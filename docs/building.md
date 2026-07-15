@@ -45,11 +45,24 @@ cmake --build build -j"$(nproc)"
 This requires `SDL3` to be discoverable by `find_package(SDL3)` (e.g. via
 your distribution's `sdl3-devel`/`libsdl3-dev` package, or a local install
 with `SDL3Config.cmake` on `CMAKE_PREFIX_PATH`). Steam Deck / Bazzite
-development machines are the primary target and are expected to have this
-available; **this sandbox does not**, so the client has been written and
-reviewed but has not been build-verified in this environment. Build it on
-your development machine before relying on it, and report back any API
-mismatches against the SDL3 version you have installed.
+development machines are the primary target; if your distro doesn't
+package SDL3 yet (e.g. Ubuntu 24.04 doesn't), build it from source first:
+
+```sh
+git clone --depth 1 --branch release-3.2.16 https://github.com/libsdl-org/SDL.git
+cmake -S SDL -B SDL/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/path/to/sdl3-install
+cmake --build SDL/build -j"$(nproc)"
+cmake --install SDL/build
+cmake -S . -B build -DMELONDS_REMOTE_BUILD_CLIENT=ON -DCMAKE_PREFIX_PATH=/path/to/sdl3-install
+```
+
+This has been verified to work: building SDL3 3.2.16 from source this way
+and configuring against it produces a `melonds-remote-client` that
+compiles cleanly and has been run successfully (real handshake, real
+sustained video/input traffic) against both the standalone host prototype
+and the actual patched melonDS host -- see `docs/known-limitations.md`.
+Not yet tested: real Steam Deck hardware/gamepad (this was verified in a
+headless, gamepad-less environment).
 
 ## Running the standalone host server locally
 

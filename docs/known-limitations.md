@@ -112,28 +112,40 @@ Concretely, on SPEC.md section 20's acceptance criteria:
   growth, and the process still alive and responsive; see the stability
   run above.
 
-## The SDL3 client has not been build-verified
+## The SDL3 client: now build- and run-verified, not yet tested on real Steam Deck hardware
 
-`client/` was written and reviewed against the SDL3 API but this
-development environment has no SDL3 package available, so:
+Earlier passes of this document said the client had never been compiled,
+since no SDL3 package was available in this development environment.
+That's since been resolved by building SDL3 3.2.16 from source (SDL3 is
+not in Ubuntu 24.04's apt repositories) and configuring the project
+against it:
 
-- `client/src/main.cpp` (which needs SDL3) has never been compiled.
-- `client/src/net_client.cpp`/`.h` (which don't need SDL3) have been
-  compiled standalone with `-Wall -Wextra -Wpedantic -Wconversion
-  -Wshadow -Werror` and are exercised indirectly by
-  `tests/smoke_test.py` acting as a bare-socket stand-in for the real
-  client, but the actual `NetClient` class integrated with SDL3's event
-  loop has not been run.
-- The auto-reconnect thread added in the second Phase 2 pass has been
-  reviewed for correctness (see `docs/architecture.md`) but not exercised
-  against a real host with the real client binary.
-- No manual testing has happened on Steam Deck LCD, Steam Deck OLED,
-  Gaming Mode, or Desktop Mode (`SPEC.md` section 19's "Manual Steam Deck
-  tests" list is entirely open).
-
-**Action required before relying on this**: build `client/` on a machine
-with SDL3 installed (`docs/building.md`), fix any API mismatches against
-the SDL3 version you have, and run it against `melonds-remote-server`.
+- `client/src/main.cpp` and the full `melonds-remote-client` binary now
+  **compile cleanly** with `-Wall -Wextra -Wpedantic -Wconversion
+  -Wshadow` against real SDL3 headers/libraries, not just
+  `net_client.cpp`/`.h` standalone as before.
+- The built binary was **run** (not just compiled) under Xvfb, first
+  against the standalone `melonds-remote-server` prototype and then
+  against the actual patched melonDS host running the interactive
+  homebrew ROM: in both cases the real `NetClient` completed a real
+  handshake ("`[net] connected to 127.0.0.1 (session ...)`"), and the
+  host's own logs confirmed a sustained real session (e.g. "`NetServer:
+  stats -- input: accepted=384 ... video: sent=285 (56.5 fps) ...`").
+  This is the first time the actual SDL3 client binary -- not a
+  raw-socket stand-in -- has been exercised end-to-end.
+- The auto-reconnect thread was exercised implicitly by this real run
+  (the client's connection thread is what established the session
+  above), though a deliberate host-restart-mid-session test was not
+  separately performed.
+- **Still open**: no manual testing has happened on real Steam Deck
+  hardware (LCD, OLED, Gaming Mode, or Desktop Mode) -- this environment
+  has no physical gamepad, and the client only accepts `SDL_Gamepad`
+  input (no keyboard fallback), so button-press-driven visual behavior
+  could not be demonstrated here, only connectivity and continuous
+  video/input traffic. `SPEC.md` section 19's "Manual Steam Deck tests"
+  list is still entirely open. The binary built here is also specific to
+  this environment's Ubuntu 24.04 x86_64 SDL3 build; see the release
+  packaging notes for what that means for portability to a real Deck.
 
 ## Video transport is Stage 1 only
 
