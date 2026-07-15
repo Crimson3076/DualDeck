@@ -6,16 +6,35 @@ section 25. Individual design docs (`architecture.md`, `protocol.md`,
 `testing.md`) call out gaps in context as they come up; this file is the
 single place to check "is X done yet" without reading everything else.
 
-## No melonDS integration
+## melonDS integration: patch exists, builds, handshake verified -- video path unverified
 
-Nothing in this repository talks to a real melonDS process yet.
-`host/remote-server` runs against `SyntheticFrameSource` (an animated test
-pattern) and `LoggingInputSink` (which records the latest input state and
-logs it, but doesn't drive an emulator). The proposed patch boundary is
-documented in `docs/melonds-integration-analysis.md` section 5 and
-`host/melonds-patches/README.md`, but the patch itself has not been
-written. Concretely, none of these acceptance criteria from `SPEC.md`
-section 20 are met yet:
+`host/melonds-patches/0001-remote-server-integration.patch` implements
+the integration against melonDS commit
+`10a173b5536fc75cd93f8a3868349dad963542ef`. Unlike the standalone
+`host/remote-server` (which still runs against `SyntheticFrameSource` and
+`LoggingInputSink` for its own independent testing), the patch wires the
+same protocol/host networking code into real melonDS state via
+`MelonDSFrameSource`/`MelonDSInputSink`/`RemoteServerBridge`.
+
+**Verified**: the patch applies to a fresh clone and builds from scratch;
+the patched binary's embedded remote server starts and correctly performs
+a real authenticated TCP handshake (including rejecting a wrong auth
+token) against a raw-socket test client, under Xvfb with
+`MELONDS_REMOTE_ENABLE=1`.
+
+**Not verified**: the video path (`GPU::GetFramebuffers()` →
+`pushBottomFrame()` → served bottom-screen frames) has not been exercised
+with a real emulated frame -- doing so requires actually running a game
+or booting to the DS system menu, and this environment has neither a ROM
+nor the firmware/BIOS assets needed for a full menu boot (obtaining real
+firmware was deliberately not attempted, for the same reason ROMs aren't
+included in this repository -- see `host/melonds-patches/README.md`).
+Input injection (`inputProcess()`'s merge of remote `ControllerState`
+into `inputMask`/hotkeys) is likewise reviewed and compiled but not
+exercised against a running game controlling actual DS input.
+
+Concretely, these acceptance criteria from `SPEC.md` section 20 are
+**still not met** (need a real ROM + firmware + a display to attempt):
 
 - (1) melonDS runs a Nintendo DS game on the host
 - (2)/(3) top/bottom screens are real DS output rather than a test pattern

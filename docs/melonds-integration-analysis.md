@@ -15,12 +15,21 @@ gates any invasive melonDS modification (Section 24 of `SPEC.md`).
   that only talk to melonDS over a socket, so they are not required to be
   GPL, but this repository adopts GPLv3 throughout for simplicity and to
   avoid any ambiguity if code is later upstreamed.
-- This analysis was done by reading source; **no build of melonDS was
-  performed in this sandbox** because it has no Qt6, SDL2, or GL
-  development headers available and installing a full desktop toolchain
-  was judged out of scope for a source-analysis pass. Building and running
-  melonDS on the real Bazzite target is a prerequisite before Phase 1 host
-  integration work begins there (see "Known limitations" below).
+- This analysis was originally done by reading source only, in a sandbox
+  without Qt6/SDL2/GL packages available. **That has since changed**: the
+  dependencies were installed, an unmodified baseline build of melonDS at
+  this exact commit was confirmed working, the patch proposed in section
+  5 below was implemented and confirmed to build (including a from-scratch
+  build of a fresh clone with the patch applied via `git apply`, not just
+  the in-place working tree it was developed against), and the patched
+  binary's embedded remote server was confirmed to perform a real
+  authenticated handshake against a raw-socket test client under Xvfb.
+  See section 8 below and `host/melonds-patches/README.md` for exactly
+  what was and wasn't verified -- notably, the video path (frame capture
+  and delivery) was reviewed and wired but not exercised with a real
+  emulated frame, since that requires firmware/BIOS assets not available
+  (and not appropriate to seek out) in this environment, for the same
+  reason ROMs aren't included in this repository.
 
 ## 1. Where completed frames become available
 
@@ -225,23 +234,56 @@ Section 24, item 10 of `SPEC.md`.
 
 ## 6. Known limitations of this analysis
 
-- melonDS was not built in this environment (missing Qt6/SDL2/OpenGL
-  dev packages in the sandbox); all findings are from static source
-  reading. Building on the actual Bazzite target and confirming these
-  call sites still match at run time is the first task before any patch
-  lands.
-- The OpenGL renderer path (§1.2) is understood at the API level only;
-  no PBO/async-readback design has been prototyped yet.
+- The OpenGL renderer path (§1.2) is understood at the API level and
+  confirmed by reading `GLRenderer::GetFramebuffers()`; no PBO/async-
+  readback design has been prototyped, and the patch (§8) only handles
+  the software renderer.
 - DSi-specific paths (microphone, camera, NAND) were not investigated
   since they are explicit non-goals for v0.1 (`SPEC.md` §21).
+- The call sites documented in sections 1-3 were confirmed to still
+  match at the exact commit inspected (§0) by successfully building and
+  patching against it; they have not been re-verified against any later
+  upstream commit.
 
-## 7. Recommended next step
+## 7. Historical: originally recommended next step (superseded)
 
-Proceed with the minimal Phase 1 skeleton that does **not** yet touch
-melonDS: a standalone protocol library (versioned framing, controller/
-touch serialization, unit tests) and a standalone host `remote-server`
-binary that can serve a synthetic 256×192 test pattern over the same
-transport the real integration will use. This lets the client, protocol,
-and transport be validated independently of getting a melonDS fork
-building in a graphical environment, and keeps the actual melonDS patch
-(§5 above) small and reviewable when it lands.
+This section is kept for context on how the work actually proceeded. The
+original recommendation here was to build a standalone protocol library
+and host `remote-server` binary first, without touching melonDS, since
+this sandbox initially had no Qt6/SDL2/GL packages. That work happened
+(see `protocol/`, `host/remote-server/`, and `docs/architecture.md`), and
+once the dependencies were later installed in the same environment, the
+melonDS patch described in section 8 below was implemented on top of it,
+reusing the same protocol/host code by vendoring it into melonDS's tree
+rather than writing it twice.
+
+## 8. The patch: what exists and what was verified
+
+`host/melonds-patches/0001-remote-server-integration.patch` implements
+exactly the boundary proposed in section 5. See
+`host/melonds-patches/README.md` for the full, honest account of what was
+verified (baseline build, patched build, patch-file-applies-to-a-fresh-clone,
+and a real authenticated handshake against the running patched binary
+under Xvfb) versus what wasn't (the video/frame-capture path, which needs
+firmware/BIOS assets this environment doesn't have and shouldn't try to
+obtain). Two real bugs were caught during this verification pass rather
+than shipped:
+
+- The frame-push gate in `EmuThread.cpp` was initially written as
+  `!useOpenGL`, which turns out to test the wrong thing --
+  `EmuInstance::usesOpenGL()` is true whenever *either* the Qt display
+  widget uses GL *or* the 3D renderer is hardware-accelerated, so it
+  doesn't by itself indicate whether `GetFramebuffers()` will return real
+  pointers. Fixed to rely solely on `GetFramebuffers()`'s own return
+  value, which is the correct, self-documented check.
+- Two debug `fprintf` diagnostics added to track down why the remote
+  server didn't seem to start (turned out to be an stdio-buffering
+  artifact of the first test run, not a real bug) were removed before
+  finalizing the patch, and a clean rebuild confirmed afterward that
+  removing them didn't reintroduce the original symptom.
+
+**Next recommended step**: get a ROM and real firmware/BIOS on a machine
+with a display, apply the patch, and verify the video path end-to-end
+(bottom screen appears on a connected client, touch/buttons control a
+running game, 30-minute stability) -- i.e. actually attempt `SPEC.md`
+section 20's acceptance criteria for the first time.

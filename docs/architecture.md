@@ -22,10 +22,18 @@ host/remote-server/  Standalone host process. Depends on protocol/ only.
                         - SyntheticFrameSource Phase 1 stand-in (animated test pattern)
                       - NetServer              TCP control + UDP input + TCP video threads
 
-host/melonds-patches/ Where the melonDS fork's diff will live once the
+host/melonds-patches/ 0001-remote-server-integration.patch: implements the
                       integration described in
-                      docs/melonds-integration-analysis.md is implemented.
-                      Empty until that patch is proposed and reviewed.
+                      docs/melonds-integration-analysis.md against real
+                      melonDS, vendoring protocol/ + host/remote-server's
+                      networking code (unchanged) into melonDS's own
+                      build alongside three new melonDS-specific adapter
+                      files (MelonDSFrameSource, MelonDSInputSink,
+                      RemoteServerBridge). Confirmed to build from a
+                      fresh clone and its handshake/auth verified against
+                      the running patched binary; the video path is not
+                      yet exercised with a real frame -- see
+                      host/melonds-patches/README.md.
 
 client/               Steam Deck client (SDL3). Depends on protocol/ only.
 

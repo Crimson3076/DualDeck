@@ -1,0 +1,2103 @@
+diff --git a/src/frontend/qt_sdl/CMakeLists.txt b/src/frontend/qt_sdl/CMakeLists.txt
+index 31207f8..823ed65 100644
+--- a/src/frontend/qt_sdl/CMakeLists.txt
++++ b/src/frontend/qt_sdl/CMakeLists.txt
+@@ -60,6 +60,15 @@ set(SOURCES_QT_SDL
+ 
+     LANDialog.cpp
+     NetplayDialog.cpp
++
++    remote_server/protocol/src/protocol.cpp
++    remote_server/protocol/src/touch_mapping.cpp
++    remote_server/protocol/src/input_state_tracker.cpp
++    remote_server/protocol/src/rate_limiter.cpp
++    remote_server/host/net_server.cpp
++    remote_server/MelonDSFrameSource.cpp
++    remote_server/MelonDSInputSink.cpp
++    remote_server/RemoteServerBridge.cpp
+ )
+ 
+ option(USE_QT6 "Use Qt 6 instead of Qt 5" ON)
+@@ -185,6 +194,17 @@ target_include_directories(melonDS PUBLIC
+     "${CMAKE_CURRENT_SOURCE_DIR}"
+     "${CMAKE_CURRENT_SOURCE_DIR}/..")
+ 
++# melonds-remote integration (see docs/melonds-integration-analysis.md and
++# host/melonds-patches/README.md in the melonds-remote repository this was
++# vendored from). Kept as its own include root so remote_server/ code
++# includes its headers the same way it does in the standalone
++# melonds-remote repo (e.g. "melonds_remote/protocol.h", "host/net_server.h").
++target_include_directories(melonDS PRIVATE
++    "${CMAKE_CURRENT_SOURCE_DIR}/remote_server/protocol/include"
++    "${CMAKE_CURRENT_SOURCE_DIR}/remote_server")
++find_package(Threads REQUIRED)
++target_link_libraries(melonDS PRIVATE Threads::Threads)
++
+ if (USE_QT6)
+     target_include_directories(melonDS PUBLIC ${Qt6Gui_PRIVATE_INCLUDE_DIRS})
+ else()
+diff --git a/src/frontend/qt_sdl/EmuInstance.cpp b/src/frontend/qt_sdl/EmuInstance.cpp
+index a8b1021..da6537b 100755
+--- a/src/frontend/qt_sdl/EmuInstance.cpp
++++ b/src/frontend/qt_sdl/EmuInstance.cpp
+@@ -20,6 +20,8 @@
+ #include <stdio.h>
+ #include <string.h>
+ 
++#include <cstdint>
++#include <cstdlib>
+ #include <codecvt>
+ #include <locale>
+ #include <memory>
+@@ -50,6 +52,8 @@
+ 
+ #include "NDSCart/CartSD.h"
+ 
++#include "remote_server/RemoteServerBridge.h"
++
+ using std::make_unique;
+ using std::pair;
+ using std::string;
+@@ -131,6 +135,35 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
+ 
+     net.RegisterInstance(instanceID);
+ 
++    // melonds-remote integration: only one remote session is supported
++    // (v0.1 scope), so only instance 0 starts it, and only when opted in
++    // via environment variable -- there is no Config/UI toggle yet (see
++    // docs/melonds-integration-analysis.md and host/melonds-patches/README.md
++    // in the melonds-remote repository for the rationale and the rest of
++    // the proposed patch boundary).
++    if (inst == 0 && getenv("MELONDS_REMOTE_ENABLE"))
++    {
++        auto envOr = [](const char* name, const std::string& def) -> std::string
++        {
++            const char* v = getenv(name);
++            return v ? std::string(v) : def;
++        };
++        auto envPortOr = [&](const char* name, uint16_t def) -> uint16_t
++        {
++            const char* v = getenv(name);
++            return v ? static_cast<uint16_t>(std::stoi(v)) : def;
++        };
++
++        remoteServer = std::make_unique<melonds_remote_bridge::RemoteServerBridge>(
++            envOr("MELONDS_REMOTE_BIND", "127.0.0.1"),
++            envPortOr("MELONDS_REMOTE_CONTROL_PORT", 8760),
++            envPortOr("MELONDS_REMOTE_INPUT_PORT", 8761),
++            envPortOr("MELONDS_REMOTE_VIDEO_PORT", 8762),
++            envOr("MELONDS_REMOTE_AUTH_TOKEN", ""));
++        remoteServer->start();
++        Platform::Log(Platform::LogLevel::Info, "melonds-remote: remote server enabled\n");
++    }
++
+     emuThread = new EmuThread(this);
+ 
+     numWindows = 0;
+@@ -156,6 +189,12 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
+ EmuInstance::~EmuInstance()
+ {
+     deleting = true;
++
++    // Stop and release the remote server (if enabled) before anything
++    // else, so its network threads stop touching this instance's state
++    // as early into teardown as possible.
++    remoteServer.reset();
++
+     deleteAllWindows();
+ 
+     emuThread->emuExit();
+diff --git a/src/frontend/qt_sdl/EmuInstance.h b/src/frontend/qt_sdl/EmuInstance.h
+index a1eab0e..bbad4f8 100755
+--- a/src/frontend/qt_sdl/EmuInstance.h
++++ b/src/frontend/qt_sdl/EmuInstance.h
+@@ -21,6 +21,8 @@
+ 
+ #include <SDL2/SDL.h>
+ 
++#include <memory>
++
+ #include "Platform.h"
+ #include "main.h"
+ #include "NDS.h"
+@@ -29,6 +31,13 @@
+ #include "Config.h"
+ #include "SaveManager.h"
+ 
++// melonds-remote integration (see docs/melonds-integration-analysis.md and
++// host/melonds-patches/README.md in the melonds-remote repository). Only
++// forward-declared here so EmuInstance.h doesn't need to pull in the
++// networking headers; the full RemoteServerBridge type is only needed
++// where EmuInstance.cpp/EmuInstanceInput.cpp construct or call into it.
++namespace melonds_remote_bridge { class RemoteServerBridge; }
++
+ const int kMaxWindows = 4;
+ 
+ enum
+@@ -378,6 +387,13 @@ private:
+     bool isTouching;
+     melonDS::u16 touchX, touchY;
+ 
++    // melonds-remote integration: null unless enabled (instance 0 only,
++    // see EmuInstance::EmuInstance()). inputProcess() (EmuInstanceInput.cpp)
++    // merges its latest remote state into inputMask/isTouching/touchX/touchY/
++    // hotkeyMask each frame; EmuThread.cpp pushes the completed bottom
++    // framebuffer into it after each RunFrame().
++    std::unique_ptr<melonds_remote_bridge::RemoteServerBridge> remoteServer;
++
+     friend class EmuThread;
+     friend class MainWindow;
+ };
+diff --git a/src/frontend/qt_sdl/EmuInstanceInput.cpp b/src/frontend/qt_sdl/EmuInstanceInput.cpp
+index a0bc623..5e549a8 100644
+--- a/src/frontend/qt_sdl/EmuInstanceInput.cpp
++++ b/src/frontend/qt_sdl/EmuInstanceInput.cpp
+@@ -25,8 +25,37 @@
+ #include "main.h"
+ #include "Config.h"
+ 
++#include "remote_server/RemoteServerBridge.h"
++
+ using namespace melonDS;
+ 
++namespace
++{
++// Wire DSButton bit (melonds_remote::DSButton, see protocol.h) that
++// corresponds to each local EmuInstance::buttonNames[]/inputMask bit
++// index. The two orderings are independent by design -- see
++// docs/protocol.md "DS button bits" in the melonds-remote repository --
++// so this table is the one and only place that translates between them.
++//
++// Local order (buttonNames): A, B, Select, Start, Right, Left, Up, Down, R, L, X, Y
++// Wire order (DSButton):     A, B, X, Y, Up, Down, Left, Right, L, R, Start, Select
++constexpr int kWireBitForLocalBit[12] =
++{
++    0,  // A      <- DSButton_A
++    1,  // B      <- DSButton_B
++    11, // Select <- DSButton_Select
++    10, // Start  <- DSButton_Start
++    7,  // Right  <- DSButton_Right
++    6,  // Left   <- DSButton_Left
++    4,  // Up     <- DSButton_Up
++    5,  // Down   <- DSButton_Down
++    9,  // R      <- DSButton_R
++    8,  // L      <- DSButton_L
++    2,  // X      <- DSButton_X
++    3,  // Y      <- DSButton_Y
++};
++} // namespace
++
+ const char* EmuInstance::buttonNames[12] =
+ {
+     "A",
+@@ -454,6 +483,44 @@ void EmuInstance::inputProcess()
+     }
+ 
+     hotkeyMask = keyHotkeyMask | joyHotkeyMask;
++
++    // melonds-remote integration: merge the latest remote controller/touch/
++    // action state in alongside local keyboard/joystick input, the same
++    // way those two are merged with each other just above. When no client
++    // is connected (or one just disconnected/timed out), latestControllerState()
++    // returns InputStateTracker::releasedState() (all zero), so this is a
++    // no-op and purely-local input behaves exactly as it did before this
++    // patch (spec section 6.4's fail-safe release falls out of that for
++    // free rather than needing special-casing here).
++    if (remoteServer)
++    {
++        melonds_remote::ControllerState remote = remoteServer->latestControllerState();
++
++        for (int i = 0; i < 12; i++)
++        {
++            if (remote.dsButtons & (1 << kWireBitForLocalBit[i]))
++                inputMask &= ~(1 << i);
++        }
++
++        if (remote.touchActive)
++        {
++            isTouching = true;
++            touchX = remote.touchX;
++            touchY = remote.touchY;
++        }
++
++        // Only the emulator actions with an existing, unambiguous hotkey
++        // equivalent are wired up so far; save/load state and the rest of
++        // spec section 7.5 are intentionally not implemented yet (see
++        // docs/known-limitations.md in the melonds-remote repository).
++        if (remote.emulatorActions & melonds_remote::EmulatorAction_PauseResume)
++            hotkeyMask |= (1 << HK_Pause);
++        if (remote.emulatorActions & melonds_remote::EmulatorAction_FastForward)
++            hotkeyMask |= (1 << HK_FastForward);
++        if (remote.emulatorActions & melonds_remote::EmulatorAction_SwapScreens)
++            hotkeyMask |= (1 << HK_SwapScreens);
++    }
++
+     hotkeyPress = hotkeyMask & ~lastHotkeyMask;
+     hotkeyRelease = lastHotkeyMask & ~hotkeyMask;
+     lastHotkeyMask = hotkeyMask;
+diff --git a/src/frontend/qt_sdl/EmuThread.cpp b/src/frontend/qt_sdl/EmuThread.cpp
+index c3fbdfe..5fac077 100755
+--- a/src/frontend/qt_sdl/EmuThread.cpp
++++ b/src/frontend/qt_sdl/EmuThread.cpp
+@@ -55,6 +55,8 @@
+ 
+ #include "EmuInstance.h"
+ 
++#include "remote_server/RemoteServerBridge.h"
++
+ using namespace melonDS;
+ 
+ 
+@@ -322,6 +324,33 @@ void EmuThread::run()
+ 
+             emuInstance->drawScreen();
+ 
++            // melonds-remote integration: hand the just-completed bottom
++            // frame to the remote server's frame source, at the same
++            // point the existing frontend already reads it for on-screen
++            // display (see docs/melonds-integration-analysis.md section
++            // 1.3).
++            //
++            // Deliberately does NOT gate on the `useOpenGL` variable above
++            // -- that reflects EmuInstance::usesOpenGL(), which is true
++            // whenever *either* the Qt display widget uses GL *or* the 3D
++            // renderer is hardware-accelerated (Screen.UseGL || 3D.Renderer
++            // != Software), so it doesn't by itself tell us whether
++            // GetFramebuffers() will hand back real pointers. That method's
++            // own return value is the correct, self-documented check
++            // (true => RAM framebuffer pointers; false => renderer-specific
++            // value such as a GL texture handle, when the *3D renderer*
++            // specifically is GL-based -- see analysis doc section 1.2).
++            if (emuInstance->remoteServer)
++            {
++                void* topBuf = nullptr;
++                void* botBuf = nullptr;
++                if (emuInstance->nds->GPU.GetFramebuffers(&topBuf, &botBuf) && botBuf)
++                {
++                    emuInstance->remoteServer->pushBottomFrame(
++                        botBuf, melonds_remote::host::kFrameSizeBytes);
++                }
++            }
++
+ #ifdef MELONCAP
+             MelonCap::Update();
+ #endif // MELONCAP
+diff --git a/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.cpp b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.cpp
+new file mode 100644
+index 0000000..6ad11d1
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.cpp
+@@ -0,0 +1,29 @@
++#include "MelonDSFrameSource.h"
++
++#include <cstring>
++
++namespace melonds_remote_bridge {
++
++void MelonDSFrameSource::pushFrame(const void* bgraData, size_t sizeBytes) {
++    if (bgraData == nullptr || sizeBytes != melonds_remote::host::kFrameSizeBytes) {
++        return;
++    }
++
++    std::lock_guard<std::mutex> lock(mutex_);
++    latestFrame_.resize(sizeBytes);
++    std::memcpy(latestFrame_.data(), bgraData, sizeBytes);
++    ++frameIndex_;
++    hasFrame_ = true;
++}
++
++bool MelonDSFrameSource::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    if (!hasFrame_) {
++        return false;
++    }
++    outFrame = latestFrame_;
++    outFrameIndex = frameIndex_;
++    return true;
++}
++
++} // namespace melonds_remote_bridge
+diff --git a/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.h b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.h
+new file mode 100644
+index 0000000..ab42356
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.h
+@@ -0,0 +1,36 @@
++#pragma once
++
++// Push-driven IFrameSource: EmuThread calls pushFrame() once per emulated
++// frame (software renderer only) right after GPU::GetFramebuffers(), and
++// NetServer's video thread calls getLatestFrame() to pull the newest one.
++// Same single-slot, mutex-guarded, latest-wins shape as the standalone
++// prototype's SyntheticFrameSource (see melonds-remote's host/remote-server),
++// but produced by the real emulation thread instead of a self-timed
++// generator thread.
++
++#include <cstddef>
++#include <cstdint>
++#include <mutex>
++#include <vector>
++
++#include "host/frame_source.h"
++
++namespace melonds_remote_bridge {
++
++class MelonDSFrameSource : public melonds_remote::host::IFrameSource {
++public:
++    // Copies `sizeBytes` bytes from `bgraData` into the single-slot buffer.
++    // Silently ignored if sizeBytes doesn't match
++    // melonds_remote::host::kFrameSizeBytes.
++    void pushFrame(const void* bgraData, size_t sizeBytes);
++
++    bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) override;
++
++private:
++    std::mutex mutex_;
++    std::vector<uint8_t> latestFrame_;
++    uint64_t frameIndex_ = 0;
++    bool hasFrame_ = false;
++};
++
++} // namespace melonds_remote_bridge
+diff --git a/src/frontend/qt_sdl/remote_server/MelonDSInputSink.cpp b/src/frontend/qt_sdl/remote_server/MelonDSInputSink.cpp
+new file mode 100644
+index 0000000..998c1e0
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/MelonDSInputSink.cpp
+@@ -0,0 +1,22 @@
++#include "MelonDSInputSink.h"
++
++#include "melonds_remote/input_state_tracker.h"
++
++namespace melonds_remote_bridge {
++
++void MelonDSInputSink::applyControllerState(const melonds_remote::ControllerState& state) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    state_ = state;
++}
++
++void MelonDSInputSink::releaseAll() {
++    std::lock_guard<std::mutex> lock(mutex_);
++    state_ = melonds_remote::InputStateTracker::releasedState();
++}
++
++melonds_remote::ControllerState MelonDSInputSink::latestState() const {
++    std::lock_guard<std::mutex> lock(mutex_);
++    return state_;
++}
++
++} // namespace melonds_remote_bridge
+diff --git a/src/frontend/qt_sdl/remote_server/MelonDSInputSink.h b/src/frontend/qt_sdl/remote_server/MelonDSInputSink.h
+new file mode 100644
+index 0000000..05308c9
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/MelonDSInputSink.h
+@@ -0,0 +1,27 @@
++#pragma once
++
++// Stores the latest ControllerState received from the network for
++// EmuInstance::inputProcess() to poll and merge into its own input state,
++// on the emulation thread, once per frame -- never called directly from
++// the network thread (see docs/melonds-integration-analysis.md section 2
++// in the melonds-remote repo).
++
++#include <mutex>
++
++#include "host/emulator_input_sink.h"
++
++namespace melonds_remote_bridge {
++
++class MelonDSInputSink : public melonds_remote::host::IEmulatorInputSink {
++public:
++    void applyControllerState(const melonds_remote::ControllerState& state) override;
++    void releaseAll() override;
++
++    melonds_remote::ControllerState latestState() const;
++
++private:
++    mutable std::mutex mutex_;
++    melonds_remote::ControllerState state_;
++};
++
++} // namespace melonds_remote_bridge
+diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
+new file mode 100644
+index 0000000..2733bc2
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
+@@ -0,0 +1,37 @@
++#include "RemoteServerBridge.h"
++
++namespace melonds_remote_bridge {
++
++RemoteServerBridge::RemoteServerBridge(std::string bindAddress, uint16_t controlPort,
++                                        uint16_t inputPort, uint16_t videoPort,
++                                        std::string authToken) {
++    melonds_remote::host::NetServerConfig config;
++    config.bindAddress = std::move(bindAddress);
++    config.controlPort = controlPort;
++    config.inputPort = inputPort;
++    config.videoPort = videoPort;
++    config.authToken = std::move(authToken);
++    server_ = std::make_unique<melonds_remote::host::NetServer>(config, inputSink_, frameSource_);
++}
++
++RemoteServerBridge::~RemoteServerBridge() {
++    stop();
++}
++
++void RemoteServerBridge::start() {
++    server_->start();
++}
++
++void RemoteServerBridge::stop() {
++    server_->stop();
++}
++
++void RemoteServerBridge::pushBottomFrame(const void* bgraData, size_t sizeBytes) {
++    frameSource_.pushFrame(bgraData, sizeBytes);
++}
++
++melonds_remote::ControllerState RemoteServerBridge::latestControllerState() const {
++    return inputSink_.latestState();
++}
++
++} // namespace melonds_remote_bridge
+diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
+new file mode 100644
+index 0000000..d618f19
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
+@@ -0,0 +1,51 @@
++#pragma once
++
++// Ties the standalone melonds-remote protocol/host networking code
++// (vendored under this remote_server/ directory) into melonDS. Owned by
++// EmuInstance (instance 0 only -- only one remote session is supported,
++// matching the melonds-remote project's v0.1 single-client scope),
++// started/stopped alongside the emulation thread.
++//
++// This class intentionally does not know about melonDS's KEYINPUT bit
++// order or hotkey enum -- see remoteButtonsToKeyMask()/
++// remoteActionsToHotkeyBits() in EmuInstanceInput.cpp for that mapping,
++// kept next to the rest of the input-merging code it parallels.
++
++#include <cstddef>
++#include <cstdint>
++#include <memory>
++#include <string>
++
++#include "MelonDSFrameSource.h"
++#include "MelonDSInputSink.h"
++#include "host/net_server.h"
++
++namespace melonds_remote_bridge {
++
++class RemoteServerBridge {
++public:
++    RemoteServerBridge(std::string bindAddress, uint16_t controlPort, uint16_t inputPort,
++                        uint16_t videoPort, std::string authToken);
++    ~RemoteServerBridge();
++
++    RemoteServerBridge(const RemoteServerBridge&) = delete;
++    RemoteServerBridge& operator=(const RemoteServerBridge&) = delete;
++
++    void start();
++    void stop();
++
++    // Called by EmuThread once per emulated frame (software renderer path
++    // only) right after GPU::GetFramebuffers().
++    void pushBottomFrame(const void* bgraData, size_t sizeBytes);
++
++    // Called by EmuInstance::inputProcess() once per frame to read the
++    // latest remote controller/touch/action state to merge in.
++    melonds_remote::ControllerState latestControllerState() const;
++
++private:
++    MelonDSInputSink inputSink_;
++    MelonDSFrameSource frameSource_;
++    std::unique_ptr<melonds_remote::host::NetServer> server_;
++};
++
++} // namespace melonds_remote_bridge
+diff --git a/src/frontend/qt_sdl/remote_server/host/emulator_input_sink.h b/src/frontend/qt_sdl/remote_server/host/emulator_input_sink.h
+new file mode 100644
+index 0000000..b6f99b8
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/host/emulator_input_sink.h
+@@ -0,0 +1,34 @@
++#pragma once
++
++// Seam between the network layer and the emulator core.
++//
++// Today (Phase 1) this is implemented by LoggingInputSink, since no melonDS
++// fork is wired in yet (see docs/melonds-integration-analysis.md). Once the
++// melonDS integration lands, a MelonDSInputSink will implement this same
++// interface and call NDS::SetKeyMask / NDS::TouchScreen / NDS::ReleaseScreen
++// on the emulation thread using the last state handed to it here -- never
++// directly from the network thread (spec section 16).
++
++#include "melonds_remote/protocol.h"
++
++namespace melonds_remote::host {
++
++class IEmulatorInputSink {
++public:
++    virtual ~IEmulatorInputSink() = default;
++
++    // Called whenever the network layer has a new accepted controller
++    // state. Implementations must not block (no I/O, no locking that could
++    // stall the emulation thread) -- store the latest state and let the
++    // emulation thread's own loop pick it up, matching how melonDS's
++    // existing frontend consumes its own local input (see analysis doc
++    // section 2).
++    virtual void applyControllerState(const ControllerState& state) = 0;
++
++    // Called on client disconnect or input timeout. Must immediately
++    // reflect an all-released state: no DS buttons held, touchscreen
++    // released, analog cleared, no emulator actions pending (spec 6.4).
++    virtual void releaseAll() = 0;
++};
++
++} // namespace melonds_remote::host
+diff --git a/src/frontend/qt_sdl/remote_server/host/frame_source.h b/src/frontend/qt_sdl/remote_server/host/frame_source.h
+new file mode 100644
+index 0000000..903d848
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/host/frame_source.h
+@@ -0,0 +1,38 @@
++#pragma once
++
++// Seam between the network layer and wherever the bottom-screen pixels come
++// from. Today this is SyntheticFrameSource (a generated test pattern); a
++// future MelonDSFrameSource will read GPU::GetFramebuffers() from the
++// emulation thread, copy the bottom buffer into its own bounded slot, and
++// expose it here (see docs/melonds-integration-analysis.md section 1).
++
++#include <cstddef>
++#include <cstdint>
++#include <vector>
++
++namespace melonds_remote::host {
++
++inline constexpr int kFrameWidth = 256;
++inline constexpr int kFrameHeight = 192;
++inline constexpr int kFrameBytesPerPixel = 4; // BGRA8888, matching melonDS's software renderer output
++inline constexpr size_t kFrameSizeBytes =
++    static_cast<size_t>(kFrameWidth) * static_cast<size_t>(kFrameHeight) * kFrameBytesPerPixel;
++
++class IFrameSource {
++public:
++    virtual ~IFrameSource() = default;
++
++    // Fills `outFrame` with the most recent available frame (resized to
++    // kFrameSizeBytes if needed) and `outFrameIndex` with a monotonically
++    // increasing index identifying it (starting at 0 for the first frame
++    // ever produced), and returns true; or returns false if no frame is
++    // available yet. Never blocks -- this exists so a network thread can
++    // poll it without stalling on the frame producer, per the
++    // "latest-frame-wins" / bounded-queue requirement (spec section
++    // 15/16). The frame index lets a caller that polls slower than frames
++    // are produced compute how many frames it skipped (spec section 14:
++    // log dropped frames), without needing the frames themselves.
++    virtual bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) = 0;
++};
++
++} // namespace melonds_remote::host
+diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.cpp b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
+new file mode 100644
+index 0000000..9fdd496
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
+@@ -0,0 +1,562 @@
++#include "host/net_server.h"
++
++#include <arpa/inet.h>
++#include <netinet/in.h>
++#include <netinet/tcp.h>
++#include <sys/socket.h>
++#include <sys/time.h>
++#include <unistd.h>
++
++#include <algorithm>
++#include <chrono>
++#include <cstdio>
++#include <cstring>
++#include <optional>
++
++#include "melonds_remote/protocol.h"
++
++namespace melonds_remote::host {
++
++namespace {
++
++// Monotonic clock: used for timeouts and sequence-number bookkeeping,
++// where immunity to wall-clock jumps (NTP corrections, DST, manual clock
++// changes) matters more than comparability with the client's clock.
++uint64_t nowMicros() {
++    using namespace std::chrono;
++    return static_cast<uint64_t>(
++        duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count());
++}
++
++// Wall-clock (epoch) time: the only clock comparable with the client's
++// ControllerState.clientTimestampUs (see wallClockNowUs() in
++// client/src/main.cpp), so this is used only for the latency estimate in
++// inputLoop()'s stats, never for timeout/ordering decisions.
++uint64_t nowMicrosEpoch() {
++    using namespace std::chrono;
++    return static_cast<uint64_t>(
++        duration_cast<microseconds>(system_clock::now().time_since_epoch()).count());
++}
++
++// Binds a TCP listening socket to config.bindAddress:port. Returns -1 on
++// failure (logged); never falls back to binding all interfaces implicitly.
++int makeTcpListener(const std::string& bindAddress, uint16_t port) {
++    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
++    if (fd < 0) {
++        std::perror("socket (tcp)");
++        return -1;
++    }
++
++    int reuse = 1;
++    ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
++
++    sockaddr_in addr{};
++    addr.sin_family = AF_INET;
++    addr.sin_port = htons(port);
++    if (::inet_pton(AF_INET, bindAddress.c_str(), &addr.sin_addr) != 1) {
++        std::fprintf(stderr, "invalid bind address: %s\n", bindAddress.c_str());
++        ::close(fd);
++        return -1;
++    }
++
++    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
++        std::perror("bind (tcp)");
++        ::close(fd);
++        return -1;
++    }
++
++    if (::listen(fd, 1) < 0) {
++        std::perror("listen");
++        ::close(fd);
++        return -1;
++    }
++
++    return fd;
++}
++
++int makeUdpSocket(const std::string& bindAddress, uint16_t port) {
++    int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
++    if (fd < 0) {
++        std::perror("socket (udp)");
++        return -1;
++    }
++
++    sockaddr_in addr{};
++    addr.sin_family = AF_INET;
++    addr.sin_port = htons(port);
++    if (::inet_pton(AF_INET, bindAddress.c_str(), &addr.sin_addr) != 1) {
++        std::fprintf(stderr, "invalid bind address: %s\n", bindAddress.c_str());
++        ::close(fd);
++        return -1;
++    }
++
++    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
++        std::perror("bind (udp)");
++        ::close(fd);
++        return -1;
++    }
++
++    return fd;
++}
++
++// Constant-time-ish string comparison: always compares the same number of
++// bytes (padding the shorter string's "missing" bytes into the mismatch
++// accumulator) so a client can't use response timing to learn how many
++// leading bytes of the auth token it guessed correctly.
++bool constantTimeEquals(const std::string& a, const std::string& b) {
++    size_t maxLen = std::max(a.size(), b.size());
++    unsigned char diff = static_cast<unsigned char>(a.size() != b.size());
++    for (size_t i = 0; i < maxLen; ++i) {
++        unsigned char ca = i < a.size() ? static_cast<unsigned char>(a[i]) : 0;
++        unsigned char cb = i < b.size() ? static_cast<unsigned char>(b[i]) : 0;
++        diff = static_cast<unsigned char>(diff | (ca ^ cb));
++    }
++    return diff == 0;
++}
++
++bool sendAll(int fd, const uint8_t* data, size_t size) {
++    size_t sent = 0;
++    while (sent < size) {
++        ssize_t n = ::send(fd, data + sent, size - sent, MSG_NOSIGNAL);
++        if (n <= 0) {
++            return false;
++        }
++        sent += static_cast<size_t>(n);
++    }
++    return true;
++}
++
++} // namespace
++
++NetServer::NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource)
++    : config_(std::move(config)), inputSink_(inputSink), frameSource_(frameSource),
++      rateLimiter_(config_.maxConnectionAttemptsPerWindow, config_.connectionAttemptWindowUs) {
++    if (config_.authToken.empty()) {
++        std::fprintf(stderr,
++                      "NetServer: WARNING -- no auth token configured, accepting any client "
++                      "that can reach %s:%u. Set --auth-token for anything but purely local "
++                      "testing (spec section 13).\n",
++                      config_.bindAddress.c_str(), config_.controlPort);
++    }
++}
++
++NetServer::~NetServer() {
++    stop();
++}
++
++void NetServer::start() {
++    bool expected = false;
++    if (!running_.compare_exchange_strong(expected, true)) {
++        return;
++    }
++
++    controlListenFd_ = makeTcpListener(config_.bindAddress, config_.controlPort);
++    videoListenFd_ = makeTcpListener(config_.bindAddress, config_.videoPort);
++    inputFd_ = makeUdpSocket(config_.bindAddress, config_.inputPort);
++
++    if (controlListenFd_ < 0 || videoListenFd_ < 0 || inputFd_ < 0) {
++        std::fprintf(stderr, "NetServer: failed to bind one or more sockets, not starting\n");
++        running_ = false;
++        return;
++    }
++
++    std::fprintf(stderr,
++                  "NetServer: listening on %s (control=%u, input(udp)=%u, video=%u)\n",
++                  config_.bindAddress.c_str(), config_.controlPort, config_.inputPort,
++                  config_.videoPort);
++
++    controlThread_ = std::thread(&NetServer::controlLoop, this);
++    inputThread_ = std::thread(&NetServer::inputLoop, this);
++    videoThread_ = std::thread(&NetServer::videoLoop, this);
++    watchdogThread_ = std::thread(&NetServer::watchdogLoop, this);
++}
++
++void NetServer::stop() {
++    if (!running_.exchange(false)) {
++        return;
++    }
++
++    // Unblock accept()/recv() calls by closing the listening/connected fds.
++    if (controlListenFd_ >= 0) ::shutdown(controlListenFd_, SHUT_RDWR);
++    if (videoListenFd_ >= 0) ::shutdown(videoListenFd_, SHUT_RDWR);
++    if (inputFd_ >= 0) ::shutdown(inputFd_, SHUT_RDWR);
++
++    int controlClient = controlClientFd_.exchange(-1);
++    if (controlClient >= 0) ::shutdown(controlClient, SHUT_RDWR);
++    int videoClient = videoClientFd_.exchange(-1);
++    if (videoClient >= 0) ::shutdown(videoClient, SHUT_RDWR);
++
++    if (controlThread_.joinable()) controlThread_.join();
++    if (inputThread_.joinable()) inputThread_.join();
++    if (videoThread_.joinable()) videoThread_.join();
++    if (watchdogThread_.joinable()) watchdogThread_.join();
++
++    if (controlListenFd_ >= 0) ::close(controlListenFd_);
++    if (videoListenFd_ >= 0) ::close(videoListenFd_);
++    if (inputFd_ >= 0) ::close(inputFd_);
++    controlListenFd_ = videoListenFd_ = inputFd_ = -1;
++}
++
++namespace {
++// Upper bound on a Hello payload's declared size, well above what any
++// legitimate client name/platform/token combination needs, so a hostile
++// payloadSize value can't be used to make the host allocate/read
++// arbitrarily large amounts of data (spec section 13).
++constexpr uint32_t kMaxHelloPayloadSize = 512;
++} // namespace
++
++void NetServer::controlLoop() {
++    while (running_.load()) {
++        sockaddr_in clientAddr{};
++        socklen_t clientLen = sizeof(clientAddr);
++        int clientFd = ::accept(controlListenFd_, reinterpret_cast<sockaddr*>(&clientAddr), &clientLen);
++        if (clientFd < 0) {
++            if (!running_.load()) break;
++            continue;
++        }
++
++        char ipStr[INET_ADDRSTRLEN] = {0};
++        ::inet_ntop(AF_INET, &clientAddr.sin_addr, ipStr, sizeof(ipStr));
++
++        bool rateOk;
++        {
++            std::lock_guard<std::mutex> lock(rateLimiterMutex_);
++            rateOk = rateLimiter_.allowAttempt(ipStr, nowMicros());
++        }
++        if (!rateOk) {
++            std::fprintf(stderr, "NetServer: rate-limiting connection attempts from %s\n", ipStr);
++            ::close(clientFd);
++            continue;
++        }
++
++        // Only one client at a time (spec section 7.1 initial scope).
++        int previous = controlClientFd_.exchange(clientFd);
++        if (previous >= 0) {
++            std::fprintf(stderr, "NetServer: rejecting extra control connection\n");
++            ::close(clientFd);
++            controlClientFd_ = previous;
++            continue;
++        }
++
++        std::fprintf(stderr, "NetServer: control connection from %s\n", ipStr);
++
++        // Bound how long a client may take to complete the handshake and
++        // how long the connection may sit idle afterward (spec section 8.1
++        // heartbeat/keepalive).
++        timeval recvTimeout{};
++        recvTimeout.tv_sec = static_cast<time_t>(config_.controlHeartbeatTimeoutUs / 1'000'000);
++        recvTimeout.tv_usec = static_cast<suseconds_t>(config_.controlHeartbeatTimeoutUs % 1'000'000);
++        ::setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO, &recvTimeout, sizeof(recvTimeout));
++
++        bool handshakeOk = false;
++        HelloRejectReason rejectReason = HelloRejectReason::ProtocolVersionMismatch;
++
++        uint8_t headerBuf[kPacketHeaderWireSize];
++        ssize_t n = ::recv(clientFd, headerBuf, sizeof(headerBuf), MSG_WAITALL);
++        if (n == static_cast<ssize_t>(sizeof(headerBuf))) {
++            auto header = parseHeader(headerBuf, sizeof(headerBuf));
++            if (header && header->type == PacketType::Hello &&
++                header->protocolVersion == kProtocolVersion &&
++                header->payloadSize <= kMaxHelloPayloadSize) {
++                ByteBuffer payloadBuf(header->payloadSize);
++                ssize_t got = header->payloadSize == 0
++                                  ? 0
++                                  : ::recv(clientFd, payloadBuf.data(), payloadBuf.size(), MSG_WAITALL);
++                if (got == static_cast<ssize_t>(payloadBuf.size())) {
++                    auto hello = parseHelloPayload(payloadBuf.data(), payloadBuf.size());
++                    if (hello) {
++                        if (config_.authToken.empty() ||
++                            constantTimeEquals(hello->authToken, config_.authToken)) {
++                            handshakeOk = true;
++                        } else {
++                            std::fprintf(stderr,
++                                          "NetServer: rejecting handshake from %s (bad auth token)\n",
++                                          ipStr);
++                            rejectReason = HelloRejectReason::AuthenticationFailed;
++                        }
++                    } else {
++                        std::fprintf(stderr, "NetServer: rejecting handshake (malformed Hello payload)\n");
++                    }
++                } else {
++                    std::fprintf(stderr, "NetServer: rejecting handshake (short Hello payload)\n");
++                }
++            } else {
++                std::fprintf(stderr, "NetServer: rejecting handshake (bad magic/type/version)\n");
++            }
++        }
++
++        HelloAckPayload ack;
++        ack.accepted = handshakeOk ? 1 : 0;
++        ack.rejectReason = handshakeOk ? HelloRejectReason::None : rejectReason;
++        ack.sessionId = handshakeOk ? static_cast<uint32_t>(nowMicros()) : 0;
++        ByteBuffer ackPacket = buildHelloAckPacket(ack);
++        sendAll(clientFd, ackPacket.data(), ackPacket.size());
++
++        if (handshakeOk) {
++            // Only from this point on will inputLoop() act on
++            // ControllerState packets, and only from this same source
++            // address (spec section 13).
++            authenticatedClientAddr_ = clientAddr.sin_addr.s_addr;
++            clientAuthenticated_ = true;
++
++            // Keep reading (heartbeats / disconnect notices / garbage) until
++            // the peer closes, goes silent past controlHeartbeatTimeoutUs
++            // (the recv() above times out and returns -1/EAGAIN), or sends
++            // something malformed enough to drop.
++            while (running_.load()) {
++                uint8_t buf[kPacketHeaderWireSize];
++                ssize_t r = ::recv(clientFd, buf, sizeof(buf), MSG_WAITALL);
++                if (r <= 0) {
++                    break; // peer closed, link error, or heartbeat timeout
++                }
++                auto hdr = parseHeader(buf, static_cast<size_t>(r));
++                if (!hdr) {
++                    std::fprintf(stderr, "NetServer: dropping malformed control packet\n");
++                    break;
++                }
++                if (hdr->type == PacketType::Disconnect) {
++                    break;
++                }
++                // Heartbeat or unrecognized-but-valid type: keep the
++                // connection open.
++            }
++        }
++
++        std::fprintf(stderr, "NetServer: control connection closed\n");
++        ::close(clientFd);
++        controlClientFd_ = -1;
++        clientAuthenticated_ = false;
++        authenticatedClientAddr_ = 0;
++
++        {
++            std::lock_guard<std::mutex> lock(trackerMutex_);
++            inputTracker_.reset();
++        }
++        inputSink_.releaseAll();
++    }
++}
++
++void NetServer::inputLoop() {
++    ByteBuffer buf(kPacketHeaderWireSize + kControllerStateWireSize);
++
++    while (running_.load()) {
++        sockaddr_in fromAddr{};
++        socklen_t fromLen = sizeof(fromAddr);
++        ssize_t n = ::recvfrom(inputFd_, buf.data(), buf.size(), 0,
++                                reinterpret_cast<sockaddr*>(&fromAddr), &fromLen);
++        if (n <= 0) {
++            if (!running_.load()) break;
++            continue;
++        }
++
++        if (!clientAuthenticated_.load() ||
++            fromAddr.sin_addr.s_addr != authenticatedClientAddr_.load()) {
++            continue; // no authenticated session, or packet from an unrelated address
++        }
++
++        auto header = parseHeader(buf.data(), static_cast<size_t>(n));
++        if (!header || header->protocolVersion != kProtocolVersion ||
++            header->type != PacketType::ControllerState) {
++            std::lock_guard<std::mutex> lock(statsMutex_);
++            ++stats_.inputPacketsMalformed;
++            continue; // reject malformed / mismatched packet, stay up
++        }
++
++        size_t payloadOffset = kPacketHeaderWireSize;
++        size_t payloadSize = static_cast<size_t>(n) - payloadOffset;
++        if (payloadSize != header->payloadSize || payloadSize != kControllerStateWireSize) {
++            std::lock_guard<std::mutex> lock(statsMutex_);
++            ++stats_.inputPacketsMalformed;
++            continue;
++        }
++
++        auto state = parseControllerState(buf.data() + payloadOffset, payloadSize);
++        if (!state) {
++            std::lock_guard<std::mutex> lock(statsMutex_);
++            ++stats_.inputPacketsMalformed;
++            continue;
++        }
++
++        bool accepted;
++        {
++            std::lock_guard<std::mutex> lock(trackerMutex_);
++            accepted = inputTracker_.onPacketReceived(*state, nowMicros());
++        }
++
++        {
++            std::lock_guard<std::mutex> lock(statsMutex_);
++            if (accepted) {
++                ++stats_.inputPacketsAccepted;
++                // Latency estimate needs a shared time base with the
++                // client, unlike the steady_clock used for
++                // timeout/sequence bookkeeping above -- see the comment
++                // on wallClockNowUs() in client/src/main.cpp. Skip
++                // clearly-bogus deltas (clock not synced, or a client
++                // that hasn't been updated to send wall-clock time yet)
++                // rather than polluting the average with them.
++                uint64_t nowWallUs = nowMicrosEpoch();
++                if (nowWallUs >= state->clientTimestampUs) {
++                    uint64_t latencyUs = nowWallUs - state->clientTimestampUs;
++                    constexpr uint64_t kMaxPlausibleLatencyUs = 10'000'000; // 10s
++                    if (latencyUs <= kMaxPlausibleLatencyUs) {
++                        stats_.recordLatency(latencyUs);
++                    }
++                }
++            } else {
++                ++stats_.inputPacketsOutOfOrder;
++            }
++        }
++
++        if (accepted) {
++            inputSink_.applyControllerState(*state);
++        }
++    }
++}
++
++void NetServer::watchdogLoop() {
++    uint64_t lastPruneUs = nowMicros();
++    uint64_t lastStatsLogUs = nowMicros();
++
++    while (running_.load()) {
++        std::this_thread::sleep_for(std::chrono::milliseconds(50));
++
++        bool timedOut;
++        {
++            std::lock_guard<std::mutex> lock(trackerMutex_);
++            timedOut = inputTracker_.isTimedOut(nowMicros(), config_.inputTimeoutUs);
++            if (timedOut) {
++                inputTracker_.reset();
++            }
++        }
++        if (timedOut) {
++            std::fprintf(stderr, "NetServer: input timeout, releasing all inputs\n");
++            inputSink_.releaseAll();
++        }
++
++        uint64_t now = nowMicros();
++        if (now - lastPruneUs > config_.connectionAttemptWindowUs) {
++            std::lock_guard<std::mutex> lock(rateLimiterMutex_);
++            rateLimiter_.pruneStaleEntries(now);
++            lastPruneUs = now;
++        }
++
++        if (now - lastStatsLogUs >= config_.statsLoggingIntervalUs) {
++            NetServerStats snapshot;
++            {
++                std::lock_guard<std::mutex> lock(statsMutex_);
++                snapshot = stats_;
++                stats_ = NetServerStats{};
++            }
++            double windowSec = static_cast<double>(now - lastStatsLogUs) / 1'000'000.0;
++            lastStatsLogUs = now;
++
++            if (snapshot.inputPacketsAccepted || snapshot.inputPacketsOutOfOrder ||
++                snapshot.inputPacketsMalformed || snapshot.framesSent || snapshot.framesDropped) {
++                double inputRate = windowSec > 0 ? static_cast<double>(snapshot.inputPacketsAccepted) / windowSec : 0.0;
++                double frameRate = windowSec > 0 ? static_cast<double>(snapshot.framesSent) / windowSec : 0.0;
++
++                if (snapshot.latencySampleCount > 0) {
++                    double avgLatencyMs =
++                        static_cast<double>(snapshot.latencySumUs) / static_cast<double>(snapshot.latencySampleCount) / 1000.0;
++                    std::fprintf(stderr,
++                                  "NetServer: stats -- input: accepted=%llu outOfOrder=%llu malformed=%llu "
++                                  "(%.1f/s) | video: sent=%llu (%.1f fps) dropped=%llu | latency: avg=%.1fms "
++                                  "min=%.1fms max=%.1fms (n=%llu)\n",
++                                  static_cast<unsigned long long>(snapshot.inputPacketsAccepted),
++                                  static_cast<unsigned long long>(snapshot.inputPacketsOutOfOrder),
++                                  static_cast<unsigned long long>(snapshot.inputPacketsMalformed), inputRate,
++                                  static_cast<unsigned long long>(snapshot.framesSent), frameRate,
++                                  static_cast<unsigned long long>(snapshot.framesDropped), avgLatencyMs,
++                                  static_cast<double>(snapshot.latencyMinUs) / 1000.0,
++                                  static_cast<double>(snapshot.latencyMaxUs) / 1000.0,
++                                  static_cast<unsigned long long>(snapshot.latencySampleCount));
++                } else {
++                    std::fprintf(stderr,
++                                  "NetServer: stats -- input: accepted=%llu outOfOrder=%llu malformed=%llu "
++                                  "(%.1f/s) | video: sent=%llu (%.1f fps) dropped=%llu\n",
++                                  static_cast<unsigned long long>(snapshot.inputPacketsAccepted),
++                                  static_cast<unsigned long long>(snapshot.inputPacketsOutOfOrder),
++                                  static_cast<unsigned long long>(snapshot.inputPacketsMalformed), inputRate,
++                                  static_cast<unsigned long long>(snapshot.framesSent), frameRate,
++                                  static_cast<unsigned long long>(snapshot.framesDropped));
++                }
++            }
++        }
++    }
++}
++
++void NetServer::videoLoop() {
++    const auto interval = std::chrono::microseconds(
++        1'000'000 / (config_.videoSendFps > 0 ? config_.videoSendFps : 60));
++
++    while (running_.load()) {
++        sockaddr_in clientAddr{};
++        socklen_t clientLen = sizeof(clientAddr);
++        int clientFd = ::accept(videoListenFd_, reinterpret_cast<sockaddr*>(&clientAddr), &clientLen);
++        if (clientFd < 0) {
++            if (!running_.load()) break;
++            continue;
++        }
++
++        int previous = videoClientFd_.exchange(clientFd);
++        if (previous >= 0) {
++            ::close(clientFd);
++            videoClientFd_ = previous;
++            continue;
++        }
++
++        if (!clientAuthenticated_.load() ||
++            clientAddr.sin_addr.s_addr != authenticatedClientAddr_.load()) {
++            std::fprintf(stderr, "NetServer: rejecting video connection (no authenticated session)\n");
++            ::close(clientFd);
++            videoClientFd_ = -1;
++            continue;
++        }
++
++        int nodelay = 1;
++        ::setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
++
++        // Bounds how long a stalled/slow reader can block this thread: without
++        // this, a full TCP send buffer makes send() block indefinitely, which
++        // is exactly the kind of unbounded network wait spec section 15 rules
++        // out (it doesn't affect emulation directly since this is its own
++        // thread, but it would otherwise hang this connection -- and thus
++        // frame delivery to any well-behaved future reconnect -- forever).
++        timeval sendTimeout{};
++        sendTimeout.tv_sec = 1;
++        sendTimeout.tv_usec = 0;
++        ::setsockopt(clientFd, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, sizeof(sendTimeout));
++
++        std::vector<uint8_t> frame;
++        std::optional<uint64_t> lastSentFrameIndex;
++        while (running_.load()) {
++            auto tickStart = std::chrono::steady_clock::now();
++
++            uint64_t frameIndex = 0;
++            if (frameSource_.getLatestFrame(frame, frameIndex)) {
++                ByteBuffer packet = buildPacket(PacketType::VideoFrame, frame);
++                if (!sendAll(clientFd, packet.data(), packet.size())) {
++                    break;
++                }
++
++                std::lock_guard<std::mutex> lock(statsMutex_);
++                ++stats_.framesSent;
++                if (lastSentFrameIndex && frameIndex > *lastSentFrameIndex + 1) {
++                    stats_.framesDropped += frameIndex - *lastSentFrameIndex - 1;
++                }
++                lastSentFrameIndex = frameIndex;
++            }
++
++            auto elapsed = std::chrono::steady_clock::now() - tickStart;
++            auto remaining = interval - std::chrono::duration_cast<std::chrono::microseconds>(elapsed);
++            if (remaining.count() > 0) {
++                std::this_thread::sleep_for(remaining);
++            }
++        }
++
++        ::close(clientFd);
++        videoClientFd_ = -1;
++    }
++}
++
++} // namespace melonds_remote::host
+diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.h b/src/frontend/qt_sdl/remote_server/host/net_server.h
+new file mode 100644
+index 0000000..6a7243b
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/host/net_server.h
+@@ -0,0 +1,136 @@
++#pragma once
++
++// Minimal standalone host server: one TCP control connection (handshake +
++// heartbeat + disconnect), one UDP input socket (ControllerState packets),
++// and one TCP video connection (bottom-screen frames). This is the Phase 1
++// "minimal host server" from SPEC.md section 24, built against IFrameSource
++// / IEmulatorInputSink so it works today with a synthetic frame source and
++// a logging input sink, and can be pointed at a real melonDS integration
++// later without changing any network code.
++//
++// Security posture (spec section 13): binds explicitly to the given
++// address (never INADDR_ANY implicitly), supports only one client at a
++// time, validates every packet's magic/version/size before acting on it,
++// and never accepts a file path or shell command from the client.
++
++#include <atomic>
++#include <cstdint>
++#include <mutex>
++#include <string>
++#include <thread>
++
++#include "host/emulator_input_sink.h"
++#include "host/frame_source.h"
++#include "melonds_remote/input_state_tracker.h"
++#include "melonds_remote/rate_limiter.h"
++
++namespace melonds_remote::host {
++
++struct NetServerConfig {
++    std::string bindAddress = "127.0.0.1";
++    uint16_t controlPort = 8760;
++    uint16_t inputPort = 8761;
++    uint16_t videoPort = 8762;
++    uint64_t inputTimeoutUs = 500'000; // 500ms, spec section 6.4 / 7.1
++    int videoSendFps = 60;
++
++    // Empty means authentication is disabled -- spec section 13 requires
++    // this to be a conscious, warned-about choice, not a silent default.
++    std::string authToken;
++
++    // If a control-channel connection is silent (no heartbeat, no other
++    // control traffic) for longer than this, it is dropped. Distinct from
++    // inputTimeoutUs, which governs the UDP input stream.
++    uint64_t controlHeartbeatTimeoutUs = 5'000'000; // 5s
++
++    // Connection-attempt rate limiting (spec section 13).
++    int maxConnectionAttemptsPerWindow = 5;
++    uint64_t connectionAttemptWindowUs = 10'000'000; // 10s
++
++    // How often to log aggregated diagnostics (spec sections 8.5 and 14:
++    // frame rate, dropped frames, input packet rate, out-of-order
++    // packets, and latency instrumentation).
++    uint64_t statsLoggingIntervalUs = 5'000'000; // 5s
++};
++
++// Aggregated counters reset each time they're logged. Guarded by
++// NetServer::statsMutex_ -- deliberately a single mutex-protected struct
++// rather than several independent atomics, since it's read/reset as one
++// unit on the ~5s logging cadence and written at most once per received
++// packet or sent frame (not a hot enough path to need lock-free counters).
++struct NetServerStats {
++    uint64_t inputPacketsAccepted = 0;
++    uint64_t inputPacketsOutOfOrder = 0;
++    uint64_t inputPacketsMalformed = 0;
++    uint64_t framesSent = 0;
++    uint64_t framesDropped = 0;
++    uint64_t latencySampleCount = 0;
++    uint64_t latencySumUs = 0;
++    uint64_t latencyMinUs = UINT64_MAX;
++    uint64_t latencyMaxUs = 0;
++
++    void recordLatency(uint64_t latencyUs) {
++        ++latencySampleCount;
++        latencySumUs += latencyUs;
++        if (latencyUs < latencyMinUs) latencyMinUs = latencyUs;
++        if (latencyUs > latencyMaxUs) latencyMaxUs = latencyUs;
++    }
++};
++
++class NetServer {
++public:
++    NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource);
++    ~NetServer();
++
++    NetServer(const NetServer&) = delete;
++    NetServer& operator=(const NetServer&) = delete;
++
++    // Starts all worker threads. Non-blocking; call stop() (or destroy the
++    // object) to shut down.
++    void start();
++    void stop();
++
++private:
++    void controlLoop();
++    void inputLoop();
++    void videoLoop();
++    void watchdogLoop();
++
++    NetServerConfig config_;
++    IEmulatorInputSink& inputSink_;
++    IFrameSource& frameSource_;
++
++    std::atomic<bool> running_{false};
++    std::thread controlThread_;
++    std::thread inputThread_;
++    std::thread videoThread_;
++    std::thread watchdogThread_;
++
++    InputStateTracker inputTracker_;
++    std::mutex trackerMutex_;
++
++    ConnectionRateLimiter rateLimiter_;
++    std::mutex rateLimiterMutex_;
++
++    NetServerStats stats_;
++    std::mutex statsMutex_;
++
++    int controlListenFd_ = -1;
++    int videoListenFd_ = -1;
++    int inputFd_ = -1;
++
++    std::atomic<int> controlClientFd_{-1};
++    std::atomic<int> videoClientFd_{-1};
++
++    // Set only once a client has completed the (possibly authenticated)
++    // control-channel handshake, and cleared on disconnect/timeout.
++    // inputLoop() uses this -- together with authenticatedClientAddr_ --
++    // to refuse to act on ControllerState packets from anyone who hasn't
++    // authenticated, and from any source address other than the
++    // authenticated client's (spec section 13: don't accept arbitrary
++    // unauthenticated input).
++    std::atomic<bool> clientAuthenticated_{false};
++    std::atomic<uint32_t> authenticatedClientAddr_{0}; // sockaddr_in::sin_addr.s_addr, network byte order
++};
++
++} // namespace melonds_remote::host
+diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/input_state_tracker.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/input_state_tracker.h
+new file mode 100644
+index 0000000..48014b9
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/input_state_tracker.h
+@@ -0,0 +1,64 @@
++#pragma once
++
++// Transport-independent logic for tracking the "current" controller state
++// from a stream of possibly out-of-order, possibly-lost UDP packets, and for
++// producing the all-released state required on timeout or disconnect (spec
++// sections 6.3 and 6.4). Kept free of any socket code so it can be unit
++// tested directly.
++
++#include <cstdint>
++#include <optional>
++
++#include "melonds_remote/protocol.h"
++
++namespace melonds_remote {
++
++class InputStateTracker {
++public:
++    // Feeds a newly received, already-parsed ControllerState in at time
++    // `nowUs` (microseconds, monotonic clock recommended). Packets whose
++    // sequence number is not newer than the last accepted one (using
++    // wraparound-aware comparison over the 32-bit sequence space) are
++    // dropped, per spec 6.3 ("host must discard old or out-of-order
++    // packets"). A tracker instance is scoped to one client session; when a
++    // client reconnects and gets a new session from the control channel,
++    // call reset() explicitly rather than relying on sequence-number
++    // heuristics to detect the restart.
++    //
++    // Returns true if the packet was accepted and is now the current state.
++    bool onPacketReceived(const ControllerState& state, uint64_t nowUs);
++
++    // The most recently accepted state, or an all-released state if nothing
++    // has been accepted yet.
++    const ControllerState& currentState() const { return current_; }
++
++    uint64_t lastReceivedAtUs() const { return lastReceivedAtUs_; }
++
++    bool hasReceivedAnyPacket() const { return hasReceivedAnyPacket_; }
++
++    // True if no packet has been accepted within `timeoutUs` of `nowUs`.
++    // Only meaningful once hasReceivedAnyPacket() is true; a client that
++    // never sent anything is not "timed out", it simply never connected.
++    bool isTimedOut(uint64_t nowUs, uint64_t timeoutUs) const;
++
++    // Resets to the all-released state and forgets sequence/timing history.
++    // Must be called on disconnect/timeout so no button can remain held
++    // (spec 6.4).
++    void reset();
++
++    // The canonical "everything released" state: no buttons, no touch, no
++    // analog deflection, no pending emulator actions.
++    static ControllerState releasedState();
++
++private:
++    // Sequence numbers wrap around at 2^32; a "new" packet is one whose
++    // signed circular distance ahead of the last accepted one is positive
++    // (standard wraparound-aware sequence comparison).
++    static bool isNewerSequence(uint32_t candidate, uint32_t last);
++
++    ControllerState current_ = releasedState();
++    uint64_t lastReceivedAtUs_ = 0;
++    bool hasReceivedAnyPacket_ = false;
++};
++
++} // namespace melonds_remote
+diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
+new file mode 100644
+index 0000000..3263469
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
+@@ -0,0 +1,196 @@
++#pragma once
++
++// melonDS Remote wire protocol definitions.
++//
++// This header defines the versioned, explicitly-sized, explicitly-serialized
++// packet formats used between the Steam Deck client and the HTPC host. See
++// docs/protocol.md for the human-readable protocol description.
++//
++// All multi-byte integers are little-endian on the wire regardless of host
++// byte order. Use the serialize()/deserialize() functions below rather than
++// reinterpreting raw structs over the network -- struct layout is
++// compiler/ABI-dependent and must never be sent directly.
++
++#include <array>
++#include <cstddef>
++#include <cstdint>
++#include <optional>
++#include <string>
++#include <vector>
++
++namespace melonds_remote {
++
++// Bumped whenever the wire format changes incompatibly.
++inline constexpr uint16_t kProtocolVersion = 1;
++
++// Sentinel at the start of every packet so malformed/foreign traffic on the
++// same port can be rejected cheaply before any further parsing.
++inline constexpr uint32_t kPacketMagic = 0x444D5231; // "DMR1"
++
++enum class PacketType : uint16_t {
++    Hello = 1,        // client -> host, control channel, session handshake request
++    HelloAck = 2,      // host -> client, control channel, session handshake response
++    ControllerState = 3, // client -> host, input channel, full input state
++    Heartbeat = 4,     // either direction, control channel, keepalive
++    Disconnect = 5,    // either direction, control channel, graceful teardown
++    EmulatorAction = 6, // client -> host, control channel, one-shot emulator command
++    VideoFrame = 7,    // host -> client, video channel, one bottom-screen frame
++};
++
++// DS button bitmask (wire format; independent from melonDS's internal
++// KEYINPUT bit order -- see docs/melonds-integration-analysis.md section 2).
++enum DSButton : uint16_t {
++    DSButton_A      = 1u << 0,
++    DSButton_B      = 1u << 1,
++    DSButton_X      = 1u << 2,
++    DSButton_Y      = 1u << 3,
++    DSButton_Up     = 1u << 4,
++    DSButton_Down   = 1u << 5,
++    DSButton_Left   = 1u << 6,
++    DSButton_Right  = 1u << 7,
++    DSButton_L      = 1u << 8,
++    DSButton_R      = 1u << 9,
++    DSButton_Start  = 1u << 10,
++    DSButton_Select = 1u << 11,
++};
++
++// Emulator action bitmask, independent from DSButton (spec section 7.5/9).
++enum EmulatorAction : uint16_t {
++    EmulatorAction_PauseResume    = 1u << 0,
++    EmulatorAction_FastForward    = 1u << 1,
++    EmulatorAction_SaveState      = 1u << 2,
++    EmulatorAction_LoadState      = 1u << 3,
++    EmulatorAction_SwapScreens    = 1u << 4,
++    EmulatorAction_OpenClientMenu = 1u << 5,
++    EmulatorAction_Disconnect     = 1u << 6,
++    EmulatorAction_QuitSession    = 1u << 7,
++};
++
++// Native DS bottom-screen touch range (spec section 7.4).
++inline constexpr uint16_t kTouchMaxX = 255;
++inline constexpr uint16_t kTouchMaxY = 191;
++
++// Bound on any length-prefixed string field below, to reject an
++// obviously-hostile declared length before ever allocating for it (spec
++// section 13: validate packet sizes and values).
++inline constexpr size_t kMaxProtocolStringLength = 64;
++
++// Hello (client -> host) handshake payload. See docs/protocol.md
++// "Handshake" for the full negotiation description; this is the minimal
++// version implemented so far -- capability negotiation fields beyond
++// display size are not yet included.
++struct HelloPayload {
++    std::string clientName;    // up to kMaxProtocolStringLength bytes
++    std::string clientPlatform; // up to kMaxProtocolStringLength bytes
++    uint16_t displayWidth = 0;
++    uint16_t displayHeight = 0;
++    std::string authToken;     // up to kMaxProtocolStringLength bytes; empty if host requires none
++};
++
++enum class HelloRejectReason : uint8_t {
++    None = 0,
++    ProtocolVersionMismatch = 1,
++    AuthenticationFailed = 2,
++    HostBusy = 3,
++};
++
++// HelloAck (host -> client) handshake payload.
++struct HelloAckPayload {
++    uint8_t accepted = 0; // 0 or 1
++    HelloRejectReason rejectReason = HelloRejectReason::None; // meaningful only if !accepted
++    uint32_t sessionId = 0;
++    uint16_t nativeWidth = 256;
++    uint16_t nativeHeight = 192;
++};
++
++// Full controller state, sent at a fixed rate (recommended 120 Hz) rather
++// than only on button transitions, so a lost packet cannot leave a button
++// stuck (spec section 6.3).
++struct ControllerState {
++    uint32_t sequence = 0;
++    uint64_t clientTimestampUs = 0;
++    uint16_t dsButtons = 0;        // DSButton bitmask, 1 = pressed
++    uint16_t emulatorActions = 0;  // EmulatorAction bitmask, 1 = active this packet
++    int16_t leftStickX = 0;        // -32768..32767, centered at 0
++    int16_t leftStickY = 0;
++    int16_t rightStickX = 0;
++    int16_t rightStickY = 0;
++    uint8_t touchActive = 0;       // 0 or 1
++    uint16_t touchX = 0;           // 0..kTouchMaxX, valid only if touchActive
++    uint16_t touchY = 0;           // 0..kTouchMaxY, valid only if touchActive
++};
++
++// Wire size of a serialized ControllerState payload (not including the
++// common PacketHeader). Kept explicit so tests can catch accidental growth.
++inline constexpr size_t kControllerStateWireSize =
++    4 + 8 + 2 + 2 + 2 + 2 + 2 + 2 + 1 + 2 + 2;
++
++struct PacketHeader {
++    uint32_t magic = kPacketMagic;
++    uint16_t protocolVersion = kProtocolVersion;
++    PacketType type = PacketType::Hello;
++    uint32_t payloadSize = 0;
++};
++
++inline constexpr size_t kPacketHeaderWireSize = 4 + 2 + 2 + 4;
++
++using ByteBuffer = std::vector<uint8_t>;
++
++// Appends a little-endian integer to `out`.
++void appendU16(ByteBuffer& out, uint16_t v);
++void appendU32(ByteBuffer& out, uint32_t v);
++void appendU64(ByteBuffer& out, uint64_t v);
++void appendI16(ByteBuffer& out, int16_t v);
++
++// Reads a little-endian integer from `data` at `offset`.
++// Caller must have already validated that offset+size <= data.size().
++uint16_t readU16(const uint8_t* data, size_t offset);
++uint32_t readU32(const uint8_t* data, size_t offset);
++uint64_t readU64(const uint8_t* data, size_t offset);
++int16_t readI16(const uint8_t* data, size_t offset);
++
++// Serializes a packet header. Always writes kPacketHeaderWireSize bytes.
++void serializeHeader(ByteBuffer& out, const PacketHeader& header);
++
++// Parses a packet header from a buffer of at least kPacketHeaderWireSize
++// bytes. Returns std::nullopt if the magic number doesn't match; does not
++// validate protocol version (caller decides whether to accept/reject a
++// version mismatch).
++std::optional<PacketHeader> parseHeader(const uint8_t* data, size_t size);
++
++// Serializes a ControllerState payload (header not included).
++void serializeControllerState(ByteBuffer& out, const ControllerState& state);
++
++// Parses a ControllerState payload of exactly kControllerStateWireSize
++// bytes. Returns std::nullopt on malformed input (wrong size, out-of-range
++// touch coordinates, or an invalid touchActive value).
++std::optional<ControllerState> parseControllerState(const uint8_t* data, size_t size);
++
++// Builds a complete Hello/HelloAck/etc. packet: header + raw payload bytes.
++// `payload` may be empty for packet types that carry no body (e.g.
++// Heartbeat, Disconnect).
++ByteBuffer buildPacket(PacketType type, const ByteBuffer& payload);
++
++// Builds a complete ControllerState packet (header + serialized body).
++ByteBuffer buildControllerStatePacket(const ControllerState& state);
++
++// Appends a length-prefixed (u16 length + bytes) string. Rejects (asserts
++// via caller contract, not enforced here) building a packet with a string
++// longer than kMaxProtocolStringLength -- callers should truncate first.
++void appendString(ByteBuffer& out, const std::string& s);
++
++// Reads a length-prefixed string starting at `offset`, advancing `offset`
++// past it. Returns std::nullopt if the buffer is too short for the
++// declared length or the declared length exceeds
++// kMaxProtocolStringLength (spec section 13: validate every field).
++std::optional<std::string> readString(const uint8_t* data, size_t size, size_t& offset);
++
++void serializeHelloPayload(ByteBuffer& out, const HelloPayload& hello);
++std::optional<HelloPayload> parseHelloPayload(const uint8_t* data, size_t size);
++ByteBuffer buildHelloPacket(const HelloPayload& hello);
++
++void serializeHelloAckPayload(ByteBuffer& out, const HelloAckPayload& ack);
++std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t size);
++ByteBuffer buildHelloAckPacket(const HelloAckPayload& ack);
++
++} // namespace melonds_remote
+diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/rate_limiter.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/rate_limiter.h
+new file mode 100644
+index 0000000..f1dc741
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/rate_limiter.h
+@@ -0,0 +1,43 @@
++#pragma once
++
++// Sliding-window connection-attempt rate limiter (spec section 13:
++// "Rate-limit connection attempts"). Transport-independent -- keyed by
++// whatever string identifies a client (typically its source IP), so it is
++// unit-testable without any socket code.
++
++#include <cstdint>
++#include <string>
++#include <unordered_map>
++#include <vector>
++
++namespace melonds_remote {
++
++class ConnectionRateLimiter {
++public:
++    // Allows at most `maxAttempts` per `windowUs` microseconds, per key.
++    ConnectionRateLimiter(int maxAttempts, uint64_t windowUs);
++
++    // Records an attempt from `key` at time `nowUs` and returns true if it
++    // is allowed (i.e. fewer than maxAttempts attempts from this key fall
++    // within the trailing window), or false if it should be rejected.
++    // A rejected attempt is still recorded, so a client hammering the
++    // listener does not get to "reset" its own window by retrying faster.
++    bool allowAttempt(const std::string& key, uint64_t nowUs);
++
++    // Removes bookkeeping for keys with no attempts in the trailing
++    // window, so long-running processes don't accumulate unbounded state
++    // from many distinct source addresses (spec section 15: bounded
++    // state).
++    void pruneStaleEntries(uint64_t nowUs);
++
++private:
++    struct Entry {
++        std::vector<uint64_t> attemptTimesUs;
++    };
++
++    int maxAttempts_;
++    uint64_t windowUs_;
++    std::unordered_map<std::string, Entry> entries_;
++};
++
++} // namespace melonds_remote
+diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/touch_mapping.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/touch_mapping.h
+new file mode 100644
+index 0000000..4f628e8
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/touch_mapping.h
+@@ -0,0 +1,39 @@
++#pragma once
++
++// Touch coordinate mapping between a client's rendered display rectangle
++// and the DS touchscreen's native 256x192 coordinate space (spec section
++// 7.4). This is pure, transport-independent math so it can be unit tested
++// without any windowing or networking involved.
++
++#include <cstdint>
++#include <optional>
++
++#include "melonds_remote/protocol.h"
++
++namespace melonds_remote {
++
++// Describes where the aspect-correct DS image rectangle sits within a
++// larger window/display surface, in the same pixel units as the raw touch
++// event (e.g. Steam Deck panel pixels).
++struct RenderRect {
++    double x = 0;
++    double y = 0;
++    double width = 0;
++    double height = 0;
++};
++
++// Computes the largest 4:3 rectangle that fits within `surfaceWidth` x
++// `surfaceHeight`, centered on the surface. This is the "aspect-correct
++// fit" display mode and is the default per spec section 7.4.
++RenderRect computeAspectFitRect(double surfaceWidth, double surfaceHeight);
++
++// Converts a raw touch/pointer position (in the same coordinate space as
++// `rect`, e.g. window pixels) into normalized DS touchscreen coordinates.
++//
++// Returns std::nullopt if the point falls outside `rect` -- callers must
++// ignore touches outside the rendered DS rectangle by default (spec
++// section 7.4, step 2), rather than clamping them into range.
++std::optional<std::pair<uint16_t, uint16_t>> mapPointToDSCoords(
++    double pointX, double pointY, const RenderRect& rect);
++
++} // namespace melonds_remote
+diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/input_state_tracker.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/input_state_tracker.cpp
+new file mode 100644
+index 0000000..a1aff53
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/protocol/src/input_state_tracker.cpp
+@@ -0,0 +1,49 @@
++#include "melonds_remote/input_state_tracker.h"
++
++namespace melonds_remote {
++
++bool InputStateTracker::isNewerSequence(uint32_t candidate, uint32_t last) {
++    return static_cast<int32_t>(candidate - last) > 0;
++}
++
++ControllerState InputStateTracker::releasedState() {
++    ControllerState released;
++    released.sequence = 0;
++    released.clientTimestampUs = 0;
++    released.dsButtons = 0;
++    released.emulatorActions = 0;
++    released.leftStickX = 0;
++    released.leftStickY = 0;
++    released.rightStickX = 0;
++    released.rightStickY = 0;
++    released.touchActive = 0;
++    released.touchX = 0;
++    released.touchY = 0;
++    return released;
++}
++
++bool InputStateTracker::onPacketReceived(const ControllerState& state, uint64_t nowUs) {
++    if (hasReceivedAnyPacket_ && !isNewerSequence(state.sequence, current_.sequence)) {
++        return false;
++    }
++
++    current_ = state;
++    lastReceivedAtUs_ = nowUs;
++    hasReceivedAnyPacket_ = true;
++    return true;
++}
++
++bool InputStateTracker::isTimedOut(uint64_t nowUs, uint64_t timeoutUs) const {
++    if (!hasReceivedAnyPacket_) {
++        return false;
++    }
++    return (nowUs - lastReceivedAtUs_) > timeoutUs;
++}
++
++void InputStateTracker::reset() {
++    current_ = releasedState();
++    lastReceivedAtUs_ = 0;
++    hasReceivedAnyPacket_ = false;
++}
++
++} // namespace melonds_remote
+diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
+new file mode 100644
+index 0000000..a081f74
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
+@@ -0,0 +1,254 @@
++#include "melonds_remote/protocol.h"
++
++#include <cstring>
++
++namespace melonds_remote {
++
++void appendU16(ByteBuffer& out, uint16_t v) {
++    out.push_back(static_cast<uint8_t>(v & 0xFF));
++    out.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
++}
++
++void appendU32(ByteBuffer& out, uint32_t v) {
++    for (int i = 0; i < 4; ++i) {
++        out.push_back(static_cast<uint8_t>((v >> (8 * i)) & 0xFF));
++    }
++}
++
++void appendU64(ByteBuffer& out, uint64_t v) {
++    for (int i = 0; i < 8; ++i) {
++        out.push_back(static_cast<uint8_t>((v >> (8 * i)) & 0xFF));
++    }
++}
++
++void appendI16(ByteBuffer& out, int16_t v) {
++    appendU16(out, static_cast<uint16_t>(v));
++}
++
++uint16_t readU16(const uint8_t* data, size_t offset) {
++    return static_cast<uint16_t>(data[offset]) |
++           (static_cast<uint16_t>(data[offset + 1]) << 8);
++}
++
++uint32_t readU32(const uint8_t* data, size_t offset) {
++    return static_cast<uint32_t>(data[offset]) |
++           (static_cast<uint32_t>(data[offset + 1]) << 8) |
++           (static_cast<uint32_t>(data[offset + 2]) << 16) |
++           (static_cast<uint32_t>(data[offset + 3]) << 24);
++}
++
++uint64_t readU64(const uint8_t* data, size_t offset) {
++    uint64_t v = 0;
++    for (int i = 0; i < 8; ++i) {
++        v |= static_cast<uint64_t>(data[offset + static_cast<size_t>(i)]) << (8 * i);
++    }
++    return v;
++}
++
++int16_t readI16(const uint8_t* data, size_t offset) {
++    return static_cast<int16_t>(readU16(data, offset));
++}
++
++void serializeHeader(ByteBuffer& out, const PacketHeader& header) {
++    appendU32(out, header.magic);
++    appendU16(out, header.protocolVersion);
++    appendU16(out, static_cast<uint16_t>(header.type));
++    appendU32(out, header.payloadSize);
++}
++
++std::optional<PacketHeader> parseHeader(const uint8_t* data, size_t size) {
++    if (data == nullptr || size < kPacketHeaderWireSize) {
++        return std::nullopt;
++    }
++
++    PacketHeader header;
++    header.magic = readU32(data, 0);
++    if (header.magic != kPacketMagic) {
++        return std::nullopt;
++    }
++    header.protocolVersion = readU16(data, 4);
++    header.type = static_cast<PacketType>(readU16(data, 6));
++    header.payloadSize = readU32(data, 8);
++    return header;
++}
++
++void serializeControllerState(ByteBuffer& out, const ControllerState& state) {
++    appendU32(out, state.sequence);
++    appendU64(out, state.clientTimestampUs);
++    appendU16(out, state.dsButtons);
++    appendU16(out, state.emulatorActions);
++    appendI16(out, state.leftStickX);
++    appendI16(out, state.leftStickY);
++    appendI16(out, state.rightStickX);
++    appendI16(out, state.rightStickY);
++    out.push_back(state.touchActive ? 1 : 0);
++    appendU16(out, state.touchX);
++    appendU16(out, state.touchY);
++}
++
++std::optional<ControllerState> parseControllerState(const uint8_t* data, size_t size) {
++    if (data == nullptr || size != kControllerStateWireSize) {
++        return std::nullopt;
++    }
++
++    size_t offset = 0;
++    ControllerState state;
++    state.sequence = readU32(data, offset); offset += 4;
++    state.clientTimestampUs = readU64(data, offset); offset += 8;
++    state.dsButtons = readU16(data, offset); offset += 2;
++    state.emulatorActions = readU16(data, offset); offset += 2;
++    state.leftStickX = readI16(data, offset); offset += 2;
++    state.leftStickY = readI16(data, offset); offset += 2;
++    state.rightStickX = readI16(data, offset); offset += 2;
++    state.rightStickY = readI16(data, offset); offset += 2;
++
++    uint8_t touchActive = data[offset]; offset += 1;
++    if (touchActive != 0 && touchActive != 1) {
++        return std::nullopt;
++    }
++    state.touchActive = touchActive;
++
++    state.touchX = readU16(data, offset); offset += 2;
++    state.touchY = readU16(data, offset); offset += 2;
++
++    if (state.touchActive) {
++        if (state.touchX > kTouchMaxX || state.touchY > kTouchMaxY) {
++            return std::nullopt;
++        }
++    }
++
++    return state;
++}
++
++ByteBuffer buildPacket(PacketType type, const ByteBuffer& payload) {
++    PacketHeader header;
++    header.type = type;
++    header.payloadSize = static_cast<uint32_t>(payload.size());
++
++    ByteBuffer out;
++    out.reserve(kPacketHeaderWireSize + payload.size());
++    serializeHeader(out, header);
++    out.insert(out.end(), payload.begin(), payload.end());
++    return out;
++}
++
++ByteBuffer buildControllerStatePacket(const ControllerState& state) {
++    ByteBuffer payload;
++    payload.reserve(kControllerStateWireSize);
++    serializeControllerState(payload, state);
++    return buildPacket(PacketType::ControllerState, payload);
++}
++
++void appendString(ByteBuffer& out, const std::string& s) {
++    appendU16(out, static_cast<uint16_t>(s.size()));
++    out.insert(out.end(), s.begin(), s.end());
++}
++
++std::optional<std::string> readString(const uint8_t* data, size_t size, size_t& offset) {
++    if (offset + 2 > size) {
++        return std::nullopt;
++    }
++    uint16_t len = readU16(data, offset);
++    offset += 2;
++
++    if (len > kMaxProtocolStringLength) {
++        return std::nullopt;
++    }
++    if (offset + len > size) {
++        return std::nullopt;
++    }
++
++    std::string s(reinterpret_cast<const char*>(data + offset), len);
++    offset += len;
++    return s;
++}
++
++void serializeHelloPayload(ByteBuffer& out, const HelloPayload& hello) {
++    appendString(out, hello.clientName);
++    appendString(out, hello.clientPlatform);
++    appendU16(out, hello.displayWidth);
++    appendU16(out, hello.displayHeight);
++    appendString(out, hello.authToken);
++}
++
++std::optional<HelloPayload> parseHelloPayload(const uint8_t* data, size_t size) {
++    if (data == nullptr) {
++        return std::nullopt;
++    }
++
++    size_t offset = 0;
++    HelloPayload hello;
++
++    auto name = readString(data, size, offset);
++    if (!name) return std::nullopt;
++    hello.clientName = std::move(*name);
++
++    auto platform = readString(data, size, offset);
++    if (!platform) return std::nullopt;
++    hello.clientPlatform = std::move(*platform);
++
++    if (offset + 4 > size) return std::nullopt;
++    hello.displayWidth = readU16(data, offset); offset += 2;
++    hello.displayHeight = readU16(data, offset); offset += 2;
++
++    auto token = readString(data, size, offset);
++    if (!token) return std::nullopt;
++    hello.authToken = std::move(*token);
++
++    if (offset != size) {
++        // trailing garbage: reject rather than silently ignore
++        return std::nullopt;
++    }
++
++    return hello;
++}
++
++ByteBuffer buildHelloPacket(const HelloPayload& hello) {
++    ByteBuffer payload;
++    serializeHelloPayload(payload, hello);
++    return buildPacket(PacketType::Hello, payload);
++}
++
++void serializeHelloAckPayload(ByteBuffer& out, const HelloAckPayload& ack) {
++    out.push_back(ack.accepted ? 1 : 0);
++    out.push_back(static_cast<uint8_t>(ack.rejectReason));
++    appendU32(out, ack.sessionId);
++    appendU16(out, ack.nativeWidth);
++    appendU16(out, ack.nativeHeight);
++}
++
++std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t size) {
++    constexpr size_t kWireSize = 1 + 1 + 4 + 2 + 2;
++    if (data == nullptr || size != kWireSize) {
++        return std::nullopt;
++    }
++
++    HelloAckPayload ack;
++    size_t offset = 0;
++
++    uint8_t accepted = data[offset]; offset += 1;
++    if (accepted != 0 && accepted != 1) {
++        return std::nullopt;
++    }
++    ack.accepted = accepted;
++
++    uint8_t reason = data[offset]; offset += 1;
++    if (reason > static_cast<uint8_t>(HelloRejectReason::HostBusy)) {
++        return std::nullopt;
++    }
++    ack.rejectReason = static_cast<HelloRejectReason>(reason);
++
++    ack.sessionId = readU32(data, offset); offset += 4;
++    ack.nativeWidth = readU16(data, offset); offset += 2;
++    ack.nativeHeight = readU16(data, offset);
++
++    return ack;
++}
++
++ByteBuffer buildHelloAckPacket(const HelloAckPayload& ack) {
++    ByteBuffer payload;
++    serializeHelloAckPayload(payload, ack);
++    return buildPacket(PacketType::HelloAck, payload);
++}
++
++} // namespace melonds_remote
+diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/rate_limiter.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/rate_limiter.cpp
+new file mode 100644
+index 0000000..1c0700b
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/protocol/src/rate_limiter.cpp
+@@ -0,0 +1,38 @@
++#include "melonds_remote/rate_limiter.h"
++
++#include <algorithm>
++
++namespace melonds_remote {
++
++ConnectionRateLimiter::ConnectionRateLimiter(int maxAttempts, uint64_t windowUs)
++    : maxAttempts_(maxAttempts), windowUs_(windowUs) {}
++
++namespace {
++void pruneEntry(std::vector<uint64_t>& times, uint64_t nowUs, uint64_t windowUs) {
++    times.erase(std::remove_if(times.begin(), times.end(),
++                                [&](uint64_t t) { return nowUs - t > windowUs; }),
++                times.end());
++}
++} // namespace
++
++bool ConnectionRateLimiter::allowAttempt(const std::string& key, uint64_t nowUs) {
++    Entry& entry = entries_[key];
++    pruneEntry(entry.attemptTimesUs, nowUs, windowUs_);
++
++    bool allowed = static_cast<int>(entry.attemptTimesUs.size()) < maxAttempts_;
++    entry.attemptTimesUs.push_back(nowUs);
++    return allowed;
++}
++
++void ConnectionRateLimiter::pruneStaleEntries(uint64_t nowUs) {
++    for (auto it = entries_.begin(); it != entries_.end();) {
++        pruneEntry(it->second.attemptTimesUs, nowUs, windowUs_);
++        if (it->second.attemptTimesUs.empty()) {
++            it = entries_.erase(it);
++        } else {
++            ++it;
++        }
++    }
++}
++
++} // namespace melonds_remote
+diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/touch_mapping.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/touch_mapping.cpp
+new file mode 100644
+index 0000000..b8723f3
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/protocol/src/touch_mapping.cpp
+@@ -0,0 +1,56 @@
++#include "melonds_remote/touch_mapping.h"
++
++#include <algorithm>
++
++namespace melonds_remote {
++
++RenderRect computeAspectFitRect(double surfaceWidth, double surfaceHeight) {
++    if (surfaceWidth <= 0 || surfaceHeight <= 0) {
++        return RenderRect{0, 0, 0, 0};
++    }
++
++    constexpr double kAspect = 4.0 / 3.0;
++
++    double width = surfaceWidth;
++    double height = width / kAspect;
++
++    if (height > surfaceHeight) {
++        height = surfaceHeight;
++        width = height * kAspect;
++    }
++
++    RenderRect rect;
++    rect.width = width;
++    rect.height = height;
++    rect.x = (surfaceWidth - width) / 2.0;
++    rect.y = (surfaceHeight - height) / 2.0;
++    return rect;
++}
++
++std::optional<std::pair<uint16_t, uint16_t>> mapPointToDSCoords(
++    double pointX, double pointY, const RenderRect& rect) {
++    if (rect.width <= 0 || rect.height <= 0) {
++        return std::nullopt;
++    }
++
++    if (pointX < rect.x || pointX >= rect.x + rect.width ||
++        pointY < rect.y || pointY >= rect.y + rect.height) {
++        return std::nullopt;
++    }
++
++    double normX = (pointX - rect.x) / rect.width;
++    double normY = (pointY - rect.y) / rect.height;
++
++    double dsXf = normX * (static_cast<double>(kTouchMaxX) + 1.0);
++    double dsYf = normY * (static_cast<double>(kTouchMaxY) + 1.0);
++
++    int dsX = static_cast<int>(dsXf);
++    int dsY = static_cast<int>(dsYf);
++
++    dsX = std::clamp(dsX, 0, static_cast<int>(kTouchMaxX));
++    dsY = std::clamp(dsY, 0, static_cast<int>(kTouchMaxY));
++
++    return std::make_pair(static_cast<uint16_t>(dsX), static_cast<uint16_t>(dsY));
++}
++
++} // namespace melonds_remote
