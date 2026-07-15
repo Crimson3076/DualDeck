@@ -38,7 +38,7 @@ button stuck.
 | Offset | Size | Field              | Notes |
 |-------:|-----:|--------------------|-------|
 | 0      | 4    | `sequence`         | Monotonically increasing per client session; wraps at 2^32. Used by `InputStateTracker` to discard old/out-of-order packets. |
-| 4      | 8    | `clientTimestampUs`| Client-side capture time, for future latency instrumentation. Not currently validated by the host. |
+| 4      | 8    | `clientTimestampUs`| Client-side capture time as **wall-clock (epoch) microseconds** (`std::chrono::system_clock`), not a monotonic/ticks-since-start value -- the host computes an approximate one-way latency as `hostWallClockNow - clientTimestampUs` for the periodic stats log (spec section 8.5), which only makes sense if client and host clocks are reasonably synced (e.g. NTP). The host does not reject a packet over this field's value; implausible deltas (host time before the timestamp, or a gap over 10s) are just excluded from the latency stats rather than treated as a validation failure. |
 | 12     | 2    | `dsButtons`        | Bitmask, 1 = pressed. See "DS button bits" below. |
 | 14     | 2    | `emulatorActions`  | Bitmask, 1 = active this packet. See "Emulator action bits" below. |
 | 16     | 2    | `leftStickX`       | Signed, -32768..32767. |

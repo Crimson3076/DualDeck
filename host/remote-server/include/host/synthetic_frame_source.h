@@ -25,7 +25,7 @@ public:
     void start();
     void stop();
 
-    bool getLatestFrame(std::vector<uint8_t>& outFrame) override;
+    bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) override;
 
 private:
     void generatorLoop();
@@ -37,6 +37,7 @@ private:
 
     std::mutex bufferMutex_;
     std::vector<uint8_t> latestFrame_;
+    uint64_t latestFrameIndex_ = 0;
     bool hasFrame_ = false;
 };
 

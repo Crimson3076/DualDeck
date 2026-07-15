@@ -104,6 +104,39 @@ cross-thread communication goes through the small, mutex-protected
 - `docs/testing.md`'s smoke test now covers: wrong-token rejection,
   confirming an unauthenticated UDP sender cannot inject input or open a
   video connection, and the full authenticated happy path.
+- The SDL3 client now auto-reconnects (`client/src/main.cpp`) with capped
+  exponential backoff on a dedicated thread, since `NetClient::connect()`
+  does several blocking socket calls. This surfaced (and fixed) two real
+  bugs in `NetClient`: a file-descriptor leak on any partial-connect
+  failure path, and a `std::thread` reassignment over a still-joinable
+  thread (undefined behavior -- calls `std::terminate`) if a reconnect
+  attempt started before the previous session's video/heartbeat threads
+  had been joined. Socket fd members are now `std::atomic<int>` and
+  `connect()`/`disconnect()` are serialized by a mutex, since they can
+  now run from a different thread than the caller of
+  `sendControllerState()`/`getLatestFrame()`.
+- Added periodic diagnostics logging (`NetServer::watchdogLoop`, spec
+  sections 8.5 and 14): input packet accept/out-of-order/malformed
+  counts and rate, video frames-sent/dropped and rate, and latency
+  (avg/min/max). Frame drops are computed from a monotonic frame index
+  now returned by `IFrameSource::getLatestFrame()`, so a video thread
+  that polls slower than frames are produced can tell how many it
+  skipped. Latency requires client and host to share a comparable clock:
+  the client's `ControllerState.clientTimestampUs` was previously
+  `SDL_GetTicksNS()` (time since `SDL_Init()`, useless across processes)
+  and has been changed to wall-clock epoch time; the host uses
+  `system_clock` only for this calculation and still uses `steady_clock`
+  (immune to wall-clock jumps) for all timeout/sequence logic.
+- Fixed an unrelated, pre-existing robustness gap surfaced while testing
+  the frame-drop counter: `NetServer::videoLoop`'s `sendAll()` had no
+  send timeout, so a stalled/frozen client (TCP receive window never
+  drained) could block that thread's `send()` indefinitely once the
+  socket send buffer filled. Added `SO_SNDTIMEO` (1s) on the accepted
+  video socket; verified live that a stalled reader gets dropped and a
+  fresh video connection is accepted again within a few seconds, while
+  the rest of the server keeps running throughout (see the
+  `stall_test2.py`-style scenario used to verify this, not currently
+  checked into `tests/` as an automated case).
 
 ## Known gaps vs. the full spec
 
@@ -117,11 +150,20 @@ cross-thread communication goes through the small, mutex-protected
   controller/touch/microphone capability flags) yet -- `clientName`/
   `clientPlatform`/display size are on the wire but unused by the host
   beyond logging.
-- No client-side automatic reconnect yet (spec section 7.2); if the host
-  connection drops, the SDL3 client currently just stops sending/
-  receiving rather than retrying with backoff.
 - Video transport is raw BGRA8888 over TCP (Stage 1 per spec section 8.4);
   no compression yet.
 - The SDL3 client (`client/`) has not been build-verified in this
   environment because no SDL3 development package is available in this
-  sandbox; see `docs/building.md`.
+  sandbox; see `docs/building.md`. This includes the auto-reconnect
+  thread -- its logic was reviewed and `net_client.cpp`/`.h` compiled
+  standalone with strict warnings, but reconnect has not been exercised
+  end-to-end against a real host with the real SDL3 client binary.
+- Latency instrumentation assumes client and host clocks are reasonably
+  synced (e.g. NTP) -- there's no protocol-level clock-offset negotiation,
+  so on an unsynced pair the latency numbers are meaningless (the host
+  silently skips recording an implausible/negative delta rather than
+  logging a nonsense value, but that's a coarse guard, not a fix).
+- The stalled-video-reader fix (`SO_SNDTIMEO`) was verified with a manual
+  script, not an automated test in `tests/`, since simulating a full TCP
+  send buffer reliably in a fast unit/integration test is fiddly (it
+  depends on OS socket buffer sizing).

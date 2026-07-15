@@ -28,12 +28,13 @@ void SyntheticFrameSource::stop() {
     }
 }
 
-bool SyntheticFrameSource::getLatestFrame(std::vector<uint8_t>& outFrame) {
+bool SyntheticFrameSource::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) {
     std::lock_guard<std::mutex> lock(bufferMutex_);
     if (!hasFrame_) {
         return false;
     }
     outFrame = latestFrame_;
+    outFrameIndex = latestFrameIndex_;
     return true;
 }
 
@@ -101,6 +102,7 @@ void SyntheticFrameSource::generatorLoop() {
         {
             std::lock_guard<std::mutex> lock(bufferMutex_);
             latestFrame_.swap(scratch);
+            latestFrameIndex_ = frameIndex;
             hasFrame_ = true;
         }
         ++frameIndex;

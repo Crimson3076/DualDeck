@@ -24,6 +24,16 @@ this repo so far:
   budgets per key, recovery after the window elapses, and stale-entry
   pruning (`test_rate_limiter.cpp`)
 
+`NetServer`'s periodic diagnostics logging (input accept/out-of-order/
+malformed counts and rate, video sent/dropped and rate, latency avg/min/
+max -- spec sections 8.5 and 14) and the `SO_SNDTIMEO` fix for a stalled
+video reader were verified manually (see `docs/architecture.md`'s Phase 2
+section) rather than as an automated `tests/` case, since reliably
+triggering a full TCP send buffer in a fast test is OS-buffer-size
+dependent. Run the server with `--stats-interval-ms 1000` and watch
+stderr while driving it with `tests/smoke_test.py`-style traffic if you
+want to see the log line yourself.
+
 Run:
 
 ```sh

@@ -69,6 +69,18 @@ const ButtonMapping kButtonMappings[] = {
 
 constexpr int16_t kStickDeadzone = 8000;
 
+// Wall-clock (epoch) microseconds, for the wire ControllerState.clientTimestampUs
+// field specifically. Deliberately not SDL_GetTicksNS() (which is time since
+// SDL_Init(), not comparable across processes/machines) -- the host uses this
+// to estimate one-way input latency, which only makes sense against a shared
+// time base (spec section 8.5). This assumes client and host clocks are
+// reasonably synced (e.g. via NTP), same as the LAN latency targets in the
+// spec already assume.
+uint64_t wallClockNowUs() {
+    using namespace std::chrono;
+    return static_cast<uint64_t>(duration_cast<microseconds>(system_clock::now().time_since_epoch()).count());
+}
+
 uint16_t buildButtonsFromGamepad(SDL_Gamepad* gamepad) {
     if (!gamepad) return 0;
 
@@ -266,7 +278,7 @@ int main(int argc, char** argv) {
         if (nowUs - lastInputSendUs >= inputIntervalUs) {
             ControllerState state;
             state.sequence = sequence++;
-            state.clientTimestampUs = nowUs;
+            state.clientTimestampUs = wallClockNowUs();
             state.dsButtons = buildButtonsFromGamepad(gamepad);
             state.emulatorActions = 0;
             state.touchActive = touchActive ? 1 : 0;

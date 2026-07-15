@@ -46,6 +46,35 @@ struct NetServerConfig {
     // Connection-attempt rate limiting (spec section 13).
     int maxConnectionAttemptsPerWindow = 5;
     uint64_t connectionAttemptWindowUs = 10'000'000; // 10s
+
+    // How often to log aggregated diagnostics (spec sections 8.5 and 14:
+    // frame rate, dropped frames, input packet rate, out-of-order
+    // packets, and latency instrumentation).
+    uint64_t statsLoggingIntervalUs = 5'000'000; // 5s
+};
+
+// Aggregated counters reset each time they're logged. Guarded by
+// NetServer::statsMutex_ -- deliberately a single mutex-protected struct
+// rather than several independent atomics, since it's read/reset as one
+// unit on the ~5s logging cadence and written at most once per received
+// packet or sent frame (not a hot enough path to need lock-free counters).
+struct NetServerStats {
+    uint64_t inputPacketsAccepted = 0;
+    uint64_t inputPacketsOutOfOrder = 0;
+    uint64_t inputPacketsMalformed = 0;
+    uint64_t framesSent = 0;
+    uint64_t framesDropped = 0;
+    uint64_t latencySampleCount = 0;
+    uint64_t latencySumUs = 0;
+    uint64_t latencyMinUs = UINT64_MAX;
+    uint64_t latencyMaxUs = 0;
+
+    void recordLatency(uint64_t latencyUs) {
+        ++latencySampleCount;
+        latencySumUs += latencyUs;
+        if (latencyUs < latencyMinUs) latencyMinUs = latencyUs;
+        if (latencyUs > latencyMaxUs) latencyMaxUs = latencyUs;
+    }
 };
 
 class NetServer {
@@ -82,6 +111,9 @@ private:
 
     ConnectionRateLimiter rateLimiter_;
     std::mutex rateLimiterMutex_;
+
+    NetServerStats stats_;
+    std::mutex statsMutex_;
 
     int controlListenFd_ = -1;
     int videoListenFd_ = -1;

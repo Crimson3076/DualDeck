@@ -23,11 +23,16 @@ public:
     virtual ~IFrameSource() = default;
 
     // Fills `outFrame` with the most recent available frame (resized to
-    // kFrameSizeBytes if needed) and returns true, or returns false if no
-    // frame is available yet. Never blocks -- this exists so a network
-    // thread can poll it without stalling on the frame producer, per the
-    // "latest-frame-wins" / bounded-queue requirement (spec section 15/16).
-    virtual bool getLatestFrame(std::vector<uint8_t>& outFrame) = 0;
+    // kFrameSizeBytes if needed) and `outFrameIndex` with a monotonically
+    // increasing index identifying it (starting at 0 for the first frame
+    // ever produced), and returns true; or returns false if no frame is
+    // available yet. Never blocks -- this exists so a network thread can
+    // poll it without stalling on the frame producer, per the
+    // "latest-frame-wins" / bounded-queue requirement (spec section
+    // 15/16). The frame index lets a caller that polls slower than frames
+    // are produced compute how many frames it skipped (spec section 14:
+    // log dropped frames), without needing the frames themselves.
+    virtual bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) = 0;
 };
 
 } // namespace melonds_remote::host

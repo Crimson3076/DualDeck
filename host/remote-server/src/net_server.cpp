@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <optional>
 
 #include "melonds_remote/protocol.h"
 
@@ -18,10 +19,23 @@ namespace melonds_remote::host {
 
 namespace {
 
+// Monotonic clock: used for timeouts and sequence-number bookkeeping,
+// where immunity to wall-clock jumps (NTP corrections, DST, manual clock
+// changes) matters more than comparability with the client's clock.
 uint64_t nowMicros() {
     using namespace std::chrono;
     return static_cast<uint64_t>(
         duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count());
+}
+
+// Wall-clock (epoch) time: the only clock comparable with the client's
+// ControllerState.clientTimestampUs (see wallClockNowUs() in
+// client/src/main.cpp), so this is used only for the latency estimate in
+// inputLoop()'s stats, never for timeout/ordering decisions.
+uint64_t nowMicrosEpoch() {
+    using namespace std::chrono;
+    return static_cast<uint64_t>(
+        duration_cast<microseconds>(system_clock::now().time_since_epoch()).count());
 }
 
 // Binds a TCP listening socket to config.bindAddress:port. Returns -1 on
@@ -343,17 +357,23 @@ void NetServer::inputLoop() {
         auto header = parseHeader(buf.data(), static_cast<size_t>(n));
         if (!header || header->protocolVersion != kProtocolVersion ||
             header->type != PacketType::ControllerState) {
+            std::lock_guard<std::mutex> lock(statsMutex_);
+            ++stats_.inputPacketsMalformed;
             continue; // reject malformed / mismatched packet, stay up
         }
 
         size_t payloadOffset = kPacketHeaderWireSize;
         size_t payloadSize = static_cast<size_t>(n) - payloadOffset;
         if (payloadSize != header->payloadSize || payloadSize != kControllerStateWireSize) {
+            std::lock_guard<std::mutex> lock(statsMutex_);
+            ++stats_.inputPacketsMalformed;
             continue;
         }
 
         auto state = parseControllerState(buf.data() + payloadOffset, payloadSize);
         if (!state) {
+            std::lock_guard<std::mutex> lock(statsMutex_);
+            ++stats_.inputPacketsMalformed;
             continue;
         }
 
@@ -362,6 +382,31 @@ void NetServer::inputLoop() {
             std::lock_guard<std::mutex> lock(trackerMutex_);
             accepted = inputTracker_.onPacketReceived(*state, nowMicros());
         }
+
+        {
+            std::lock_guard<std::mutex> lock(statsMutex_);
+            if (accepted) {
+                ++stats_.inputPacketsAccepted;
+                // Latency estimate needs a shared time base with the
+                // client, unlike the steady_clock used for
+                // timeout/sequence bookkeeping above -- see the comment
+                // on wallClockNowUs() in client/src/main.cpp. Skip
+                // clearly-bogus deltas (clock not synced, or a client
+                // that hasn't been updated to send wall-clock time yet)
+                // rather than polluting the average with them.
+                uint64_t nowWallUs = nowMicrosEpoch();
+                if (nowWallUs >= state->clientTimestampUs) {
+                    uint64_t latencyUs = nowWallUs - state->clientTimestampUs;
+                    constexpr uint64_t kMaxPlausibleLatencyUs = 10'000'000; // 10s
+                    if (latencyUs <= kMaxPlausibleLatencyUs) {
+                        stats_.recordLatency(latencyUs);
+                    }
+                }
+            } else {
+                ++stats_.inputPacketsOutOfOrder;
+            }
+        }
+
         if (accepted) {
             inputSink_.applyControllerState(*state);
         }
@@ -370,6 +415,7 @@ void NetServer::inputLoop() {
 
 void NetServer::watchdogLoop() {
     uint64_t lastPruneUs = nowMicros();
+    uint64_t lastStatsLogUs = nowMicros();
 
     while (running_.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -392,6 +438,49 @@ void NetServer::watchdogLoop() {
             std::lock_guard<std::mutex> lock(rateLimiterMutex_);
             rateLimiter_.pruneStaleEntries(now);
             lastPruneUs = now;
+        }
+
+        if (now - lastStatsLogUs >= config_.statsLoggingIntervalUs) {
+            NetServerStats snapshot;
+            {
+                std::lock_guard<std::mutex> lock(statsMutex_);
+                snapshot = stats_;
+                stats_ = NetServerStats{};
+            }
+            double windowSec = static_cast<double>(now - lastStatsLogUs) / 1'000'000.0;
+            lastStatsLogUs = now;
+
+            if (snapshot.inputPacketsAccepted || snapshot.inputPacketsOutOfOrder ||
+                snapshot.inputPacketsMalformed || snapshot.framesSent || snapshot.framesDropped) {
+                double inputRate = windowSec > 0 ? static_cast<double>(snapshot.inputPacketsAccepted) / windowSec : 0.0;
+                double frameRate = windowSec > 0 ? static_cast<double>(snapshot.framesSent) / windowSec : 0.0;
+
+                if (snapshot.latencySampleCount > 0) {
+                    double avgLatencyMs =
+                        static_cast<double>(snapshot.latencySumUs) / static_cast<double>(snapshot.latencySampleCount) / 1000.0;
+                    std::fprintf(stderr,
+                                  "NetServer: stats -- input: accepted=%llu outOfOrder=%llu malformed=%llu "
+                                  "(%.1f/s) | video: sent=%llu (%.1f fps) dropped=%llu | latency: avg=%.1fms "
+                                  "min=%.1fms max=%.1fms (n=%llu)\n",
+                                  static_cast<unsigned long long>(snapshot.inputPacketsAccepted),
+                                  static_cast<unsigned long long>(snapshot.inputPacketsOutOfOrder),
+                                  static_cast<unsigned long long>(snapshot.inputPacketsMalformed), inputRate,
+                                  static_cast<unsigned long long>(snapshot.framesSent), frameRate,
+                                  static_cast<unsigned long long>(snapshot.framesDropped), avgLatencyMs,
+                                  static_cast<double>(snapshot.latencyMinUs) / 1000.0,
+                                  static_cast<double>(snapshot.latencyMaxUs) / 1000.0,
+                                  static_cast<unsigned long long>(snapshot.latencySampleCount));
+                } else {
+                    std::fprintf(stderr,
+                                  "NetServer: stats -- input: accepted=%llu outOfOrder=%llu malformed=%llu "
+                                  "(%.1f/s) | video: sent=%llu (%.1f fps) dropped=%llu\n",
+                                  static_cast<unsigned long long>(snapshot.inputPacketsAccepted),
+                                  static_cast<unsigned long long>(snapshot.inputPacketsOutOfOrder),
+                                  static_cast<unsigned long long>(snapshot.inputPacketsMalformed), inputRate,
+                                  static_cast<unsigned long long>(snapshot.framesSent), frameRate,
+                                  static_cast<unsigned long long>(snapshot.framesDropped));
+                }
+            }
         }
     }
 }
@@ -427,15 +516,35 @@ void NetServer::videoLoop() {
         int nodelay = 1;
         ::setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
+        // Bounds how long a stalled/slow reader can block this thread: without
+        // this, a full TCP send buffer makes send() block indefinitely, which
+        // is exactly the kind of unbounded network wait spec section 15 rules
+        // out (it doesn't affect emulation directly since this is its own
+        // thread, but it would otherwise hang this connection -- and thus
+        // frame delivery to any well-behaved future reconnect -- forever).
+        timeval sendTimeout{};
+        sendTimeout.tv_sec = 1;
+        sendTimeout.tv_usec = 0;
+        ::setsockopt(clientFd, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, sizeof(sendTimeout));
+
         std::vector<uint8_t> frame;
+        std::optional<uint64_t> lastSentFrameIndex;
         while (running_.load()) {
             auto tickStart = std::chrono::steady_clock::now();
 
-            if (frameSource_.getLatestFrame(frame)) {
+            uint64_t frameIndex = 0;
+            if (frameSource_.getLatestFrame(frame, frameIndex)) {
                 ByteBuffer packet = buildPacket(PacketType::VideoFrame, frame);
                 if (!sendAll(clientFd, packet.data(), packet.size())) {
                     break;
                 }
+
+                std::lock_guard<std::mutex> lock(statsMutex_);
+                ++stats_.framesSent;
+                if (lastSentFrameIndex && frameIndex > *lastSentFrameIndex + 1) {
+                    stats_.framesDropped += frameIndex - *lastSentFrameIndex - 1;
+                }
+                lastSentFrameIndex = frameIndex;
             }
 
             auto elapsed = std::chrono::steady_clock::now() - tickStart;

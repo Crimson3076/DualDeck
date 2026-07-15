@@ -41,10 +41,13 @@ int main(int argc, char** argv) {
             config.inputTimeoutUs = static_cast<uint64_t>(std::stoll(nextArg())) * 1000;
         } else if (arg == "--auth-token") {
             config.authToken = nextArg();
+        } else if (arg == "--stats-interval-ms") {
+            config.statsLoggingIntervalUs = static_cast<uint64_t>(std::stoll(nextArg())) * 1000;
         } else if (arg == "--help") {
             std::printf(
                 "Usage: melonds-remote-server [--bind ADDR] [--control-port N] "
-                "[--input-port N] [--video-port N] [--timeout-ms N] [--auth-token TOKEN]\n"
+                "[--input-port N] [--video-port N] [--timeout-ms N] [--auth-token TOKEN] "
+                "[--stats-interval-ms N]\n"
                 "\n"
                 "Phase 1 prototype: serves a synthetic 256x192 test-pattern bottom\n"
                 "screen and logs received controller/touch state. Not yet wired to\n"
@@ -52,7 +55,11 @@ int main(int argc, char** argv) {
                 "\n"
                 "If --auth-token is omitted, the server accepts any client that can\n"
                 "reach it (spec section 13 requires this to be a conscious, warned-\n"
-                "about choice for anything beyond local testing).\n");
+                "about choice for anything beyond local testing).\n"
+                "\n"
+                "--stats-interval-ms controls how often aggregated diagnostics\n"
+                "(input packet rate, out-of-order/malformed counts, video frame\n"
+                "rate, dropped frames, latency) are logged (default 5000).\n");
             return 0;
         } else {
             std::fprintf(stderr, "unrecognized argument: %s\n", arg.c_str());
