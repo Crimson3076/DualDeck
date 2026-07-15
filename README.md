@@ -59,6 +59,7 @@ python3 tests/smoke_test.py build/host/remote-server/melonds-remote-server
 - [`docs/protocol.md`](docs/protocol.md) — wire format reference
 - [`docs/building.md`](docs/building.md) — build instructions
 - [`docs/testing.md`](docs/testing.md) — unit tests and the integration smoke test
+- [`docs/bazzite-host-setup.md`](docs/bazzite-host-setup.md) — Bazzite-specific host build/run notes (Distrobox, firewalld)
 - [`docs/steam-deck-setup.md`](docs/steam-deck-setup.md) — Steam Deck client setup (Desktop Mode + Gaming Mode shortcut)
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — fixes for problems you're likely to hit
 - [`docs/known-limitations.md`](docs/known-limitations.md) — consolidated list of what isn't done yet
