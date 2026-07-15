@@ -17,6 +17,12 @@ this repo so far:
 - Sequence-number acceptance/rejection (including 32-bit wraparound),
   timeout detection, and fail-safe reset-to-released-state
   (`test_input_state_tracker.cpp`)
+- `Hello`/`HelloAck` payload serialization round-trip, truncated-buffer
+  and trailing-garbage rejection, and length-prefixed string bounds
+  checking (`test_handshake.cpp`)
+- Connection-attempt rate limiting: per-key sliding window, independent
+  budgets per key, recovery after the window elapses, and stale-entry
+  pruning (`test_rate_limiter.cpp`)
 
 Run:
 
@@ -28,16 +34,31 @@ ctest --test-dir build --output-on-failure
 
 ## Integration smoke test (`tests/smoke_test.py`)
 
-Exercises the real `melonds-remote-server` binary over actual TCP/UDP
-sockets: control handshake, a valid UDP `ControllerState` packet, a
-deliberately corrupted packet (must be dropped, not crash the process), a
-TCP video-frame read of the expected size, and a control-channel
-disconnect that must trigger the host's fail-safe input release. This is
-the fastest way to validate the acceptance criteria in `SPEC.md` section
-20, items 10 ("host releases all inputs when client disconnects") and 11
-("bottom screen runs at or near 60 FPS" -- indirectly, by confirming the
-video path delivers correctly-sized frames), without needing melonDS or
-the SDL3 client built.
+Exercises the real `melonds-remote-server` binary (started with
+`--auth-token`) over actual TCP/UDP sockets:
+
+- a handshake with the wrong auth token is rejected (`accepted=0`,
+  `rejectReason=AuthenticationFailed`)
+- an unauthenticated UDP sender cannot inject `ControllerState` input, and
+  cannot open a video connection, even if it knows the ports -- this is
+  the fix for the gap described in `docs/architecture.md` where the
+  Phase 1 skeleton accepted UDP input from anyone regardless of
+  handshake state
+- a handshake with the correct token is accepted and receives a session ID
+- a valid UDP `ControllerState` packet is accepted
+- a deliberately corrupted packet (bad magic) is dropped, not crash the
+  process
+- a TCP video-frame read returns the expected size
+- a control-channel disconnect triggers the host's fail-safe input
+  release
+- rapid repeated connection attempts are eventually rate-limited
+
+This is the fastest way to validate the acceptance criteria in `SPEC.md`
+section 20, items 10 ("host releases all inputs when client disconnects")
+and 11 ("bottom screen runs at or near 60 FPS" -- indirectly, by
+confirming the video path delivers correctly-sized frames), plus section
+13's authentication and rate-limiting requirements, without needing
+melonDS or the SDL3 client built.
 
 ```sh
 python3 tests/smoke_test.py build/host/remote-server/melonds-remote-server
@@ -50,7 +71,13 @@ Exits non-zero and prints the server's log output on any failure.
 - The SDL3 client (`client/`) has no automated tests; it has not been
   build-verified in this development sandbox (no SDL3 package available
   here -- see `docs/building.md`). Manual testing on a Steam Deck or Linux
-  desktop with SDL3 installed is required before relying on it.
+  desktop with SDL3 installed is required before relying on it. This
+  includes the client's auto-reconnect thread (`client/src/main.cpp`) --
+  its logic was reviewed and `client/src/net_client.cpp`/`.h` were
+  compiled standalone (outside the SDL3-gated CMake target, since only
+  `main.cpp` needs SDL3) with strict warnings to catch data races around
+  the added reconnect thread, but the reconnect behavior itself has not
+  been exercised end-to-end against a real host.
 - No test yet exercises packet loss, delayed/out-of-order UDP delivery
   under real network conditions (only the pure sequence-number logic is
   unit tested), or a long-running (30-minute) session.

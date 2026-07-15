@@ -21,8 +21,8 @@ same fixed-size header.
 
 | Value | Name              | Direction       | Channel | Payload                                   |
 |------:|-------------------|-----------------|---------|--------------------------------------------|
-| 1     | `Hello`           | client -> host  | TCP control | none in the current prototype (see "Handshake" below) |
-| 2     | `HelloAck`        | host -> client  | TCP control | none in the current prototype |
+| 1     | `Hello`           | client -> host  | TCP control | see "Hello payload" below |
+| 2     | `HelloAck`        | host -> client  | TCP control | see "HelloAck payload" below |
 | 3     | `ControllerState` | client -> host  | UDP input | see "ControllerState payload" below |
 | 4     | `Heartbeat`       | either           | TCP control | none |
 | 5     | `Disconnect`      | either           | TCP control | none |
@@ -101,34 +101,101 @@ integration does not need a color conversion step. `host/remote-server`'s
 `SyntheticFrameSource` already produces frames in this same format so the
 client-side decode path is exercised end-to-end today.
 
+## Hello payload (variable length)
+
+Each string field is length-prefixed: a `u16` byte count followed by that
+many bytes (not null-terminated). Any declared length greater than
+`kMaxProtocolStringLength` (64 bytes) is rejected as malformed, as is a
+declared length that would run past the end of the received buffer.
+
+| Field             | Type          | Notes |
+|-------------------|---------------|-------|
+| `clientName`      | length-prefixed string | e.g. "SteamDeck". Informational/logging only today. |
+| `clientPlatform`  | length-prefixed string | e.g. "linux". Informational/logging only today. |
+| `displayWidth`    | `u16`         | Client's display width in pixels. Not currently used by the host. |
+| `displayHeight`   | `u16`         | Client's display height in pixels. Not currently used by the host. |
+| `authToken`       | length-prefixed string | Must equal the host's configured `--auth-token` exactly, or the handshake is rejected. Empty if the host has authentication disabled. |
+
+The whole `Hello` payload is capped at 512 bytes by the host before it will
+even attempt to parse it, so a hostile `payloadSize` can't be used to make
+the host read/allocate an unbounded amount of data.
+
+**Not yet implemented** (present in `SPEC.md` section 9 as a suggestion,
+not a current requirement): supported pixel formats/codecs, controller/
+touch/microphone capability flags. `clientName`/`clientPlatform`/display
+size exist on the wire today but the host does not yet act on them beyond
+logging.
+
+## HelloAck payload (10 bytes)
+
+| Offset | Size | Field          | Notes |
+|-------:|-----:|----------------|-------|
+| 0      | 1    | `accepted`     | 0 or 1. Any other value is malformed. |
+| 1      | 1    | `rejectReason` | Meaningful only if `accepted == 0`. See `HelloRejectReason` below. |
+| 2      | 4    | `sessionId`    | Non-zero, host-chosen, only when `accepted == 1`. Informational today (logging/future reconnect correlation); not yet validated on subsequent packets. |
+| 6      | 2    | `nativeWidth`  | Always 256. |
+| 8      | 2    | `nativeHeight` | Always 192. |
+
+`HelloRejectReason`: `0` = none (accepted), `1` = protocol version
+mismatch, `2` = authentication failed, `3` = host busy (reserved, not
+currently sent since the host doesn't yet reject on "busy" -- an extra
+control connection while one is active is simply closed without a
+handshake attempt).
+
 ## Handshake (as currently implemented)
 
 1. Client opens a TCP connection to the control port and sends a `Hello`
-   packet with an empty payload.
-2. Host validates `magic` and `protocolVersion`. On success, replies with
-   a `HelloAck` packet (empty payload) and keeps the connection open.
-   On failure, the host does not reply and the connection is expected to
-   be closed by the client.
-3. Either side may send `Heartbeat` packets on the control connection;
-   the host does not currently enforce a heartbeat interval itself,
-   because client liveness is already tracked via the UDP input stream's
-   timeout (`InputStateTracker::isTimedOut`, default 500ms). A future
-   revision may add an explicit heartbeat timeout for clients that are
-   connected but not sending input (e.g. a paused game).
-4. Either side may send `Disconnect` to request a graceful close; the host
-   also treats TCP EOF/error on the control socket as an implicit
-   disconnect.
-5. On disconnect (graceful or timeout), the host resets its
-   `InputStateTracker` and calls `IEmulatorInputSink::releaseAll()`
-   unconditionally (spec section 6.4).
+   packet with the payload described above.
+2. Host checks, in order: source-IP connection-attempt rate limit (see
+   "Rate limiting" below) -- applied before any handshake bytes are even
+   read; `magic`/`protocolVersion`/`payloadSize` bound; successful parse of
+   the Hello payload; and finally, if the host has `--auth-token` set,
+   that `authToken` matches exactly. On success, replies with a
+   `HelloAck` (`accepted=1`, a fresh `sessionId`) and keeps the connection
+   open. On any failure, replies with `HelloAck` (`accepted=0`, the
+   relevant `rejectReason`) and then closes the connection.
+3. Only once a client is accepted does the host start acting on
+   `ControllerState` packets on the UDP input port, and only accepts a
+   video connection on the video port -- both are matched against the
+   authenticated client's source IP address. An unauthenticated sender on
+   either port is silently ignored (input) or has its connection closed
+   immediately (video). This closes a gap that existed before
+   authentication was added: previously the UDP input port accepted any
+   well-formed packet regardless of whether a control-channel client had
+   completed a handshake.
+4. The client should send `Heartbeat` packets on the control connection
+   periodically (the SDL3 client sends one every second while otherwise
+   idle). The host enforces a control-channel silence timeout
+   (`controlHeartbeatTimeoutUs`, default 5s, via `SO_RCVTIMEO` on the
+   accepted socket) independent of the UDP input timeout, so a
+   TCP-alive-but-silent connection (e.g. a firewall dropping UDP only)
+   still gets cleaned up.
+5. Either side may send `Disconnect` to request a graceful close; the host
+   also treats TCP EOF/error, a malformed control packet, or the
+   heartbeat timeout as an implicit disconnect.
+6. On disconnect (graceful, malformed-packet, or timeout), the host resets
+   its `InputStateTracker`, clears the authenticated-client state, and
+   calls `IEmulatorInputSink::releaseAll()` unconditionally (spec section
+   6.4).
 
 **Not yet implemented** (present in `SPEC.md` section 9 as a suggestion,
-not a current requirement): client capability negotiation (display
-resolution, supported pixel formats/codecs, controller/touch/microphone
-capabilities), session IDs, native-resolution/frame-rate advertisement in
-`HelloAck`, and a pairing token. These belong to Phase 2 (spec section
-"Development Phases" / Phase 2: Network robustness) and are called out
-here so the gap is explicit rather than silently assumed.
+not a current requirement): supported pixel formats/codecs, controller/
+touch/microphone capability negotiation, session IDs being carried on any
+packet after `HelloAck` (so a stale/replayed session can't yet be
+distinguished from a current one at the protocol level -- today this is
+handled at the transport level via one-active-client-plus-source-IP-match
+instead).
+
+## Rate limiting
+
+The host tracks control-connection attempts per source IP address in a
+sliding window (`ConnectionRateLimiter`, `protocol/include/melonds_remote/rate_limiter.h`):
+by default at most 5 attempts per 10 seconds per address. An attempt over
+the limit is closed immediately, before any handshake bytes are read, and
+still counts against the client's budget (so hammering the endpoint
+doesn't reset it faster). This satisfies spec section 13's "rate-limit
+connection attempts" as a bound on handshake attempts specifically; it
+does not currently rate-limit already-established UDP input traffic.
 
 ## Validation rules enforced today
 
@@ -141,6 +208,14 @@ here so the gap is explicit rather than silently assumed.
 - `ControllerState` packets with a `sequence` that is not "newer" than the
   last accepted packet (wraparound-aware comparison) are silently
   discarded (spec section 6.3).
+- `ControllerState` packets are ignored entirely unless they come from
+  the same source address as the currently-authenticated control-channel
+  client.
+- `Hello`/`HelloAck` string fields longer than 64 bytes, or a declared
+  length that overruns the buffer, are rejected; a `Hello` payload larger
+  than 512 bytes overall is rejected before parsing.
 - The host accepts exactly one control connection and one video
   connection at a time; extra connection attempts while one is active are
-  closed immediately.
+  closed immediately. A video connection is additionally refused unless
+  it comes from the address of the currently-authenticated control
+  client.

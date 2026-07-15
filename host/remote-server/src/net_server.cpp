@@ -4,8 +4,10 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -83,6 +85,21 @@ int makeUdpSocket(const std::string& bindAddress, uint16_t port) {
     return fd;
 }
 
+// Constant-time-ish string comparison: always compares the same number of
+// bytes (padding the shorter string's "missing" bytes into the mismatch
+// accumulator) so a client can't use response timing to learn how many
+// leading bytes of the auth token it guessed correctly.
+bool constantTimeEquals(const std::string& a, const std::string& b) {
+    size_t maxLen = std::max(a.size(), b.size());
+    unsigned char diff = static_cast<unsigned char>(a.size() != b.size());
+    for (size_t i = 0; i < maxLen; ++i) {
+        unsigned char ca = i < a.size() ? static_cast<unsigned char>(a[i]) : 0;
+        unsigned char cb = i < b.size() ? static_cast<unsigned char>(b[i]) : 0;
+        diff = static_cast<unsigned char>(diff | (ca ^ cb));
+    }
+    return diff == 0;
+}
+
 bool sendAll(int fd, const uint8_t* data, size_t size) {
     size_t sent = 0;
     while (sent < size) {
@@ -98,7 +115,16 @@ bool sendAll(int fd, const uint8_t* data, size_t size) {
 } // namespace
 
 NetServer::NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource)
-    : config_(std::move(config)), inputSink_(inputSink), frameSource_(frameSource) {}
+    : config_(std::move(config)), inputSink_(inputSink), frameSource_(frameSource),
+      rateLimiter_(config_.maxConnectionAttemptsPerWindow, config_.connectionAttemptWindowUs) {
+    if (config_.authToken.empty()) {
+        std::fprintf(stderr,
+                      "NetServer: WARNING -- no auth token configured, accepting any client "
+                      "that can reach %s:%u. Set --auth-token for anything but purely local "
+                      "testing (spec section 13).\n",
+                      config_.bindAddress.c_str(), config_.controlPort);
+    }
+}
 
 NetServer::~NetServer() {
     stop();
@@ -157,6 +183,14 @@ void NetServer::stop() {
     controlListenFd_ = videoListenFd_ = inputFd_ = -1;
 }
 
+namespace {
+// Upper bound on a Hello payload's declared size, well above what any
+// legitimate client name/platform/token combination needs, so a hostile
+// payloadSize value can't be used to make the host allocate/read
+// arbitrarily large amounts of data (spec section 13).
+constexpr uint32_t kMaxHelloPayloadSize = 512;
+} // namespace
+
 void NetServer::controlLoop() {
     while (running_.load()) {
         sockaddr_in clientAddr{};
@@ -164,6 +198,20 @@ void NetServer::controlLoop() {
         int clientFd = ::accept(controlListenFd_, reinterpret_cast<sockaddr*>(&clientAddr), &clientLen);
         if (clientFd < 0) {
             if (!running_.load()) break;
+            continue;
+        }
+
+        char ipStr[INET_ADDRSTRLEN] = {0};
+        ::inet_ntop(AF_INET, &clientAddr.sin_addr, ipStr, sizeof(ipStr));
+
+        bool rateOk;
+        {
+            std::lock_guard<std::mutex> lock(rateLimiterMutex_);
+            rateOk = rateLimiter_.allowAttempt(ipStr, nowMicros());
+        }
+        if (!rateOk) {
+            std::fprintf(stderr, "NetServer: rate-limiting connection attempts from %s\n", ipStr);
+            ::close(clientFd);
             continue;
         }
 
@@ -176,38 +224,76 @@ void NetServer::controlLoop() {
             continue;
         }
 
-        char ipStr[INET_ADDRSTRLEN] = {0};
-        ::inet_ntop(AF_INET, &clientAddr.sin_addr, ipStr, sizeof(ipStr));
         std::fprintf(stderr, "NetServer: control connection from %s\n", ipStr);
+
+        // Bound how long a client may take to complete the handshake and
+        // how long the connection may sit idle afterward (spec section 8.1
+        // heartbeat/keepalive).
+        timeval recvTimeout{};
+        recvTimeout.tv_sec = static_cast<time_t>(config_.controlHeartbeatTimeoutUs / 1'000'000);
+        recvTimeout.tv_usec = static_cast<suseconds_t>(config_.controlHeartbeatTimeoutUs % 1'000'000);
+        ::setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO, &recvTimeout, sizeof(recvTimeout));
+
+        bool handshakeOk = false;
+        HelloRejectReason rejectReason = HelloRejectReason::ProtocolVersionMismatch;
 
         uint8_t headerBuf[kPacketHeaderWireSize];
         ssize_t n = ::recv(clientFd, headerBuf, sizeof(headerBuf), MSG_WAITALL);
-        bool handshakeOk = false;
         if (n == static_cast<ssize_t>(sizeof(headerBuf))) {
             auto header = parseHeader(headerBuf, sizeof(headerBuf));
             if (header && header->type == PacketType::Hello &&
-                header->protocolVersion == kProtocolVersion) {
-                handshakeOk = true;
+                header->protocolVersion == kProtocolVersion &&
+                header->payloadSize <= kMaxHelloPayloadSize) {
+                ByteBuffer payloadBuf(header->payloadSize);
+                ssize_t got = header->payloadSize == 0
+                                  ? 0
+                                  : ::recv(clientFd, payloadBuf.data(), payloadBuf.size(), MSG_WAITALL);
+                if (got == static_cast<ssize_t>(payloadBuf.size())) {
+                    auto hello = parseHelloPayload(payloadBuf.data(), payloadBuf.size());
+                    if (hello) {
+                        if (config_.authToken.empty() ||
+                            constantTimeEquals(hello->authToken, config_.authToken)) {
+                            handshakeOk = true;
+                        } else {
+                            std::fprintf(stderr,
+                                          "NetServer: rejecting handshake from %s (bad auth token)\n",
+                                          ipStr);
+                            rejectReason = HelloRejectReason::AuthenticationFailed;
+                        }
+                    } else {
+                        std::fprintf(stderr, "NetServer: rejecting handshake (malformed Hello payload)\n");
+                    }
+                } else {
+                    std::fprintf(stderr, "NetServer: rejecting handshake (short Hello payload)\n");
+                }
             } else {
                 std::fprintf(stderr, "NetServer: rejecting handshake (bad magic/type/version)\n");
             }
         }
 
+        HelloAckPayload ack;
+        ack.accepted = handshakeOk ? 1 : 0;
+        ack.rejectReason = handshakeOk ? HelloRejectReason::None : rejectReason;
+        ack.sessionId = handshakeOk ? static_cast<uint32_t>(nowMicros()) : 0;
+        ByteBuffer ackPacket = buildHelloAckPacket(ack);
+        sendAll(clientFd, ackPacket.data(), ackPacket.size());
+
         if (handshakeOk) {
-            PacketHeader ackHeader;
-            ackHeader.type = PacketType::HelloAck;
-            ackHeader.payloadSize = 0;
-            ByteBuffer ack;
-            serializeHeader(ack, ackHeader);
-            sendAll(clientFd, ack.data(), ack.size());
+            // Only from this point on will inputLoop() act on
+            // ControllerState packets, and only from this same source
+            // address (spec section 13).
+            authenticatedClientAddr_ = clientAddr.sin_addr.s_addr;
+            clientAuthenticated_ = true;
 
             // Keep reading (heartbeats / disconnect notices / garbage) until
-            // the peer closes or sends something malformed enough to drop.
+            // the peer closes, goes silent past controlHeartbeatTimeoutUs
+            // (the recv() above times out and returns -1/EAGAIN), or sends
+            // something malformed enough to drop.
             while (running_.load()) {
                 uint8_t buf[kPacketHeaderWireSize];
                 ssize_t r = ::recv(clientFd, buf, sizeof(buf), MSG_WAITALL);
                 if (r <= 0) {
-                    break; // peer closed or link error
+                    break; // peer closed, link error, or heartbeat timeout
                 }
                 auto hdr = parseHeader(buf, static_cast<size_t>(r));
                 if (!hdr) {
@@ -218,14 +304,15 @@ void NetServer::controlLoop() {
                     break;
                 }
                 // Heartbeat or unrecognized-but-valid type: keep the
-                // connection open; liveness is primarily tracked via the
-                // UDP input stream (see watchdogLoop).
+                // connection open.
             }
         }
 
         std::fprintf(stderr, "NetServer: control connection closed\n");
         ::close(clientFd);
         controlClientFd_ = -1;
+        clientAuthenticated_ = false;
+        authenticatedClientAddr_ = 0;
 
         {
             std::lock_guard<std::mutex> lock(trackerMutex_);
@@ -246,6 +333,11 @@ void NetServer::inputLoop() {
         if (n <= 0) {
             if (!running_.load()) break;
             continue;
+        }
+
+        if (!clientAuthenticated_.load() ||
+            fromAddr.sin_addr.s_addr != authenticatedClientAddr_.load()) {
+            continue; // no authenticated session, or packet from an unrelated address
         }
 
         auto header = parseHeader(buf.data(), static_cast<size_t>(n));
@@ -277,6 +369,8 @@ void NetServer::inputLoop() {
 }
 
 void NetServer::watchdogLoop() {
+    uint64_t lastPruneUs = nowMicros();
+
     while (running_.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
@@ -291,6 +385,13 @@ void NetServer::watchdogLoop() {
         if (timedOut) {
             std::fprintf(stderr, "NetServer: input timeout, releasing all inputs\n");
             inputSink_.releaseAll();
+        }
+
+        uint64_t now = nowMicros();
+        if (now - lastPruneUs > config_.connectionAttemptWindowUs) {
+            std::lock_guard<std::mutex> lock(rateLimiterMutex_);
+            rateLimiter_.pruneStaleEntries(now);
+            lastPruneUs = now;
         }
     }
 }
@@ -312,6 +413,14 @@ void NetServer::videoLoop() {
         if (previous >= 0) {
             ::close(clientFd);
             videoClientFd_ = previous;
+            continue;
+        }
+
+        if (!clientAuthenticated_.load() ||
+            clientAddr.sin_addr.s_addr != authenticatedClientAddr_.load()) {
+            std::fprintf(stderr, "NetServer: rejecting video connection (no authenticated session)\n");
+            ::close(clientFd);
+            videoClientFd_ = -1;
             continue;
         }
 

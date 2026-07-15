@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace melonds_remote {
@@ -68,6 +69,39 @@ enum EmulatorAction : uint16_t {
 // Native DS bottom-screen touch range (spec section 7.4).
 inline constexpr uint16_t kTouchMaxX = 255;
 inline constexpr uint16_t kTouchMaxY = 191;
+
+// Bound on any length-prefixed string field below, to reject an
+// obviously-hostile declared length before ever allocating for it (spec
+// section 13: validate packet sizes and values).
+inline constexpr size_t kMaxProtocolStringLength = 64;
+
+// Hello (client -> host) handshake payload. See docs/protocol.md
+// "Handshake" for the full negotiation description; this is the minimal
+// version implemented so far -- capability negotiation fields beyond
+// display size are not yet included.
+struct HelloPayload {
+    std::string clientName;    // up to kMaxProtocolStringLength bytes
+    std::string clientPlatform; // up to kMaxProtocolStringLength bytes
+    uint16_t displayWidth = 0;
+    uint16_t displayHeight = 0;
+    std::string authToken;     // up to kMaxProtocolStringLength bytes; empty if host requires none
+};
+
+enum class HelloRejectReason : uint8_t {
+    None = 0,
+    ProtocolVersionMismatch = 1,
+    AuthenticationFailed = 2,
+    HostBusy = 3,
+};
+
+// HelloAck (host -> client) handshake payload.
+struct HelloAckPayload {
+    uint8_t accepted = 0; // 0 or 1
+    HelloRejectReason rejectReason = HelloRejectReason::None; // meaningful only if !accepted
+    uint32_t sessionId = 0;
+    uint16_t nativeWidth = 256;
+    uint16_t nativeHeight = 192;
+};
 
 // Full controller state, sent at a fixed rate (recommended 120 Hz) rather
 // than only on button transitions, so a lost packet cannot leave a button
@@ -139,5 +173,24 @@ ByteBuffer buildPacket(PacketType type, const ByteBuffer& payload);
 
 // Builds a complete ControllerState packet (header + serialized body).
 ByteBuffer buildControllerStatePacket(const ControllerState& state);
+
+// Appends a length-prefixed (u16 length + bytes) string. Rejects (asserts
+// via caller contract, not enforced here) building a packet with a string
+// longer than kMaxProtocolStringLength -- callers should truncate first.
+void appendString(ByteBuffer& out, const std::string& s);
+
+// Reads a length-prefixed string starting at `offset`, advancing `offset`
+// past it. Returns std::nullopt if the buffer is too short for the
+// declared length or the declared length exceeds
+// kMaxProtocolStringLength (spec section 13: validate every field).
+std::optional<std::string> readString(const uint8_t* data, size_t size, size_t& offset);
+
+void serializeHelloPayload(ByteBuffer& out, const HelloPayload& hello);
+std::optional<HelloPayload> parseHelloPayload(const uint8_t* data, size_t size);
+ByteBuffer buildHelloPacket(const HelloPayload& hello);
+
+void serializeHelloAckPayload(ByteBuffer& out, const HelloAckPayload& ack);
+std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t size);
+ByteBuffer buildHelloAckPacket(const HelloAckPayload& ack);
 
 } // namespace melonds_remote

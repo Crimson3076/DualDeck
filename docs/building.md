@@ -55,13 +55,37 @@ mismatches against the SDL3 version you have installed.
 
 ```sh
 ./build/host/remote-server/melonds-remote-server --bind 127.0.0.1 \
-    --control-port 8760 --input-port 8761 --video-port 8762 --timeout-ms 500
+    --control-port 8760 --input-port 8761 --video-port 8762 --timeout-ms 500 \
+    --auth-token some-shared-secret
 ```
 
+If `--auth-token` is omitted, the server logs a loud warning and accepts
+any client that can reach it (spec section 13 requires this to be a
+conscious choice, not a silent default -- fine for purely local testing,
+not for anything reachable from the rest of your LAN). Run
+`--help` for the full flag list.
+
 See `scripts/run-host.sh` for a convenience wrapper, and
-`docs/testing.md` for a smoke-test script that exercises the handshake,
-UDP input path, and video path against a running server without needing
-the SDL3 client built.
+`docs/testing.md` for a smoke-test script that exercises the handshake
+(including the auth-token and rate-limiting paths), UDP input path, and
+video path against a running server without needing the SDL3 client
+built.
+
+## Running the SDL3 client locally
+
+```sh
+./build/client/melonds-remote-client --host 192.168.1.50 --auth-token some-shared-secret
+```
+
+Also accepts a bare positional host address (`melonds-remote-client
+192.168.1.50`) for `scripts/run-client.sh`'s convenience form; use
+`--auth-token` whenever the host was started with one, since a mismatched
+or missing token is rejected. The client retries the connection with
+capped exponential backoff (1s up to 5s) on a background thread whenever
+it isn't currently connected, so it recovers automatically after the host
+restarts or a network interruption (spec section 7.2) -- as noted above,
+this reconnect behavior has not been exercised on real hardware yet since
+the client itself isn't build-verified in this sandbox.
 
 ## melonDS itself
 

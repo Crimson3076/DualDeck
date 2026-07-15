@@ -79,14 +79,47 @@ No thread calls into another thread's blocking I/O directly; all
 cross-thread communication goes through the small, mutex-protected
 `InputStateTracker` or the single-slot frame buffer.
 
+## Threading model additions (Phase 2: network robustness)
+
+- `NetServer::controlLoop` now rate-limits connection attempts per source
+  IP (`ConnectionRateLimiter`) before reading any handshake bytes, parses
+  a variable-length `HelloPayload` (client name/platform/display size/
+  auth token), checks the auth token against `NetServerConfig::authToken`
+  if one is configured, and replies with a structured `HelloAckPayload`
+  (accepted flag, reject reason, session ID). It also sets a receive
+  timeout (`SO_RCVTIMEO`, `controlHeartbeatTimeoutUs`, default 5s) on the
+  accepted socket so a silent-but-still-open TCP connection is detected
+  and torn down independently of the UDP input timeout.
+- `NetServer::inputLoop` and `NetServer::videoLoop` now both check an
+  atomic `clientAuthenticated_` flag plus a source-address match against
+  the currently authenticated control client before acting on anything.
+  This closes a real gap from the initial Phase 1 skeleton: the UDP input
+  port previously accepted any well-formed `ControllerState` packet
+  regardless of whether a control-channel handshake had ever completed.
+- `NetClient` (client side) now sends the same `HelloPayload`/parses
+  `HelloAckPayload`, and runs its own heartbeat thread that sends a
+  `Heartbeat` packet on the control channel roughly once a second while
+  otherwise idle, so the host's control-channel timeout doesn't fire on a
+  live-but-quiet connection.
+- `docs/testing.md`'s smoke test now covers: wrong-token rejection,
+  confirming an unauthenticated UDP sender cannot inject input or open a
+  video connection, and the full authenticated happy path.
+
 ## Known gaps vs. the full spec
 
 - No melonDS integration yet (Phase 0 analysis exists; patch not started).
-- No pairing/authentication token yet (spec section 13) -- the prototype
-  only binds explicitly to a configured address and accepts one client;
-  it does not yet reject unauthenticated connections with a token check.
-- No mDNS discovery, reconnect-with-backoff, or capability negotiation
-  beyond a bare protocol-version check.
+- Authentication is a single shared pre-shared token, compared with a
+  constant-time comparison (`constantTimeEquals` in `net_server.cpp`) to
+  avoid a length/content timing side-channel (spec section 13's
+  "pre-shared token" option). No six-digit pairing code, QR code, or
+  certificate-based pairing yet.
+- No mDNS discovery or capability negotiation (pixel formats/codecs,
+  controller/touch/microphone capability flags) yet -- `clientName`/
+  `clientPlatform`/display size are on the wire but unused by the host
+  beyond logging.
+- No client-side automatic reconnect yet (spec section 7.2); if the host
+  connection drops, the SDL3 client currently just stops sending/
+  receiving rather than retrying with backoff.
 - Video transport is raw BGRA8888 over TCP (Stage 1 per spec section 8.4);
   no compression yet.
 - The SDL3 client (`client/`) has not been build-verified in this

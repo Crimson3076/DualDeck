@@ -24,8 +24,12 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <optional>
+#include <thread>
 #include <vector>
 
 #include "melonds_remote/protocol.h"
@@ -90,7 +94,32 @@ uint16_t buildButtonsFromGamepad(SDL_Gamepad* gamepad) {
 
 int main(int argc, char** argv) {
     NetClientConfig netConfig;
-    if (argc > 1) netConfig.hostAddress = argv[1];
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        auto nextArg = [&]() -> std::string {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "missing value for %s\n", arg.c_str());
+                std::exit(1);
+            }
+            return argv[++i];
+        };
+
+        if (arg == "--host") {
+            netConfig.hostAddress = nextArg();
+        } else if (arg == "--auth-token") {
+            netConfig.authToken = nextArg();
+        } else if (arg == "--client-name") {
+            netConfig.clientName = nextArg();
+        } else if (!arg.empty() && arg[0] != '-') {
+            // Positional host address, for scripts/run-client.sh's
+            // `melonds-remote-client 127.0.0.1` convenience form.
+            netConfig.hostAddress = arg;
+        } else {
+            std::fprintf(stderr, "unrecognized argument: %s\n", arg.c_str());
+            return 1;
+        }
+    }
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
@@ -136,15 +165,40 @@ int main(int argc, char** argv) {
     if (gamepadIds) SDL_free(gamepadIds);
 
     NetClient net(netConfig);
-    bool connected = net.connect();
-    if (connected) {
-        std::printf("[net] connected to %s\n", netConfig.hostAddress.c_str());
+    if (net.connect()) {
+        std::printf("[net] connected to %s (session %u)\n", netConfig.hostAddress.c_str(),
+                     net.sessionId());
     } else {
         std::fprintf(stderr,
-                      "[net] failed to connect to %s -- continuing to show a local test "
-                      "pattern only\n",
+                      "[net] failed to connect to %s -- will keep retrying in the "
+                      "background, showing a local test pattern meanwhile\n",
                       netConfig.hostAddress.c_str());
     }
+
+    // Auto-reconnect (spec section 7.2): connect() does several blocking
+    // socket calls, so retries run on their own thread rather than
+    // stalling the render/input loop below. Backoff caps at 5s so a
+    // permanently-unreachable host doesn't spin the CPU.
+    std::atomic<bool> shuttingDown{false};
+    std::thread reconnectThread([&]() {
+        uint32_t backoffMs = 1000;
+        constexpr uint32_t kMaxBackoffMs = 5000;
+        while (!shuttingDown.load()) {
+            if (!net.isConnected()) {
+                std::printf("[net] attempting to (re)connect to %s...\n",
+                            netConfig.hostAddress.c_str());
+                if (net.connect()) {
+                    std::printf("[net] reconnected (session %u)\n", net.sessionId());
+                    backoffMs = 1000;
+                } else {
+                    backoffMs = std::min(backoffMs * 2, kMaxBackoffMs);
+                }
+            }
+            for (uint32_t waited = 0; waited < backoffMs && !shuttingDown.load(); waited += 100) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        }
+    });
 
     uint32_t sequence = 0;
     bool touchActive = false;
@@ -239,6 +293,8 @@ int main(int argc, char** argv) {
         SDL_RenderPresent(renderer);
     }
 
+    shuttingDown = true;
+    reconnectThread.join();
     net.disconnect();
     if (gamepad) SDL_CloseGamepad(gamepad);
     SDL_DestroyTexture(texture);

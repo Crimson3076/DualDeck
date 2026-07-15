@@ -21,6 +21,20 @@ struct NetClientConfig {
     uint16_t controlPort = 8760;
     uint16_t inputPort = 8761;
     uint16_t videoPort = 8762;
+
+    std::string clientName = "SteamDeck";
+    std::string clientPlatform = "linux";
+    uint16_t displayWidth = 1280;
+    uint16_t displayHeight = 800;
+
+    // Must match the host's --auth-token, if it has one configured; empty
+    // if the host has authentication disabled (spec section 13).
+    std::string authToken;
+
+    // How often to send a Heartbeat packet on the control channel while
+    // otherwise idle, so the host's control-channel timeout doesn't fire
+    // on a live-but-quiet connection.
+    uint32_t heartbeatIntervalMs = 1000;
 };
 
 class NetClient {
@@ -48,16 +62,34 @@ public:
     // returns false if no frame has arrived yet. Never blocks.
     bool getLatestFrame(std::vector<uint8_t>& outFrame);
 
+    // Session ID assigned by the host in HelloAck, or 0 if not connected.
+    // Informational only (e.g. for logging); not currently used to
+    // validate anything client-side.
+    uint32_t sessionId() const { return sessionId_.load(); }
+
 private:
     void videoReceiveLoop();
+    void heartbeatLoop();
+    void closePartialConnection();
 
     NetClientConfig config_;
-    int controlFd_ = -1;
-    int videoFd_ = -1;
-    int udpFd_ = -1;
+
+    // atomic because connect()/disconnect() may run on a different thread
+    // (the auto-reconnect loop in main.cpp) than sendControllerState(),
+    // which reads udpFd_ on every call from the render/input thread.
+    std::atomic<int> controlFd_{-1};
+    std::atomic<int> videoFd_{-1};
+    std::atomic<int> udpFd_{-1};
+    std::atomic<uint32_t> sessionId_{0};
+
+    // Serializes connect()/disconnect() against each other -- callers may
+    // run reconnect-on-a-background-thread while the main thread can
+    // still call disconnect() at shutdown.
+    std::mutex connectMutex_;
 
     std::atomic<bool> connected_{false};
     std::thread videoThread_;
+    std::thread heartbeatThread_;
 
     std::mutex frameMutex_;
     std::vector<uint8_t> latestFrame_;

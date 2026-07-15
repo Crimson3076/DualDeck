@@ -9,20 +9,26 @@ See [`SPEC.md`](SPEC.md) for the full project scope and requirements.
 
 ## Status
 
-**Phase 0 (repository investigation) and a minimal Phase 1 skeleton are
-implemented.** There is no melonDS integration yet.
+**Phase 0 (repository investigation) and a Phase 1 skeleton with some
+Phase 2 network-robustness work are implemented.** There is no melonDS
+integration yet.
 
 - [`docs/melonds-integration-analysis.md`](docs/melonds-integration-analysis.md) —
   where melonDS exposes bottom-screen frames and accepts input, and the
   proposed patch boundary for the future melonDS fork integration.
-- [`protocol/`](protocol/) — versioned wire format, touch-coordinate
-  mapping, and fail-safe input-state tracking. Fully unit tested, no
-  external dependencies.
+- [`protocol/`](protocol/) — versioned wire format (including the Hello/
+  HelloAck handshake payloads), touch-coordinate mapping, fail-safe
+  input-state tracking, and connection-attempt rate limiting. Fully unit
+  tested, no external dependencies.
 - [`host/remote-server/`](host/remote-server/) — a standalone host binary
   implementing the full network/threading model (TCP control, UDP input,
   TCP video) against a synthetic test-pattern frame source and a logging
   input sink, so it can be built and tested without melonDS or a display.
-- [`client/`](client/) — an SDL3 Steam Deck client. Written but **not
+  Supports an optional pre-shared auth token (`--auth-token`); UDP input
+  and the video channel are both gated on a completed, authenticated
+  handshake from the same source address.
+- [`client/`](client/) — an SDL3 Steam Deck client with automatic
+  reconnect (capped exponential backoff). Written but **not
   build-verified** in the environment this was developed in (no SDL3
   package available there) — see [`docs/building.md`](docs/building.md).
 - [`host/melonds-patches/`](host/melonds-patches/) — empty. The actual
@@ -36,14 +42,14 @@ implemented.** There is no melonDS integration yet.
 ./scripts/install-dev.sh
 
 # Run the standalone host prototype:
-./scripts/run-host.sh
+./scripts/run-host.sh --auth-token some-shared-secret
 
 # In another terminal, exercise it end-to-end without needing the client built:
 python3 tests/smoke_test.py build/host/remote-server/melonds-remote-server
 
 # If you have SDL3 installed, build and run the client:
 ./scripts/install-dev.sh --with-client
-./scripts/run-client.sh 127.0.0.1
+./scripts/run-client.sh 127.0.0.1  # or: melonds-remote-client --host 127.0.0.1 --auth-token some-shared-secret
 ```
 
 ## Documentation

@@ -7,7 +7,6 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_dir="${repo_root}/build"
 binary="${build_dir}/client/melonds-remote-client"
-host_address="${1:-127.0.0.1}"
 
 if [[ ! -x "${binary}" ]]; then
     echo "Client binary not found, building..." >&2
@@ -15,4 +14,10 @@ if [[ ! -x "${binary}" ]]; then
     cmake --build "${build_dir}" -j"$(nproc)"
 fi
 
-exec "${binary}" "${host_address}"
+# Forwards all arguments, e.g.:
+#   ./scripts/run-client.sh 127.0.0.1
+#   ./scripts/run-client.sh --host 127.0.0.1 --auth-token some-shared-secret
+if [[ $# -eq 0 ]]; then
+    set -- "127.0.0.1"
+fi
+exec "${binary}" "$@"

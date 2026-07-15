@@ -2,6 +2,7 @@ add_library(melonds_remote_protocol STATIC
     src/protocol.cpp
     src/touch_mapping.cpp
     src/input_state_tracker.cpp
+    src/rate_limiter.cpp
 )
 
 target_include_directories(melonds_remote_protocol PUBLIC

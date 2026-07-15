@@ -39,14 +39,20 @@ int main(int argc, char** argv) {
             config.videoPort = static_cast<uint16_t>(std::stoi(nextArg()));
         } else if (arg == "--timeout-ms") {
             config.inputTimeoutUs = static_cast<uint64_t>(std::stoll(nextArg())) * 1000;
+        } else if (arg == "--auth-token") {
+            config.authToken = nextArg();
         } else if (arg == "--help") {
             std::printf(
                 "Usage: melonds-remote-server [--bind ADDR] [--control-port N] "
-                "[--input-port N] [--video-port N] [--timeout-ms N]\n"
+                "[--input-port N] [--video-port N] [--timeout-ms N] [--auth-token TOKEN]\n"
                 "\n"
                 "Phase 1 prototype: serves a synthetic 256x192 test-pattern bottom\n"
                 "screen and logs received controller/touch state. Not yet wired to\n"
-                "a real melonDS instance -- see docs/melonds-integration-analysis.md.\n");
+                "a real melonDS instance -- see docs/melonds-integration-analysis.md.\n"
+                "\n"
+                "If --auth-token is omitted, the server accepts any client that can\n"
+                "reach it (spec section 13 requires this to be a conscious, warned-\n"
+                "about choice for anything beyond local testing).\n");
             return 0;
         } else {
             std::fprintf(stderr, "unrecognized argument: %s\n", arg.c_str());

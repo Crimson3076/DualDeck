@@ -22,6 +22,7 @@
 #include "host/emulator_input_sink.h"
 #include "host/frame_source.h"
 #include "melonds_remote/input_state_tracker.h"
+#include "melonds_remote/rate_limiter.h"
 
 namespace melonds_remote::host {
 
@@ -32,6 +33,19 @@ struct NetServerConfig {
     uint16_t videoPort = 8762;
     uint64_t inputTimeoutUs = 500'000; // 500ms, spec section 6.4 / 7.1
     int videoSendFps = 60;
+
+    // Empty means authentication is disabled -- spec section 13 requires
+    // this to be a conscious, warned-about choice, not a silent default.
+    std::string authToken;
+
+    // If a control-channel connection is silent (no heartbeat, no other
+    // control traffic) for longer than this, it is dropped. Distinct from
+    // inputTimeoutUs, which governs the UDP input stream.
+    uint64_t controlHeartbeatTimeoutUs = 5'000'000; // 5s
+
+    // Connection-attempt rate limiting (spec section 13).
+    int maxConnectionAttemptsPerWindow = 5;
+    uint64_t connectionAttemptWindowUs = 10'000'000; // 10s
 };
 
 class NetServer {
@@ -66,12 +80,25 @@ private:
     InputStateTracker inputTracker_;
     std::mutex trackerMutex_;
 
+    ConnectionRateLimiter rateLimiter_;
+    std::mutex rateLimiterMutex_;
+
     int controlListenFd_ = -1;
     int videoListenFd_ = -1;
     int inputFd_ = -1;
 
     std::atomic<int> controlClientFd_{-1};
     std::atomic<int> videoClientFd_{-1};
+
+    // Set only once a client has completed the (possibly authenticated)
+    // control-channel handshake, and cleared on disconnect/timeout.
+    // inputLoop() uses this -- together with authenticatedClientAddr_ --
+    // to refuse to act on ControllerState packets from anyone who hasn't
+    // authenticated, and from any source address other than the
+    // authenticated client's (spec section 13: don't accept arbitrary
+    // unauthenticated input).
+    std::atomic<bool> clientAuthenticated_{false};
+    std::atomic<uint32_t> authenticatedClientAddr_{0}; // sockaddr_in::sin_addr.s_addr, network byte order
 };
 
 } // namespace melonds_remote::host

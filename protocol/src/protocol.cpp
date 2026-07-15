@@ -139,4 +139,116 @@ ByteBuffer buildControllerStatePacket(const ControllerState& state) {
     return buildPacket(PacketType::ControllerState, payload);
 }
 
+void appendString(ByteBuffer& out, const std::string& s) {
+    appendU16(out, static_cast<uint16_t>(s.size()));
+    out.insert(out.end(), s.begin(), s.end());
+}
+
+std::optional<std::string> readString(const uint8_t* data, size_t size, size_t& offset) {
+    if (offset + 2 > size) {
+        return std::nullopt;
+    }
+    uint16_t len = readU16(data, offset);
+    offset += 2;
+
+    if (len > kMaxProtocolStringLength) {
+        return std::nullopt;
+    }
+    if (offset + len > size) {
+        return std::nullopt;
+    }
+
+    std::string s(reinterpret_cast<const char*>(data + offset), len);
+    offset += len;
+    return s;
+}
+
+void serializeHelloPayload(ByteBuffer& out, const HelloPayload& hello) {
+    appendString(out, hello.clientName);
+    appendString(out, hello.clientPlatform);
+    appendU16(out, hello.displayWidth);
+    appendU16(out, hello.displayHeight);
+    appendString(out, hello.authToken);
+}
+
+std::optional<HelloPayload> parseHelloPayload(const uint8_t* data, size_t size) {
+    if (data == nullptr) {
+        return std::nullopt;
+    }
+
+    size_t offset = 0;
+    HelloPayload hello;
+
+    auto name = readString(data, size, offset);
+    if (!name) return std::nullopt;
+    hello.clientName = std::move(*name);
+
+    auto platform = readString(data, size, offset);
+    if (!platform) return std::nullopt;
+    hello.clientPlatform = std::move(*platform);
+
+    if (offset + 4 > size) return std::nullopt;
+    hello.displayWidth = readU16(data, offset); offset += 2;
+    hello.displayHeight = readU16(data, offset); offset += 2;
+
+    auto token = readString(data, size, offset);
+    if (!token) return std::nullopt;
+    hello.authToken = std::move(*token);
+
+    if (offset != size) {
+        // trailing garbage: reject rather than silently ignore
+        return std::nullopt;
+    }
+
+    return hello;
+}
+
+ByteBuffer buildHelloPacket(const HelloPayload& hello) {
+    ByteBuffer payload;
+    serializeHelloPayload(payload, hello);
+    return buildPacket(PacketType::Hello, payload);
+}
+
+void serializeHelloAckPayload(ByteBuffer& out, const HelloAckPayload& ack) {
+    out.push_back(ack.accepted ? 1 : 0);
+    out.push_back(static_cast<uint8_t>(ack.rejectReason));
+    appendU32(out, ack.sessionId);
+    appendU16(out, ack.nativeWidth);
+    appendU16(out, ack.nativeHeight);
+}
+
+std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t size) {
+    constexpr size_t kWireSize = 1 + 1 + 4 + 2 + 2;
+    if (data == nullptr || size != kWireSize) {
+        return std::nullopt;
+    }
+
+    HelloAckPayload ack;
+    size_t offset = 0;
+
+    uint8_t accepted = data[offset]; offset += 1;
+    if (accepted != 0 && accepted != 1) {
+        return std::nullopt;
+    }
+    ack.accepted = accepted;
+
+    uint8_t reason = data[offset]; offset += 1;
+    if (reason > static_cast<uint8_t>(HelloRejectReason::HostBusy)) {
+        return std::nullopt;
+    }
+    ack.rejectReason = static_cast<HelloRejectReason>(reason);
+
+    ack.sessionId = readU32(data, offset); offset += 4;
+    ack.nativeWidth = readU16(data, offset); offset += 2;
+    ack.nativeHeight = readU16(data, offset);
+
+    return ack;
+}
+
+ByteBuffer buildHelloAckPacket(const HelloAckPayload& ack) {
+    ByteBuffer payload;
+    serializeHelloAckPayload(payload, ack);
+    return buildPacket(PacketType::HelloAck, payload);
+}
+
 } // namespace melonds_remote

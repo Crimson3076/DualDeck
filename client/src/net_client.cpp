@@ -5,7 +5,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <cstdio>
+#include <thread>
 
 namespace melonds_remote::client {
 
@@ -44,10 +46,38 @@ NetClient::~NetClient() {
     disconnect();
 }
 
+void NetClient::closePartialConnection() {
+    // Closing the fds first unblocks any recv()/send() a still-running
+    // videoReceiveLoop()/heartbeatLoop() from a previous session is
+    // stuck in, so the joins below complete promptly instead of hanging.
+    // This matters for reconnect: connect() calls this at its start, and
+    // assigning a new std::thread over a still-joinable one (without
+    // joining first) would call std::terminate.
+    if (controlFd_ >= 0) { ::close(controlFd_); controlFd_ = -1; }
+    if (videoFd_ >= 0) { ::close(videoFd_); videoFd_ = -1; }
+    if (udpFd_ >= 0) { ::close(udpFd_); udpFd_ = -1; }
+    sessionId_ = 0;
+
+    if (videoThread_.joinable()) videoThread_.join();
+    if (heartbeatThread_.joinable()) heartbeatThread_.join();
+}
+
 bool NetClient::connect() {
+    // Serializes against disconnect() (and against another concurrent
+    // connect(), though callers aren't expected to do that) -- e.g. the
+    // reconnect-on-a-background-thread pattern in client/src/main.cpp,
+    // which may race with a main-thread disconnect() at shutdown.
+    std::lock_guard<std::mutex> lock(connectMutex_);
+
+    // A previous connect() attempt may have failed partway through (or a
+    // prior session may have just ended); never layer a new attempt on
+    // top of stale file descriptors.
+    closePartialConnection();
+
     controlFd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     if (controlFd_ < 0) {
         std::perror("socket (control)");
+        closePartialConnection();
         return false;
     }
 
@@ -56,35 +86,61 @@ bool NetClient::connect() {
     addr.sin_port = htons(config_.controlPort);
     if (::inet_pton(AF_INET, config_.hostAddress.c_str(), &addr.sin_addr) != 1) {
         std::fprintf(stderr, "invalid host address: %s\n", config_.hostAddress.c_str());
-        ::close(controlFd_);
-        controlFd_ = -1;
+        closePartialConnection();
         return false;
     }
 
     if (::connect(controlFd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
         std::perror("connect (control)");
-        ::close(controlFd_);
-        controlFd_ = -1;
+        closePartialConnection();
         return false;
     }
 
-    ByteBuffer hello;
-    serializeHeader(hello, PacketHeader{kPacketMagic, kProtocolVersion, PacketType::Hello, 0});
+    HelloPayload helloPayload;
+    helloPayload.clientName = config_.clientName;
+    helloPayload.clientPlatform = config_.clientPlatform;
+    helloPayload.displayWidth = config_.displayWidth;
+    helloPayload.displayHeight = config_.displayHeight;
+    helloPayload.authToken = config_.authToken;
+    ByteBuffer hello = buildHelloPacket(helloPayload);
     if (!sendAll(controlFd_, hello.data(), hello.size())) {
         std::fprintf(stderr, "failed to send Hello\n");
+        closePartialConnection();
         return false;
     }
 
-    uint8_t ackBuf[kPacketHeaderWireSize];
-    if (!recvExact(controlFd_, ackBuf, sizeof(ackBuf))) {
+    uint8_t ackHeaderBuf[kPacketHeaderWireSize];
+    if (!recvExact(controlFd_, ackHeaderBuf, sizeof(ackHeaderBuf))) {
         std::fprintf(stderr, "failed to receive HelloAck\n");
+        closePartialConnection();
         return false;
     }
-    auto ackHeader = parseHeader(ackBuf, sizeof(ackBuf));
-    if (!ackHeader || ackHeader->type != PacketType::HelloAck) {
-        std::fprintf(stderr, "handshake rejected by host\n");
+    auto ackHeader = parseHeader(ackHeaderBuf, sizeof(ackHeaderBuf));
+    if (!ackHeader || ackHeader->type != PacketType::HelloAck || ackHeader->payloadSize > 256) {
+        std::fprintf(stderr, "handshake rejected by host (bad response header)\n");
+        closePartialConnection();
         return false;
     }
+
+    ByteBuffer ackPayloadBuf(ackHeader->payloadSize);
+    if (!ackPayloadBuf.empty() && !recvExact(controlFd_, ackPayloadBuf.data(), ackPayloadBuf.size())) {
+        std::fprintf(stderr, "failed to receive HelloAck payload\n");
+        closePartialConnection();
+        return false;
+    }
+    auto ack = parseHelloAckPayload(ackPayloadBuf.data(), ackPayloadBuf.size());
+    if (!ack) {
+        std::fprintf(stderr, "handshake rejected by host (malformed HelloAck payload)\n");
+        closePartialConnection();
+        return false;
+    }
+    if (!ack->accepted) {
+        std::fprintf(stderr, "handshake rejected by host (reason code %d)\n",
+                      static_cast<int>(ack->rejectReason));
+        closePartialConnection();
+        return false;
+    }
+    sessionId_ = ack->sessionId;
 
     // Video channel: a second TCP connection dedicated to frame streaming
     // (see docs/protocol.md -- Stage 1 keeps control and video separate
@@ -94,12 +150,14 @@ bool NetClient::connect() {
     videoFd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     if (videoFd_ < 0 || ::connect(videoFd_, reinterpret_cast<sockaddr*>(&videoAddr), sizeof(videoAddr)) < 0) {
         std::perror("connect (video)");
+        closePartialConnection();
         return false;
     }
 
     udpFd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
     if (udpFd_ < 0) {
         std::perror("socket (udp input)");
+        closePartialConnection();
         return false;
     }
     sockaddr_in inputAddr = addr;
@@ -109,15 +167,19 @@ bool NetClient::connect() {
         // send() calls; failure here means the address family/setup is
         // wrong, not an actual network condition.
         std::perror("connect (udp input)");
+        closePartialConnection();
         return false;
     }
 
     connected_ = true;
     videoThread_ = std::thread(&NetClient::videoReceiveLoop, this);
+    heartbeatThread_ = std::thread(&NetClient::heartbeatLoop, this);
     return true;
 }
 
 void NetClient::disconnect() {
+    std::lock_guard<std::mutex> lock(connectMutex_);
+
     // Always fall through to close sockets below, even if connect() only
     // partially succeeded or the video thread already noticed a dropped
     // connection and cleared connected_ itself.
@@ -131,11 +193,22 @@ void NetClient::disconnect() {
     }
     if (videoFd_ >= 0) ::shutdown(videoFd_, SHUT_RDWR);
 
-    if (videoThread_.joinable()) videoThread_.join();
+    // Also joins videoThread_/heartbeatThread_ and closes udpFd_.
+    closePartialConnection();
+}
 
-    if (controlFd_ >= 0) { ::close(controlFd_); controlFd_ = -1; }
-    if (videoFd_ >= 0) { ::close(videoFd_); videoFd_ = -1; }
-    if (udpFd_ >= 0) { ::close(udpFd_); udpFd_ = -1; }
+void NetClient::heartbeatLoop() {
+    ByteBuffer heartbeat;
+    serializeHeader(heartbeat, PacketHeader{kPacketMagic, kProtocolVersion, PacketType::Heartbeat, 0});
+
+    while (connected_.load()) {
+        if (!sendAll(controlFd_, heartbeat.data(), heartbeat.size())) {
+            break;
+        }
+        for (uint32_t waited = 0; waited < config_.heartbeatIntervalMs && connected_.load(); waited += 50) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+    }
 }
 
 void NetClient::sendControllerState(const ControllerState& state) {
