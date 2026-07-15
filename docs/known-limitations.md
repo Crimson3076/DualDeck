@@ -6,7 +6,7 @@ section 25. Individual design docs (`architecture.md`, `protocol.md`,
 `testing.md`) call out gaps in context as they come up; this file is the
 single place to check "is X done yet" without reading everything else.
 
-## melonDS integration: patch exists, builds, handshake verified -- video path unverified
+## melonDS integration: patch exists, builds, handshake and real-frame delivery verified
 
 `host/melonds-patches/0001-remote-server-integration.patch` implements
 the integration against melonDS commit
@@ -20,25 +20,45 @@ same protocol/host networking code into real melonDS state via
 the patched binary's embedded remote server starts and correctly performs
 a real authenticated TCP handshake (including rejecting a wrong auth
 token) against a raw-socket test client, under Xvfb with
-`MELONDS_REMOTE_ENABLE=1`.
+`MELONDS_REMOTE_ENABLE=1`. Beyond that, a minimal, fully original homebrew
+`.nds` ROM (`tests/homebrew-test-rom/`, written from scratch -- no
+copyrighted content) was direct-booted successfully in the patched
+binary, and the video path delivered a **stable, non-black, non-test-
+pattern** frame consistently across repeated reads and separate process
+runs -- confirming `GPU::GetFramebuffers()` → `pushBottomFrame()` → the
+network client really does carry live `RunFrame()`-driven output, not a
+static placeholder. This was the specific gap flagged as unverified in
+an earlier pass of this document.
 
-**Not verified**: the video path (`GPU::GetFramebuffers()` →
-`pushBottomFrame()` → served bottom-screen frames) has not been exercised
-with a real emulated frame -- doing so requires actually running a game
-or booting to the DS system menu, and this environment has neither a ROM
-nor the firmware/BIOS assets needed for a full menu boot (obtaining real
-firmware was deliberately not attempted, for the same reason ROMs aren't
-included in this repository -- see `host/melonds-patches/README.md`).
-Input injection (`inputProcess()`'s merge of remote `ControllerState`
-into `inputMask`/hotkeys) is likewise reviewed and compiled but not
-exercised against a running game controlling actual DS input.
+**Still not verified**:
+
+- The exact pixel channel order (RGBA vs BGRA) of the delivered frame --
+  a test with distinctly different R/G/B palette values across two runs
+  produced the same output color both times, which doesn't cleanly
+  confirm either hypothesis. See `tests/homebrew-test-rom/README.md`.
+  Double-check `docs/protocol.md`'s BGRA claim against a real game before
+  trusting the client's rendered colors.
+- Input injection (`inputProcess()`'s merge of remote `ControllerState`
+  into `inputMask`/hotkeys) against a game that actually reads input --
+  the test ROM used for verification never reads input, only writes
+  display registers.
+- Booting to the DS system menu without a cartridge (needs genuine
+  Nintendo firmware, deliberately not sought out here, same reasoning as
+  not including ROMs in this repository) -- only cartridge direct boot
+  was exercised.
+- A commercial-cart-style ROM (the test ROM is homebrew, which skips the
+  "secure area" decryption step entirely -- untested whether that path
+  works).
 
 Concretely, these acceptance criteria from `SPEC.md` section 20 are
-**still not met** (need a real ROM + firmware + a display to attempt):
+**still not met** (need a real commercial ROM + a display + actual
+gameplay to attempt):
 
-- (1) melonDS runs a Nintendo DS game on the host
-- (2)/(3) top/bottom screens are real DS output rather than a test pattern
+- (1) melonDS runs a Nintendo DS *game* on the host (a trivial homebrew
+  test program has been run, not a game)
 - (4)-(8) DS controls/touch actually affect a running game
+- (9) touches outside the rendered rect are ignored *in the context of a
+  real game*
 - (12) 30-minute emulator stability
 
 ## The SDL3 client has not been build-verified

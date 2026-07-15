@@ -65,27 +65,47 @@ Qt6, SDL2, GCC 13) — not just written and assumed correct:
    CRC checks pass and the boot sequence proceeds, but full "boot to DS
    menu" fails on `Failed to open "firmware.mch"` in this environment
    (no real firmware/NAND assets available -- FreeBIOS alone isn't
-   sufficient for a full menu boot). This means the video path
-   (`GPU::GetFramebuffers()` → `pushBottomFrame()` → served over the
-   video port) was **not** exercised with a real emulated frame here;
-   the control-handshake/auth path was fully exercised, and the video
-   push code was reviewed line-by-line against the analysis doc's
-   documented `GetFramebuffers()` contract (see the code comment at the
-   push site explaining why it does *not* gate on `useOpenGL` -- an
-   incorrect gate that was caught and fixed during this verification
-   pass, precisely because a careful read of `EmuInstance::usesOpenGL()`
-   showed it conflates two independent settings).
+   sufficient for a full menu boot, since booting to the system menu
+   without a cartridge needs genuine Nintendo firmware, which was
+   deliberately not sought out here for the same reason ROMs aren't
+   included in this repository).
+5. **Runtime, real ROM, direct boot (the actual gap closed in this
+   pass)**: rather than stopping at "no ROM available", a minimal, fully
+   original homebrew `.nds` ROM was written from scratch (two tiny ARM9/
+   ARM7 programs plus a hand-packed header -- see
+   `tests/homebrew-test-rom/`, no copyrighted content, no external
+   downloads) and direct-booted successfully in the patched binary
+   (confirmed via melonDS's own log: `Inserted cart with game code:
+   ####`, `Game is now booting`). With the ROM actually running:
+   - The remote server's video port delivered a **stable, non-black,
+     non-test-pattern** 256x192 frame -- consistent across repeated
+     reads and across separate process runs -- proving frames really do
+     flow `GPU::GetFramebuffers()` → `pushBottomFrame()` → the network
+     client from genuine `RunFrame()` execution, not a static
+     placeholder. This is the specific gap flagged as unverified in the
+     previous pass of this document.
+   - The exact pixel channel order was **not** conclusively established:
+     writing distinctly different R/G/B palette values across separate
+     runs produced the same output color both times, which doesn't fit a
+     simple "it's RGBA" or "it's BGRA" story on its own. This is flagged
+     as an open item rather than glossed over -- see
+     `tests/homebrew-test-rom/README.md` and `docs/known-limitations.md`.
+   - Input injection (`inputProcess()`'s merge of remote state into
+     `inputMask`/hotkeys) was still not exercised against a running game
+     reacting to real input -- the test ROM never reads input.
 
-Obtaining real firmware/BIOS assets to close that last gap was
-deliberately not attempted here, for the same reason ROMs aren't
-included in this repository (spec section 19: "Do not include commercial
-ROMs in the repository or test artifacts" -- real DS firmware carries the
-same concern). **The next person with legitimate firmware/a ROM should
-verify the video path end-to-end** and report back; the code path is
-believed correct from review, but "believed correct from review" is
-exactly the kind of claim this project's own instructions (`SPEC.md`
-section 23) say not to make without verification, so it's flagged
-explicitly here rather than glossed over.
+Two real things were caught and fixed during this verification, not
+assumed correct from review:
+- The frame-push gate in `EmuThread.cpp` was initially `!useOpenGL`,
+  which tests the wrong flag (`EmuInstance::usesOpenGL()` conflates the
+  display widget's renderer with the 3D renderer choice) -- fixed to
+  rely solely on `GetFramebuffers()`'s own return value.
+- A pre-existing melonDS quirk, unrelated to this patch: a freshly
+  created `$HOME` without an existing `~/.config` directory makes
+  `Config::Load()` fail and pop a blocking `QMessageBox::critical` that
+  never resolves headlessly. Worked around in testing by pre-creating
+  the directory; **not** patched here since it's out of this patch's
+  scope (see `tests/homebrew-test-rom/README.md`).
 
 ## Applying the patch
 
@@ -131,9 +151,16 @@ one-client-at-a-time v0.1 scope.
 - Only three emulator actions are mapped to existing hotkeys (pause/
   resume, fast-forward, swap screens); save state, load state, and the
   rest of `SPEC.md` section 7.5 are not wired up yet.
-- The video path has not been exercised with a real emulated frame in
-  this environment (see "What has actually been verified" above) --
-  verify this specifically before relying on it.
+- The video path has been confirmed to deliver real, non-static frames
+  from a real (if minimal/homebrew) running ROM, but the exact pixel
+  channel order (RGBA vs BGRA) was not conclusively pinned down -- see
+  "What has actually been verified" above and
+  `tests/homebrew-test-rom/README.md`. Double check the client's texture
+  format assumption (`docs/protocol.md`) against a real game before
+  trusting colors to be correct.
+- Input injection into a real running game has not been exercised (the
+  test ROM used for verification never reads input) -- only the merge
+  logic itself was reviewed and compiled.
 - Session IDs are generated and returned in `HelloAck` but not yet
   validated on any later packet (matches the standalone prototype's
   current scope, see `docs/known-limitations.md`).

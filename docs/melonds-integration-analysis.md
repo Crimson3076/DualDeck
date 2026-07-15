@@ -262,12 +262,14 @@ rather than writing it twice.
 `host/melonds-patches/0001-remote-server-integration.patch` implements
 exactly the boundary proposed in section 5. See
 `host/melonds-patches/README.md` for the full, honest account of what was
-verified (baseline build, patched build, patch-file-applies-to-a-fresh-clone,
-and a real authenticated handshake against the running patched binary
-under Xvfb) versus what wasn't (the video/frame-capture path, which needs
-firmware/BIOS assets this environment doesn't have and shouldn't try to
-obtain). Two real bugs were caught during this verification pass rather
-than shipped:
+verified: baseline build, patched build, patch-file-applies-to-a-fresh-clone,
+a real authenticated handshake against the running patched binary under
+Xvfb, and -- going further than "no ROM available" -- a minimal, fully
+original homebrew `.nds` ROM written from scratch (`tests/homebrew-test-rom/`)
+that was direct-booted successfully in the patched binary, with the video
+path confirmed to deliver a real, stable, non-static frame from actual
+`RunFrame()` execution. Three real things were caught during this
+verification pass rather than shipped or assumed correct:
 
 - The frame-push gate in `EmuThread.cpp` was initially written as
   `!useOpenGL`, which turns out to test the wrong thing --
@@ -276,14 +278,27 @@ than shipped:
   doesn't by itself indicate whether `GetFramebuffers()` will return real
   pointers. Fixed to rely solely on `GetFramebuffers()`'s own return
   value, which is the correct, self-documented check.
-- Two debug `fprintf` diagnostics added to track down why the remote
-  server didn't seem to start (turned out to be an stdio-buffering
-  artifact of the first test run, not a real bug) were removed before
-  finalizing the patch, and a clean rebuild confirmed afterward that
-  removing them didn't reintroduce the original symptom.
+- A pre-existing melonDS quirk unrelated to this patch: a freshly created
+  `$HOME` without an existing `~/.config` directory makes
+  `Config::Load()` fail and pop a blocking `QMessageBox::critical` that
+  never resolves headlessly. Worked around in testing, not patched (out
+  of this patch's scope) -- see `tests/homebrew-test-rom/README.md`.
+- Debug `fprintf` diagnostics added along the way to track down the above
+  two issues were removed before finalizing the patch, with a clean
+  rebuild confirming afterward that removing them didn't reintroduce
+  either original symptom.
 
-**Next recommended step**: get a ROM and real firmware/BIOS on a machine
-with a display, apply the patch, and verify the video path end-to-end
-(bottom screen appears on a connected client, touch/buttons control a
-running game, 30-minute stability) -- i.e. actually attempt `SPEC.md`
-section 20's acceptance criteria for the first time.
+**What's still open, honestly**: the exact pixel channel order (RGBA vs
+BGRA) of the delivered frame was not conclusively pinned down -- a test
+with distinctly different R/G/B values across two runs produced identical
+output both times, which doesn't cleanly fit either hypothesis. Input
+injection into a game that reads input, booting to the system menu
+(needs real firmware), and a commercial-cart-style ROM (secure-area
+decryption path) are all still unexercised. See
+`docs/known-limitations.md` for the complete list.
+
+**Next recommended step**: get a real ROM (or continue with homebrew) on
+a machine with a display and a gamepad, verify DS controls/touch actually
+affect the running program, resolve the RGBA/BGRA question definitively,
+and attempt a 30-minute stability run -- i.e. work through the remainder
+of `SPEC.md` section 20's acceptance criteria.
