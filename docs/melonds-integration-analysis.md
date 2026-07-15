@@ -288,17 +288,39 @@ verification pass rather than shipped or assumed correct:
   rebuild confirming afterward that removing them didn't reintroduce
   either original symptom.
 
-**What's still open, honestly**: the exact pixel channel order (RGBA vs
-BGRA) of the delivered frame was not conclusively pinned down -- a test
-with distinctly different R/G/B values across two runs produced identical
-output both times, which doesn't cleanly fit either hypothesis. Input
-injection into a game that reads input, booting to the system menu
-(needs real firmware), and a commercial-cart-style ROM (secure-area
-decryption path) are all still unexercised. See
-`docs/known-limitations.md` for the complete list.
+**Follow-up pass -- input injection, pixel format, and stability**: the
+static-color ROM was extended into a genuinely interactive program
+(reads the real `KEYINPUT` register and reacts visibly;
+`tests/homebrew-test-rom/arm9.c`) and driven through the actual network
+pipeline end-to-end (`tests/homebrew-test-rom/interactive_pipeline_test.py`):
+real UDP `ControllerState` packets → `NetServer` → `RemoteServerBridge` →
+`EmuInstance::inputProcess()` → `NDS::SetKeyMask()` → CPU register read →
+visible display change → `GPU::GetFramebuffers()` → `pushBottomFrame()` →
+client. Holding each of several button states produced exactly one
+stable pixel value across 50 consecutive samples with clean transitions,
+which:
 
-**Next recommended step**: get a real ROM (or continue with homebrew) on
-a machine with a display and a gamepad, verify DS controls/touch actually
-affect the running program, resolve the RGBA/BGRA question definitively,
-and attempt a 30-minute stability run -- i.e. work through the remainder
-of `SPEC.md` section 20's acceptance criteria.
+- Confirms DS controls sent over the remote protocol genuinely affect a
+  running program (SPEC.md section 20 criteria (4)-(8), for a real if
+  original/homebrew program -- see the caveat in
+  `tests/homebrew-test-rom/README.md` about why a commercial game itself
+  isn't and can't be used here).
+- Conclusively resolves the pixel-channel-order question left open in
+  the previous pass: the delivered format is **BGRA8888**, and **engine
+  B** (not engine A) is the "bottom" screen `GetFramebuffers()` returns.
+  The earlier ambiguity was a one-sample-per-run test that couldn't
+  distinguish these; holding distinct states within one continuous
+  session and sampling many frames per state resolved it cleanly.
+
+A sustained-session stability run (`tests/homebrew-test-rom/stability_test.py`,
+SPEC.md section 20 criterion (12)) was also carried out against the live
+patched binary; see `docs/known-limitations.md` for the duration achieved
+and results.
+
+**What's still open, honestly**: booting to the system menu (needs real
+firmware, deliberately not sought out) and a commercial-cart-style ROM
+(secure-area decryption path) remain unexercised -- both require assets
+this project deliberately does not include or seek out. Real Steam Deck
+hardware, a physical gamepad, and a real commercial game are still
+outside what this sandboxed environment can provide; see
+`docs/known-limitations.md` for the precise, current list.

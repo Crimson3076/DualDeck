@@ -12,9 +12,10 @@ See [`SPEC.md`](SPEC.md) for the full project scope and requirements.
 **Phase 0, a Phase 1 skeleton, Phase 2 network-robustness work, and a
 first melonDS integration patch are all implemented.** The patch builds,
 its control-channel handshake/authentication is verified against a real
-melonDS binary, and its video-capture path has been confirmed to deliver
-real, non-static frames from an actual running (homebrew) ROM -- see
-below for exactly what is and isn't verified yet.
+melonDS binary, and its video-capture and input-injection paths have both
+been confirmed end-to-end against an actual running (homebrew) program
+driven through the real network pipeline — see below for exactly what is
+and isn't verified yet.
 
 - [`docs/melonds-integration-analysis.md`](docs/melonds-integration-analysis.md) —
   where melonDS exposes bottom-screen frames and accepts input, verified
@@ -35,13 +36,18 @@ below for exactly what is and isn't verified yet.
   the protocol/host code above into melonDS's own build and wires it to
   `GPU::GetFramebuffers()` and the input/hotkey system. Confirmed to
   build from a fresh clone, its handshake/auth verified against the
-  running patched binary, and its video path confirmed to deliver a real,
+  running patched binary. Its video path was confirmed to deliver a real,
   non-static frame from a minimal original homebrew ROM
   ([`tests/homebrew-test-rom/`](tests/homebrew-test-rom/)) direct-booted
-  in the patched binary. **Still open**: the exact RGBA/BGRA pixel order
-  wasn't conclusively pinned down, and input injection into a game that
-  reads input hasn't been exercised — see
-  `host/melonds-patches/README.md` for the full verification account.
+  in the patched binary — and, going further, that ROM was extended to
+  read real DS button input and driven through the actual UDP-input →
+  `SetKeyMask()` → CPU → framebuffer → network pipeline, confirming DS
+  controls sent remotely genuinely affect a running program, and
+  conclusively resolving the pixel format as **BGRA8888** with engine B
+  as the bottom screen. See `host/melonds-patches/README.md` and
+  `tests/homebrew-test-rom/README.md` for the full verification account,
+  including the honest caveat that this is an original homebrew program,
+  not a commercial game.
 - [`client/`](client/) — an SDL3 Steam Deck client with automatic
   reconnect (capped exponential backoff). Written but **not
   build-verified** in the environment this was developed in (no SDL3

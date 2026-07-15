@@ -13,11 +13,13 @@ in any third-party binaries.
 ## What it does
 
 - `arm9.c`: sets both 2D engines' `DISPCNT` to display-mode 1 (regular 2D
-  graphics) and writes a distinctive color into each engine's BG palette
-  entry 0 (the "backdrop" color shown when no BG layer covers a pixel),
-  then loops forever. No tiles, no sprites, no font -- this is the
-  simplest possible way to get the emulated screen showing something
-  other than its power-on default, using only two register writes.
+  graphics), then loops forever reading the real `KEYINPUT` hardware
+  register (0x04000130) and writing the currently-held buttons (A/B/Up)
+  as a solid RGB backdrop color into engine B's BG palette entry 0 (the
+  "backdrop" color shown when no BG layer covers a pixel). No tiles, no
+  sprites, no font -- this is the simplest possible way to make the
+  emulated screen visibly, immediately reflect real DS button input,
+  using only a register read and a register write per frame.
 - `arm7.c`: an empty infinite loop. NDS direct boot jumps both CPUs to
   their entry points; ARM7 just needs to exist and not crash.
 - `build_rom.py`: hand-packs a valid 4096-byte `NDSHeader` (matching
@@ -25,6 +27,15 @@ in any third-party binaries.
   dumper against melonDS's actual `NDS_Header.h` rather than assumed) plus
   the two compiled binaries into a `.nds` file that satisfies melonDS's
   `ValidateROM()` checks (see the script's docstring for the exact rules).
+- `interactive_pipeline_test.py`: drives the real network pipeline (real
+  UDP `ControllerState` packets, exactly as the SDL3 client sends) against
+  a running patched melonDS with this ROM booted, and confirms specific
+  button holds produce specific, stable, expected colors in the delivered
+  video frames -- verifying SPEC.md section 20 criteria (4)-(8).
+- `stability_test.py`: runs a sustained session (continuous input +
+  continuous video draining) for a target duration, checking for
+  disconnects, stalled video, and process RSS growth -- verifying SPEC.md
+  section 20 criterion (12).
 
 ## Building
 
@@ -43,25 +54,57 @@ MELONDS_REMOTE_ENABLE=1 MELONDS_REMOTE_AUTH_TOKEN=some-token \
   ./melonDS --boot always /path/to/test.nds
 ```
 
-## What this proved (and didn't)
+## What this proved
 
-Used to verify `host/melonds-patches`'s video-capture path end-to-end:
-built and direct-booted successfully (confirmed via melonDS's own log
-output: "Inserted cart with game code: ####", "Game is now booting"), and
-the remote server delivered a **stable, non-black, non-test-pattern**
-256x192 frame that was consistent across repeated reads and across
-process restarts -- i.e. a real frame computed by actual `RunFrame()`
-execution and delivered through `GPU::GetFramebuffers()` →
-`pushBottomFrame()` → the network client, not a static placeholder.
+Used to verify `host/melonds-patches`'s video-capture and input-injection
+paths end-to-end:
 
-**What it didn't conclusively establish**: the exact pixel channel order
-of the delivered frame. Writing distinctly different R/G/B palette values
-across two separate runs produced the same output color both times,
-which doesn't fit a simple "it's just RGBA" or "it's just BGRA" story on
-its own -- this needs further investigation (possibly a VRAM-bank-enable
-prerequisite for backdrop rendering that this minimal program doesn't set
-up, or some other interaction not yet understood) rather than being
-declared solved. See `docs/known-limitations.md`.
+- Built and direct-booted successfully (confirmed via melonDS's own log
+  output: "Inserted cart with game code: ####", "Game is now booting"),
+  and the remote server delivered a **stable, non-black, non-test-pattern**
+  256x192 frame -- i.e. a real frame computed by actual `RunFrame()`
+  execution and delivered through `GPU::GetFramebuffers()` →
+  `pushBottomFrame()` → the network client, not a static placeholder.
+- With the interactive (`KEYINPUT`-reading) version of `arm9.c` and
+  `interactive_pipeline_test.py` driving real UDP `ControllerState`
+  packets through the actual network pipeline (`NetServer` →
+  `RemoteServerBridge` → `EmuInstance::inputProcess()` → `NDS::SetKeyMask()`
+  → CPU register read → visible backdrop-color change →
+  `GPU::GetFramebuffers()` → `pushBottomFrame()` → client), each held
+  button state produced **exactly one stable pixel value across 50
+  consecutive samples**, with clean, immediate transitions between
+  states and no noise -- a genuine, unambiguous confirmation that DS
+  controls sent over the remote protocol affect a running program
+  (SPEC.md section 20 criteria (4)-(8)).
+- This also **conclusively resolved** two previously-open questions:
+  - **Engine B is the "bottom" screen** delivered by
+    `GPU::GetFramebuffers()` (the dynamic, input-reactive color was
+    written to engine B's backdrop and that's what changed on screen;
+    engine A's fixed color never appeared in the delivered frames).
+  - **The delivered pixel format is BGRA8888**: holding "Up" (which the
+    ROM maps to the blue component) changed byte offset 0; holding "B"
+    (green component) changed byte offset 1; holding "A" (red component)
+    changed byte offset 2; byte offset 3 stayed 255 (alpha). This
+    resolves the earlier ambiguity from the static two-color ROM version,
+    which used only a single sample per run and couldn't distinguish
+    engine/order this cleanly.
+- `stability_test.py` was run for a sustained period against the live
+  patched melonDS process with continuous input and video traffic; see
+  `docs/known-limitations.md` for the actual duration achieved and
+  results (frame count, RSS growth, disconnects) in this sandboxed
+  environment.
+
+**Important caveat, stated plainly**: this is a fully original, minimal
+homebrew program, not a commercial DS game -- SPEC.md section 19
+explicitly forbids including commercial ROMs in this repository, and
+sourcing/using real commercial software or firmware in this sandbox was
+avoided for the same copyright reason. The *mechanism* verified here
+(remote button state → `SetKeyMask()` → CPU-visible register → program
+logic → framebuffer → network) is identical regardless of what program
+is running; what hasn't been (and can't be, without real commercial
+software or real Steam Deck/gamepad hardware) verified is a specific
+commercial game's own input handling, or a human physically operating a
+Steam Deck controller.
 
 ## Known environmental gotcha (not a bug in this project)
 

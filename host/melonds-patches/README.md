@@ -84,15 +84,43 @@ Qt6, SDL2, GCC 13) — not just written and assumed correct:
      client from genuine `RunFrame()` execution, not a static
      placeholder. This is the specific gap flagged as unverified in the
      previous pass of this document.
-   - The exact pixel channel order was **not** conclusively established:
-     writing distinctly different R/G/B palette values across separate
-     runs produced the same output color both times, which doesn't fit a
-     simple "it's RGBA" or "it's BGRA" story on its own. This is flagged
-     as an open item rather than glossed over -- see
-     `tests/homebrew-test-rom/README.md` and `docs/known-limitations.md`.
-   - Input injection (`inputProcess()`'s merge of remote state into
-     `inputMask`/hotkeys) was still not exercised against a running game
-     reacting to real input -- the test ROM never reads input.
+6. **Runtime, real ROM, actual input injection (the gap closed in this
+   pass)**: the static-color ROM above was extended into a genuinely
+   interactive program (`tests/homebrew-test-rom/arm9.c`) that
+   continuously reads the real `KEYINPUT` hardware register and reflects
+   currently-held buttons as a solid backdrop color, then driven through
+   the *actual* remote-control network pipeline end-to-end using
+   `tests/homebrew-test-rom/interactive_pipeline_test.py`: real UDP
+   `ControllerState` packets (the same wire format the SDL3 client sends)
+   → `NetServer` → `RemoteServerBridge` → `EmuInstance::inputProcess()`'s
+   merge into `inputMask` → `NDS::SetKeyMask()` → the emulated CPU reading
+   `KEYINPUT` → the ROM writing a new backdrop color →
+   `GPU::GetFramebuffers()` → `pushBottomFrame()` → the network client.
+   Holding each of several button combinations (A, B, Up, A+Up, released)
+   for a settle period and then sampling 50 consecutive delivered frames
+   produced **exactly one stable pixel value per state**, with clean
+   immediate transitions and zero noise -- a genuine, unambiguous
+   confirmation that DS controls sent over the remote protocol affect a
+   running program (closing SPEC.md section 20 criteria (4)-(8) for a
+   real, if original/homebrew, program). This also conclusively resolved
+   two previously-open questions:
+   - **The pixel format is BGRA8888** (byte0=Blue, byte1=Green, byte2=Red,
+     byte3=Alpha) -- determined by observing which byte changed for each
+     button-controlled color channel.
+   - **Engine B is the "bottom" screen** delivered by
+     `GPU::GetFramebuffers()`, not engine A.
+   The earlier ambiguity (two static-color runs producing the same
+   output) is now understood: that test only took one sample per run and
+   didn't vary input dynamically within a single run, so it couldn't
+   distinguish engine assignment or byte order the way holding different
+   button states within one continuous session does. See
+   `tests/homebrew-test-rom/README.md` for full results.
+7. **Sustained-session stability** (SPEC.md section 20 criterion (12)):
+   `tests/homebrew-test-rom/stability_test.py` was run against the live
+   patched binary with continuous ~120Hz input traffic and continuous
+   video draining; see `docs/known-limitations.md` for the duration
+   actually achieved and the frame-count/RSS/error results in this
+   sandboxed environment.
 
 Two real things were caught and fixed during this verification, not
 assumed correct from review:
@@ -152,15 +180,14 @@ one-client-at-a-time v0.1 scope.
   resume, fast-forward, swap screens); save state, load state, and the
   rest of `SPEC.md` section 7.5 are not wired up yet.
 - The video path has been confirmed to deliver real, non-static frames
-  from a real (if minimal/homebrew) running ROM, but the exact pixel
-  channel order (RGBA vs BGRA) was not conclusively pinned down -- see
-  "What has actually been verified" above and
-  `tests/homebrew-test-rom/README.md`. Double check the client's texture
-  format assumption (`docs/protocol.md`) against a real game before
-  trusting colors to be correct.
-- Input injection into a real running game has not been exercised (the
-  test ROM used for verification never reads input) -- only the merge
-  logic itself was reviewed and compiled.
+  from a real (if minimal/homebrew) running ROM, and the pixel channel
+  order is confirmed BGRA8888 -- see "What has actually been verified"
+  above and `tests/homebrew-test-rom/README.md`.
+- Input injection has been exercised end-to-end against a running
+  (homebrew) program that reads input and visibly reacts -- see item 6
+  above. Not yet exercised: a commercial-style game's own input-handling
+  code (would need a real commercial ROM, out of scope for this
+  repository) or a physical Steam Deck controller feeding the client.
 - Session IDs are generated and returned in `HelloAck` but not yet
   validated on any later packet (matches the standalone prototype's
   current scope, see `docs/known-limitations.md`).

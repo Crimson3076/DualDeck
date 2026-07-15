@@ -99,7 +99,10 @@ melonDS's software renderer output directly (see
 `docs/melonds-integration-analysis.md` section 1.1), so the eventual real
 integration does not need a color conversion step. `host/remote-server`'s
 `SyntheticFrameSource` already produces frames in this same format so the
-client-side decode path is exercised end-to-end today.
+client-side decode path is exercised end-to-end today. This byte order
+was empirically confirmed (not just assumed) against a real patched
+melonDS binary delivering live frames from a running program -- see
+`tests/homebrew-test-rom/README.md`.
 
 ## Hello payload (variable length)
 

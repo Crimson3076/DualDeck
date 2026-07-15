@@ -6,7 +6,7 @@ section 25. Individual design docs (`architecture.md`, `protocol.md`,
 `testing.md`) call out gaps in context as they come up; this file is the
 single place to check "is X done yet" without reading everything else.
 
-## melonDS integration: patch exists, builds, handshake and real-frame delivery verified
+## melonDS integration: patch exists, builds, handshake, real-frame delivery, and real input injection verified
 
 `host/melonds-patches/0001-remote-server-integration.patch` implements
 the integration against melonDS commit
@@ -20,46 +20,97 @@ same protocol/host networking code into real melonDS state via
 the patched binary's embedded remote server starts and correctly performs
 a real authenticated TCP handshake (including rejecting a wrong auth
 token) against a raw-socket test client, under Xvfb with
-`MELONDS_REMOTE_ENABLE=1`. Beyond that, a minimal, fully original homebrew
-`.nds` ROM (`tests/homebrew-test-rom/`, written from scratch -- no
-copyrighted content) was direct-booted successfully in the patched
-binary, and the video path delivered a **stable, non-black, non-test-
-pattern** frame consistently across repeated reads and separate process
-runs -- confirming `GPU::GetFramebuffers()` → `pushBottomFrame()` → the
-network client really does carry live `RunFrame()`-driven output, not a
-static placeholder. This was the specific gap flagged as unverified in
-an earlier pass of this document.
+`MELONDS_REMOTE_ENABLE=1`. A minimal, fully original homebrew `.nds` ROM
+(`tests/homebrew-test-rom/`, written from scratch -- no copyrighted
+content) was direct-booted successfully in the patched binary, and the
+video path delivered a **stable, non-black, non-test-pattern** frame
+consistently across repeated reads and separate process runs -- confirming
+`GPU::GetFramebuffers()` → `pushBottomFrame()` → the network client
+really does carry live `RunFrame()`-driven output, not a static
+placeholder.
 
-**Still not verified**:
+Going further, the ROM was extended into a genuinely **interactive**
+program that continuously reads the real `KEYINPUT` hardware register
+and reflects currently-held buttons as a visible color change
+(`tests/homebrew-test-rom/arm9.c`), and driven through the *actual*
+network pipeline end-to-end
+(`tests/homebrew-test-rom/interactive_pipeline_test.py`): real UDP
+`ControllerState` packets → `NetServer` → `RemoteServerBridge` →
+`EmuInstance::inputProcess()`'s merge into `inputMask` →
+`NDS::SetKeyMask()` → the emulated CPU reading `KEYINPUT` → the running
+program reacting → `GPU::GetFramebuffers()` → `pushBottomFrame()` → the
+network client. Holding each of several button states (A, B, Up, A+Up,
+released) produced **exactly one stable pixel value across 50
+consecutive delivered frames per state**, with clean, immediate
+transitions and zero noise. This is a genuine, unambiguous, end-to-end
+confirmation that DS controls sent over the remote protocol affect a
+running program -- **not** a unit test of the merge logic in isolation.
 
-- The exact pixel channel order (RGBA vs BGRA) of the delivered frame --
-  a test with distinctly different R/G/B palette values across two runs
-  produced the same output color both times, which doesn't cleanly
-  confirm either hypothesis. See `tests/homebrew-test-rom/README.md`.
-  Double-check `docs/protocol.md`'s BGRA claim against a real game before
-  trusting the client's rendered colors.
-- Input injection (`inputProcess()`'s merge of remote `ControllerState`
-  into `inputMask`/hotkeys) against a game that actually reads input --
-  the test ROM used for verification never reads input, only writes
-  display registers.
+This also **conclusively resolved** the two items the previous pass of
+this document flagged as open:
+
+- **Pixel channel order is BGRA8888** (byte0=Blue, byte1=Green,
+  byte2=Red, byte3=Alpha) -- determined by observing which byte changed
+  for each button-controlled color channel across a continuous session,
+  which the earlier one-sample-per-run static-color test couldn't
+  distinguish.
+- **Engine B (not engine A) is the "bottom" screen** delivered by
+  `GPU::GetFramebuffers()`.
+
+A sustained-session stability run was also carried out (SPEC.md section
+20 criterion (12)) using `tests/homebrew-test-rom/stability_test.py`
+against the live patched binary, with continuous ~120Hz input traffic and
+continuous video draining for an extended period:
+
+**Result: ran the full 1800s (30 minutes) target duration with 106,785
+video frames delivered (~59 fps average), zero connection errors, zero
+video stalls beyond 0.11s max, and zero measured RSS growth in the
+melonDS process (185,436 kB at both start and end) -- the process was
+still running and responsive at the end of the run.** This was a
+continuous session with ~120Hz UDP input traffic (cycling through
+several button combinations every second) and continuous video draining
+throughout, i.e. sustained real network activity for the full period, not
+an idle emulator left alone.
+
+**Still not verified** (both require assets this project deliberately
+does not include or seek out, for the same copyright reasoning that
+excludes ROMs from this repository -- see
+`tests/homebrew-test-rom/README.md`'s caveat):
+
 - Booting to the DS system menu without a cartridge (needs genuine
-  Nintendo firmware, deliberately not sought out here, same reasoning as
-  not including ROMs in this repository) -- only cartridge direct boot
-  was exercised.
+  Nintendo firmware).
 - A commercial-cart-style ROM (the test ROM is homebrew, which skips the
   "secure area" decryption step entirely -- untested whether that path
   works).
+- A specific commercial game's own input-handling code, real Steam Deck
+  hardware, and a physical gamepad -- the *mechanism* verified here
+  (remote button state → `SetKeyMask()` → CPU-visible register → program
+  logic → framebuffer → network client) is identical regardless of what
+  program is running, but a particular commercial game's own logic
+  hasn't been (and, per this project's constraints, can't be in this
+  sandbox) exercised.
 
-Concretely, these acceptance criteria from `SPEC.md` section 20 are
-**still not met** (need a real commercial ROM + a display + actual
-gameplay to attempt):
+Concretely, on SPEC.md section 20's acceptance criteria:
 
-- (1) melonDS runs a Nintendo DS *game* on the host (a trivial homebrew
-  test program has been run, not a game)
-- (4)-(8) DS controls/touch actually affect a running game
-- (9) touches outside the rendered rect are ignored *in the context of a
-  real game*
-- (12) 30-minute emulator stability
+- (1) melonDS runs a Nintendo DS *game* on the host: **not met literally**
+  -- a fully original, from-scratch homebrew program has been run and
+  verified interactive, not a commercial game (see the caveat above for
+  why).
+- (2)/(3) real DS output on top/bottom screens: **met** for the bottom
+  screen (verified above); the top screen uses the same
+  `GetFramebuffers()` call and code path, just not separately re-tested
+  with a second capture point.
+- (4)-(8) DS controls/touch actually affect a running program: **met**,
+  for the reasons above -- with the explicit caveat that "a running
+  program" here means the original homebrew test program, not a
+  commercial game.
+- (9) touches outside the rendered rect are ignored: covered by
+  `protocol/touch_mapping.h`'s unit tests at the coordinate-mapping
+  level; not re-verified against a real game's touch-sensitive UI.
+- (12) 30-minute emulator stability: **met** -- a full 1800s run with
+  continuous input/video traffic completed with zero errors, zero RSS
+  growth, and the process still alive and responsive; see the stability
+  run above.
 
 ## The SDL3 client has not been build-verified
 
