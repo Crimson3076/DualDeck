@@ -820,6 +820,41 @@ behavior only -- not run-verified end-to-end on real Bazzite. This
 matches the same honest caveat this file and `docs/bazzite-host-setup.md`
 already carry for all other Bazzite-specific content in this project.
 
+**Version checking**: also added `check-for-updates.sh` (packaged at the
+top level of every release archive, applies to both `host/` and
+`client/`) -- reads a `VERSION` file embedded at build time (the actual
+published tag, wired through from `.github/workflows/release.yml` via a
+`RELEASE_VERSION_TAG` env var into `scripts/build-release.sh`) and
+compares it against `https://api.github.com/repos/Crimson3076/DualDeck/releases/latest`.
+Deliberately read-only -- reports whether a newer version exists and
+its Releases page URL, but never downloads or installs anything
+automatically, and is never invoked by `run-host.sh`/`run-client.sh`
+themselves, so a slow or unreachable network can never add delay to
+actually starting the app. **Verified** live against the real GitHub API
+for this repo, exercising all of its fallback paths directly: a stale
+local `VERSION` correctly reports the real newer tag with the correct
+release URL, a matching `VERSION` reports "up to date," a `VERSION`-less
+directory falls back to "unknown" without erroring, and both the
+"`curl` isn't installed" and "GitHub unreachable" paths degrade to a
+clear one-line message and exit 0 rather than failing loudly.
+
+**Issue #10's scope grew substantially after the above shipped**: the
+issue was rewritten (Goal/Scope/Acceptance-criteria/Design-constraint
+sections added) after `install-host-distrobox.sh` was already merged,
+adding requirements not yet addressed -- notably an explicit rollback
+path when an update fails (the current script deletes the old central
+install *before* copying the new one in, so a failure mid-copy currently
+leaves nothing usable, not "the previous version stays usable"), a
+dedicated host uninstaller (none exists yet -- only the client's Steam
+shortcut has one), and a design constraint that Distrobox/containerization
+must not be *mandatory* for ordinary users even though it's fine as a
+"supported development path" -- in tension with the current
+`install-host-distrobox.sh`-is-the-only-path-on-immutable-systems
+design, which a fully self-contained/bundled-runtime-libraries binary
+(closer to how `client/lib/` already bundles SDL3 for the client) would
+resolve more directly. Flagged to the user rather than guessed at
+further given the scale and direction change involved.
+
 ## Latency instrumentation assumes synced clocks
 
 The host's periodic latency stat (`docs/protocol.md`'s note on

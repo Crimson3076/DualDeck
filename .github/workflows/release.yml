@@ -54,6 +54,7 @@ jobs:
         env:
           BUILD_RELEASE_WORKDIR: ${{ github.workspace }}/.release-work
           BUILD_RELEASE_OUTPUT_DIR: ${{ github.workspace }}/release-out
+          RELEASE_VERSION_TAG: ${{ steps.version.outputs.tag }}
         run: ./scripts/build-release.sh
 
       - name: Publish versioned release

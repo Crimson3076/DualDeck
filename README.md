@@ -31,7 +31,10 @@ copies everything the shortcut needs into a fixed central directory
 folder can be deleted afterward -- installing again from a newer release
 later still updates the same shortcut rather than duplicating it, and
 `uninstall-steam-shortcut.sh` keeps working regardless of which
-download folder (if any) is still around.
+download folder (if any) is still around. Double-click
+`check-for-updates.sh` (top level of the archive) any time to check
+whether a newer release has been published -- read-only, it only
+reports, it doesn't download or change anything.
 
 ## Status
 

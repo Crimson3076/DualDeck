@@ -64,10 +64,18 @@ ctest --test-dir "${repo_build}" --output-on-failure
 echo "== [4/4] Packaging =="
 commit_short="$(cd "${repo_root}" && git rev-parse --short HEAD)"
 branch_name="$(cd "${repo_root}" && git rev-parse --abbrev-ref HEAD)"
+# Set by .github/workflows/release.yml to the actual published tag
+# (vX.Y.<run number>); falls back to a "dev-<commit>" placeholder for
+# local runs outside CI, where there's no real release tag yet.
+version_tag="${RELEASE_VERSION_TAG:-dev-${commit_short}}"
 pkg_name="melonds-remote-${commit_short}-linux-x86_64"
 pkg_dir="${work_dir}/${pkg_name}"
 rm -rf "${pkg_dir}"
 mkdir -p "${pkg_dir}/host" "${pkg_dir}/client/lib" "${pkg_dir}/docs" "${pkg_dir}/scripts/lib"
+
+# Read by check-for-updates.sh below to compare against the latest
+# published GitHub release.
+echo "${version_tag}" > "${pkg_dir}/VERSION"
 
 cp "${melonds_src}/build/melonDS" "${pkg_dir}/host/melonDS"
 chmod +x "${pkg_dir}/host/melonDS"
@@ -339,15 +347,60 @@ cp "${repo_root}/docs/building.md" "${repo_root}/docs/steam-deck-setup.md" \
    "${pkg_dir}/docs/"
 cp "${repo_root}/LICENSE" "${pkg_dir}/"
 
+cat > "${pkg_dir}/check-for-updates.sh" <<'WRAP'
+#!/usr/bin/env bash
+# Checks whether a newer melonDS Remote release is published on GitHub --
+# read-only, no download or install of anything happens here (GitHub
+# issue #10: "simplify... updates"). Never blocks or fails a real host/
+# client launch on this -- run-host.sh/run-client.sh don't call this
+# automatically, precisely so a slow/unreachable network never adds
+# delay to actually starting the app; run this yourself whenever you
+# want to check.
+set -uo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+current_version="$(cat VERSION 2>/dev/null || echo "unknown")"
+repo="Crimson3076/DualDeck"
+
+if ! command -v curl >/dev/null 2>&1; then
+    echo "melonDS Remote ${current_version} -- install 'curl' to enable update checks."
+    exit 0
+fi
+
+api_response="$(curl -fsSL --max-time 5 \
+    "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null)"
+if [[ -z "${api_response}" ]]; then
+    echo "melonDS Remote ${current_version} -- couldn't reach GitHub to check for updates (offline?)."
+    exit 0
+fi
+
+latest_version="$(echo "${api_response}" | grep -o '"tag_name" *: *"[^"]*"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')"
+if [[ -z "${latest_version}" ]]; then
+    echo "melonDS Remote ${current_version} -- couldn't parse GitHub's response to check for updates."
+    exit 0
+fi
+
+if [[ "${latest_version}" == "${current_version}" ]]; then
+    echo "melonDS Remote ${current_version} -- you're on the latest version."
+else
+    echo "melonDS Remote ${current_version} -- update available: ${latest_version}"
+    echo "  https://github.com/${repo}/releases/tag/${latest_version}"
+fi
+WRAP
+chmod +x "${pkg_dir}/check-for-updates.sh"
+
 commit_full="$(cd "${repo_root}" && git rev-parse HEAD)"
 built_at="$(date -u +"%Y-%m-%d %H:%M UTC")"
 cat > "${pkg_dir}/RELEASE_NOTES.md" <<NOTES
-# melonDS Remote
+# melonDS Remote (\`${version_tag}\`)
 
 Built from commit \`${commit_full}\` on branch \`${branch_name}\`,
 ${built_at}. This is a distinct, permanently-retained release -- it will
 not be overwritten by a later build, so if this version has a problem,
-just grab an earlier one from the Releases page instead.
+just grab an earlier one from the Releases page instead. Double-click
+\`check-for-updates.sh\` any time to check whether a newer version has
+been published since (read-only -- it only checks and reports, it
+doesn't download or change anything).
 
 Contains \`host/\` (melonDS patched with
 \`host/melonds-patches/0001-remote-server-integration.patch\`, built
@@ -360,9 +413,9 @@ verified and portability notes.
 ## Running it
 
 Every script here (\`run-host.sh\`, \`run-client.sh\`,
-\`install-steam-shortcut.sh\`, \`uninstall-steam-shortcut.sh\`) is
-directly double-click-runnable from a file manager -- no arguments or
-typing required for any of them. On
+\`install-steam-shortcut.sh\`, \`uninstall-steam-shortcut.sh\`,
+\`check-for-updates.sh\`) is directly double-click-runnable from a file
+manager -- no arguments or typing required for any of them. On
 SteamOS Desktop Mode / Bazzite (both KDE Plasma/Dolphin), double-clicking
 an executable \`.sh\` file offers to run it directly, no terminal needed.
 (On a GNOME-based file manager instead, you may need to enable
