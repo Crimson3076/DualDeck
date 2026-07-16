@@ -261,10 +261,15 @@ next save; always backs up the existing file first; parses its own
 freshly-written output back as a sanity check before ever touching the
 real file; and is idempotent (matches by `Exe` path, so re-running with
 different `--launch-options` updates the existing entry instead of
-duplicating it). It does **not** touch Steam Input controller-layout
-assignments (a separate per-shortcut config keyed by a derived ID) --
-`docs/steam-deck-setup.md`'s "set Controller Layout to Gamepad" step is
-still manual.
+duplicating it). Applies to **every local Steam user by default**, not
+just one picked interactively -- a Steam Deck's controller-only input
+has no reliable way to type an answer to a "which user?" prompt, so an
+early version that errored out and asked for `--user` was changed to
+just apply to all of them instead (`--user` still exists to narrow it,
+for scripted/single-user use, but is never required). It does **not**
+touch Steam Input controller-layout assignments (a separate per-shortcut
+config keyed by a derived ID) -- `docs/steam-deck-setup.md`'s "set
+Controller Layout to Gamepad" step is still manual.
 
 **Verified**: cross-checked bidirectionally against the independent
 reference `vdf` Python package (`pip install vdf`, an established
@@ -278,12 +283,59 @@ fresh-file creation, `--dry-run` preview, preserving a pre-existing
 unrelated shortcut untouched while adding a new one, idempotent re-run
 updating the existing entry in place (still exactly 2 total entries, not
 3), the "Steam is running" guard correctly blocking without `--force` and
-proceeding with it, and the multiple-Steam-users error path (`--user`
-required, listing the available ids). **Not verified**: against a real
-Steam client actually reading the result (this sandbox has no real Steam
+proceeding with it, and -- specifically for the apply-to-all-users
+change -- a fake two-user setup: one run added the shortcut to both
+users' `shortcuts.vdf` with zero prompts, and a second run with
+different `--launch-options` updated both in place (still exactly one
+entry each, not two). **Not verified**: against a real Steam client
+actually reading the result (this sandbox has no real Steam
 installation) -- the cross-validation above is strong evidence the
 format is correct, but "Steam's Big Picture UI actually shows the
 shortcut and launches it" hasn't been observed directly.
+
+## Release scripts streamlined: no user-selection prompt, no `.desktop` launchers (tried, reverted)
+
+Two follow-up requests after the above: reduce manual input further, and
+make every script in the release archive runnable by double-clicking it
+in a file manager rather than needing a terminal.
+
+- **Multi-Steam-user prompt removed**: `install-steam-shortcut.sh`
+  previously errored out and asked for `--user <id>` when it found more
+  than one local Steam account, which is exactly the kind of prompt a
+  Steam Deck's controller-only input can't answer (no keyboard to type an
+  id into). Changed to apply to every local Steam user automatically by
+  default (`--user` still exists to narrow it for scripted/single-user
+  use, but is never required) -- see the "Easy Big Picture" section
+  above, whose verification section now also covers this.
+- **`.desktop` launcher files: tried, and reverted.** The plan was to
+  ship a `.desktop` file next to each script using the `%k` field code
+  (the launched desktop file's own path) so a single static file would
+  work regardless of where the user extracts the archive, unknown at
+  build time. This was caught before shipping specifically *because* of
+  the practice established throughout this project of verifying against
+  real tools rather than trusting spec-reading alone:
+  `desktop-file-validate` (from `desktop-file-utils`) flagged the first
+  attempt's escaping as invalid, and once that was fixed to pass
+  validation, testing the *actual* execution with `gio launch` (GLib's
+  own launcher, i.e. what GNOME/Nautilus uses under the hood) showed
+  `%k` doesn't expand at all in the GLib version available here -- the
+  Exec line silently ran as if empty, no error, nothing happened. Since
+  a `.desktop` file that passes static validation but silently fails at
+  the exact moment a user double-clicks it is worse than not having one,
+  this was reverted in favor of relying on `run-host.sh`/`run-client.sh`/
+  `install-steam-shortcut.sh` already being plain, self-locating,
+  zero-argument executable scripts: on SteamOS Desktop Mode and Bazzite
+  (both KDE Plasma/Dolphin -- this project's two actual target
+  environments), Dolphin natively offers to run an executable `.sh` file
+  on double-click with no `.desktop` wrapper needed at all, confirmed
+  against `desktop-file-utils`' own documentation of that behavior (not
+  independently re-verified against a live Dolphin session, since this
+  sandbox has no KDE desktop environment -- see the caveats throughout
+  this document about what real-desktop-environment testing isn't
+  possible here). GNOME-based file managers (Nautilus) may still need a
+  one-time "Executable Text Files: Run" preference change or a
+  right-click "Open Terminal Here" fallback, documented in
+  `docs/steam-deck-setup.md`/`docs/bazzite-host-setup.md`.
 
 ## Live-toggle: start/stop remote streaming without restarting melonDS, plus a Decky plugin
 

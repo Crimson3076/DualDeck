@@ -148,7 +148,13 @@ cat > "${pkg_dir}/host/run-host.sh" <<'WRAP'
 # libarchive, libenet, libfaad, etc. -- see
 # host-shared-library-dependencies.txt for the exact list this binary
 # was linked against).
-# Usage: ./run-host.sh --boot always /path/to/your/game.nds
+# No arguments needed: this just opens melonDS itself, and you pick a
+# ROM through its own File > Open ROM dialog same as any other launch
+# (it defaults to EmuDeck's ROM folder the first time, and remembers
+# your last one after that). A path can still be passed through if you
+# want a specific one to open immediately, e.g.
+# ./run-host.sh --boot always /path/to/your/game.nds -- see melonDS's
+# own --help for the rest.
 # Omit MELONDS_REMOTE_AUTH_TOKEN to use device-approval authentication
 # instead of a static shared secret.
 set -euo pipefail
@@ -194,43 +200,58 @@ verified and portability notes.
 
 ## Running it
 
-Both \`run-host.sh\` and \`run-client.sh\` check for missing runtime
-system libraries and try to install them automatically (apt/dnf/pacman)
-before launching -- you shouldn't need to install anything by hand on a
-normal desktop Linux distro. On an immutable-filesystem distro (Bazzite,
-SteamOS in Game Mode), they'll tell you that instead of guessing, since
-auto-installing onto those needs a reboot or a Distrobox -- see
+Every script here (\`run-host.sh\`, \`run-client.sh\`,
+\`install-steam-shortcut.sh\`) is directly double-click-runnable from a
+file manager -- no arguments or typing required for any of them. On
+SteamOS Desktop Mode / Bazzite (both KDE Plasma/Dolphin), double-clicking
+an executable \`.sh\` file offers to run it directly, no terminal needed.
+(On a GNOME-based file manager instead, you may need to enable
+"Executable Text Files: Run" in Nautilus's preferences first, or
+right-click > Open Terminal Here as a fallback.) Both \`run-host.sh\` and
+\`run-client.sh\` also check for missing runtime system libraries and try
+to install them automatically (apt/dnf/pacman) before launching -- you
+shouldn't need to install anything by hand on a normal desktop Linux
+distro. On an immutable-filesystem distro (Bazzite, SteamOS in Game
+Mode), they'll tell you that instead of guessing, since auto-installing
+onto those needs a reboot or a Distrobox -- see
 \`docs/bazzite-host-setup.md\` / \`docs/steam-deck-setup.md\`.
 
-Host (on your Linux HTPC):
+**Host** (on your Linux HTPC): double-click \`host/run-host.sh\`, or from
+a terminal:
 \`\`\`sh
 cd host
-./run-host.sh --boot always /path/to/your/game.nds
+./run-host.sh
 \`\`\`
-No \`MELONDS_REMOTE_AUTH_TOKEN\` needed -- on a new client's first
+No ROM path needed -- melonDS opens normally and you pick one through
+its own File > Open ROM (defaults to EmuDeck's ROM folder the first
+time, remembers your last one after that). No
+\`MELONDS_REMOTE_AUTH_TOKEN\` needed either -- on a new client's first
 connection attempt, the host logs a pending request for you to approve
-(type \`approve <id>\`, shown in the log). Set \`MELONDS_REMOTE_AUTH_TOKEN\`
+(type \`approve <id>\`, shown in the log, or click Approve on the popup
+if you're running the melonDS GUI). Set \`MELONDS_REMOTE_AUTH_TOKEN\`
 instead if you'd rather use a static shared secret.
 
-Client (on your Steam Deck, or any Linux x86_64 machine with a gamepad):
+**Client** (on your Steam Deck, or any Linux x86_64 machine with a
+gamepad): double-click \`client/run-client.sh\`, or from a terminal:
 \`\`\`sh
 cd client
 ./run-client.sh
 \`\`\`
-Run with no arguments to scan the LAN and pick a host from a list shown
-every launch, or pass \`--host <your-htpc-ip>\` to skip discovery and
-connect to one specific address. Either way, first connection to a new
-host needs a human to approve it at the host (see above); no typing is
-needed on the client.
+No arguments needed -- it scans the LAN and shows a pick-a-host list
+every launch. First connection to a new host needs a human to approve it
+at the host (see above); no typing is needed on the client.
 
 To add it as a Steam Gaming Mode shortcut without the manual "Add a
-Non-Steam Game" steps, close Steam and run (from the \`client/\`
-directory):
+Non-Steam Game" steps: close Steam, then double-click
+\`client/install-steam-shortcut.sh\`, or from a terminal (from the
+\`client/\` directory):
 \`\`\`sh
 ./install-steam-shortcut.sh
 \`\`\`
-See \`docs/steam-deck-setup.md\` for what this does and the Controller
-Layout step it doesn't automate.
+Applies to every local Steam user automatically -- no prompt to pick one,
+since the Deck's controller-only input can't type an answer to that kind
+of question. See \`docs/steam-deck-setup.md\` for what this does and the
+Controller Layout step it doesn't automate.
 NOTES
 
 # The archive itself gets a *constant* filename (unlike the internal

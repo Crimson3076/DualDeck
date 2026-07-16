@@ -16,6 +16,24 @@ for remote video to work; pick whichever gives you the best local
 gameplay performance. If video still doesn't show up, see
 `docs/troubleshooting.md`'s "screen stays blank" entry.
 
+## Quickest path: prebuilt release, no terminal needed
+
+If you'd rather not build anything, download the latest release archive
+(see the top-level `README.md`'s "Download a build") and extract it in
+Desktop Mode's file manager (Dolphin). Both scripts in `client/` are
+directly double-clickable -- Dolphin offers to run an executable `.sh`
+file when you double-click it, no terminal or typing needed:
+
+- **`run-client.sh`** -- runs the client directly, for a quick test.
+- **`install-steam-shortcut.sh`** -- one-time setup that registers it as
+  a Steam library/Gaming Mode shortcut, applied to every local Steam
+  user automatically (**close Steam first**, since it edits Steam's
+  library file directly and Steam can silently undo the change if it's
+  still running).
+
+Everything below this section is the from-source/terminal path -- useful
+if you're modifying the code, but not required for normal use.
+
 ## Prerequisite: build the client
 
 You need `melonds-remote-client` built with SDL3 for the Deck's
@@ -103,18 +121,23 @@ See `docs/building.md` for the actual CMake invocation either way.
 
 ## Gaming Mode: adding as a non-Steam shortcut
 
-**Quickest path**: with Steam closed, run
-`./scripts/install-steam-shortcut.sh` (add `--host 192.168.1.50` if you'd
-rather skip discovery and always connect to one address, matching step
-4's Launch Options note below) -- it builds the client if needed and
-adds it directly to your Steam library, no manual "Add a Non-Steam Game"
-clicking required. See `scripts/lib/steam_shortcut.py`'s module docstring
-for exactly what it does and doesn't touch (it backs up `shortcuts.vdf`
-first and refuses to run while Steam is open, since Steam caches that
-file in memory and can overwrite the change on its next save). You still
-need to set its **Controller Layout** by hand afterward -- that's a
-separate per-shortcut Steam Input config this script doesn't touch, see
-step 4 below for why it matters.
+**Quickest path**: with Steam closed, double-click
+`client/install-steam-shortcut.sh` (prebuilt release archive -- Dolphin
+offers to run it, no terminal needed) or run
+`./scripts/install-steam-shortcut.sh` (from source; add
+`--host 192.168.1.50` if you'd rather skip discovery and always connect
+to one address, matching step 4's Launch Options note below) -- it
+builds the client if needed and adds it directly to your
+Steam library, no manual "Add a Non-Steam Game" clicking, and no typing
+required. It applies to every local Steam user automatically (no prompt
+to pick one -- there'd be no way to answer that with just a controller).
+See `scripts/lib/steam_shortcut.py`'s module docstring for exactly what
+it does and doesn't touch (it backs up `shortcuts.vdf` first and refuses
+to run while Steam is open, since Steam caches that file in memory and
+can overwrite the change on its next save). You still need to set its
+**Controller Layout** by hand afterward -- that's a separate per-shortcut
+Steam Input config this script doesn't touch, see step 4 below for why
+it matters.
 
 Or, the standard manual way any non-Steam Linux binary gets added to
 Gaming Mode:

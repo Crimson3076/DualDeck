@@ -14,6 +14,18 @@ here follows the same Distrobox approach below, just against melonDS's
 own (larger) Qt6/SDL2/OpenGL dependency list instead of this prototype's
 none; see `host/melonds-patches/README.md`.
 
+## Quickest path: prebuilt release, no terminal needed
+
+Everything below this section is about building `host/remote-server` (the
+standalone prototype) from source inside a Distrobox. If you just want
+to run the real melonDS-integrated host without building anything,
+download the latest release archive instead (see the top-level
+`README.md`'s "Download a build"), extract it, and double-click
+`host/run-host.sh` -- on Bazzite's KDE Plasma/Dolphin desktop,
+double-clicking an executable `.sh` file offers to run it directly, no
+terminal or typing needed. See `docs/steam-deck-setup.md`'s equivalent
+section for the client side.
+
 ## Why Bazzite needs a different approach than a normal distro
 
 Bazzite is an `rpm-ostree`-based (Fedora Atomic/Silverblue-derived)

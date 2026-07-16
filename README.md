@@ -17,9 +17,15 @@ unless you specifically want to modify the code. It's triggered manually
 rather than overwriting a shared one, so older builds stay downloadable
 if a newer one turns out to be broken. See `RELEASE_NOTES.md` inside the
 archive for exactly which commit a given release was built from.
-`run-host.sh`/`run-client.sh` inside the archive check for and
-auto-install any missing runtime libraries (apt/dnf/pacman) before
-launching, so there's normally nothing to install by hand first.
+
+Everything you need to run is a script you can just double-click, no
+typing required: `run-host.sh`, `run-client.sh`, and
+`install-steam-shortcut.sh` all take zero required arguments and check
+for/auto-install any missing runtime libraries (apt/dnf/pacman) before
+launching. On SteamOS Desktop Mode or Bazzite (both KDE Plasma/Dolphin),
+double-clicking an executable `.sh` file offers to run it directly --
+see `docs/steam-deck-setup.md`/`docs/bazzite-host-setup.md` for the
+quick-start section at the top of each.
 
 ## Status
 

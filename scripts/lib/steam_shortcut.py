@@ -20,6 +20,10 @@ documented by Valve, so this is deliberately conservative:
   possibly-corrupt file in place.
 - Idempotent: re-running with the same --exe updates that entry in place
   (matched by Exe path) instead of adding a duplicate.
+- Applies to every local Steam user by default rather than prompting to
+  pick one -- a Steam Deck's controller-only input has no reliable way
+  to type an answer to that kind of prompt (--user overrides this for
+  scripted/single-user use, but is never required).
 
 This only touches the shortcuts list -- it does not touch Steam Input
 controller-layout assignments (a separate, per-shortcut config file
@@ -189,7 +193,8 @@ def main() -> int:
     parser.add_argument("--exe", required=True, help="Absolute path to the melonds-remote-client binary")
     parser.add_argument("--name", default="melonDS Remote", help="Shortcut display name (default: %(default)s)")
     parser.add_argument("--launch-options", default="", help="Extra launch arguments, e.g. --host 192.168.1.50")
-    parser.add_argument("--user", help="Steam user id (userdata subfolder name); auto-detected if only one exists")
+    parser.add_argument("--user", help="Restrict to one Steam user id (userdata subfolder name); "
+                                        "applies to every local user by default, so this is optional")
     parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing anything")
     parser.add_argument("--force", action="store_true", help="Proceed even if Steam appears to be running")
     args = parser.parse_args()
@@ -209,48 +214,70 @@ def main() -> int:
 
     userdata_dirs = find_userdata_dirs()
     if args.user:
+        # Optional override for scripted/advanced use -- normal usage on
+        # a Steam Deck applies to every local Steam user with no typing
+        # needed, since the Deck's controller-only input can't type a
+        # user id anyway (see below).
         userdata_dirs = [d for d in userdata_dirs if os.path.basename(d) == args.user]
         if not userdata_dirs:
             print(f"error: no userdata directory found for user id {args.user!r}", file=sys.stderr)
             return 1
-    elif len(userdata_dirs) > 1:
-        print("error: multiple Steam users found, pass --user to pick one:", file=sys.stderr)
-        for d in userdata_dirs:
-            print(f"  {os.path.basename(d)}", file=sys.stderr)
-        return 1
     elif not userdata_dirs:
         print("error: no Steam userdata directory found (has Steam been run at least once?)", file=sys.stderr)
         return 1
 
-    userdata_dir = userdata_dirs[0]
-    shortcuts_path = os.path.join(userdata_dir, "config", "shortcuts.vdf")
+    # Applies to every local Steam user found, rather than erroring out
+    # and asking which one to pick -- a Steam Deck's controller-only
+    # input has no reliable way to type a user id in response to such a
+    # prompt (this project deliberately avoids relying on Steam Input's
+    # on-screen keyboard everywhere else too, see docs/protocol.md's
+    # "History: the 6-digit pairing code"). Harmless for the common
+    # single-user case, and for any additional local users it just means
+    # the shortcut is already there if they ever switch to that profile.
+    if len(userdata_dirs) > 1:
+        print(f"Found {len(userdata_dirs)} Steam users -- applying to all of them:")
+        for d in userdata_dirs:
+            print(f"  {os.path.basename(d)}")
 
-    root = load_shortcuts(shortcuts_path)
-    upsert_shortcut(root, args.name, exe, os.path.dirname(exe), args.launch_options)
-    new_data = write_vdf_map(root)
+    any_written = False
+    for userdata_dir in userdata_dirs:
+        shortcuts_path = os.path.join(userdata_dir, "config", "shortcuts.vdf")
 
-    # Round-trip check: make sure what we're about to write actually
-    # parses back to the same structure before touching the real file.
-    reparsed, _ = parse_vdf_map(new_data, 0)
-    if reparsed != root:
-        print("error: internal VDF round-trip check failed -- not writing anything", file=sys.stderr)
-        return 1
+        root = load_shortcuts(shortcuts_path)
+        upsert_shortcut(root, args.name, exe, os.path.dirname(exe), args.launch_options)
+        new_data = write_vdf_map(root)
+
+        # Round-trip check: make sure what we're about to write actually
+        # parses back to the same structure before touching the real file.
+        reparsed, _ = parse_vdf_map(new_data, 0)
+        if reparsed != root:
+            print(f"error: internal VDF round-trip check failed for {shortcuts_path} -- "
+                  "not writing this one", file=sys.stderr)
+            continue
+
+        if args.dry_run:
+            print(f"Would write {len(new_data)} bytes to {shortcuts_path}")
+            print(f"Shortcut: name={args.name!r} exe={exe!r} launch_options={args.launch_options!r}")
+            continue
+
+        os.makedirs(os.path.dirname(shortcuts_path), exist_ok=True)
+        if os.path.isfile(shortcuts_path):
+            backup_path = f"{shortcuts_path}.bak-{int(time.time())}"
+            shutil.copy2(shortcuts_path, backup_path)
+            print(f"Backed up existing shortcuts.vdf to {backup_path}")
+
+        with open(shortcuts_path, "wb") as f:
+            f.write(new_data)
+
+        print(f"Added/updated \"{args.name}\" shortcut in {shortcuts_path}")
+        any_written = True
 
     if args.dry_run:
-        print(f"Would write {len(new_data)} bytes to {shortcuts_path}")
-        print(f"Shortcut: name={args.name!r} exe={exe!r} launch_options={args.launch_options!r}")
         return 0
+    if not any_written:
+        print("error: nothing was written -- see errors above", file=sys.stderr)
+        return 1
 
-    os.makedirs(os.path.dirname(shortcuts_path), exist_ok=True)
-    if os.path.isfile(shortcuts_path):
-        backup_path = f"{shortcuts_path}.bak-{int(time.time())}"
-        shutil.copy2(shortcuts_path, backup_path)
-        print(f"Backed up existing shortcuts.vdf to {backup_path}")
-
-    with open(shortcuts_path, "wb") as f:
-        f.write(new_data)
-
-    print(f"Added/updated \"{args.name}\" shortcut in {shortcuts_path}")
     print("Restart Steam (or switch to Gaming Mode) to see it in your library.")
     print(
         "Reminder: set its Controller Layout to a plain \"Gamepad\" template once it's "
