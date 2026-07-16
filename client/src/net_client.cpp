@@ -69,6 +69,19 @@ bool NetClient::connect() {
     // which may race with a main-thread disconnect() at shutdown.
     std::lock_guard<std::mutex> lock(connectMutex_);
 
+    // Reset first: lastRejectReason_ is only ever written when a real
+    // HelloAck is actually parsed below, so without this, a caller
+    // checking lastRejectReason() after this attempt fails at an earlier
+    // stage (e.g. the raw TCP connect() call itself, meaning the host is
+    // simply unreachable) would otherwise still see a stale reason left
+    // over from a *previous* attempt's real rejection -- misleading for
+    // anything that shows a distinct status per attempt (the setup
+    // wizard's connect/approval step in particular).
+    {
+        std::lock_guard<std::mutex> resultLock(handshakeResultMutex_);
+        lastRejectReason_ = HelloRejectReason::None;
+    }
+
     // A previous connect() attempt may have failed partway through (or a
     // prior session may have just ended); never layer a new attempt on
     // top of stale file descriptors.

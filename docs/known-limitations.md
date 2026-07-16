@@ -971,6 +971,124 @@ runner image with SDL3 pre-installed has been wired up. A follow-up should
 either install SDL3 in CI or add a client-specific job once a known-good
 SDL3 version is pinned.
 
+## First-run setup wizard (GitHub issue #19)
+
+Added a linear, gamepad-navigable setup wizard to the client
+(`client/src/main.cpp`'s `runSetupWizard()` and its step functions), run
+automatically once on first launch and reachable again afterward via a
+new "SETUP WIZARD" entry in the existing Start+Select pause menu.
+Completion is tracked by a plain marker file
+(`~/.config/melonds-remote-client/setup_complete.txt`, see
+`client/src/wizard_state.h`/`.cpp`) so it only runs unprompted once.
+Skipped entirely (same as "CHANGE HOST") when an explicit `--host`/
+positional address is given, since that means scripted/CI use, not an
+interactive first-time user.
+
+Steps, in order, each with Back navigation to the previous step (except
+Welcome, where B/Escape exits the wizard instead) and window-close
+(`SDL_EVENT_QUIT`) always exiting immediately from any step:
+
+1. **Welcome** -- what the wizard does and roughly how long it takes.
+2. **Choose connection method** -- auto-discover on the LAN (reuses the
+   existing `discoverAndSelectHost()` screen verbatim) or enter a host
+   address manually.
+3. **Manual entry** (if chosen) -- a text-input screen using
+   `SDL_StartTextInput()`/`SDL_EVENT_TEXT_INPUT`. Assumes the host's
+   default ports (8760/8761/8762); there is no port-entry field, since
+   supporting non-default ports without discovery would need a second
+   input field for comparatively little benefit -- a user with
+   non-default ports can just use auto-discovery instead. Carries the
+   same known limitation as the pairing-code screen this project removed
+   earlier: Steam Input doesn't reliably bring up a virtual keyboard in
+   Gaming Mode, so this screen is only really usable with a physical or
+   Bluetooth keyboard attached. Not solved here, just documented.
+4. **Connect and wait for approval** -- runs the connection attempt on a
+   background thread (mirroring `main()`'s own reconnect-thread pattern)
+   with backoff retry, so the UI never freezes on a blocking `connect()`
+   call. Distinguishes every `HelloRejectReason` value in the status
+   text (protocol version mismatch, authentication failed, host busy,
+   approval required, or plain unreachable) instead of collapsing them
+   to one generic message, since a first-time user has no other way to
+   learn why a connection attempt is failing. This step also exposed and
+   fixed a real bug: `NetClient::connect()` (`client/src/net_client.cpp`)
+   never reset `lastRejectReason_` at the start of an attempt, so a
+   caller could see a stale reason left over from a previous attempt's
+   real rejection if the current attempt failed earlier (e.g. the host
+   simply being unreachable, which fails before any HelloAck is ever
+   parsed). Fixed by resetting it to `None` under `handshakeResultMutex_`
+   at the top of `connect()`, verified by a clean rebuild with warnings
+   enabled.
+5. **Video test** -- shows live frames the same way the normal connected
+   view does, with a "no video yet -- open a ROM on the host" hint if
+   the screen stays blank, and only allows advancing once at least one
+   frame has actually arrived.
+6. **Controller test** -- a 12-button grid (all `DSButton_*` values)
+   that highlights each button live and auto-advances about a second
+   after every one has been pressed at least once. Deliberately
+   keyboard-only for going back (Escape) -- gamepad South/East are
+   themselves under test here (A and B), so treating either as a menu
+   action would make it impossible to confirm they report correctly.
+7. **Touch test** -- four corner targets over the aspect-fit DS
+   rectangle, hit-tested by Euclidean distance in window space, using
+   `mapPointToDSCoords()` only to confirm a touch fell inside the valid
+   DS rectangle at all. Auto-advances about a second after all four are
+   hit.
+8. **Done** -- marks setup complete and returns to the normal discovery
+   screen.
+
+All wizard screen text was written using only the bitmap font's
+supported characters (space, `0`-`9`, `A`-`Z`, `.`, `-`, `:` --
+see `client/src/bitmap_font.cpp`), avoiding commas, parentheses,
+apostrophes, and question marks, which silently render as blank glyphs.
+
+**Verified**: a full warnings-enabled rebuild (`-Wall -Wextra -Wpedantic
+-Wconversion -Wshadow`, zero warnings) against the real SDL3 build
+already used elsewhere in this project; an Xvfb smoke test launching the
+real binary and using `xdotool` to drive it through Welcome -> Choose
+Method -> Manual Entry (typing `127.0.0.1`) -> Connect (observed three
+real `connect() -> Connection refused` attempts against the unreachable
+address, confirming the background retry thread runs) -> Back through
+every step in sequence all the way to Welcome -> Exit, confirming clean
+process shutdown (exit code 0, no hung threads) the whole way; and a
+separate run with a pre-created `setup_complete.txt` confirming the
+wizard is correctly skipped on a subsequent launch. `ctest` re-run to
+confirm no regressions elsewhere.
+
+**Not addressed, and not possible from this sandbox or without further,
+separate work**:
+
+- **No real Steam Deck LCD/OLED hardware testing.** This sandbox has no
+  such hardware; issue #19's acceptance criteria explicitly ask for this
+  before it can be considered complete. The wizard follows the same
+  input-handling conventions (gated Escape-key handling, deliberate
+  chord holds, etc.) already validated on real hardware for the rest of
+  this client in earlier work, but the wizard's own screens have only
+  been exercised via Xvfb + `xdotool` and manual code review here.
+- **No audio/microphone test step.** This project has no audio feature
+  at all yet (Stage 1 is video-only, see "Video transport is Stage 1
+  only" above) -- there is nothing for such a step to test.
+- **No host-side changes** (approve/deny dialog improvements, a
+  server-state display, or a test-pattern mode) -- issue #19 asks for
+  these too, but they require patching real melonDS Qt source, which is
+  a separate, much larger undertaking than the client-side wizard and
+  was left out of this pass.
+- **Cannot distinguish "denied" from "still pending" approval.** Per
+  `docs/protocol.md`, the wire protocol has no distinct signal for a
+  denied device -- a denied client just stays `ApprovalRequired` forever
+  from the client's point of view. The wizard's Connect step is honest
+  about this (it only ever says "waiting for approval"), rather than
+  guessing or fabricating a "denied" state the protocol can't actually
+  report. Fixing this would require a protocol change.
+- No end-to-end run against a real melonDS host was possible in this
+  sandbox (no windowing/GPU environment to run melonDS itself here);
+  the Connect/Video/Controller/Touch steps were verified structurally
+  (compiles, runs, navigates, threads join cleanly) rather than against
+  a live host actually streaming frames.
+
+Given the above, GitHub issue #19 is left open rather than closed --
+this is a substantial but partial pass at its scope, not a complete
+implementation of its acceptance criteria.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

@@ -16,6 +16,17 @@ for remote video to work; pick whichever gives you the best local
 gameplay performance. If video still doesn't show up, see
 `docs/troubleshooting.md`'s "screen stays blank" entry.
 
+**First launch runs a setup wizard.** The client walks you through
+picking a host (or entering its address manually), connecting, and
+testing video/controller/touch, entirely with the D-pad and face
+buttons -- no typing needed unless you choose manual entry. It only runs
+automatically once; pick "SETUP WIZARD" from the Start+Select pause menu
+to run it again later (e.g. after switching to a different host). See
+`docs/known-limitations.md`'s "First-run setup wizard" entry for what it
+does and doesn't cover -- in particular, it has not yet been run on real
+Steam Deck hardware, only built and exercised in this project's own
+sandbox.
+
 ## Quickest path: prebuilt release, no terminal needed
 
 If you'd rather not build anything, download the latest release archive
