@@ -263,10 +263,75 @@ ensure_packages "host runtime" \
     "curl libpcap sdl2 libarchive enet zstd faad2 qt6-base qt6-multimedia qt6-svg libx11 libxext libxrandr libxcursor libxfixes libxi libxss wayland libxkbcommon libdrm mesa libdecor" \
     || echo "warning: could not verify/install host runtime libraries automatically; see host-shared-library-dependencies.txt and docs/troubleshooting.md" >&2
 
+if [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1; then
+    echo "Note: this looks like an immutable (rpm-ostree) system, e.g. Bazzite --" >&2
+    echo "if melonDS fails to start below over a missing shared library, use" >&2
+    echo "./install-host-distrobox.sh instead, which runs it inside a Distrobox" >&2
+    echo "container with everything it needs already installed. See" >&2
+    echo "docs/bazzite-host-setup.md." >&2
+fi
+
 export MELONDS_REMOTE_ENABLE=1
 exec ./melonDS "$@"
 WRAP
 chmod +x "${pkg_dir}/host/run-host.sh"
+
+cat > "${pkg_dir}/host/install-host-distrobox.sh" <<'WRAP'
+#!/usr/bin/env bash
+# Runs the melonDS Remote host inside a Distrobox container, for
+# immutable-filesystem systems (Bazzite, other rpm-ostree/Fedora Atomic
+# derivatives) where run-host.sh can't install missing runtime libraries
+# directly -- see docs/bazzite-host-setup.md. On a regular (non-immutable)
+# Linux system, just use run-host.sh instead; this refuses to run there
+# rather than needlessly creating a container.
+#
+# Safe to re-run any time, including from a newer release's extracted
+# archive: it always re-syncs this host/ directory into a fixed location
+# (~/.config/melonds-remote/install/) and re-installs into the same
+# Distrobox container (dnf skips packages already present), so updating
+# is just "download the new release, run this again" -- no need to
+# recreate the container or redo any setup by hand. After the first run
+# you can also launch/update straight from that central directory
+# instead of keeping the original download around.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+if [[ ! -f /run/ostree-booted ]] && ! command -v rpm-ostree >/dev/null 2>&1; then
+    echo "This doesn't look like an immutable (rpm-ostree) system -- just run" >&2
+    echo "./run-host.sh directly instead, no container needed." >&2
+    exit 1
+fi
+
+if ! command -v distrobox >/dev/null 2>&1; then
+    echo "error: 'distrobox' not found. Bazzite ships it by default; on other" >&2
+    echo "rpm-ostree systems, install it first -- see" >&2
+    echo "https://github.com/89luca89/distrobox" >&2
+    exit 1
+fi
+
+# Keep in sync with docs/bazzite-host-setup.md's description of this path.
+central_install_dir="${HOME}/.config/melonds-remote/install"
+container_name="melonds-remote-host"
+
+echo "Syncing host files to ${central_install_dir} ..."
+rm -rf "${central_install_dir}"
+mkdir -p "${central_install_dir}"
+cp -a . "${central_install_dir}/"
+
+echo "Creating/reusing Distrobox container \"${container_name}\" (Fedora-based) ..."
+distrobox create --name "${container_name}" --image fedora:latest --yes
+
+echo "Installing runtime libraries inside the container ..."
+distrobox enter "${container_name}" -- sudo dnf install -y \
+    libcurl-devel libpcap-devel SDL2-devel libarchive-devel enet-devel libzstd-devel faad2-devel \
+    qt6-qtbase-devel qt6-qtmultimedia-devel qt6-qtsvg-devel \
+    libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel \
+    wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel
+
+echo "Launching the host inside the container ..."
+exec distrobox enter "${container_name}" -- env MELONDS_REMOTE_ENABLE=1 "${central_install_dir}/melonDS" "$@"
+WRAP
+chmod +x "${pkg_dir}/host/install-host-distrobox.sh"
 
 cp "${repo_root}/docs/building.md" "${repo_root}/docs/steam-deck-setup.md" \
    "${repo_root}/docs/bazzite-host-setup.md" "${repo_root}/docs/troubleshooting.md" \

@@ -20,11 +20,72 @@ Everything below this section is about building `host/remote-server` (the
 standalone prototype) from source inside a Distrobox. If you just want
 to run the real melonDS-integrated host without building anything,
 download the latest release archive instead (see the top-level
-`README.md`'s "Download a build"), extract it, and double-click
-`host/run-host.sh` -- on Bazzite's KDE Plasma/Dolphin desktop,
+`README.md`'s "Download a build") and extract it.
+
+**On Bazzite specifically (and any other immutable/rpm-ostree system)**,
+double-click `host/install-host-distrobox.sh` instead of `run-host.sh` --
+`run-host.sh`'s usual auto-install-missing-libraries step can't install
+anything on an immutable base, so double-clicking it directly is likely
+to fail there with a missing-shared-library error the first time (it
+does tell you to use `install-host-distrobox.sh` instead if it detects
+this). `install-host-distrobox.sh` creates (or reuses) a Fedora-based
+Distrobox container named `melonds-remote-host`, installs everything the
+host needs inside it, and launches melonDS from there -- no manual
+Distrobox commands needed, and safe to just double-click again later,
+including from a newer release's extracted archive, to pick up an
+update (it re-syncs the host files and re-checks the container's
+packages each time, so nothing needs to be redone by hand). See "Easier
+Bazzite host install and updates" below for what this actually does.
+
+On a regular (non-immutable) Linux HTPC, just double-click
+`host/run-host.sh` as usual -- on Bazzite's KDE Plasma/Dolphin desktop,
 double-clicking an executable `.sh` file offers to run it directly, no
-terminal or typing needed. See `docs/steam-deck-setup.md`'s equivalent
-section for the client side.
+terminal or typing needed either way. See `docs/steam-deck-setup.md`'s
+equivalent section for the client side.
+
+## Easier Bazzite host install and updates: `install-host-distrobox.sh`
+
+Addresses GitHub issue #10 ("simplify host installation and updates on
+Bazzite and other supported Linux systems"): running the prebuilt
+release binary directly on an immutable system wasn't really "quickest"
+at all before this -- `run-host.sh`'s auto-install step refuses to touch
+an rpm-ostree base image (correctly -- it would need a reboot to take
+effect, and there's no way to layer the full Qt6/SDL2/X11/audio
+dependency list unattended), so the only options were reading
+`host/melonds-patches/README.md`'s from-source Distrobox instructions or
+figuring out `rpm-ostree install` + reboot by hand.
+
+`host/install-host-distrobox.sh` (packaged alongside `run-host.sh` in
+every release archive) automates the Distrobox path end to end:
+
+1. Detects whether this actually is an immutable/rpm-ostree system at
+   all (same check `ensure_packages()` already uses elsewhere in this
+   project) -- refuses to run and points you at `run-host.sh` instead if
+   not, since there's no need for a container there.
+2. Copies the whole extracted `host/` directory into a fixed location,
+   `~/.config/melonds-remote/install/` -- this is what makes updates
+   simple: downloading a newer release and running this script again
+   re-syncs that copy and re-verifies the container's packages, so
+   there's nothing to redo by hand, and once set up once you can launch
+   or update straight from that central directory instead of keeping the
+   original download around.
+3. Creates (or reuses -- safe to re-run) a Fedora-based Distrobox
+   container named `melonds-remote-host`.
+4. Installs the runtime library packages the host needs inside that
+   container via `dnf` (skips anything already present).
+5. Launches melonDS (with the remote server enabled) from inside the
+   container -- Distrobox shares the host's X11/Wayland session and
+   networking automatically, so the video output and LAN
+   discovery/connections work the same as running natively.
+
+**Not verified on a real Bazzite install** (no rpm-ostree/Distrobox
+environment in this project's own sandbox -- see `docs/known-limitations.md`
+for the honest account of what is and isn't confirmed here, matching this
+doc's own existing disclaimer at the top). If `distrobox` isn't
+installed at all (Bazzite ships it by default, but a different
+rpm-ostree derivative might not), the script says so and points at
+[the Distrobox project](https://github.com/89luca89/distrobox) rather
+than guessing.
 
 ## Why Bazzite needs a different approach than a normal distro
 
@@ -134,8 +195,8 @@ any extra arguments -- e.g.:
 
 ## What's not covered here yet
 
-- Actually building/running the patched melonDS *on Bazzite specifically*:
-  the patch (`host/melonds-patches/0001-remote-server-integration.patch`)
+- Actually *building* the patched melonDS *on Bazzite specifically*: the
+  patch (`host/melonds-patches/0001-remote-server-integration.patch`)
   exists and has been verified in this project's own development sandbox
   (Ubuntu 24.04), but not on real Bazzite. Expect the same
   Distrobox-vs-layered-package tradeoff described above for melonDS's own
@@ -143,7 +204,9 @@ any extra arguments -- e.g.:
   considerations specific to running a Qt/OpenGL application from inside
   a container (Bazzite's Distrobox setup generally handles this for AMD
   GPUs via Mesa, but this hasn't been tested against melonDS specifically
-  on Bazzite).
+  on Bazzite). *Running* the prebuilt release binary on Bazzite is now
+  automated by `install-host-distrobox.sh` (see above) -- same
+  not-yet-verified-on-real-hardware caveat applies to it too.
 - A systemd user service / autostart unit so the host server comes up
   automatically -- not implemented; `scripts/run-host.sh` is a manual
   foreground launch for now.
