@@ -36,36 +36,42 @@ listening on that port. Either stop it (`pkill melonds-remote-server`
 or find the PID with `ss -tlnp | grep 8760`) or pick different ports
 with `--control-port`/`--input-port`/`--video-port`.
 
-### `NetServer: no static auth token configured; using pairing-code mode...`
+### `NetServer: no static auth token configured; using device-approval mode...`
 
-Expected and intentional (spec section 13) if you didn't pass
+Expected and intentional (spec section 13, adapted) if you didn't pass
 `--auth-token` -- this is the recommended default, not a warning to fix.
-An unrecognized client gets a 6-digit pairing code (shown here, and in
-the melonDS window's status bar for the integrated host); once the
-client's entered it, it's remembered and won't be asked again. If you'd
-rather skip pairing entirely (e.g. scripted testing), pass
+An unrecognized client's connection request gets queued and logged here
+(and pops an Approve/Deny dialog in the melonDS window for the integrated
+host); once approved, that client is remembered and won't be asked again.
+No code is ever typed on the client (this replaced an earlier 6-digit
+pairing code specifically because Steam Input doesn't reliably bring up a
+virtual keyboard in Gaming Mode). If you'd rather skip device approval
+entirely (e.g. scripted testing), pass
 `--auth-token`/`MELONDS_REMOTE_AUTH_TOKEN` on the host and the matching
 `--auth-token` on the client.
 
-### Client's handshake keeps getting rejected with "pairing required"
+### Client's handshake keeps getting rejected with "awaiting approval"
 
-- This is expected the *first* time a client connects to a host --
-  that's the point at which you're supposed to enter the code. Look at
-  the host's log (or, for the melonDS-integrated host, its window's
-  status bar) for the current 6-digit code and enter it on the client.
+- This is expected the *first* time a client connects to a host -- that's
+  the point at which a human needs to approve it. Look at the host's log
+  for a `pending connection request` line and type the `approve ...`
+  command it shows (or, for the melonDS-integrated host, click
+  **Approve** on the popup dialog).
 - If it keeps happening on every run instead of just the first: check
-  that `$HOME` (or whatever the code is running as) is writable and that
-  `~/.config/melonds-remote-client/pairing_tokens.txt` is actually being
-  written after a successful pairing -- a read-only home directory would
-  make the client "forget" its token every restart.
-- A code only stays valid for 5 minutes (`--pairing-code-ttl-s` on the
-  host) and is single-use; if you waited too long or already used it,
-  the host will show a new one on the next attempt.
+  that `$HOME` (or whatever the client is running as) is writable and
+  that `~/.config/melonds-remote-client/device_id.txt` is actually
+  present after the first run -- a read-only home directory would make
+  the client generate a brand-new (unapproved) identity every restart
+  instead of reusing the same one. The same applies host-side to
+  `--state-dir`/`$MELONDS_REMOTE_STATE_DIR`'s `approved_devices.txt`.
+- A pending request not retried within `--pending-request-ttl-s` (default
+  60s) is evicted from the queue -- if you waited too long before
+  approving, the client's next automatic retry will just re-queue it.
 
 ### Client's handshake is rejected but the static token looks right
 
 (Only relevant if you're using `--auth-token`/`MELONDS_REMOTE_AUTH_TOKEN`
-instead of pairing mode.)
+instead of device-approval mode.)
 
 - Check for accidental whitespace/newline differences if the token is
   coming from a shell variable, config file, or copy-paste.
@@ -133,13 +139,17 @@ in `tests/smoke_test.py`, so it shouldn't regress silently.
 - Check for a firewall blocking the three ports (control TCP, input UDP,
   video TCP) *and* the discovery UDP port (default 8763) between client
   and host.
-- The client now shows a small "CONNECTING TO &lt;address&gt;..." banner
-  on screen whenever it isn't currently connected (including during
-  reconnect retries), instead of a silent dark screen with only stdout
-  logging -- if you see that banner stuck on one address, that's the
-  address discovery found (or the one you passed via `--host`), and it's
-  the host at that address you need to fix reachability to, not a client
-  bug.
+- The client now shows a small status banner on screen whenever it isn't
+  currently connected (including during reconnect retries), instead of a
+  silent dark screen with only stdout logging: "CONNECTING TO
+  &lt;address&gt;..." for a plain connection failure, or "WAITING FOR
+  APPROVAL ON HOST &lt;address&gt;..." specifically when the host rejected
+  the handshake with `ApprovalRequired` (nothing to fix reachability-wise
+  in that case -- a human just needs to approve the device on the host,
+  see "Client's handshake keeps getting rejected with 'awaiting approval'"
+  below). Either way, the address shown is the one discovery found (or
+  the one you passed via `--host`), and it's the host at that address you
+  need to look at, not a client bug.
 
 ### Reconnect doesn't seem to happen after I kill the host
 

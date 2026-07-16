@@ -130,35 +130,58 @@ bool sendAll(int fd, const uint8_t* data, size_t size) {
 
 NetServer::NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource)
     : config_(std::move(config)), inputSink_(inputSink), frameSource_(frameSource),
-      pairingManager_(config_.pairingStateFilePath, config_.pairingCodeTtl),
+      deviceApproval_(config_.approvalStateFilePath, config_.pendingRequestTtl),
       rateLimiter_(config_.maxConnectionAttemptsPerWindow, config_.connectionAttemptWindowUs) {
     if (!config_.authToken.empty()) {
         std::fprintf(stderr,
-                      "NetServer: static auth token configured -- pairing-code flow is disabled, "
+                      "NetServer: static auth token configured -- device-approval flow is disabled, "
                       "the exact token is required.\n");
     } else {
         std::fprintf(stderr,
-                      "NetServer: no static auth token configured; using pairing-code mode. An "
-                      "unrecognized connection attempt will display a 6-digit code here to enter "
-                      "on the client (spec section 13).\n");
+                      "NetServer: no static auth token configured; using device-approval mode. An "
+                      "unrecognized client's connection request will be queued here for you to "
+                      "approve or deny -- see this process's stdin/console.\n");
     }
 
-    pairingManager_.setOnCodeChanged([this](std::optional<std::string> code) {
-        if (code) {
-            std::fprintf(stderr,
-                          "NetServer: pairing code: %s (enter this on the client; expires in %lds)\n",
-                          code->c_str(), static_cast<long>(config_.pairingCodeTtl.count()));
-        } else {
-            std::fprintf(stderr, "NetServer: pairing code cleared\n");
-        }
-        if (config_.onPairingCodeChanged) {
-            config_.onPairingCodeChanged(code);
-        }
-    });
+    deviceApproval_.setOnPendingRequestsChanged(
+        [this](std::vector<DeviceApprovalManager::PendingRequest> requests) {
+            // DeviceApprovalManager serializes every call to this callback
+            // under its own internal mutex (see notifyChangedLocked), so
+            // mutating notifiedPendingIds_ here without a separate lock of
+            // our own is safe -- two invocations can never run concurrently.
+            std::unordered_set<std::string> currentIds;
+            for (const auto& r : requests) {
+                currentIds.insert(r.deviceId);
+                if (notifiedPendingIds_.count(r.deviceId) == 0) {
+                    std::fprintf(stderr,
+                                  "NetServer: pending connection request from '%s' at %s "
+                                  "(device %s) -- type 'approve %s' or 'deny %s' to respond\n",
+                                  r.clientName.c_str(), r.address.c_str(), r.deviceId.c_str(),
+                                  r.deviceId.substr(0, 8).c_str(), r.deviceId.substr(0, 8).c_str());
+                }
+            }
+            notifiedPendingIds_ = std::move(currentIds);
+
+            if (config_.onPendingRequestsChanged) {
+                config_.onPendingRequestsChanged(requests);
+            }
+        });
 }
 
 NetServer::~NetServer() {
     stop();
+}
+
+bool NetServer::approveDevice(const std::string& deviceIdOrPrefix) {
+    return deviceApproval_.approve(deviceIdOrPrefix);
+}
+
+bool NetServer::denyDevice(const std::string& deviceIdOrPrefix) {
+    return deviceApproval_.deny(deviceIdOrPrefix);
+}
+
+std::vector<DeviceApprovalManager::PendingRequest> NetServer::pendingRequests() {
+    return deviceApproval_.pendingRequests();
 }
 
 void NetServer::start() {
@@ -181,14 +204,6 @@ void NetServer::start() {
                   "NetServer: listening on %s (control=%u, input(udp)=%u, video=%u)\n",
                   config_.bindAddress.c_str(), config_.controlPort, config_.inputPort,
                   config_.videoPort);
-
-    // Show a pairing code immediately, rather than only the first time
-    // some client's Hello gets rejected -- otherwise launching the host
-    // and looking at it before any client has tried connecting shows
-    // nothing (see docs/known-limitations.md).
-    if (config_.authToken.empty()) {
-        pairingManager_.ensureCodeActive();
-    }
 
     controlThread_ = std::thread(&NetServer::controlLoop, this);
     inputThread_ = std::thread(&NetServer::inputLoop, this);
@@ -299,7 +314,6 @@ void NetServer::controlLoop() {
 
         bool handshakeOk = false;
         HelloRejectReason rejectReason = HelloRejectReason::ProtocolVersionMismatch;
-        std::string issuedPairingToken;
 
         uint8_t headerBuf[kPacketHeaderWireSize];
         ssize_t n = ::recv(clientFd, headerBuf, sizeof(headerBuf), MSG_WAITALL);
@@ -317,7 +331,7 @@ void NetServer::controlLoop() {
                     if (hello) {
                         if (!config_.authToken.empty()) {
                             // Legacy/CI-friendly static-token mode: exact match or reject,
-                            // pairing-code flow is bypassed entirely.
+                            // device-approval flow is bypassed entirely.
                             if (constantTimeEquals(hello->authToken, config_.authToken)) {
                                 handshakeOk = true;
                             } else {
@@ -327,23 +341,16 @@ void NetServer::controlLoop() {
                                 rejectReason = HelloRejectReason::AuthenticationFailed;
                             }
                         } else {
-                            switch (pairingManager_.check(hello->authToken)) {
-                                case PairingManager::CheckResult::ValidExistingToken:
+                            switch (deviceApproval_.check(hello->authToken, hello->clientName, ipStr)) {
+                                case DeviceApprovalManager::CheckResult::Approved:
                                     handshakeOk = true;
                                     break;
-                                case PairingManager::CheckResult::ValidCode:
-                                    handshakeOk = true;
-                                    issuedPairingToken = pairingManager_.lastIssuedToken();
+                                case DeviceApprovalManager::CheckResult::Pending:
                                     std::fprintf(stderr,
-                                                  "NetServer: %s paired successfully with a new device token\n",
+                                                  "NetServer: rejecting handshake from %s (device not "
+                                                  "yet approved -- see the pending-request log above)\n",
                                                   ipStr);
-                                    break;
-                                case PairingManager::CheckResult::NeedsCode:
-                                case PairingManager::CheckResult::WrongCode:
-                                    std::fprintf(stderr,
-                                                  "NetServer: rejecting handshake from %s (pairing required)\n",
-                                                  ipStr);
-                                    rejectReason = HelloRejectReason::PairingRequired;
+                                    rejectReason = HelloRejectReason::ApprovalRequired;
                                     break;
                             }
                         }
@@ -362,7 +369,6 @@ void NetServer::controlLoop() {
         ack.accepted = handshakeOk ? 1 : 0;
         ack.rejectReason = handshakeOk ? HelloRejectReason::None : rejectReason;
         ack.sessionId = handshakeOk ? static_cast<uint32_t>(nowMicros()) : 0;
-        ack.pairingToken = issuedPairingToken;
         ByteBuffer ackPacket = buildHelloAckPacket(ack);
         sendAll(clientFd, ackPacket.data(), ackPacket.size());
 
@@ -490,21 +496,20 @@ void NetServer::inputLoop() {
 void NetServer::watchdogLoop() {
     uint64_t lastPruneUs = nowMicros();
     uint64_t lastStatsLogUs = nowMicros();
-    uint64_t lastPairingCheckUs = nowMicros();
-    constexpr uint64_t kPairingCheckIntervalUs = 5'000'000; // 5s
+    uint64_t lastApprovalSweepUs = nowMicros();
+    constexpr uint64_t kApprovalSweepIntervalUs = 5'000'000; // 5s
 
     while (running_.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-        // Keeps a pairing code visible even if it expires (default 5min
-        // TTL) with nobody having attempted to pair yet -- without this,
-        // an expired-and-never-replaced code would just sit there
-        // looking valid until the next connection attempt.
+        // check() already evicts stale pending requests as a side effect,
+        // but a host nobody is actively retrying against (its one pending
+        // client gave up) would otherwise never get its queue swept.
         if (config_.authToken.empty()) {
             uint64_t now = nowMicros();
-            if (now - lastPairingCheckUs >= kPairingCheckIntervalUs) {
-                pairingManager_.ensureCodeActive();
-                lastPairingCheckUs = now;
+            if (now - lastApprovalSweepUs >= kApprovalSweepIntervalUs) {
+                deviceApproval_.evictStale();
+                lastApprovalSweepUs = now;
             }
         }
 

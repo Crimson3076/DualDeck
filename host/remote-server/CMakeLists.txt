@@ -2,7 +2,7 @@ add_library(melonds_remote_host STATIC
     src/logging_input_sink.cpp
     src/synthetic_frame_source.cpp
     src/net_server.cpp
-    src/pairing_manager.cpp
+    src/device_approval_manager.cpp
 )
 
 target_include_directories(melonds_remote_host PUBLIC

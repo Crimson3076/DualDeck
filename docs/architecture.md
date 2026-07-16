@@ -37,7 +37,7 @@ host/melonds-patches/ 0001-remote-server-integration.patch: implements the
 
 client/               Steam Deck client (SDL3). Depends on protocol/ only.
                       - net_client.h/.cpp      control/input/video sockets
-                      - pairing_store.h/.cpp   persisted per-host pairing tokens
+                      - device_identity.h/.cpp persisted device identity (one, reused for every host)
                       - discovery_client.h/.cpp  one-shot LAN host scan (UDP broadcast)
                       - discovery_store.h/.cpp   persisted last-picked host
                       - bitmap_font.h/.cpp     self-contained 5x7 pixel font,
@@ -154,56 +154,71 @@ cross-thread communication goes through the small, mutex-protected
   `stall_test2.py`-style scenario used to verify this, not currently
   checked into `tests/` as an automated case).
 
-## Threading model additions (pairing-code flow)
+## Threading model additions (device-approval flow)
 
-- `NetServer` owns a `PairingManager` (`host/remote-server/include/host/pairing_manager.h`),
-  consulted from `controlLoop`'s handshake path only when
-  `NetServerConfig::authToken` is empty. `PairingManager` has its own
-  internal mutex (independent of `NetServer`'s other locks), since it's a
-  self-contained state machine (active code + issued-token set) that
+- `NetServer` owns a `DeviceApprovalManager`
+  (`host/remote-server/include/host/device_approval_manager.h`), consulted
+  from `controlLoop`'s handshake path only when `NetServerConfig::authToken`
+  is empty. `DeviceApprovalManager` has its own internal mutex
+  (independent of `NetServer`'s other locks), since it's a self-contained
+  state machine (approved-device set + pending-request queue) that
   doesn't touch any other `NetServer` state.
-- The pairing-code-changed callback (`NetServerConfig::onPairingCodeChanged`)
-  fires synchronously on `controlLoop`'s thread. The melonDS integration
-  (`RemoteServerBridge`) is the one example of a caller that needs to hop
-  threads from there (to touch a Qt widget) -- it does so with
-  `QMetaObject::invokeMethod(qApp, ..., Qt::QueuedConnection)`, using
-  `qApp` rather than the not-yet-constructed `mainWindow` as the
+- The pending-requests-changed callback
+  (`NetServerConfig::onPendingRequestsChanged`) fires synchronously on
+  `controlLoop`'s thread (or the watchdog thread, for stale evictions),
+  while still holding `DeviceApprovalManager`'s internal mutex. The
+  melonDS integration (`RemoteServerBridge`) is the one example of a
+  caller that needs to hop threads from there (to touch a Qt widget) --
+  it does so with `QMetaObject::invokeMethod(qApp, ..., Qt::QueuedConnection)`,
+  using `qApp` rather than the not-yet-constructed `mainWindow` as the
   marshaling target, since the remote server starts before
-  `EmuInstance::createWindow()` runs.
-- Client-side, `main.cpp`'s render loop (not the reconnect thread) owns
-  the pairing-code-entry UI state and is the only thread that calls
-  `NetClient::setAuthToken()`/retries `connect()` after code entry, so
-  there's no risk of the reconnect thread and the UI both racing to
-  submit a code. The reconnect thread instead checks a shared
-  `awaitingPairingCode` atomic and skips its own retry attempts while
-  true, so it doesn't burn through the host's connection-attempt rate
-  limit hammering a token that hasn't changed.
+  `EmuInstance::createWindow()` runs. Because `QueuedConnection` only
+  enqueues the callback rather than blocking on it, calling
+  `approveDevice()`/`denyDevice()` back into `NetServer` from inside the
+  eventual Qt-thread handler (in response to a button click) is safe --
+  by the time it runs, the original call stack (and its lock) is long
+  gone.
+- Client-side, there is no equivalent UI-thread/reconnect-thread
+  coordination needed any more: approval happens entirely on the host, so
+  the client's existing reconnect/backoff loop (unchanged since Phase 2)
+  handles "not yet approved" exactly like any other reason `connect()`
+  failed -- it just keeps retrying until the host approves it, at which
+  point the next retry succeeds. This is simpler than the 6-digit-code
+  flow it replaced, which needed a shared `awaitingPairingCode` atomic to
+  stop the reconnect thread from retrying while the render thread waited
+  on user text input; see git history if that coordination pattern is
+  ever needed again for something else.
 
 ## Known gaps vs. the full spec
 
 - Authentication offers both a static pre-shared token (compared with a
   constant-time comparison, `constantTimeEquals` in `net_server.cpp`, spec
-  section 13's "pre-shared token" option) and, as the default, a 6-digit
-  pairing code with persistent per-device tokens (spec section 13's
-  "six-digit pairing code" option) -- see `docs/protocol.md`'s
-  "Authentication and pairing". No QR code or certificate-based pairing
-  yet, and no UI to list/revoke individual paired devices.
+  section 13's "pre-shared token" option) and, as the default, device
+  approval -- a human at the host approves or denies each new client by
+  name and address (see `docs/protocol.md`'s "Authentication and device
+  approval"), adapted from spec section 13's "six-digit pairing code"
+  option after Steam Input turned out not to reliably bring up a virtual
+  keyboard in Gaming Mode (see "History: the 6-digit pairing code" in the
+  same doc). No QR code or certificate-based pairing, and no UI to
+  list/revoke individual approved devices, yet.
 - LAN discovery is implemented (custom UDP broadcast request/response,
   not mDNS/SSDP -- see `docs/protocol.md`'s "Discovery payload" section):
   the host advertises itself and the client scans for it instead of
-  needing `--host`, with a gamepad/keyboard-navigable selection screen
-  (`client/src/bitmap_font.h`'s self-contained bitmap-font renderer, since
-  Steam Deck Gaming Mode has no visible terminal for host names to be
-  printed to) when more than one host answers. No capability negotiation
-  yet, though -- `clientName`/`clientPlatform`/display size are on the
-  wire but unused by the host beyond logging.
+  needing `--host`, always showing a gamepad/keyboard-navigable
+  host-selection screen on launch (`client/src/bitmap_font.h`'s
+  self-contained bitmap-font renderer, since Steam Deck Gaming Mode has
+  no visible terminal for host names to be printed to) -- never silently
+  auto-connecting, even with only one host, so switching to a different
+  HTPC is always available. No capability negotiation yet, though --
+  `clientName`/`clientPlatform`/display size are on the wire but unused
+  by the host beyond logging.
 - Video transport is raw BGRA8888 over TCP (Stage 1 per spec section 8.4);
   no compression yet.
 - The SDL3 client (`client/`) is now build- and run-verified: SDL3 3.2.16
   was built from source (not packaged for this sandbox's distro -- see
   `docs/building.md`) and the real client binary was run against both the
   standalone host prototype and the actual patched melonDS host,
-  including the auto-reconnect thread and the pairing-code entry flow.
+  including the auto-reconnect thread and the device-approval flow.
   Not yet tested: real Steam Deck hardware/gamepad (see
   `docs/known-limitations.md`).
 - Latency instrumentation assumes client and host clocks are reasonably

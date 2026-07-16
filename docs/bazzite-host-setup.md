@@ -84,12 +84,15 @@ you specifically want to restrict which interface answers (e.g. this
 machine has multiple NICs and you only want one reachable) -- find your
 LAN IP with `ip addr` or `nmcli device show`. `--bind 127.0.0.1` is also
 available if you only ever intend to connect from this same machine.
-Without `--auth-token`, this runs in pairing mode (spec section 13's
-six-digit pairing code, the recommended default) -- the first connection
-attempt from the client gets a code logged here to enter once; add
-`--auth-token <a-shared-secret>` instead if you'd rather manage a static
-shared secret yourself. See `docs/protocol.md`'s "Authentication and
-pairing" section.
+Without `--auth-token`, this runs in device-approval mode (spec section
+13, adapted -- the recommended default): the first connection attempt
+from the client gets a pending-request line logged here, naming the
+client and its address; type `approve <device-id-prefix>` and press
+Enter to let it connect (or `deny <device-id-prefix>` to refuse it, or
+`list` to see everything pending). No code is ever typed on the client.
+Add `--auth-token <a-shared-secret>` instead if you'd rather manage a
+static shared secret yourself. See `docs/protocol.md`'s "Authentication
+and device approval" section.
 
 ### Firewall
 

@@ -13,7 +13,7 @@ same fixed-size header.
 | Offset | Size | Field            | Notes                                   |
 |-------:|-----:|------------------|------------------------------------------|
 | 0      | 4    | `magic`          | Always `0x444D5231` ("DMR1"). Packets with any other value are rejected before further parsing. |
-| 4      | 2    | `protocolVersion`| Currently `2` (bumped from `1` when the pairing-code fields below were added to `HelloAckPayload` -- an incompatible wire change). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
+| 4      | 2    | `protocolVersion`| Currently `3` (bumped from `2` when `HelloAckPayload.pairingToken` was removed and `HelloRejectReason::PairingRequired` was renamed to `ApprovalRequired`, moving from a typed-code pairing flow to device-approval -- see "Authentication and device approval" below; `2` itself had bumped from `1` when those pairing-code fields were first added). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
 | 6      | 2    | `packetType`     | See table below.                        |
 | 8      | 4    | `payloadSize`    | Size of the payload that follows, in bytes. Receivers must verify this matches the number of bytes actually available before parsing the payload. |
 
@@ -129,17 +129,21 @@ with this type to `255.255.255.255:<discoveryPort>` and collects whatever
 | var.   | 2    | `videoPort`    | |
 
 Deliberately unauthenticated: discovery only reveals a host name and three
-port numbers, never bypasses the pairing/token check on the actual control
-connection (see "Authentication and pairing" below), so there is no
-security benefit to gating it. This is also why the host's discovery
-listener is the one socket in this project that binds `0.0.0.0` rather
-than a specific configured address -- see the doc comment on
-`NetServerConfig::discoveryEnabled` in `host/remote-server/include/host/net_server.h`.
+port numbers, never bypasses the device-approval/token check on the
+actual control connection (see "Authentication and device approval"
+below), so there is no security benefit to gating it. This is also why
+the host's discovery listener is the one socket in this project that
+binds `0.0.0.0` rather than a specific configured address -- see the doc
+comment on `NetServerConfig::discoveryEnabled` in
+`host/remote-server/include/host/net_server.h`.
 
-If more than one host answers within the scan window, the client shows a
-selectable list (see `docs/architecture.md` "Client" section); if exactly
-one answers, or a previously-picked host answers again, it connects
-without prompting.
+The client shows the discovered-host list on every launch (see
+`docs/architecture.md` "Client" section) -- it never auto-connects
+silently, even when only one host answers, so switching to a different
+HTPC is always available. The previously-picked host is pre-highlighted
+as the default selection for a quick one-button reconnect, and the list
+keeps rescanning live while shown so a host that finishes booting a few
+seconds late still appears.
 
 ## Hello payload (variable length)
 
@@ -154,7 +158,7 @@ declared length that would run past the end of the received buffer.
 | `clientPlatform`  | length-prefixed string | e.g. "linux". Informational/logging only today. |
 | `displayWidth`    | `u16`         | Client's display width in pixels. Not currently used by the host. |
 | `displayHeight`   | `u16`         | Client's display height in pixels. Not currently used by the host. |
-| `authToken`       | length-prefixed string | See "Authentication and pairing" below -- meaning depends on whether the host has a static `--auth-token` configured. |
+| `authToken`       | length-prefixed string | See "Authentication and device approval" below -- meaning depends on whether the host has a static `--auth-token` configured. |
 
 The whole `Hello` payload is capped at 512 bytes by the host before it will
 even attempt to parse it, so a hostile `payloadSize` can't be used to make
@@ -166,7 +170,7 @@ touch/microphone capability flags. `clientName`/`clientPlatform`/display
 size exist on the wire today but the host does not yet act on them beyond
 logging.
 
-## HelloAck payload (10 fixed bytes + a length-prefixed string)
+## HelloAck payload (10 fixed bytes)
 
 | Offset | Size | Field          | Notes |
 |-------:|-----:|----------------|-------|
@@ -175,60 +179,94 @@ logging.
 | 2      | 4    | `sessionId`    | Non-zero, host-chosen, only when `accepted == 1`. Informational today (logging/future reconnect correlation); not yet validated on subsequent packets. |
 | 6      | 2    | `nativeWidth`  | Always 256. |
 | 8      | 2    | `nativeHeight` | Always 192. |
-| 10     | var. | `pairingToken` | length-prefixed string (added in protocol v2). Non-empty only when `accepted == 1` and this handshake just consumed a fresh pairing code -- see "Authentication and pairing" below. The client must persist it and send it back as `authToken` on all future connections to this host. |
+
+(Protocol v2 added a trailing length-prefixed `pairingToken` string here,
+for the 6-digit-pairing-code flow described below under "History: the
+6-digit pairing code". Protocol v3 removed it again along with that flow
+-- `HelloAckPayload` is back to a fixed 10 bytes.)
 
 `HelloRejectReason`: `0` = none (accepted), `1` = protocol version
 mismatch, `2` = authentication failed, `3` = host busy (reserved, not
 currently sent since the host doesn't yet reject on "busy" -- an extra
 control connection while one is active is simply closed without a
-handshake attempt), `4` = pairing required (added in protocol v2 -- see
-below).
+handshake attempt), `4` = approval required (see "Authentication and
+device approval" below; renamed from `PairingRequired` in protocol v3).
 
-## Authentication and pairing
+## Authentication and device approval
 
-Implements spec section 13's "later pairing options" (six-digit pairing
-code, pre-shared token). Which mode is active is a single host-side
-choice (`NetServerConfig::authToken` empty or not), not negotiated:
+Adapts spec section 13's "later pairing options" (originally: six-digit
+pairing code, pre-shared token, QR code, certificate-based pairing).
+Which mode is active is a single host-side choice
+(`NetServerConfig::authToken` empty or not), not negotiated:
 
 **Static token mode** (`--auth-token TOKEN` given to the host): the
 `Hello` payload's `authToken` must equal that value exactly (compared in
 constant time), or the handshake is rejected with `AuthenticationFailed`.
-No pairing code is ever generated in this mode. Intended for
+Device-approval mode (below) never runs in this mode. Intended for
 scripting/CI (`tests/smoke_test.py` uses this) or anyone who'd rather
 manage a shared secret themselves.
 
-**Pairing mode** (no `--auth-token`, the recommended default): the host
-maintains a set of previously-issued opaque pairing tokens plus at most
-one currently-active 6-digit code (`melonds_remote::host::PairingManager`,
-`host/remote-server/include/host/pairing_manager.h`). For each `Hello`:
+**Device-approval mode** (no `--auth-token`, the recommended default):
+the client generates a random, persistent device identity once (32 hex
+characters, `client/src/device_identity.h`) and sends the *same* value in
+`Hello.authToken` on every connection attempt, to every host, forever --
+there is no code typed on the client, ever. The host maintains a set of
+approved device identities plus a queue of pending (not yet approved)
+ones (`melonds_remote::host::DeviceApprovalManager`,
+`host/remote-server/include/host/device_approval_manager.h`). For each
+`Hello`:
 
-1. If `authToken` matches a previously-issued pairing token: accept
-   silently, `pairingToken` in the `HelloAck` is empty (nothing new to
-   hand back) -- this is what makes reconnects (including the client's
-   auto-reconnect-on-drop) not require re-entering a code.
-2. Else if `authToken` matches the currently-active 6-digit code: accept,
-   consume the code (single-use), generate a new persistent pairing
-   token, and return it in `HelloAck.pairingToken`. The client must save
-   this for future connections.
-3. Else if no code is currently active: generate one (default TTL 5
-   minutes), surface it (console log, and the melonDS-integrated host
-   also shows it in the window's status bar), and reject this attempt
-   with `PairingRequired`.
-4. Else (a code is active but `authToken` didn't match it): reject with
-   `PairingRequired` without generating a new code, so a client mid-typing
-   the currently-displayed code doesn't have it invalidated out from under
-   them.
+1. If `authToken` (the device identity) is in the approved set: accept
+   silently -- this is what makes reconnects (including the client's
+   auto-reconnect-on-drop) not require re-approval.
+2. Else: record or refresh a pending-request entry for this identity
+   (deduped by identity, so a client's automatic retries don't create
+   duplicate entries), surface it to a human at the host (console log
+   with `approve`/`deny` commands on the standalone host; a `QMessageBox`
+   Approve/Deny dialog on the melonDS-integrated host), and reject this
+   attempt with `ApprovalRequired`. The client has nothing to do here but
+   keep retrying automatically (its normal reconnect/backoff loop already
+   does this) -- approval happens entirely on the host side.
+3. A pending request not refreshed by a retry within `pendingRequestTtl`
+   (default 60s) is silently evicted, so a client that gave up (powered
+   off, pointed elsewhere) doesn't leave a permanent stale entry in the
+   approval queue.
 
-Issued pairing tokens are persisted to `--state-dir PATH` (standalone
-host) or `$HOME/.config/melonds-remote/paired_devices.txt` by default, or
-`$MELONDS_REMOTE_STATE_DIR` if set (melonDS-integrated host), so a paired
-client stays paired across host restarts. There is currently no UI to
-list or revoke individual paired devices -- only deleting the state file
-entirely (forgetting everyone) is possible.
+A human approves or denies a pending request by device identity (or an
+unambiguous prefix, for convenience typing it by hand):
+`DeviceApprovalManager::approve()`/`deny()`, exposed as `approve <id>`/
+`deny <id>` console commands on the standalone host and Approve/Deny
+buttons on the melonDS-integrated host's dialog. Approval persists the
+identity to disk; denial just drops the pending entry (not a permanent
+block -- if the same client retries, it becomes pending again, though the
+melonDS-integrated host's dialog won't re-prompt for an already-denied
+identity again within the same process run).
 
-The SDL3 client persists whatever token it's issued to
-`$HOME/.config/melonds-remote-client/pairing_tokens.txt`, keyed by host
-address, and uses it automatically on future runs against the same host.
+Approved device identities are persisted to `--state-dir PATH`
+(standalone host) or `$HOME/.config/melonds-remote/approved_devices.txt`
+by default, or `$MELONDS_REMOTE_STATE_DIR` if set (melonDS-integrated
+host), so an approved client stays approved across host restarts. There
+is currently no UI to list or revoke individual approved devices -- only
+deleting the state file entirely (forgetting everyone) is possible.
+
+The SDL3 client persists its own device identity to
+`$HOME/.config/melonds-remote-client/device_id.txt` and reuses it for
+every host, forever (regenerated only if that file is missing).
+
+### History: the 6-digit pairing code
+
+An earlier version of this project implemented spec section 13's
+"six-digit pairing code" option literally: the client would show a
+6-digit code-entry screen (driven by `SDL_StartTextInput()`, intended to
+bring up Steam's on-screen keyboard in Gaming Mode) and the user typed
+the code shown in the host's log. This was replaced with device-approval
+authentication above because Steam Input doesn't reliably bring up a
+virtual keyboard in Gaming Mode in practice, making the client-side
+typing step unworkable -- device-approval moves all interaction to the
+host side instead (which normally has a real keyboard/mouse), and
+requires no typing on either side. See git history for the removed
+`PairingManager`/`pairing_store.h` code if it's ever needed for
+reference.
 
 ## Handshake (as currently implemented)
 
@@ -238,12 +276,11 @@ address, and uses it automatically on future runs against the same host.
    "Rate limiting" below) -- applied before any handshake bytes are even
    read; `magic`/`protocolVersion`/`payloadSize` bound; successful parse of
    the Hello payload; and finally the `authToken` check described in
-   "Authentication and pairing" above (either an exact static-token match,
-   or the pairing-code/pairing-token logic). On success, replies with a
-   `HelloAck` (`accepted=1`, a fresh `sessionId`, and `pairingToken` if a
-   code was just consumed) and keeps the connection open. On any failure,
-   replies with `HelloAck` (`accepted=0`, the relevant `rejectReason`) and
-   then closes the connection.
+   "Authentication and device approval" above (either an exact
+   static-token match, or the device-approval logic). On success, replies
+   with a `HelloAck` (`accepted=1`, a fresh `sessionId`) and keeps the
+   connection open. On any failure, replies with `HelloAck` (`accepted=0`,
+   the relevant `rejectReason`) and then closes the connection.
 3. Only once a client is accepted does the host start acting on
    `ControllerState` packets on the UDP input port, and only accepts a
    video connection on the video port -- both are matched against the

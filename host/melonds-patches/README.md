@@ -22,13 +22,14 @@ follows the patch boundary proposed in
    `RemoteServerBridge` (null unless enabled), constructed/started in
    `EmuInstance`'s constructor and stopped at the top of its destructor,
    alongside the existing emulation thread's lifecycle. Also computes a
-   default pairing-token state-file path (`$MELONDS_REMOTE_STATE_DIR` or
-   `$HOME/.config/melonds-remote/paired_devices.txt`) and wires a
-   pairing-code-changed callback that marshals onto the Qt UI thread
+   default approved-device state-file path (`$MELONDS_REMOTE_STATE_DIR` or
+   `$HOME/.config/melonds-remote/approved_devices.txt`) and wires a
+   pending-requests-changed callback that marshals onto the Qt UI thread
    (`QMetaObject::invokeMethod(qApp, ..., Qt::QueuedConnection)`, since
-   the callback fires on `NetServer`'s own thread) to show the code in
-   `mainWindow`'s status bar. LAN discovery (enabled/port/host name) is
-   also configured here, from `MELONDS_REMOTE_NO_DISCOVERY`/
+   the callback fires on `NetServer`'s own thread) to pop a `QMessageBox`
+   Approve/Deny dialog per new connection request and mirror a one-line
+   summary in `mainWindow`'s status bar. LAN discovery (enabled/port/host
+   name) is also configured here, from `MELONDS_REMOTE_NO_DISCOVERY`/
    `MELONDS_REMOTE_DISCOVERY_PORT`/`MELONDS_REMOTE_HOST_NAME` env vars.
 5. `src/frontend/qt_sdl/Window.cpp` — `pickROM()`'s "Open ROM" dialog
    defaults to EmuDeck's standard NDS ROM directory
@@ -39,17 +40,17 @@ follows the patch boundary proposed in
    section 13 forbids.
 
 The protocol/host networking code itself (`protocol/`,
-`host/remote-server/net_server.{h,cpp}`, `host/remote-server/pairing_manager.{h,cpp}`,
+`host/remote-server/net_server.{h,cpp}`, `host/remote-server/device_approval_manager.{h,cpp}`,
 `emulator_input_sink.h`, `frame_source.h`) is vendored byte-for-byte from
 this repository into `src/frontend/qt_sdl/remote_server/` in the patch,
 plus three new melonDS-specific adapter files (`MelonDSFrameSource`,
 `MelonDSInputSink`, `RemoteServerBridge`) that implement
 `IFrameSource`/`IEmulatorInputSink` against real melonDS state instead of
 the standalone prototype's synthetic frame source / logging sink.
-`PairingManager` (the 6-digit pairing-code state machine, spec section
-13) lives in `host/remote-server/` alongside `NetServer` specifically so
-it's shared unchanged between the standalone prototype and this patch,
-rather than being melonDS-specific.
+`DeviceApprovalManager` (the device-approval authentication state
+machine, spec section 13) lives in `host/remote-server/` alongside
+`NetServer` specifically so it's shared unchanged between the standalone
+prototype and this patch, rather than being melonDS-specific.
 
 ## What has actually been verified
 
@@ -140,48 +141,70 @@ Qt6, SDL2, GCC 13) — not just written and assumed correct:
    video draining; see `docs/known-limitations.md` for the duration
    actually achieved and the frame-count/RSS/error results in this
    sandboxed environment.
-8. **Pairing-code flow, real host + real SDL3 client** (spec section 13):
-   verified two ways. First, protocol-level against this exact fresh-clone
-   patched binary: an unpaired `Hello` was rejected with `PairingRequired`
-   and the code from the log accepted on retry, issuing a token that then
-   worked on reconnect while the (now-consumed) code did not -- see
-   "Applying the patch" below for the exact fresh-clone build this was
-   run against. Second, against the standalone `host/remote-server`
-   prototype with the **actual** `melonds-remote-client` binary (not a
-   raw-socket stand-in): the client detected the `PairingRequired`
-   rejection, rendered its 6-digit entry screen, accepted simulated
-   keystrokes (`xdotool type`, standing in for Steam's on-screen keyboard
-   in Gaming Mode) for the code shown in the host's log, paired
-   successfully, saved the issued token to
-   `~/.config/melonds-remote-client/pairing_tokens.txt`, and a completely
-   separate client process launched afterward with no code entry
-   reconnected silently using that saved token. The melonDS-integrated
-   host's status-bar display of the code was separately confirmed with a
-   screenshot showing "melonDS Remote pairing code: ..." in the window.
-9. **Pairing code shown at launch, not just on a rejected handshake**:
-   fixed a bug where the code only ever appeared as a side effect of some
-   client's `Hello` being rejected, so launching the host and looking at
-   it with zero connection attempts made showed nothing. Confirmed fixed
-   against this exact patched binary via an Xvfb screenshot taken
-   immediately after launch, with no client ever having connected,
-   showing "melonDS Remote pairing code: ..." already present in the
-   status bar.
+8. **(Historical, superseded) Pairing-code flow, real host + real SDL3
+   client** (spec section 13): an earlier version of this patch verified
+   a 6-digit-pairing-code authentication flow the same way described here
+   for device-approval below -- protocol-level against a fresh-clone
+   patched binary, and against the standalone prototype with the actual
+   `melonds-remote-client` binary, simulated keystrokes standing in for
+   Steam's on-screen keyboard. **That flow no longer exists in the
+   code**: Steam Input doesn't reliably bring up a virtual keyboard in
+   Gaming Mode, so typing a code on the client turned out not to be a
+   workable UX, and it was replaced with device-approval authentication
+   (see item 11 below and `docs/protocol.md`'s "Authentication and device
+   approval" section) -- a human approves/denies by name and address
+   instead of the client typing anything. Kept here as a historical
+   record, not a description of current behavior.
+9. **(Historical, superseded) Pairing code shown at launch, not just on a
+   rejected handshake**: a bug where the (now-removed) pairing code only
+   ever appeared as a side effect of some client's `Hello` being
+   rejected was fixed in the same patch version referenced in item 8.
+   Device-approval mode has no equivalent "code visible at launch"
+   concept -- there's nothing to show until a specific client actually
+   attempts a connection and gets queued as pending.
 10. **LAN discovery** (spec section 8.1): `RemoteServerBridge`/
     `EmuInstance.cpp` wire `discoveryEnabled`/`discoveryPort`/`hostName`
     through to `NetServer` (env var overrides:
     `MELONDS_REMOTE_NO_DISCOVERY`, `MELONDS_REMOTE_DISCOVERY_PORT`,
-    `MELONDS_REMOTE_HOST_NAME`), sharing the same `NetServer`/
-    `PairingManager` code as the standalone prototype (vendored
-    byte-for-byte, per above) -- so the discovery responder logic itself
-    is the exact code end-to-end verified against a real host binary +
-    real `melonds-remote-client` (broadcast scan, single-host
-    auto-connect, and the gamepad-navigable multi-host list all
-    confirmed live; see `docs/protocol.md`'s "Discovery payload"
-    section). What's confirmed specifically for *this* patched binary is
-    a clean build with the new fields threaded through; the discovery
-    broadcast itself was exercised against the standalone
-    `host/remote-server` prototype rather than re-run against this exact
-    melonDS-integrated binary.
+    `MELONDS_REMOTE_HOST_NAME`), sharing the same `NetServer` code as the
+    standalone prototype (vendored byte-for-byte, per above) -- so the
+    discovery responder logic itself is the exact code end-to-end
+    verified against a real host binary + real `melonds-remote-client`
+    (broadcast scan and the gamepad-navigable host-selection list shown
+    on every launch both confirmed live; see `docs/protocol.md`'s
+    "Discovery payload" section). What's confirmed specifically for
+    *this* patched binary is a clean build with the new fields threaded
+    through; the discovery broadcast itself was exercised against the
+    standalone `host/remote-server` prototype rather than re-run against
+    this exact melonDS-integrated binary.
+11. **Device-approval authentication, real host + real SDL3 client**
+    (spec section 13, adapted): verified against the standalone
+    `host/remote-server` prototype with the **actual**
+    `melonds-remote-client` binary end-to-end, exercising the exact
+    `DeviceApprovalManager`/`NetServer` code vendored byte-for-byte into
+    this patch (per above) -- not a protocol-level stand-in. Sequence
+    confirmed live: client launched with zero prior state → discovery
+    scan finds the host → host-selection screen shown (even with only one
+    host, per the always-show behavior) → South/A confirms → handshake
+    rejected with `ApprovalRequired` → client shows "WAITING FOR APPROVAL
+    ON HOST ..." and retries automatically with no user action → a
+    pending-request line appears in the host's log/console → `approve
+    <id>` typed at the host's stdin → the client's next automatic retry
+    is accepted and starts streaming (confirmed via the host's live
+    input/video stats and a screenshot of the connected client showing a
+    real animated frame, not the waiting banner). Separately confirmed:
+    killing and relaunching the client process reuses its persisted
+    device identity and reconnects silently with **no** new pending
+    request logged and **no** waiting banner shown -- i.e. approval
+    genuinely persists across a client restart, matching what
+    `--state-dir` promises. What's confirmed specifically for *this*
+    patched binary (as opposed to the standalone prototype) is a clean
+    build with the `QMessageBox` Approve/Deny dialog wired through;
+    triggering that exact dialog live requires a real Qt window with a
+    human clicking it, which is why this verification pass used the
+    standalone prototype's console `approve`/`deny` commands (same
+    underlying `DeviceApprovalManager::approve()` call either way) rather
+    than the melonDS-integrated binary's popup specifically.
 
 Two real things were caught and fixed during this verification, not
 assumed correct from review:
@@ -230,12 +253,16 @@ same-machine testing, or to a specific address to pick one interface.
 `MELONDS_REMOTE_CONTROL_PORT`/`_INPUT_PORT`/`_VIDEO_PORT` default to
 8760/8761/8762 and rarely need overriding.
 
-`MELONDS_REMOTE_AUTH_TOKEN` is optional; omit it (recommended) to use the
-pairing-code flow instead of a static shared secret -- see
-`docs/protocol.md`'s "Authentication and pairing" section. When set, it
-disables pairing entirely in favor of that exact pre-shared token.
-`MELONDS_REMOTE_STATE_DIR` overrides where paired-device tokens are
-remembered (default `$HOME/.config/melonds-remote/paired_devices.txt`).
+`MELONDS_REMOTE_AUTH_TOKEN` is optional; omit it (recommended) to use
+device-approval authentication instead of a static shared secret -- see
+`docs/protocol.md`'s "Authentication and device approval" section. An
+unrecognized client's connection request pops a `QMessageBox`
+Approve/Deny dialog in the melonDS window; once approved, that same
+client reconnects silently forever, no re-prompting. Setting
+`MELONDS_REMOTE_AUTH_TOKEN` disables device approval entirely in favor of
+that exact pre-shared token. `MELONDS_REMOTE_STATE_DIR` overrides where
+approved devices are remembered (default
+`$HOME/.config/melonds-remote/approved_devices.txt`).
 
 Only instance 0 (melonDS supports multiple emulator instances for local
 multiplayer testing) starts the remote server, matching this project's
@@ -259,11 +286,12 @@ one-client-at-a-time v0.1 scope.
   above. Not yet exercised: a commercial-style game's own input-handling
   code (would need a real commercial ROM, out of scope for this
   repository) or a physical Steam Deck controller feeding the client.
-- The pairing-code flow has been exercised end-to-end (item 8 above) with
-  simulated keystrokes standing in for Steam's on-screen keyboard; not
-  yet exercised with the actual on-screen keyboard on real Steam Deck
-  hardware. There's no UI to list/revoke individual paired devices, only
-  deleting the whole state file.
+- Device-approval authentication requires no client-side typing at all
+  (see item 11 above), so it isn't affected by Steam Input's virtual
+  keyboard *not* coming up in Gaming Mode -- the specific problem that
+  made this repository move off the earlier 6-digit-code flow. There's no
+  UI to list/revoke individual approved devices yet, only deleting the
+  whole state file.
 - Session IDs are generated and returned in `HelloAck` but not yet
   validated on any later packet (matches the standalone prototype's
   current scope, see `docs/known-limitations.md`).

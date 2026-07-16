@@ -27,7 +27,7 @@ import sys
 import time
 
 MAGIC = 0x444D5231
-VERSION = 2
+VERSION = 3
 
 PT_HELLO = 1
 PT_HELLO_ACK = 2
@@ -86,12 +86,7 @@ def do_handshake(control_port: int, token: str):
     assert ptype == PT_HELLO_ACK, f"expected HelloAck, got type {ptype}"
 
     ack_payload = recv_exact(ctrl, psize)
-    # Fixed-size fields, then a length-prefixed pairingToken string (spec
-    # section 13's pairing-code flow) -- unused by this static-token-mode
-    # smoke test but must still be parsed to consume the full payload.
     accepted, reject_reason, session_id, native_w, native_h = struct.unpack_from("<BBIHH", ack_payload, 0)
-    token_len = struct.unpack_from("<H", ack_payload, 10)[0]
-    pairing_token = ack_payload[12:12 + token_len].decode("utf-8")
     return ctrl, accepted, reject_reason
 
 

@@ -76,39 +76,48 @@ python3 tests/smoke_test.py build/host/remote-server/melonds-remote-server
 
 Exits non-zero and prints the server's log output on any failure.
 
-## Pairing-flow smoke test (`tests/pairing_smoke_test.py`)
+## Device-approval smoke test (`tests/device_approval_smoke_test.py`)
 
 Exercises the same `melonds-remote-server` binary in its **default**
-mode (no `--auth-token`, so pairing mode is active), covering the state
-machine `PairingManager` implements (spec section 13's "six-digit pairing
-code"): an unpaired connection is rejected with `PairingRequired` and
-gets a code logged; presenting that code pairs successfully and issues a
-persistent token; reconnecting with the token succeeds silently with no
-new token issued; the original code is single-use and doesn't work a
-second time; and a paired token survives a full host process restart
-when `--state-dir` is given.
+mode (no `--auth-token`, so device-approval mode is active), covering the
+state machine `DeviceApprovalManager` implements (spec section 13,
+adapted -- see below): an unrecognized device identity is rejected with
+`ApprovalRequired` and gets a pending-request line logged; sending
+`approve <id>` on the server's stdin approves it and lets that same
+identity connect; reconnecting with it again succeeds silently with no
+re-approval; a different, never-seen identity is not accidentally
+approved; `deny <id>` leaves an identity rejected; and an approved
+identity survives a full host process restart when `--state-dir` is
+given.
 
 ```sh
-python3 tests/pairing_smoke_test.py build/host/remote-server/melonds-remote-server
+python3 tests/device_approval_smoke_test.py build/host/remote-server/melonds-remote-server
 ```
 
-This is a protocol-level test (raw sockets standing in for a client).
+This is a protocol-level test (raw sockets standing in for a client, and
+writing directly to the server's stdin standing in for a human operator).
 The corresponding real-client verification -- the actual
-`melonds-remote-client` binary detecting `PairingRequired`, rendering its
-code-entry screen, and pairing via simulated keystrokes standing in for
-Steam's on-screen keyboard -- is documented (not yet automated) in
-`host/melonds-patches/README.md` item 8.
+`melonds-remote-client` binary detecting `ApprovalRequired`, showing its
+"awaiting approval" status, and connecting once approved on the host,
+with no typing anywhere -- is documented in
+`host/melonds-patches/README.md`.
+
+Note: this replaces an earlier `tests/pairing_smoke_test.py` that
+exercised a 6-digit-code-typed-on-the-client flow (spec section 13's
+"six-digit pairing code" option as originally proposed). That flow was
+replaced with device-approval because Steam Input doesn't reliably bring
+up a virtual keyboard in Gaming Mode, so requiring the client to type
+anything wasn't a workable UX -- see `docs/known-limitations.md`.
 
 ## What is not yet tested
 
 - Real Steam Deck hardware: the SDL3 client has been build- and
-  run-verified (real handshake/pairing, real sustained video/input
-  traffic against both the standalone host and the actual patched
-  melonDS host -- see `docs/known-limitations.md`), but only headlessly
-  in this sandbox, with no physical gamepad and simulated keystrokes
-  standing in for Steam's on-screen keyboard. Manual testing on real
-  Deck hardware (Gaming Mode and Desktop Mode, both LCD and OLED models)
-  is still needed.
+  run-verified (real handshake/device-approval, real sustained
+  video/input traffic against both the standalone host and the actual
+  patched melonDS host -- see `docs/known-limitations.md`), but only
+  headlessly in this sandbox, with no physical gamepad. Manual testing on
+  real Deck hardware (Gaming Mode and Desktop Mode, both LCD and OLED
+  models) is still needed.
 - No test yet exercises packet loss, delayed/out-of-order UDP delivery
   under real network conditions (only the pure sequence-number logic is
   unit tested).

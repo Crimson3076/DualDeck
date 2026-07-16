@@ -1,5 +1,5 @@
 diff --git a/src/frontend/qt_sdl/CMakeLists.txt b/src/frontend/qt_sdl/CMakeLists.txt
-index 31207f8..22dc836 100644
+index 31207f8..d6e6be0 100644
 --- a/src/frontend/qt_sdl/CMakeLists.txt
 +++ b/src/frontend/qt_sdl/CMakeLists.txt
 @@ -60,6 +60,16 @@ set(SOURCES_QT_SDL
@@ -12,7 +12,7 @@ index 31207f8..22dc836 100644
 +    remote_server/protocol/src/input_state_tracker.cpp
 +    remote_server/protocol/src/rate_limiter.cpp
 +    remote_server/host/net_server.cpp
-+    remote_server/host/pairing_manager.cpp
++    remote_server/host/device_approval_manager.cpp
 +    remote_server/MelonDSFrameSource.cpp
 +    remote_server/MelonDSInputSink.cpp
 +    remote_server/RemoteServerBridge.cpp
@@ -38,10 +38,10 @@ index 31207f8..22dc836 100644
      target_include_directories(melonDS PUBLIC ${Qt6Gui_PRIVATE_INCLUDE_DIRS})
  else()
 diff --git a/src/frontend/qt_sdl/EmuInstance.cpp b/src/frontend/qt_sdl/EmuInstance.cpp
-index a8b1021..f0b3654 100755
+index a8b1021..25a8b2f 100755
 --- a/src/frontend/qt_sdl/EmuInstance.cpp
 +++ b/src/frontend/qt_sdl/EmuInstance.cpp
-@@ -20,15 +20,21 @@
+@@ -20,15 +20,24 @@
  #include <stdio.h>
  #include <string.h>
  
@@ -53,17 +53,20 @@ index a8b1021..f0b3654 100755
 +#include <optional>
  #include <tuple>
  #include <string>
++#include <unordered_set>
  #include <utility>
  #include <fstream>
  
  #include <QDateTime>
 +#include <QCoreApplication>
++#include <QMessageBox>
 +#include <QMetaObject>
++#include <QPushButton>
 +#include <QStatusBar>
  
  #include <zstd.h>
  #ifdef ARCHIVE_SUPPORT_ENABLED
-@@ -50,6 +56,8 @@
+@@ -50,6 +59,8 @@
  
  #include "NDSCart/CartSD.h"
  
@@ -72,7 +75,7 @@ index a8b1021..f0b3654 100755
  using std::make_unique;
  using std::pair;
  using std::string;
-@@ -131,6 +139,69 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
+@@ -131,6 +142,103 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
  
      net.RegisterInstance(instanceID);
  
@@ -95,19 +98,30 @@ index a8b1021..f0b3654 100755
 +            return v ? static_cast<uint16_t>(std::stoi(v)) : def;
 +        };
 +
-+        // Where paired-client tokens are remembered across restarts (spec
-+        // section 13's "six-digit pairing code" option). Defaults under
++        // Where approved device identities are remembered across restarts
++        // (see host/device_approval_manager.h). Defaults under
 +        // $HOME/.config so a normal install just works with no extra
 +        // configuration; MELONDS_REMOTE_STATE_DIR overrides it.
-+        std::string pairingStateFilePath;
++        std::string approvalStateFilePath;
 +        {
 +            const char* stateDir = getenv("MELONDS_REMOTE_STATE_DIR");
 +            const char* home = getenv("HOME");
 +            if (stateDir && *stateDir)
-+                pairingStateFilePath = std::string(stateDir) + "/paired_devices.txt";
++                approvalStateFilePath = std::string(stateDir) + "/approved_devices.txt";
 +            else if (home && *home)
-+                pairingStateFilePath = std::string(home) + "/.config/melonds-remote/paired_devices.txt";
++                approvalStateFilePath = std::string(home) + "/.config/melonds-remote/approved_devices.txt";
 +        }
++
++        // Tracks which pending device ids a dialog has already been shown
++        // for, so a client's automatic reconnect retries (every few
++        // seconds while awaiting approval) don't keep reopening the
++        // prompt. A denied device stays suppressed for the rest of this
++        // process's lifetime (deliberately -- an operator who just
++        // clicked Deny shouldn't be nagged again a second later by the
++        // same client's next retry); restarting melonDS clears it. Held
++        // by shared_ptr so the callback (which may outlive any single
++        // invocation) keeps it alive.
++        auto shownDeviceIds = std::make_shared<std::unordered_set<std::string>>();
 +
 +        remoteServer = std::make_unique<melonds_remote_bridge::RemoteServerBridge>(
 +            envOr("MELONDS_REMOTE_BIND", "0.0.0.0"),
@@ -115,20 +129,43 @@ index a8b1021..f0b3654 100755
 +            envPortOr("MELONDS_REMOTE_INPUT_PORT", 8761),
 +            envPortOr("MELONDS_REMOTE_VIDEO_PORT", 8762),
 +            envOr("MELONDS_REMOTE_AUTH_TOKEN", ""),
-+            pairingStateFilePath,
-+            [this](std::optional<std::string> code) {
-+                // Fired on NetServer's control thread -- marshal to the Qt
-+                // UI thread via qApp (always valid once Qt is up, unlike
++            approvalStateFilePath,
++            [this, shownDeviceIds](std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest> requests) {
++                // Fired on NetServer's control thread (or its watchdog
++                // thread, for stale evictions) -- marshal to the Qt UI
++                // thread via qApp (always valid once Qt is up, unlike
 +                // mainWindow which isn't created until just below this
 +                // block) before touching any widget.
-+                QMetaObject::invokeMethod(qApp, [this, code]() {
++                QMetaObject::invokeMethod(qApp, [this, shownDeviceIds, requests]() {
 +                    if (!mainWindow) return;
-+                    if (code) {
-+                        mainWindow->statusBar()->showMessage(
-+                            QString("melonDS Remote pairing code: %1 -- enter this on the client (expires in 5 min)")
-+                                .arg(QString::fromStdString(*code)));
-+                    } else {
++
++                    if (requests.empty()) {
 +                        mainWindow->statusBar()->clearMessage();
++                    } else {
++                        mainWindow->statusBar()->showMessage(
++                            QString("melonDS Remote: %1 pending connection request(s)")
++                                .arg(requests.size()));
++                    }
++
++                    for (const auto& req : requests) {
++                        if (shownDeviceIds->count(req.deviceId) > 0) continue;
++                        shownDeviceIds->insert(req.deviceId);
++
++                        QMessageBox box(mainWindow);
++                        box.setWindowTitle("melonDS Remote -- connection request");
++                        box.setText(QString("Allow \"%1\" at %2 to connect?")
++                                        .arg(QString::fromStdString(req.clientName))
++                                        .arg(QString::fromStdString(req.address)));
++                        QPushButton* approveButton = box.addButton("Approve", QMessageBox::YesRole);
++                        box.addButton("Deny", QMessageBox::NoRole);
++                        box.setDefaultButton(approveButton);
++                        box.exec();
++
++                        if (box.clickedButton() == approveButton) {
++                            remoteServer->approveDevice(req.deviceId);
++                        } else {
++                            remoteServer->denyDevice(req.deviceId);
++                        }
 +                    }
 +                }, Qt::QueuedConnection);
 +            },
@@ -142,7 +179,7 @@ index a8b1021..f0b3654 100755
      emuThread = new EmuThread(this);
  
      numWindows = 0;
-@@ -156,6 +227,12 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
+@@ -156,6 +264,12 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
  EmuInstance::~EmuInstance()
  {
      deleting = true;
@@ -509,28 +546,28 @@ index 0000000..05308c9
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
 new file mode 100644
-index 0000000..3f3a844
+index 0000000..d93ed9e
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,53 @@
 +#include "RemoteServerBridge.h"
 +
 +namespace melonds_remote_bridge {
 +
-+RemoteServerBridge::RemoteServerBridge(std::string bindAddress, uint16_t controlPort,
-+                                        uint16_t inputPort, uint16_t videoPort,
-+                                        std::string authToken, std::string pairingStateFilePath,
-+                                        std::function<void(std::optional<std::string>)> onPairingCodeChanged,
-+                                        bool discoveryEnabled, uint16_t discoveryPort,
-+                                        std::string hostName) {
++RemoteServerBridge::RemoteServerBridge(
++    std::string bindAddress, uint16_t controlPort, uint16_t inputPort, uint16_t videoPort,
++    std::string authToken, std::string approvalStateFilePath,
++    std::function<void(std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest>)>
++        onPendingRequestsChanged,
++    bool discoveryEnabled, uint16_t discoveryPort, std::string hostName) {
 +    melonds_remote::host::NetServerConfig config;
 +    config.bindAddress = std::move(bindAddress);
 +    config.controlPort = controlPort;
 +    config.inputPort = inputPort;
 +    config.videoPort = videoPort;
 +    config.authToken = std::move(authToken);
-+    config.pairingStateFilePath = std::move(pairingStateFilePath);
-+    config.onPairingCodeChanged = std::move(onPairingCodeChanged);
++    config.approvalStateFilePath = std::move(approvalStateFilePath);
++    config.onPendingRequestsChanged = std::move(onPendingRequestsChanged);
 +    config.discoveryEnabled = discoveryEnabled;
 +    config.discoveryPort = discoveryPort;
 +    config.hostName = std::move(hostName);
@@ -557,13 +594,21 @@ index 0000000..3f3a844
 +    return inputSink_.latestState();
 +}
 +
++bool RemoteServerBridge::approveDevice(const std::string& deviceIdOrPrefix) {
++    return server_->approveDevice(deviceIdOrPrefix);
++}
++
++bool RemoteServerBridge::denyDevice(const std::string& deviceIdOrPrefix) {
++    return server_->denyDevice(deviceIdOrPrefix);
++}
++
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
 new file mode 100644
-index 0000000..a4404e7
+index 0000000..5a25373
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,74 @@
 +#pragma once
 +
 +// Ties the standalone melonds-remote protocol/host networking code
@@ -581,8 +626,8 @@ index 0000000..a4404e7
 +#include <cstdint>
 +#include <functional>
 +#include <memory>
-+#include <optional>
 +#include <string>
++#include <vector>
 +
 +#include "MelonDSFrameSource.h"
 +#include "MelonDSInputSink.h"
@@ -592,22 +637,24 @@ index 0000000..a4404e7
 +
 +class RemoteServerBridge {
 +public:
-+    // `pairingStateFilePath` and `onPairingCodeChanged` implement the
-+    // 6-digit pairing code flow (see host/pairing_manager.h); only used
-+    // when `authToken` is empty. `onPairingCodeChanged` is invoked on
-+    // NetServer's control thread, not the Qt UI thread -- callers must
-+    // marshal it themselves (e.g. QMetaObject::invokeMethod with
-+    // Qt::QueuedConnection) before touching any widget.
++    // `approvalStateFilePath` and `onPendingRequestsChanged` implement
++    // device-approval authentication (see
++    // host/device_approval_manager.h); only used when `authToken` is
++    // empty. `onPendingRequestsChanged` is invoked on NetServer's control
++    // thread (or its watchdog thread, for stale evictions), not the Qt UI
++    // thread -- callers must marshal it themselves (e.g.
++    // QMetaObject::invokeMethod with Qt::QueuedConnection) before
++    // touching any widget.
 +    //
 +    // `discoveryEnabled`/`discoveryPort`/`hostName` implement LAN
 +    // discovery (spec section 8.1): on by default, see
 +    // NetServerConfig::discoveryEnabled for the security reasoning.
-+    RemoteServerBridge(std::string bindAddress, uint16_t controlPort, uint16_t inputPort,
-+                        uint16_t videoPort, std::string authToken,
-+                        std::string pairingStateFilePath = {},
-+                        std::function<void(std::optional<std::string>)> onPairingCodeChanged = {},
-+                        bool discoveryEnabled = true, uint16_t discoveryPort = 8763,
-+                        std::string hostName = {});
++    RemoteServerBridge(
++        std::string bindAddress, uint16_t controlPort, uint16_t inputPort, uint16_t videoPort,
++        std::string authToken, std::string approvalStateFilePath = {},
++        std::function<void(std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest>)>
++            onPendingRequestsChanged = {},
++        bool discoveryEnabled = true, uint16_t discoveryPort = 8763, std::string hostName = {});
 +    ~RemoteServerBridge();
 +
 +    RemoteServerBridge(const RemoteServerBridge&) = delete;
@@ -624,6 +671,11 @@ index 0000000..a4404e7
 +    // latest remote controller/touch/action state to merge in.
 +    melonds_remote::ControllerState latestControllerState() const;
 +
++    // Forwarded to NetServer -- see host/net_server.h. Safe to call from
++    // the Qt UI thread (e.g. a dialog's button-click slot).
++    bool approveDevice(const std::string& deviceIdOrPrefix);
++    bool denyDevice(const std::string& deviceIdOrPrefix);
++
 +private:
 +    MelonDSInputSink inputSink_;
 +    MelonDSFrameSource frameSource_;
@@ -631,6 +683,318 @@ index 0000000..a4404e7
 +};
 +
 +} // namespace melonds_remote_bridge
+diff --git a/src/frontend/qt_sdl/remote_server/host/device_approval_manager.cpp b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.cpp
+new file mode 100644
+index 0000000..2429912
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.cpp
+@@ -0,0 +1,163 @@
++#include "host/device_approval_manager.h"
++
++#include <algorithm>
++#include <filesystem>
++#include <fstream>
++
++namespace melonds_remote::host {
++
++DeviceApprovalManager::DeviceApprovalManager(std::string stateFilePath,
++                                             std::chrono::seconds pendingRequestTtl)
++    : stateFilePath_(std::move(stateFilePath)), pendingRequestTtl_(pendingRequestTtl) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    loadApprovedLocked();
++}
++
++void DeviceApprovalManager::loadApprovedLocked() {
++    if (stateFilePath_.empty()) return;
++
++    std::ifstream in(stateFilePath_);
++    if (!in.is_open()) return; // fine -- no prior approvals, or first run
++
++    std::string line;
++    while (std::getline(in, line)) {
++        if (!line.empty()) {
++            approvedDevices_.insert(line);
++        }
++    }
++}
++
++void DeviceApprovalManager::persistApprovedLocked(const std::string& deviceId) {
++    if (stateFilePath_.empty()) return;
++
++    std::error_code ec;
++    std::filesystem::path path(stateFilePath_);
++    if (path.has_parent_path()) {
++        std::filesystem::create_directories(path.parent_path(), ec);
++    }
++
++    // Append-only: every previously-approved device keeps working even if
++    // the process restarts mid-write of a later line.
++    std::ofstream out(stateFilePath_, std::ios::app);
++    if (out.is_open()) {
++        out << deviceId << '\n';
++    }
++}
++
++void DeviceApprovalManager::evictStaleLocked() {
++    auto now = std::chrono::steady_clock::now();
++    bool changed = false;
++    for (auto it = pendingOrder_.begin(); it != pendingOrder_.end();) {
++        auto entryIt = pending_.find(*it);
++        if (entryIt == pending_.end() || now - entryIt->second.lastSeen > pendingRequestTtl_) {
++            pending_.erase(*it);
++            it = pendingOrder_.erase(it);
++            changed = true;
++        } else {
++            ++it;
++        }
++    }
++    if (changed) {
++        notifyChangedLocked();
++    }
++}
++
++void DeviceApprovalManager::notifyChangedLocked() {
++    if (!onPendingRequestsChanged_) return;
++
++    std::vector<PendingRequest> requests;
++    requests.reserve(pendingOrder_.size());
++    for (const auto& id : pendingOrder_) {
++        const auto& entry = pending_.at(id);
++        requests.push_back(PendingRequest{id, entry.clientName, entry.address});
++    }
++    onPendingRequestsChanged_(std::move(requests));
++}
++
++std::string DeviceApprovalManager::resolvePendingLocked(const std::string& idOrPrefix) const {
++    if (idOrPrefix.empty()) return {};
++    if (pending_.count(idOrPrefix) > 0) return idOrPrefix;
++
++    std::string match;
++    for (const auto& id : pendingOrder_) {
++        if (id.compare(0, idOrPrefix.size(), idOrPrefix) == 0) {
++            if (!match.empty()) return {}; // ambiguous: more than one match
++            match = id;
++        }
++    }
++    return match;
++}
++
++DeviceApprovalManager::CheckResult DeviceApprovalManager::check(const std::string& deviceId,
++                                                                 const std::string& clientName,
++                                                                 const std::string& address) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    evictStaleLocked();
++
++    if (!deviceId.empty() && approvedDevices_.count(deviceId) > 0) {
++        return CheckResult::Approved;
++    }
++
++    if (!deviceId.empty()) {
++        bool isNew = pending_.count(deviceId) == 0;
++        pending_[deviceId] = PendingEntry{clientName, address, std::chrono::steady_clock::now()};
++        if (isNew) {
++            pendingOrder_.push_back(deviceId);
++            notifyChangedLocked();
++        }
++    }
++
++    return CheckResult::Pending;
++}
++
++bool DeviceApprovalManager::approve(const std::string& deviceIdOrPrefix) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    std::string deviceId = resolvePendingLocked(deviceIdOrPrefix);
++    if (deviceId.empty()) return false;
++
++    approvedDevices_.insert(deviceId);
++    persistApprovedLocked(deviceId);
++    pending_.erase(deviceId);
++    pendingOrder_.erase(std::remove(pendingOrder_.begin(), pendingOrder_.end(), deviceId),
++                         pendingOrder_.end());
++    notifyChangedLocked();
++    return true;
++}
++
++bool DeviceApprovalManager::deny(const std::string& deviceIdOrPrefix) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    std::string deviceId = resolvePendingLocked(deviceIdOrPrefix);
++    if (deviceId.empty()) return false;
++
++    pending_.erase(deviceId);
++    pendingOrder_.erase(std::remove(pendingOrder_.begin(), pendingOrder_.end(), deviceId),
++                         pendingOrder_.end());
++    notifyChangedLocked();
++    return true;
++}
++
++std::vector<DeviceApprovalManager::PendingRequest> DeviceApprovalManager::pendingRequests() {
++    std::lock_guard<std::mutex> lock(mutex_);
++    evictStaleLocked();
++
++    std::vector<PendingRequest> requests;
++    requests.reserve(pendingOrder_.size());
++    for (const auto& id : pendingOrder_) {
++        const auto& entry = pending_.at(id);
++        requests.push_back(PendingRequest{id, entry.clientName, entry.address});
++    }
++    return requests;
++}
++
++void DeviceApprovalManager::evictStale() {
++    std::lock_guard<std::mutex> lock(mutex_);
++    evictStaleLocked();
++}
++
++void DeviceApprovalManager::setOnPendingRequestsChanged(
++    std::function<void(std::vector<PendingRequest>)> callback) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    onPendingRequestsChanged_ = std::move(callback);
++}
++
++} // namespace melonds_remote::host
+diff --git a/src/frontend/qt_sdl/remote_server/host/device_approval_manager.h b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.h
+new file mode 100644
+index 0000000..a472cba
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.h
+@@ -0,0 +1,137 @@
++#pragma once
++
++// Implements device-approval authentication (replaces the earlier
++// 6-digit-pairing-code flow, which required the client to type a code --
++// unworkable on Steam Deck when Steam Input's virtual keyboard doesn't
++// come up, see docs/known-limitations.md):
++//
++//   1. The client generates a random, persistent device identity once
++//      (see client/src/device_identity.h) and sends the same value on
++//      every Hello, to every host, forever -- there is no code to type on
++//      either side.
++//   2. An unrecognized device identity is queued as a pending request
++//      (surfaced to whoever is at the host -- console log, and
++//      optionally a GUI hook) and the handshake is rejected with
++//      `HelloRejectReason::ApprovalRequired`. The client's existing
++//      auto-reconnect loop keeps retrying with the same identity; no
++//      client-side action is needed or possible.
++//   3. A human at the host approves (or denies) the pending request.
++//      Approval persists the device identity to disk; every future Hello
++//      from that same identity is accepted immediately, no re-approval
++//      needed unless the host's approved-device state is deleted.
++//
++// Independent of NetServerConfig::authToken, which remains a static
++// pre-shared secret for scripting/CI use (checked first by NetServer;
++// this class is only consulted when no static token is configured).
++
++#include <chrono>
++#include <functional>
++#include <mutex>
++#include <string>
++#include <unordered_map>
++#include <unordered_set>
++#include <vector>
++
++namespace melonds_remote::host {
++
++class DeviceApprovalManager {
++public:
++    // `stateFilePath` is where approved device identities are persisted
++    // (one per line) so an approved client survives a host restart. An
++    // empty path disables persistence -- approval still works within the
++    // current process lifetime, just isn't remembered across restarts
++    // (used by tests that shouldn't touch the filesystem).
++    //
++    // `pendingRequestTtl` bounds how long a pending request is kept
++    // without a fresh retry before it's silently evicted -- a client that
++    // gave up (powered off, pointed at a different host) shouldn't leave
++    // a permanent stale entry in the approval queue. A live client keeps
++    // its entry fresh on its own via the auto-reconnect loop's repeated
++    // retries, each of which refreshes lastSeen.
++    explicit DeviceApprovalManager(std::string stateFilePath,
++                                   std::chrono::seconds pendingRequestTtl = std::chrono::seconds(60));
++
++    DeviceApprovalManager(const DeviceApprovalManager&) = delete;
++    DeviceApprovalManager& operator=(const DeviceApprovalManager&) = delete;
++
++    enum class CheckResult {
++        Approved, // deviceId is in the persisted approved set: accept immediately
++        Pending,  // not yet approved: request recorded/refreshed, reject with ApprovalRequired
++    };
++
++    struct PendingRequest {
++        std::string deviceId;
++        std::string clientName;
++        std::string address;
++    };
++
++    // Checks `deviceId` (the Hello payload's authToken field, repurposed
++    // as a persistent device identity) against the approved-device set.
++    // As a side effect, records or refreshes a pending-approval entry
++    // when it doesn't match -- an empty deviceId is never recorded as
++    // pending (nothing to approve/deny later) and always returns Pending.
++    CheckResult check(const std::string& deviceId, const std::string& clientName,
++                       const std::string& address);
++
++    // Approves a pending request by exact deviceId or unambiguous prefix
++    // (operator convenience -- typing the first several characters of the
++    // id shown in the log is enough). Persists the full deviceId to disk
++    // and removes it from the pending set. Returns false if no pending
++    // request matches (exactly, or as a unique prefix).
++    bool approve(const std::string& deviceIdOrPrefix);
++
++    // Denies (simply discards) a pending request by exact deviceId or
++    // unambiguous prefix. Returns false if no pending request matches. A
++    // denied client's automatic retries will just reappear as pending
++    // again -- this isn't a permanent block, only "not right now".
++    bool deny(const std::string& deviceIdOrPrefix);
++
++    // Current pending requests, oldest first, after evicting any that
++    // haven't been refreshed within pendingRequestTtl.
++    std::vector<PendingRequest> pendingRequests();
++
++    // Fired (on whatever thread calls check()/approve()/deny(), or the
++    // watchdog thread that evicts stale entries) whenever the *set* of
++    // pending device ids actually changes -- a new arrival, an eviction,
++    // or an approve/deny -- not on every refresh of an already-pending
++    // entry, so a UI hook isn't re-prompted on every retry. Callers
++    // needing UI-thread delivery (e.g. a Qt dialog) must marshal it
++    // themselves.
++    void setOnPendingRequestsChanged(std::function<void(std::vector<PendingRequest>)> callback);
++
++    // Evicts any pending requests that have gone stale (no retry within
++    // pendingRequestTtl). check() already does this internally as a side
++    // effect too, but a host that nobody is actively retrying against
++    // (e.g. its one pending client gave up) wouldn't otherwise ever prune
++    // its queue -- call this periodically from a watchdog loop.
++    void evictStale();
++
++private:
++    struct PendingEntry {
++        std::string clientName;
++        std::string address;
++        std::chrono::steady_clock::time_point lastSeen;
++    };
++
++    void loadApprovedLocked();
++    void persistApprovedLocked(const std::string& deviceId);
++    void evictStaleLocked();
++    void notifyChangedLocked();
++    // Returns the exact deviceId matching `idOrPrefix` in pending_, either
++    // an exact key match or the single pending entry whose key starts
++    // with it. Returns empty string if there's no match or the prefix is
++    // ambiguous (matches more than one).
++    std::string resolvePendingLocked(const std::string& idOrPrefix) const;
++
++    mutable std::mutex mutex_;
++    std::string stateFilePath_;
++    std::chrono::seconds pendingRequestTtl_;
++
++    std::unordered_set<std::string> approvedDevices_;
++    std::unordered_map<std::string, PendingEntry> pending_; // keyed by deviceId
++    std::vector<std::string> pendingOrder_; // insertion order, for stable listing
++
++    std::function<void(std::vector<PendingRequest>)> onPendingRequestsChanged_;
++};
++
++} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/emulator_input_sink.h b/src/frontend/qt_sdl/remote_server/host/emulator_input_sink.h
 new file mode 100644
 index 0000000..b6f99b8
@@ -717,10 +1081,10 @@ index 0000000..903d848
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.cpp b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
 new file mode 100644
-index 0000000..04a4dcf
+index 0000000..565532d
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
-@@ -0,0 +1,694 @@
+@@ -0,0 +1,699 @@
 +#include "host/net_server.h"
 +
 +#include <arpa/inet.h>
@@ -853,35 +1217,58 @@ index 0000000..04a4dcf
 +
 +NetServer::NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource)
 +    : config_(std::move(config)), inputSink_(inputSink), frameSource_(frameSource),
-+      pairingManager_(config_.pairingStateFilePath, config_.pairingCodeTtl),
++      deviceApproval_(config_.approvalStateFilePath, config_.pendingRequestTtl),
 +      rateLimiter_(config_.maxConnectionAttemptsPerWindow, config_.connectionAttemptWindowUs) {
 +    if (!config_.authToken.empty()) {
 +        std::fprintf(stderr,
-+                      "NetServer: static auth token configured -- pairing-code flow is disabled, "
++                      "NetServer: static auth token configured -- device-approval flow is disabled, "
 +                      "the exact token is required.\n");
 +    } else {
 +        std::fprintf(stderr,
-+                      "NetServer: no static auth token configured; using pairing-code mode. An "
-+                      "unrecognized connection attempt will display a 6-digit code here to enter "
-+                      "on the client (spec section 13).\n");
++                      "NetServer: no static auth token configured; using device-approval mode. An "
++                      "unrecognized client's connection request will be queued here for you to "
++                      "approve or deny -- see this process's stdin/console.\n");
 +    }
 +
-+    pairingManager_.setOnCodeChanged([this](std::optional<std::string> code) {
-+        if (code) {
-+            std::fprintf(stderr,
-+                          "NetServer: pairing code: %s (enter this on the client; expires in %lds)\n",
-+                          code->c_str(), static_cast<long>(config_.pairingCodeTtl.count()));
-+        } else {
-+            std::fprintf(stderr, "NetServer: pairing code cleared\n");
-+        }
-+        if (config_.onPairingCodeChanged) {
-+            config_.onPairingCodeChanged(code);
-+        }
-+    });
++    deviceApproval_.setOnPendingRequestsChanged(
++        [this](std::vector<DeviceApprovalManager::PendingRequest> requests) {
++            // DeviceApprovalManager serializes every call to this callback
++            // under its own internal mutex (see notifyChangedLocked), so
++            // mutating notifiedPendingIds_ here without a separate lock of
++            // our own is safe -- two invocations can never run concurrently.
++            std::unordered_set<std::string> currentIds;
++            for (const auto& r : requests) {
++                currentIds.insert(r.deviceId);
++                if (notifiedPendingIds_.count(r.deviceId) == 0) {
++                    std::fprintf(stderr,
++                                  "NetServer: pending connection request from '%s' at %s "
++                                  "(device %s) -- type 'approve %s' or 'deny %s' to respond\n",
++                                  r.clientName.c_str(), r.address.c_str(), r.deviceId.c_str(),
++                                  r.deviceId.substr(0, 8).c_str(), r.deviceId.substr(0, 8).c_str());
++                }
++            }
++            notifiedPendingIds_ = std::move(currentIds);
++
++            if (config_.onPendingRequestsChanged) {
++                config_.onPendingRequestsChanged(requests);
++            }
++        });
 +}
 +
 +NetServer::~NetServer() {
 +    stop();
++}
++
++bool NetServer::approveDevice(const std::string& deviceIdOrPrefix) {
++    return deviceApproval_.approve(deviceIdOrPrefix);
++}
++
++bool NetServer::denyDevice(const std::string& deviceIdOrPrefix) {
++    return deviceApproval_.deny(deviceIdOrPrefix);
++}
++
++std::vector<DeviceApprovalManager::PendingRequest> NetServer::pendingRequests() {
++    return deviceApproval_.pendingRequests();
 +}
 +
 +void NetServer::start() {
@@ -904,14 +1291,6 @@ index 0000000..04a4dcf
 +                  "NetServer: listening on %s (control=%u, input(udp)=%u, video=%u)\n",
 +                  config_.bindAddress.c_str(), config_.controlPort, config_.inputPort,
 +                  config_.videoPort);
-+
-+    // Show a pairing code immediately, rather than only the first time
-+    // some client's Hello gets rejected -- otherwise launching the host
-+    // and looking at it before any client has tried connecting shows
-+    // nothing (see docs/known-limitations.md).
-+    if (config_.authToken.empty()) {
-+        pairingManager_.ensureCodeActive();
-+    }
 +
 +    controlThread_ = std::thread(&NetServer::controlLoop, this);
 +    inputThread_ = std::thread(&NetServer::inputLoop, this);
@@ -1022,7 +1401,6 @@ index 0000000..04a4dcf
 +
 +        bool handshakeOk = false;
 +        HelloRejectReason rejectReason = HelloRejectReason::ProtocolVersionMismatch;
-+        std::string issuedPairingToken;
 +
 +        uint8_t headerBuf[kPacketHeaderWireSize];
 +        ssize_t n = ::recv(clientFd, headerBuf, sizeof(headerBuf), MSG_WAITALL);
@@ -1040,7 +1418,7 @@ index 0000000..04a4dcf
 +                    if (hello) {
 +                        if (!config_.authToken.empty()) {
 +                            // Legacy/CI-friendly static-token mode: exact match or reject,
-+                            // pairing-code flow is bypassed entirely.
++                            // device-approval flow is bypassed entirely.
 +                            if (constantTimeEquals(hello->authToken, config_.authToken)) {
 +                                handshakeOk = true;
 +                            } else {
@@ -1050,23 +1428,16 @@ index 0000000..04a4dcf
 +                                rejectReason = HelloRejectReason::AuthenticationFailed;
 +                            }
 +                        } else {
-+                            switch (pairingManager_.check(hello->authToken)) {
-+                                case PairingManager::CheckResult::ValidExistingToken:
++                            switch (deviceApproval_.check(hello->authToken, hello->clientName, ipStr)) {
++                                case DeviceApprovalManager::CheckResult::Approved:
 +                                    handshakeOk = true;
 +                                    break;
-+                                case PairingManager::CheckResult::ValidCode:
-+                                    handshakeOk = true;
-+                                    issuedPairingToken = pairingManager_.lastIssuedToken();
++                                case DeviceApprovalManager::CheckResult::Pending:
 +                                    std::fprintf(stderr,
-+                                                  "NetServer: %s paired successfully with a new device token\n",
++                                                  "NetServer: rejecting handshake from %s (device not "
++                                                  "yet approved -- see the pending-request log above)\n",
 +                                                  ipStr);
-+                                    break;
-+                                case PairingManager::CheckResult::NeedsCode:
-+                                case PairingManager::CheckResult::WrongCode:
-+                                    std::fprintf(stderr,
-+                                                  "NetServer: rejecting handshake from %s (pairing required)\n",
-+                                                  ipStr);
-+                                    rejectReason = HelloRejectReason::PairingRequired;
++                                    rejectReason = HelloRejectReason::ApprovalRequired;
 +                                    break;
 +                            }
 +                        }
@@ -1085,7 +1456,6 @@ index 0000000..04a4dcf
 +        ack.accepted = handshakeOk ? 1 : 0;
 +        ack.rejectReason = handshakeOk ? HelloRejectReason::None : rejectReason;
 +        ack.sessionId = handshakeOk ? static_cast<uint32_t>(nowMicros()) : 0;
-+        ack.pairingToken = issuedPairingToken;
 +        ByteBuffer ackPacket = buildHelloAckPacket(ack);
 +        sendAll(clientFd, ackPacket.data(), ackPacket.size());
 +
@@ -1213,21 +1583,20 @@ index 0000000..04a4dcf
 +void NetServer::watchdogLoop() {
 +    uint64_t lastPruneUs = nowMicros();
 +    uint64_t lastStatsLogUs = nowMicros();
-+    uint64_t lastPairingCheckUs = nowMicros();
-+    constexpr uint64_t kPairingCheckIntervalUs = 5'000'000; // 5s
++    uint64_t lastApprovalSweepUs = nowMicros();
++    constexpr uint64_t kApprovalSweepIntervalUs = 5'000'000; // 5s
 +
 +    while (running_.load()) {
 +        std::this_thread::sleep_for(std::chrono::milliseconds(50));
 +
-+        // Keeps a pairing code visible even if it expires (default 5min
-+        // TTL) with nobody having attempted to pair yet -- without this,
-+        // an expired-and-never-replaced code would just sit there
-+        // looking valid until the next connection attempt.
++        // check() already evicts stale pending requests as a side effect,
++        // but a host nobody is actively retrying against (its one pending
++        // client gave up) would otherwise never get its queue swept.
 +        if (config_.authToken.empty()) {
 +            uint64_t now = nowMicros();
-+            if (now - lastPairingCheckUs >= kPairingCheckIntervalUs) {
-+                pairingManager_.ensureCodeActive();
-+                lastPairingCheckUs = now;
++            if (now - lastApprovalSweepUs >= kApprovalSweepIntervalUs) {
++                deviceApproval_.evictStale();
++                lastApprovalSweepUs = now;
 +            }
 +        }
 +
@@ -1417,10 +1786,10 @@ index 0000000..04a4dcf
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.h b/src/frontend/qt_sdl/remote_server/host/net_server.h
 new file mode 100644
-index 0000000..e800d06
+index 0000000..29e520d
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.h
-@@ -0,0 +1,203 @@
+@@ -0,0 +1,228 @@
 +#pragma once
 +
 +// Minimal standalone host server: one TCP control connection (handshake +
@@ -1438,8 +1807,8 @@ index 0000000..e800d06
 +// client. Defaults to "0.0.0.0" (all interfaces) rather than loopback --
 +// this is a LAN remote-play tool, so out-of-the-box reachability from
 +// another machine is the expected behavior, not an opt-in; the
-+// pairing-code/token handshake (not the bind address) is what's supposed
-+// to keep that safe. This also has to match what LAN discovery already
++// device-approval/token handshake (not the bind address) is what's
++// supposed to keep that safe. This also has to match what LAN discovery already
 +// promises: discovery (below) answers broadcasts on every interface by
 +// default and hands back a real, externally-reachable address, so a
 +// bindAddress default of "127.0.0.1" would make discovery advertise a
@@ -1455,10 +1824,12 @@ index 0000000..e800d06
 +#include <optional>
 +#include <string>
 +#include <thread>
++#include <unordered_set>
++#include <vector>
 +
++#include "host/device_approval_manager.h"
 +#include "host/emulator_input_sink.h"
 +#include "host/frame_source.h"
-+#include "host/pairing_manager.h"
 +#include "melonds_remote/input_state_tracker.h"
 +#include "melonds_remote/rate_limiter.h"
 +
@@ -1480,31 +1851,39 @@ index 0000000..e800d06
 +    //
 +    // If non-empty, this is a static pre-shared token checked before
 +    // anything else (legacy/CI-friendly path, e.g. tests/smoke_test.py):
-+    // an exact match is accepted outright and the pairing-code flow below
-+    // never runs. Leave empty to use pairing mode instead (recommended
-+    // for real use): unrecognized clients are shown a 6-digit code (see
-+    // pairingStateFilePath / onPairingCodeChanged) instead of a fixed
-+    // secret you have to configure and distribute yourself.
++    // an exact match is accepted outright and the device-approval flow
++    // below never runs. Leave empty to use device-approval mode instead
++    // (recommended for real use): an unrecognized client's connection
++    // request is queued for a human at the host to approve or deny (see
++    // approvalStateFilePath / onPendingRequestsChanged) rather than
++    // requiring a fixed secret configured and distributed by hand, or a
++    // code typed on the client (which Steam Input's virtual keyboard
++    // doesn't reliably bring up -- see docs/known-limitations.md).
 +    std::string authToken;
 +
-+    // Where issued pairing tokens are persisted so a paired client stays
-+    // paired across host restarts (see PairingManager). Empty disables
-+    // persistence -- pairing still works for the life of the process,
-+    // it's just forgotten on restart. Ignored entirely when authToken is
-+    // set (static-token mode bypasses pairing).
-+    std::string pairingStateFilePath;
++    // Where approved device identities are persisted so an approved
++    // client stays approved across host restarts (see
++    // DeviceApprovalManager). Empty disables persistence -- approval
++    // still works for the life of the process, it's just forgotten on
++    // restart. Ignored entirely when authToken is set (static-token mode
++    // bypasses device approval).
++    std::string approvalStateFilePath;
 +
-+    // How long a generated pairing code stays valid before a fresh one
-+    // is needed.
-+    std::chrono::seconds pairingCodeTtl{300};
++    // How long a pending approval request is kept without a fresh retry
++    // before being silently evicted from the queue (a client that gave
++    // up shouldn't leave a permanent stale entry).
++    std::chrono::seconds pendingRequestTtl{60};
 +
-+    // Optional hook for surfacing the pairing code somewhere beyond the
-+    // console (e.g. melonDS's own window). Called with the new code when
-+    // one is generated, and with std::nullopt when it's consumed/expires.
-+    // Invoked synchronously on NetServer's control-connection thread --
-+    // if the callback touches UI state, it must marshal to the UI thread
-+    // itself (e.g. Qt::QueuedConnection).
-+    std::function<void(std::optional<std::string>)> onPairingCodeChanged;
++    // Optional hook for surfacing pending approval requests somewhere
++    // beyond the console (e.g. melonDS's own window, as a Yes/No
++    // dialog). Called with the current full list of pending requests
++    // whenever it changes (a new arrival, an eviction, or an
++    // approve/deny) -- see DeviceApprovalManager::setOnPendingRequestsChanged.
++    // Invoked synchronously on NetServer's control-connection thread (or
++    // the watchdog thread, for stale evictions) -- if the callback
++    // touches UI state, it must marshal to the UI thread itself (e.g.
++    // Qt::QueuedConnection).
++    std::function<void(std::vector<DeviceApprovalManager::PendingRequest>)> onPendingRequestsChanged;
 +
 +    // If a control-channel connection is silent (no heartbeat, no other
 +    // control traffic) for longer than this, it is dropped. Distinct from
@@ -1526,7 +1905,7 @@ index 0000000..e800d06
 +    // back from every host listening, without any auth -- it only ever
 +    // reveals a host name and port numbers, never anything sensitive; the
 +    // actual control/input/video ports still require the full
-+    // pairing/token handshake regardless. Deliberately bound to
++    // device-approval/token handshake regardless. Deliberately bound to
 +    // "0.0.0.0" (not `bindAddress`) since receiving a broadcast requires
 +    // it -- this is the one socket in this class that doesn't obey
 +    // `bindAddress`, and is the reason discovery can be disabled
@@ -1576,6 +1955,18 @@ index 0000000..e800d06
 +    void start();
 +    void stop();
 +
++    // Approves/denies a pending connection request by exact device id or
++    // unambiguous prefix (see DeviceApprovalManager::approve/deny).
++    // Returns false if nothing pending matches. Safe to call from any
++    // thread (e.g. a console-input thread in main.cpp, or a Qt UI-thread
++    // slot in the melonDS integration).
++    bool approveDevice(const std::string& deviceIdOrPrefix);
++    bool denyDevice(const std::string& deviceIdOrPrefix);
++
++    // Current pending connection requests -- e.g. for a UI/console loop
++    // to list on demand rather than only reacting to onPendingRequestsChanged.
++    std::vector<DeviceApprovalManager::PendingRequest> pendingRequests();
++
 +private:
 +    void controlLoop();
 +    void inputLoop();
@@ -1586,7 +1977,10 @@ index 0000000..e800d06
 +    NetServerConfig config_;
 +    IEmulatorInputSink& inputSink_;
 +    IFrameSource& frameSource_;
-+    PairingManager pairingManager_;
++    DeviceApprovalManager deviceApproval_;
++    // Only ever touched from inside the onPendingRequestsChanged callback
++    // above (see the comment there for why that's safe without its own lock).
++    std::unordered_set<std::string> notifiedPendingIds_;
 +
 +    std::atomic<bool> running_{false};
 +    std::thread controlThread_;
@@ -1621,263 +2015,6 @@ index 0000000..e800d06
 +    // unauthenticated input).
 +    std::atomic<bool> clientAuthenticated_{false};
 +    std::atomic<uint32_t> authenticatedClientAddr_{0}; // sockaddr_in::sin_addr.s_addr, network byte order
-+};
-+
-+} // namespace melonds_remote::host
-diff --git a/src/frontend/qt_sdl/remote_server/host/pairing_manager.cpp b/src/frontend/qt_sdl/remote_server/host/pairing_manager.cpp
-new file mode 100644
-index 0000000..c36d7fb
---- /dev/null
-+++ b/src/frontend/qt_sdl/remote_server/host/pairing_manager.cpp
-@@ -0,0 +1,142 @@
-+#include "host/pairing_manager.h"
-+
-+#include <cstdio>
-+#include <filesystem>
-+#include <fstream>
-+#include <random>
-+#include <sstream>
-+
-+namespace melonds_remote::host {
-+
-+namespace {
-+
-+std::mt19937 makeSeededRng() {
-+    std::random_device rd;
-+    std::seed_seq seed{rd(), rd(), rd(), rd(), rd(), rd(), rd(), rd()};
-+    return std::mt19937(seed);
-+}
-+
-+} // namespace
-+
-+PairingManager::PairingManager(std::string stateFilePath, std::chrono::seconds codeTtl)
-+    : stateFilePath_(std::move(stateFilePath)), codeTtl_(codeTtl), rng_(makeSeededRng()) {
-+    std::lock_guard<std::mutex> lock(mutex_);
-+    loadTokensLocked();
-+}
-+
-+void PairingManager::loadTokensLocked() {
-+    if (stateFilePath_.empty()) return;
-+
-+    std::ifstream in(stateFilePath_);
-+    if (!in.is_open()) return; // fine -- no prior pairings, or first run
-+
-+    std::string line;
-+    while (std::getline(in, line)) {
-+        if (!line.empty()) {
-+            knownTokens_.insert(line);
-+        }
-+    }
-+}
-+
-+void PairingManager::persistTokenLocked(const std::string& token) {
-+    if (stateFilePath_.empty()) return;
-+
-+    std::error_code ec;
-+    std::filesystem::path path(stateFilePath_);
-+    if (path.has_parent_path()) {
-+        std::filesystem::create_directories(path.parent_path(), ec);
-+    }
-+
-+    // Append-only: every previously-paired device keeps working even if
-+    // the process restarts mid-write of a later line.
-+    std::ofstream out(stateFilePath_, std::ios::app);
-+    if (out.is_open()) {
-+        out << token << '\n';
-+    }
-+}
-+
-+std::string PairingManager::generateCode() {
-+    std::uniform_int_distribution<int> dist(0, 999999);
-+    int value = dist(rng_);
-+    char buf[7];
-+    std::snprintf(buf, sizeof(buf), "%06d", value);
-+    return std::string(buf);
-+}
-+
-+std::string PairingManager::generateToken() {
-+    // 128 bits of randomness as 32 hex characters -- opaque, not
-+    // meant to be typed by a human (unlike the 6-digit code).
-+    std::uniform_int_distribution<int> nibble(0, 15);
-+    static const char kHexDigits[] = "0123456789abcdef";
-+    std::string token(32, '0');
-+    for (char& c : token) {
-+        c = kHexDigits[nibble(rng_)];
-+    }
-+    return token;
-+}
-+
-+void PairingManager::setCodeLocked(std::optional<std::string> code) {
-+    currentCode_ = std::move(code);
-+    if (currentCode_) {
-+        codeExpiry_ = std::chrono::steady_clock::now() + codeTtl_;
-+    }
-+    if (onCodeChanged_) {
-+        onCodeChanged_(currentCode_);
-+    }
-+}
-+
-+void PairingManager::expireIfNeededLocked() {
-+    if (currentCode_ && std::chrono::steady_clock::now() >= codeExpiry_) {
-+        setCodeLocked(std::nullopt);
-+    }
-+}
-+
-+PairingManager::CheckResult PairingManager::check(const std::string& presented) {
-+    std::lock_guard<std::mutex> lock(mutex_);
-+    expireIfNeededLocked();
-+
-+    if (!presented.empty() && knownTokens_.count(presented) > 0) {
-+        return CheckResult::ValidExistingToken;
-+    }
-+
-+    if (currentCode_ && !presented.empty() && presented == *currentCode_) {
-+        std::string newToken = generateToken();
-+        knownTokens_.insert(newToken);
-+        persistTokenLocked(newToken);
-+        lastIssuedToken_ = newToken;
-+        setCodeLocked(std::nullopt); // single-use: consumed
-+        return CheckResult::ValidCode;
-+    }
-+
-+    if (currentCode_) {
-+        return CheckResult::WrongCode;
-+    }
-+
-+    setCodeLocked(generateCode());
-+    return CheckResult::NeedsCode;
-+}
-+
-+void PairingManager::ensureCodeActive() {
-+    std::lock_guard<std::mutex> lock(mutex_);
-+    expireIfNeededLocked();
-+    if (!currentCode_) {
-+        setCodeLocked(generateCode());
-+    }
-+}
-+
-+std::string PairingManager::lastIssuedToken() const {
-+    std::lock_guard<std::mutex> lock(mutex_);
-+    return lastIssuedToken_;
-+}
-+
-+std::optional<std::string> PairingManager::currentCode() const {
-+    std::lock_guard<std::mutex> lock(mutex_);
-+    return currentCode_;
-+}
-+
-+void PairingManager::setOnCodeChanged(std::function<void(std::optional<std::string>)> callback) {
-+    std::lock_guard<std::mutex> lock(mutex_);
-+    onCodeChanged_ = std::move(callback);
-+}
-+
-+} // namespace melonds_remote::host
-diff --git a/src/frontend/qt_sdl/remote_server/host/pairing_manager.h b/src/frontend/qt_sdl/remote_server/host/pairing_manager.h
-new file mode 100644
-index 0000000..c58554c
---- /dev/null
-+++ b/src/frontend/qt_sdl/remote_server/host/pairing_manager.h
-@@ -0,0 +1,103 @@
-+#pragma once
-+
-+// Implements the "pairing code" flow from SPEC.md section 13's "later
-+// pairing options" (six-digit pairing code, pre-shared token -- both now
-+// supported side by side, see NetServerConfig::authToken vs this class):
-+//
-+//   1. An unrecognized client attempt causes a fresh, short-lived,
-+//      single-use 6-digit code to be generated and surfaced to whoever is
-+//      at the host (console log, and optionally a GUI hook).
-+//   2. The user reads the code and enters it on the client, which retries
-+//      the handshake with that code as the Hello payload's authToken.
-+//   3. On a correct code, the host issues a long-lived opaque pairing
-+//      token in the HelloAck, which the client persists and sends on all
-+//      future connections instead of prompting for a code again.
-+//
-+// Independent of NetServerConfig::authToken, which remains a static
-+// pre-shared secret for scripting/CI use (checked first by NetServer;
-+// this class is only consulted when no static token is configured).
-+
-+#include <chrono>
-+#include <functional>
-+#include <mutex>
-+#include <optional>
-+#include <random>
-+#include <string>
-+#include <unordered_set>
-+
-+namespace melonds_remote::host {
-+
-+class PairingManager {
-+public:
-+    // `stateFilePath` is where previously-issued pairing tokens are
-+    // persisted (one per line) so a paired client survives a host
-+    // restart. An empty path disables persistence -- pairing still works
-+    // within the current process lifetime, just isn't remembered across
-+    // restarts (used by tests that shouldn't touch the filesystem).
-+    explicit PairingManager(std::string stateFilePath,
-+                            std::chrono::seconds codeTtl = std::chrono::seconds(300));
-+
-+    PairingManager(const PairingManager&) = delete;
-+    PairingManager& operator=(const PairingManager&) = delete;
-+
-+    enum class CheckResult {
-+        ValidExistingToken, // matched a previously-issued token: accept, nothing new to hand back
-+        ValidCode,          // matched the active code: accept, a new token was just issued
-+        NeedsCode,          // no match and no code was active; one was just generated as a side effect
-+        WrongCode,          // no match, but a code IS currently active (mistyped or stale)
-+    };
-+
-+    // Checks `presented` (the Hello payload's authToken field) against
-+    // known pairing tokens and the currently-active pairing code. As a
-+    // side effect, generates a fresh code if nothing matches and no code
-+    // is currently active (see the onCodeChanged callback).
-+    CheckResult check(const std::string& presented);
-+
-+    // Generates a fresh code if none is currently active (including if
-+    // the previous one just expired), without needing any client to
-+    // actually attempt a connection first. Call this once right after
-+    // the host starts listening, and periodically afterward (e.g. from a
-+    // watchdog loop), so a code is always visible to whoever is at the
-+    // host -- otherwise the code only ever appears reactively, the first
-+    // time some client's Hello gets rejected, which means someone who
-+    // launches the host and looks at it before any client has tried
-+    // connecting sees nothing. A no-op if a code is already active and
-+    // unexpired.
-+    void ensureCodeActive();
-+
-+    // Only meaningful immediately after check() returns ValidCode.
-+    std::string lastIssuedToken() const;
-+
-+    // The currently-active pairing code, if any.
-+    std::optional<std::string> currentCode() const;
-+
-+    // Fired synchronously (on whatever thread calls check()) whenever the
-+    // active code changes: a fresh code when one is generated, or
-+    // std::nullopt when it's consumed or expires. Callers needing
-+    // UI-thread delivery (e.g. a Qt window) must marshal it themselves.
-+    void setOnCodeChanged(std::function<void(std::optional<std::string>)> callback);
-+
-+private:
-+    std::string generateCode();
-+    std::string generateToken();
-+    void loadTokensLocked();
-+    void persistTokenLocked(const std::string& token);
-+    void setCodeLocked(std::optional<std::string> code);
-+    void expireIfNeededLocked();
-+
-+    mutable std::mutex mutex_;
-+    std::string stateFilePath_;
-+    std::chrono::seconds codeTtl_;
-+
-+    std::optional<std::string> currentCode_;
-+    std::chrono::steady_clock::time_point codeExpiry_;
-+
-+    std::string lastIssuedToken_;
-+    std::unordered_set<std::string> knownTokens_;
-+
-+    std::function<void(std::optional<std::string>)> onCodeChanged_;
-+
-+    std::mt19937 rng_;
 +};
 +
 +} // namespace melonds_remote::host
@@ -1953,10 +2090,10 @@ index 0000000..48014b9
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
 new file mode 100644
-index 0000000..c93f5d4
+index 0000000..b25b18f
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
-@@ -0,0 +1,246 @@
+@@ -0,0 +1,242 @@
 +#pragma once
 +
 +// melonDS Remote wire protocol definitions.
@@ -1980,7 +2117,7 @@ index 0000000..c93f5d4
 +namespace melonds_remote {
 +
 +// Bumped whenever the wire format changes incompatibly.
-+inline constexpr uint16_t kProtocolVersion = 2;
++inline constexpr uint16_t kProtocolVersion = 3;
 +
 +// Sentinel at the start of every packet so malformed/foreign traffic on the
 +// same port can be rejected cheaply before any further parsing.
@@ -2042,14 +2179,15 @@ index 0000000..c93f5d4
 +// display size are not yet included.
 +//
 +// `authToken` does double duty (spec section 13's "later pairing options"
-+// list, now implemented): if the host was started with a static
-+// `--auth-token`, this must match it exactly. Otherwise the host runs in
-+// pairing mode -- this field should be either a previously-issued
-+// `HelloAckPayload::pairingToken` (silent reconnect, no user interaction)
-+// or a freshly-entered 6-digit pairing code shown on the host (first-time
-+// pairing). An empty or unrecognized value gets rejected with
-+// `PairingRequired` so the client knows to prompt for a code rather than
-+// show a generic auth failure.
++// list): if the host was started with a static `--auth-token`, this must
++// match it exactly. Otherwise the host runs in device-approval mode (see
++// `docs/protocol.md`'s "Authentication and device approval" section) --
++// this field is the client's own self-generated, persistent device
++// identity (not something the host issues), the same value on every
++// connection attempt from this client, to any host. An unrecognized value
++// gets rejected with `ApprovalRequired`, the same on every retry, until a
++// human at the host approves that device -- no code is ever typed on
++// either side.
 +struct HelloPayload {
 +    std::string clientName;    // up to kMaxProtocolStringLength bytes
 +    std::string clientPlatform; // up to kMaxProtocolStringLength bytes
@@ -2063,12 +2201,14 @@ index 0000000..c93f5d4
 +    ProtocolVersionMismatch = 1,
 +    AuthenticationFailed = 2,
 +    HostBusy = 3,
-+    // No static auth token configured and the presented value isn't a
-+    // known pairing token or a currently-active pairing code. The host
-+    // has (or will, on this same attempt) generate/display a fresh
-+    // 6-digit code; the client should prompt the user to enter it and
-+    // retry, rather than treat this like a generic auth failure.
-+    PairingRequired = 4,
++    // No static auth token configured and the presented device identity
++    // isn't (yet) in the host's approved-devices list. The request has
++    // been queued for a human at the host to approve or deny (see
++    // `docs/protocol.md`'s "Authentication and device approval" section);
++    // the client should keep retrying automatically (same as any other
++    // connection failure) rather than prompt the user for anything --
++    // there's nothing for the client side to do but wait.
++    ApprovalRequired = 4,
 +};
 +
 +// HelloAck (host -> client) handshake payload.
@@ -2078,13 +2218,6 @@ index 0000000..c93f5d4
 +    uint32_t sessionId = 0;
 +    uint16_t nativeWidth = 256;
 +    uint16_t nativeHeight = 192;
-+    // Only non-empty when `accepted` and this handshake just consumed a
-+    // fresh pairing code (i.e. this is a brand-new pairing, not a
-+    // reconnect with an already-known token). The client must persist
-+    // this and send it back as `HelloPayload::authToken` on all future
-+    // connections to this host, instead of asking the user to re-enter a
-+    // code. Up to kMaxProtocolStringLength bytes.
-+    std::string pairingToken;
 +};
 +
 +// DiscoveryRequest (client -> host) has no payload: a bare packet header
@@ -2354,10 +2487,10 @@ index 0000000..a1aff53
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
 new file mode 100644
-index 0000000..95f00e2
+index 0000000..807417c
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
-@@ -0,0 +1,306 @@
+@@ -0,0 +1,296 @@
 +#include "melonds_remote/protocol.h"
 +
 +#include <cstring>
@@ -2575,12 +2708,11 @@ index 0000000..95f00e2
 +    appendU32(out, ack.sessionId);
 +    appendU16(out, ack.nativeWidth);
 +    appendU16(out, ack.nativeHeight);
-+    appendString(out, ack.pairingToken);
 +}
 +
 +std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t size) {
 +    constexpr size_t kFixedWireSize = 1 + 1 + 4 + 2 + 2;
-+    if (data == nullptr || size < kFixedWireSize) {
++    if (data == nullptr || size != kFixedWireSize) {
 +        return std::nullopt;
 +    }
 +
@@ -2594,7 +2726,7 @@ index 0000000..95f00e2
 +    ack.accepted = accepted;
 +
 +    uint8_t reason = data[offset]; offset += 1;
-+    if (reason > static_cast<uint8_t>(HelloRejectReason::PairingRequired)) {
++    if (reason > static_cast<uint8_t>(HelloRejectReason::ApprovalRequired)) {
 +        return std::nullopt;
 +    }
 +    ack.rejectReason = static_cast<HelloRejectReason>(reason);
@@ -2602,15 +2734,6 @@ index 0000000..95f00e2
 +    ack.sessionId = readU32(data, offset); offset += 4;
 +    ack.nativeWidth = readU16(data, offset); offset += 2;
 +    ack.nativeHeight = readU16(data, offset); offset += 2;
-+
-+    auto pairingToken = readString(data, size, offset);
-+    if (!pairingToken) return std::nullopt;
-+    ack.pairingToken = std::move(*pairingToken);
-+
-+    if (offset != size) {
-+        // trailing garbage: reject rather than silently ignore
-+        return std::nullopt;
-+    }
 +
 +    return ack;
 +}

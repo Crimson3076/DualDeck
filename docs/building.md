@@ -87,20 +87,21 @@ client both running here). For real use across two machines, omit
 is what makes the client's LAN discovery actually able to reach the host
 it just found; see `docs/bazzite-host-setup.md`.
 
-Without `--auth-token`, the server runs in **pairing mode** (spec section
-13's "six-digit pairing code"): an unrecognized client is shown a
-6-digit code to enter once, after which the host remembers it (in
-`--state-dir`, if given) and reconnects don't need a code again. Pass
-`--auth-token SECRET` instead for a static pre-shared token that bypasses
-pairing entirely (useful for scripting/CI). Run `--help` for the full
-flag list, including `--pairing-code-ttl-s`.
+Without `--auth-token`, the server runs in **device-approval mode** (spec
+section 13, adapted): an unrecognized client's connection request is
+queued and logged here, naming the client and its address -- type
+`approve <device-id-prefix>` and press Enter to let it connect. Once
+approved (in `--state-dir`, if given), reconnects need no re-approval.
+Pass `--auth-token SECRET` instead for a static pre-shared token that
+bypasses device approval entirely (useful for scripting/CI). Run
+`--help` for the full flag list, including `--pending-request-ttl-s`.
 
 See `scripts/run-host.sh` for a convenience wrapper, and
 `docs/testing.md` for a smoke-test script that exercises the handshake
 (including the auth-token and rate-limiting paths), UDP input path, and
 video path against a running server without needing the SDL3 client
 built. (The smoke test uses `--auth-token`, the static/legacy path, since
-it doesn't simulate a human entering a pairing code.)
+it doesn't simulate a human approving a device.)
 
 ## Running the SDL3 client locally
 
@@ -110,23 +111,23 @@ it doesn't simulate a human entering a pairing code.)
 
 Also accepts a bare positional host address (`melonds-remote-client
 192.168.1.50`) for `scripts/run-client.sh`'s convenience form. If the
-host is in pairing mode (the default) and this is the first connection to
-it, the client shows a 6-digit code-entry screen (SDL text input, so
-Steam's on-screen keyboard drives it in Gaming Mode) -- enter the code
-the host just displayed. The client saves the token it's issued to
-`~/.config/melonds-remote-client/pairing_tokens.txt` and reuses it
-silently on every future run against that host address. Pass
-`--auth-token SECRET` only if the host was started with a static token
-instead. The client retries the connection with capped exponential
-backoff (1s up to 5s) on a background thread whenever it isn't currently
-connected (paused while awaiting pairing-code entry, so it doesn't burn
-through the host's connection-attempt rate limit with a code that hasn't
-changed), so it recovers automatically after the host
-restarts or a network interruption (spec section 7.2). This reconnect
-behavior, and the pairing flow above, have been exercised against a real
-host process with the real client binary in this sandbox (see
-`docs/known-limitations.md`) but not yet against real Steam Deck
-hardware/gamepad.
+host is in device-approval mode (the default) and this client hasn't
+connected to it before, the client shows "WAITING FOR APPROVAL ON HOST
+..." -- no typing needed on the client side; approve it from the host's
+console (or the melonDS-integrated host's popup dialog) instead. The
+client's own persistent device identity is saved to
+`~/.config/melonds-remote-client/device_id.txt` and reused for every
+host, forever. Pass `--auth-token SECRET` only if the host was started
+with a static token instead. The client retries the connection with
+capped exponential backoff (1s up to 5s) on a background thread whenever
+it isn't currently connected -- the same retry loop naturally covers both
+"host temporarily down" and "not yet approved", since there's nothing
+client-side to pause for -- so it recovers automatically once the host
+approves it, restarts, or a network interruption clears (spec section
+7.2). This reconnect behavior, and the device-approval flow above, have
+been exercised against a real host process with the real client binary
+in this sandbox (see `docs/known-limitations.md`) but not yet against
+real Steam Deck hardware/gamepad.
 
 ## Building the full release package yourself
 

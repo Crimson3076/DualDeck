@@ -166,26 +166,32 @@ Raw BGRA8888 frames over TCP, no compression, per `SPEC.md` section 8.4's
 acceptable for LAN but not evaluated against the Stage 2 options
 (H.264/H.265/AV1/MJPEG/custom delta encoding) at all yet.
 
-## Authentication: pairing codes and pre-shared tokens both implemented; no QR/certificate pairing
+## Authentication: device approval and pre-shared tokens both implemented; no QR/certificate pairing
 
-Two of spec section 13's four "later pairing options" are implemented,
-end-to-end verified (real host + real SDL3 client, not just unit tests --
-see `host/melonds-patches/README.md`):
+Spec section 13's "later pairing options" are adapted rather than
+implemented literally -- see below -- and end-to-end verified (real host
++ real SDL3 client, not just unit tests -- see
+`host/melonds-patches/README.md`):
 
-- **Six-digit pairing code** (the default when no `--auth-token` is
-  configured): an unrecognized connection attempt causes the host to
-  generate and display a short-lived, single-use 6-digit code (console
-  log always; the melonDS-integrated host also shows it in the window's
-  status bar). The user enters it once on the client (an SDL text-input
-  screen that drives Steam's on-screen keyboard in Gaming Mode); the host
-  then issues a persistent opaque token, which the client saves and
-  reuses silently on every future connection (including the existing
-  auto-reconnect-on-drop logic) -- no code needed again unless the host's
-  paired-device state is deleted. See `docs/protocol.md`'s "Authentication
-  and pairing" section for the full state machine.
+- **Device approval** (the default when no `--auth-token` is configured):
+  the client generates a random, persistent device identity once and
+  sends it on every connection attempt, to every host, forever -- there
+  is no code typed on either side. An unrecognized identity causes the
+  host to queue a pending connection request naming the client and its
+  address (console log with `approve`/`deny` commands on the standalone
+  host; a `QMessageBox` Approve/Deny dialog on the melonDS-integrated
+  host). Once a human approves it, that identity is remembered and every
+  future connection (including the existing auto-reconnect-on-drop
+  logic) is accepted silently -- no re-approval needed unless the host's
+  approved-device state is deleted. See `docs/protocol.md`'s
+  "Authentication and device approval" section for the full state
+  machine, and its "History: the 6-digit pairing code" subsection for why
+  this replaced an earlier typed-code flow (Steam Input doesn't reliably
+  bring up a virtual keyboard in Gaming Mode, so requiring the client to
+  type anything wasn't a workable UX).
 - **Pre-shared token** (`--auth-token TOKEN`): unchanged from before,
   still available as an explicit opt-in for scripting/CI
-  (`tests/smoke_test.py` uses it) -- bypasses pairing entirely.
+  (`tests/smoke_test.py` uses it) -- bypasses device approval entirely.
 
 **Not implemented**: QR codes, certificate-based pairing, or any
 post-handshake re-authentication (a session that's been accepted stays
@@ -193,9 +199,9 @@ accepted until it disconnects or times out; there is no `sessionId`
 validation on subsequent packets in this version, so nothing currently
 distinguishes a stale session from a current one at the protocol level
 beyond the one-connection-at-a-time plus source-IP-match rule enforced by
-the transport). There is also no UI to list or revoke individual paired
-devices -- only deleting the whole paired-device state file (forgetting
-every previously-paired client at once).
+the transport). There is also no UI to list or revoke individual approved
+devices -- only deleting the whole approved-device state file (forgetting
+every previously-approved client at once).
 
 ## LAN discovery implemented; still no multi-client, no IPv6
 
@@ -204,16 +210,18 @@ every previously-paired client at once).
   client -- see `docs/protocol.md`'s "Discovery payload" section): the
   host broadcasts availability over a separate UDP port (`8763` by
   default) and the client scans for it on launch instead of requiring
-  `--host`. If exactly one host answers, or a previously-picked host
-  answers again, the client connects without prompting; if more than one
-  answers (e.g. more than one HTPC on the household LAN), a
-  gamepad/keyboard-navigable list is shown (bitmap-font rendered, so it
-  works in Steam Deck Gaming Mode where there's no visible terminal --
-  see `client/src/bitmap_font.h`). Not implemented: mDNS/SSDP/any
-  standard discovery protocol -- this is a small custom broadcast
-  request/response instead, with no external dependency. `--host`/a
-  positional host address still works exactly as before and skips
-  discovery entirely (scripting/CI use, `tests/smoke_test.py`).
+  `--host`. A gamepad/keyboard-navigable list is always shown (bitmap-font
+  rendered, so it works in Steam Deck Gaming Mode where there's no
+  visible terminal -- see `client/src/bitmap_font.h`), even with just one
+  host discovered, rather than auto-connecting silently -- so switching
+  to a different HTPC is always one screen away, not just when there
+  happens to be more than one on the LAN. The previously-picked host is
+  pre-highlighted for a quick one-button reconnect, and the list keeps
+  rescanning live while shown. Not implemented: mDNS/SSDP/any standard
+  discovery protocol -- this is a small custom broadcast request/response
+  instead, with no external dependency. `--host`/a positional host
+  address still works exactly as before and skips discovery entirely
+  (scripting/CI use, `tests/smoke_test.py`).
 - Only one client at a time, by design (`SPEC.md` section 7.1's initial
   scope, and an explicit non-goal in section 21).
 - IPv4 only (including discovery).

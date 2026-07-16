@@ -21,7 +21,7 @@
 namespace melonds_remote {
 
 // Bumped whenever the wire format changes incompatibly.
-inline constexpr uint16_t kProtocolVersion = 2;
+inline constexpr uint16_t kProtocolVersion = 3;
 
 // Sentinel at the start of every packet so malformed/foreign traffic on the
 // same port can be rejected cheaply before any further parsing.
@@ -83,14 +83,15 @@ inline constexpr size_t kMaxProtocolStringLength = 64;
 // display size are not yet included.
 //
 // `authToken` does double duty (spec section 13's "later pairing options"
-// list, now implemented): if the host was started with a static
-// `--auth-token`, this must match it exactly. Otherwise the host runs in
-// pairing mode -- this field should be either a previously-issued
-// `HelloAckPayload::pairingToken` (silent reconnect, no user interaction)
-// or a freshly-entered 6-digit pairing code shown on the host (first-time
-// pairing). An empty or unrecognized value gets rejected with
-// `PairingRequired` so the client knows to prompt for a code rather than
-// show a generic auth failure.
+// list): if the host was started with a static `--auth-token`, this must
+// match it exactly. Otherwise the host runs in device-approval mode (see
+// `docs/protocol.md`'s "Authentication and device approval" section) --
+// this field is the client's own self-generated, persistent device
+// identity (not something the host issues), the same value on every
+// connection attempt from this client, to any host. An unrecognized value
+// gets rejected with `ApprovalRequired`, the same on every retry, until a
+// human at the host approves that device -- no code is ever typed on
+// either side.
 struct HelloPayload {
     std::string clientName;    // up to kMaxProtocolStringLength bytes
     std::string clientPlatform; // up to kMaxProtocolStringLength bytes
@@ -104,12 +105,14 @@ enum class HelloRejectReason : uint8_t {
     ProtocolVersionMismatch = 1,
     AuthenticationFailed = 2,
     HostBusy = 3,
-    // No static auth token configured and the presented value isn't a
-    // known pairing token or a currently-active pairing code. The host
-    // has (or will, on this same attempt) generate/display a fresh
-    // 6-digit code; the client should prompt the user to enter it and
-    // retry, rather than treat this like a generic auth failure.
-    PairingRequired = 4,
+    // No static auth token configured and the presented device identity
+    // isn't (yet) in the host's approved-devices list. The request has
+    // been queued for a human at the host to approve or deny (see
+    // `docs/protocol.md`'s "Authentication and device approval" section);
+    // the client should keep retrying automatically (same as any other
+    // connection failure) rather than prompt the user for anything --
+    // there's nothing for the client side to do but wait.
+    ApprovalRequired = 4,
 };
 
 // HelloAck (host -> client) handshake payload.
@@ -119,13 +122,6 @@ struct HelloAckPayload {
     uint32_t sessionId = 0;
     uint16_t nativeWidth = 256;
     uint16_t nativeHeight = 192;
-    // Only non-empty when `accepted` and this handshake just consumed a
-    // fresh pairing code (i.e. this is a brand-new pairing, not a
-    // reconnect with an already-known token). The client must persist
-    // this and send it back as `HelloPayload::authToken` on all future
-    // connections to this host, instead of asking the user to re-enter a
-    // code. Up to kMaxProtocolStringLength bytes.
-    std::string pairingToken;
 };
 
 // DiscoveryRequest (client -> host) has no payload: a bare packet header

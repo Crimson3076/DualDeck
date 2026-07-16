@@ -112,7 +112,7 @@ cat > "${pkg_dir}/host/run-host.sh" <<'WRAP'
 # host-shared-library-dependencies.txt for the exact list this binary
 # was linked against).
 # Usage: ./run-host.sh --boot always /path/to/your/game.nds
-# Omit MELONDS_REMOTE_AUTH_TOKEN to use the 6-digit pairing-code flow
+# Omit MELONDS_REMOTE_AUTH_TOKEN to use device-approval authentication
 # instead of a static shared secret.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -170,18 +170,21 @@ Host (on your Linux HTPC):
 cd host
 ./run-host.sh --boot always /path/to/your/game.nds
 \`\`\`
-No \`MELONDS_REMOTE_AUTH_TOKEN\` needed -- the host will show a 6-digit
-pairing code on first connection (spec section 13). Set
-\`MELONDS_REMOTE_AUTH_TOKEN\` instead if you'd rather use a static shared
-secret.
+No \`MELONDS_REMOTE_AUTH_TOKEN\` needed -- on a new client's first
+connection attempt, the host logs a pending request for you to approve
+(type \`approve <id>\`, shown in the log). Set \`MELONDS_REMOTE_AUTH_TOKEN\`
+instead if you'd rather use a static shared secret.
 
 Client (on your Steam Deck, or any Linux x86_64 machine with a gamepad):
 \`\`\`sh
 cd client
-./run-client.sh --host <your-htpc-ip>
+./run-client.sh
 \`\`\`
-First connection to a new host prompts for the pairing code; it's
-remembered after that. See \`docs/steam-deck-setup.md\` for Gaming Mode
+Run with no arguments to scan the LAN and pick a host from a list shown
+every launch, or pass \`--host <your-htpc-ip>\` to skip discovery and
+connect to one specific address. Either way, first connection to a new
+host needs a human to approve it at the host (see above); no typing is
+needed on the client. See \`docs/steam-deck-setup.md\` for Gaming Mode
 shortcut setup.
 NOTES
 

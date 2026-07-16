@@ -15,8 +15,8 @@
 // client. Defaults to "0.0.0.0" (all interfaces) rather than loopback --
 // this is a LAN remote-play tool, so out-of-the-box reachability from
 // another machine is the expected behavior, not an opt-in; the
-// pairing-code/token handshake (not the bind address) is what's supposed
-// to keep that safe. This also has to match what LAN discovery already
+// device-approval/token handshake (not the bind address) is what's
+// supposed to keep that safe. This also has to match what LAN discovery already
 // promises: discovery (below) answers broadcasts on every interface by
 // default and hands back a real, externally-reachable address, so a
 // bindAddress default of "127.0.0.1" would make discovery advertise a
@@ -32,10 +32,12 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_set>
+#include <vector>
 
+#include "host/device_approval_manager.h"
 #include "host/emulator_input_sink.h"
 #include "host/frame_source.h"
-#include "host/pairing_manager.h"
 #include "melonds_remote/input_state_tracker.h"
 #include "melonds_remote/rate_limiter.h"
 
@@ -57,31 +59,39 @@ struct NetServerConfig {
     //
     // If non-empty, this is a static pre-shared token checked before
     // anything else (legacy/CI-friendly path, e.g. tests/smoke_test.py):
-    // an exact match is accepted outright and the pairing-code flow below
-    // never runs. Leave empty to use pairing mode instead (recommended
-    // for real use): unrecognized clients are shown a 6-digit code (see
-    // pairingStateFilePath / onPairingCodeChanged) instead of a fixed
-    // secret you have to configure and distribute yourself.
+    // an exact match is accepted outright and the device-approval flow
+    // below never runs. Leave empty to use device-approval mode instead
+    // (recommended for real use): an unrecognized client's connection
+    // request is queued for a human at the host to approve or deny (see
+    // approvalStateFilePath / onPendingRequestsChanged) rather than
+    // requiring a fixed secret configured and distributed by hand, or a
+    // code typed on the client (which Steam Input's virtual keyboard
+    // doesn't reliably bring up -- see docs/known-limitations.md).
     std::string authToken;
 
-    // Where issued pairing tokens are persisted so a paired client stays
-    // paired across host restarts (see PairingManager). Empty disables
-    // persistence -- pairing still works for the life of the process,
-    // it's just forgotten on restart. Ignored entirely when authToken is
-    // set (static-token mode bypasses pairing).
-    std::string pairingStateFilePath;
+    // Where approved device identities are persisted so an approved
+    // client stays approved across host restarts (see
+    // DeviceApprovalManager). Empty disables persistence -- approval
+    // still works for the life of the process, it's just forgotten on
+    // restart. Ignored entirely when authToken is set (static-token mode
+    // bypasses device approval).
+    std::string approvalStateFilePath;
 
-    // How long a generated pairing code stays valid before a fresh one
-    // is needed.
-    std::chrono::seconds pairingCodeTtl{300};
+    // How long a pending approval request is kept without a fresh retry
+    // before being silently evicted from the queue (a client that gave
+    // up shouldn't leave a permanent stale entry).
+    std::chrono::seconds pendingRequestTtl{60};
 
-    // Optional hook for surfacing the pairing code somewhere beyond the
-    // console (e.g. melonDS's own window). Called with the new code when
-    // one is generated, and with std::nullopt when it's consumed/expires.
-    // Invoked synchronously on NetServer's control-connection thread --
-    // if the callback touches UI state, it must marshal to the UI thread
-    // itself (e.g. Qt::QueuedConnection).
-    std::function<void(std::optional<std::string>)> onPairingCodeChanged;
+    // Optional hook for surfacing pending approval requests somewhere
+    // beyond the console (e.g. melonDS's own window, as a Yes/No
+    // dialog). Called with the current full list of pending requests
+    // whenever it changes (a new arrival, an eviction, or an
+    // approve/deny) -- see DeviceApprovalManager::setOnPendingRequestsChanged.
+    // Invoked synchronously on NetServer's control-connection thread (or
+    // the watchdog thread, for stale evictions) -- if the callback
+    // touches UI state, it must marshal to the UI thread itself (e.g.
+    // Qt::QueuedConnection).
+    std::function<void(std::vector<DeviceApprovalManager::PendingRequest>)> onPendingRequestsChanged;
 
     // If a control-channel connection is silent (no heartbeat, no other
     // control traffic) for longer than this, it is dropped. Distinct from
@@ -103,7 +113,7 @@ struct NetServerConfig {
     // back from every host listening, without any auth -- it only ever
     // reveals a host name and port numbers, never anything sensitive; the
     // actual control/input/video ports still require the full
-    // pairing/token handshake regardless. Deliberately bound to
+    // device-approval/token handshake regardless. Deliberately bound to
     // "0.0.0.0" (not `bindAddress`) since receiving a broadcast requires
     // it -- this is the one socket in this class that doesn't obey
     // `bindAddress`, and is the reason discovery can be disabled
@@ -153,6 +163,18 @@ public:
     void start();
     void stop();
 
+    // Approves/denies a pending connection request by exact device id or
+    // unambiguous prefix (see DeviceApprovalManager::approve/deny).
+    // Returns false if nothing pending matches. Safe to call from any
+    // thread (e.g. a console-input thread in main.cpp, or a Qt UI-thread
+    // slot in the melonDS integration).
+    bool approveDevice(const std::string& deviceIdOrPrefix);
+    bool denyDevice(const std::string& deviceIdOrPrefix);
+
+    // Current pending connection requests -- e.g. for a UI/console loop
+    // to list on demand rather than only reacting to onPendingRequestsChanged.
+    std::vector<DeviceApprovalManager::PendingRequest> pendingRequests();
+
 private:
     void controlLoop();
     void inputLoop();
@@ -163,7 +185,10 @@ private:
     NetServerConfig config_;
     IEmulatorInputSink& inputSink_;
     IFrameSource& frameSource_;
-    PairingManager pairingManager_;
+    DeviceApprovalManager deviceApproval_;
+    // Only ever touched from inside the onPendingRequestsChanged callback
+    // above (see the comment there for why that's safe without its own lock).
+    std::unordered_set<std::string> notifiedPendingIds_;
 
     std::atomic<bool> running_{false};
     std::thread controlThread_;

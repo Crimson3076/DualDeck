@@ -90,34 +90,19 @@ MDR_TEST(hello_ack_payload_round_trip_accepted) {
     MDR_CHECK_EQ(parsed->sessionId, ack.sessionId);
     MDR_CHECK_EQ(parsed->nativeWidth, 256);
     MDR_CHECK_EQ(parsed->nativeHeight, 192);
-    MDR_CHECK(parsed->pairingToken.empty());
 }
 
-MDR_TEST(hello_ack_payload_round_trip_with_pairing_token) {
-    HelloAckPayload ack;
-    ack.accepted = 1;
-    ack.rejectReason = HelloRejectReason::None;
-    ack.sessionId = 42;
-    ack.pairingToken = "a1b2c3d4e5f6";
-
-    ByteBuffer buf;
-    serializeHelloAckPayload(buf, ack);
-    auto parsed = parseHelloAckPayload(buf.data(), buf.size());
-    MDR_CHECK(parsed.has_value());
-    MDR_CHECK(parsed->pairingToken == ack.pairingToken);
-}
-
-MDR_TEST(hello_ack_payload_round_trip_pairing_required) {
+MDR_TEST(hello_ack_payload_round_trip_approval_required) {
     HelloAckPayload ack;
     ack.accepted = 0;
-    ack.rejectReason = HelloRejectReason::PairingRequired;
+    ack.rejectReason = HelloRejectReason::ApprovalRequired;
 
     ByteBuffer buf;
     serializeHelloAckPayload(buf, ack);
     auto parsed = parseHelloAckPayload(buf.data(), buf.size());
     MDR_CHECK(parsed.has_value());
     MDR_CHECK_EQ(parsed->accepted, 0);
-    MDR_CHECK(parsed->rejectReason == HelloRejectReason::PairingRequired);
+    MDR_CHECK(parsed->rejectReason == HelloRejectReason::ApprovalRequired);
 }
 
 MDR_TEST(hello_ack_payload_rejects_trailing_garbage) {

@@ -27,8 +27,13 @@ struct NetClientConfig {
     uint16_t displayWidth = 1280;
     uint16_t displayHeight = 800;
 
-    // Must match the host's --auth-token, if it has one configured; empty
-    // if the host has authentication disabled (spec section 13).
+    // Must match the host's --auth-token if it has one configured
+    // (static pre-shared secret, spec section 13). Otherwise, this is the
+    // client's own persistent device identity (see device_identity.h) --
+    // the same value on every connection attempt, to every host, set
+    // once at startup and never changed for the life of the process; a
+    // human at the host approves or denies it (see
+    // host/remote-server/include/host/device_approval_manager.h).
     std::string authToken;
 
     // How often to send a Heartbeat packet on the control channel while
@@ -68,25 +73,13 @@ public:
     uint32_t sessionId() const { return sessionId_.load(); }
 
     // Meaningful only right after a connect() call returns false: why the
-    // host rejected the handshake. In particular, PairingRequired means
-    // the caller should prompt the user for the 6-digit code currently
-    // displayed on the host (spec section 13) and retry via
-    // setAuthToken() + connect(), rather than just keep blindly retrying
-    // with the same (rejected) token.
+    // host rejected the handshake. In particular, ApprovalRequired means
+    // the device identity in NetClientConfig::authToken hasn't been
+    // approved by a human at the host yet -- there's nothing to do on the
+    // client side but keep retrying (the caller's existing reconnect/
+    // backoff loop already does this), unlike the old 6-digit-code flow
+    // this replaced.
     HelloRejectReason lastRejectReason() const;
-
-    // Non-empty only right after a connect() call returns true where the
-    // handshake just consumed a fresh pairing code: the persistent token
-    // the caller must save (e.g. to disk, keyed by host address) and pass
-    // to setAuthToken() on all future runs, so the user isn't prompted
-    // for a code again.
-    std::string lastPairingToken() const;
-
-    // Changes the value sent as HelloPayload::authToken on the next
-    // connect() call (a pairing code the user just entered, or a
-    // previously-saved persistent pairing token). Safe to call whether or
-    // not currently connected.
-    void setAuthToken(std::string token);
 
 private:
     void videoReceiveLoop();
@@ -116,15 +109,13 @@ private:
     std::vector<uint8_t> latestFrame_;
     bool hasFrame_ = false;
 
-    // Guards config_.authToken (mutable via setAuthToken()) and the two
-    // handshake-result fields below; connect() holds connectMutex_ for
-    // its whole body anyway, but setAuthToken()/the getters may be called
-    // from a different thread (e.g. the render thread reacting to
-    // connect()'s return value while a background reconnect thread also
-    // touches config_), so these get their own narrower lock.
+    // Guards lastRejectReason_; connect() holds connectMutex_ for its
+    // whole body anyway, but lastRejectReason() may be called from a
+    // different thread (e.g. the render thread reacting to connect()'s
+    // return value while a background reconnect thread also calls
+    // connect()), so it gets its own narrower lock.
     mutable std::mutex handshakeResultMutex_;
     HelloRejectReason lastRejectReason_ = HelloRejectReason::None;
-    std::string lastPairingToken_;
 };
 
 } // namespace melonds_remote::client

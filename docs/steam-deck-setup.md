@@ -34,37 +34,42 @@ See `docs/building.md` for the actual CMake invocation either way.
    ./melonds-remote-client --host <htpc-ip-address>
    ```
    but as of the LAN discovery feature, this is optional -- run it with no
-   arguments and it scans the LAN for a running `melonds-remote-server`
-   host instead:
+   arguments and it scans the LAN for running `melonds-remote-server`
+   hosts instead:
    ```sh
    ./melonds-remote-client
    ```
-   You'll see a "SEARCHING FOR HOST..." screen while it scans. If exactly
-   one host answers, it connects automatically -- no address to type or
-   remember. If more than one HTPC on your network is running a host
-   (e.g. one in the living room, one in a bedroom), you'll instead see a
-   list of them by name; use the D-pad (or arrow keys in Desktop Mode) to
-   move and South/A (or Enter) to confirm. Whichever one you pick is
-   remembered (`~/.config/melonds-remote-client/last_host.txt`), so if
-   that same host answers again next time it's chosen automatically
-   without asking again. Discovery only works if the host has it enabled
-   (the default -- see `--no-discovery`/`--discovery-port` in the host's
-   `--help`) and both machines are on the same LAN/subnet (it relies on
-   UDP broadcast, which routers don't forward across subnets or over the
-   internet).
-4. **First connection to a given host**: the host has no idea who you are
-   yet, so it rejects the handshake and generates a 6-digit pairing code
-   (spec section 13) -- printed in the host's log/terminal, and also
-   shown in the melonDS window's status bar if you're running the
-   melonDS-integrated host. The client shows a 6-box entry screen and
-   starts SDL text input, which in Gaming Mode brings up Steam's
-   on-screen keyboard automatically; in Desktop Mode, just type the digits
-   on a physical keyboard. Once entered, the client pairs and saves a
-   token to `~/.config/melonds-remote-client/pairing_tokens.txt` -- future
-   runs against the same host address reconnect silently, no code needed
-   again. (If you'd rather skip pairing entirely, e.g. for scripted
-   testing, start the host with `--auth-token`/`MELONDS_REMOTE_AUTH_TOKEN`
-   and pass the same value here with `--auth-token`.)
+   You'll see a "SEARCHING FOR HOST..." screen while it scans, then a
+   **SELECT A HOST** list -- shown every time the client launches, even
+   if only one host answers, so switching to a different HTPC (e.g. one
+   in the living room, one in a bedroom) is always available, not just
+   remembered from last time. Use the D-pad (or arrow keys in Desktop
+   Mode) to move and South/A (or Enter) to confirm; the previously-picked
+   host is pre-highlighted, so reconnecting to the same one as usual is
+   still just one button press. The list keeps rescanning live while
+   shown, so a host that finishes booting a few seconds late still shows
+   up. Discovery only works if the host has it enabled (the default --
+   see `--no-discovery`/`--discovery-port` in the host's `--help`) and
+   both machines are on the same LAN/subnet (it relies on UDP broadcast,
+   which routers don't forward across subnets or over the internet).
+4. **First connection to a given host**: the host has no idea who this
+   client is yet, so it rejects the handshake and queues a pending
+   connection request -- naming the client and its address -- for a human
+   at the host to approve. No typing is needed anywhere (this
+   deliberately doesn't rely on Steam Input's virtual keyboard, which
+   doesn't reliably come up in Gaming Mode -- see
+   `docs/known-limitations.md`): on the standalone host, type
+   `approve <device-id-prefix>` at its console (the pending-request log
+   line shows the exact command to use); on the melonDS-integrated host,
+   a window pops up asking "Allow ... to connect?" with Approve/Deny
+   buttons. While waiting, the client shows "WAITING FOR APPROVAL ON
+   HOST ..." on screen and keeps retrying automatically -- no action
+   needed on the client side. Once approved, this same client reconnects
+   silently forever, no re-approval needed, unless the host's
+   approved-device state is deleted. (If you'd rather skip device
+   approval entirely, e.g. for scripted testing, start the host with
+   `--auth-token`/`MELONDS_REMOTE_AUTH_TOKEN` and pass the same value
+   here with `--auth-token`.)
 5. Confirm: window opens fullscreen at 1280x800, the host's bottom-screen
    stream renders letterboxed at 4:3, the Deck's built-in controller
    moves the game/logs show button state, and the touchscreen registers
@@ -83,17 +88,18 @@ Mode, applied to this client:
 2. **Games → Add a Non-Steam Game to My Shortcuts...**
 3. **Browse...** to the built `melonds-remote-client` binary.
 4. After adding, right-click it in your library → **Properties**:
-   - **Launch Options**: leave blank to let the client discover a host on
-     the LAN automatically (see "Desktop Mode" step 3 above -- if more
-     than one answers, the resulting selection screen is fully
-     controller-navigable, D-pad + South/A, matching Gaming Mode's
-     controller-only input model). Add `--host 192.168.1.50` here only if
-     you'd rather skip discovery and always connect to one specific
-     address (add `--auth-token your-token` too only if the host was
-     started with a static token instead of pairing mode). The first
-     launch will need the on-screen keyboard for the pairing code (see
-     "Desktop Mode" step 4 above); every launch after that reconnects
-     silently.
+   - **Launch Options**: leave blank to let the client discover hosts on
+     the LAN automatically and show the selection screen every launch
+     (see "Desktop Mode" step 3 above -- fully controller-navigable,
+     D-pad + South/A, matching Gaming Mode's controller-only input
+     model). Add `--host 192.168.1.50` here only if you'd rather skip
+     discovery and always connect to one specific address (add
+     `--auth-token your-token` too only if the host was started with a
+     static token instead of device-approval mode). The first launch
+     needs a human at the host to approve the connection request (see
+     "Desktop Mode" step 4 above) -- no on-screen keyboard needed on the
+     client, unlike the pairing-code flow this replaced; every launch
+     after that reconnects silently once approved.
    - **Compatibility**: a Proton layer is not needed since this is a
      native Linux binary; leave "Force the use of a specific Steam Play
      compatibility tool" unchecked.

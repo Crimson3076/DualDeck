@@ -3,7 +3,7 @@ find_package(SDL3 REQUIRED CONFIG)
 add_executable(melonds-remote-client
     src/main.cpp
     src/net_client.cpp
-    src/pairing_store.cpp
+    src/device_identity.cpp
     src/discovery_client.cpp
     src/discovery_store.cpp
     src/bitmap_font.cpp

@@ -29,11 +29,11 @@ jobs:
       - name: Run integration smoke test
         run: python3 tests/smoke_test.py build/host/remote-server/melonds-remote-server
 
-      - name: Run pairing-flow smoke test
-        run: python3 tests/pairing_smoke_test.py build/host/remote-server/melonds-remote-server
+      - name: Run device-approval smoke test
+        run: python3 tests/device_approval_smoke_test.py build/host/remote-server/melonds-remote-server
 
   net-client-compiles:
-    name: Compile client net_client.cpp/pairing_store.cpp standalone (no SDL3 available)
+    name: Compile client net_client.cpp/device_identity.cpp standalone (no SDL3 available)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,8 +44,20 @@ jobs:
             -I protocol/include -I client/src \
             -c client/src/net_client.cpp -o /tmp/net_client_test.o
 
-      - name: Compile pairing_store.cpp with strict warnings
+      - name: Compile device_identity.cpp with strict warnings
         run: |
           g++ -std=c++20 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
             -I client/src \
-            -c client/src/pairing_store.cpp -o /tmp/pairing_store_test.o
+            -c client/src/device_identity.cpp -o /tmp/device_identity_test.o
+
+      - name: Compile discovery_client.cpp with strict warnings
+        run: |
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+            -I protocol/include -I client/src \
+            -c client/src/discovery_client.cpp -o /tmp/discovery_client_test.o
+
+      - name: Compile discovery_store.cpp with strict warnings
+        run: |
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+            -I client/src \
+            -c client/src/discovery_store.cpp -o /tmp/discovery_store_test.o

@@ -101,10 +101,7 @@ bool NetClient::connect() {
     helloPayload.clientPlatform = config_.clientPlatform;
     helloPayload.displayWidth = config_.displayWidth;
     helloPayload.displayHeight = config_.displayHeight;
-    {
-        std::lock_guard<std::mutex> tokenLock(handshakeResultMutex_);
-        helloPayload.authToken = config_.authToken;
-    }
+    helloPayload.authToken = config_.authToken;
     ByteBuffer hello = buildHelloPacket(helloPayload);
     if (!sendAll(controlFd_, hello.data(), hello.size())) {
         std::fprintf(stderr, "failed to send Hello\n");
@@ -140,13 +137,12 @@ bool NetClient::connect() {
     {
         std::lock_guard<std::mutex> resultLock(handshakeResultMutex_);
         lastRejectReason_ = ack->rejectReason;
-        lastPairingToken_ = ack->pairingToken;
     }
     if (!ack->accepted) {
-        if (ack->rejectReason == HelloRejectReason::PairingRequired) {
+        if (ack->rejectReason == HelloRejectReason::ApprovalRequired) {
             std::fprintf(stderr,
-                          "handshake rejected by host: pairing required -- enter the 6-digit "
-                          "code shown on the host\n");
+                          "handshake rejected by host: awaiting approval -- a human at the host "
+                          "needs to approve this device, no action needed here\n");
         } else {
             std::fprintf(stderr, "handshake rejected by host (reason code %d)\n",
                           static_cast<int>(ack->rejectReason));
@@ -234,16 +230,6 @@ void NetClient::sendControllerState(const ControllerState& state) {
 HelloRejectReason NetClient::lastRejectReason() const {
     std::lock_guard<std::mutex> lock(handshakeResultMutex_);
     return lastRejectReason_;
-}
-
-std::string NetClient::lastPairingToken() const {
-    std::lock_guard<std::mutex> lock(handshakeResultMutex_);
-    return lastPairingToken_;
-}
-
-void NetClient::setAuthToken(std::string token) {
-    std::lock_guard<std::mutex> lock(handshakeResultMutex_);
-    config_.authToken = std::move(token);
 }
 
 bool NetClient::getLatestFrame(std::vector<uint8_t>& outFrame) {

@@ -340,5 +340,32 @@ melonDS's "Open ROM" dialog to EmuDeck's standard NDS folder
 (`~/Emulation/roms/nds`) the first time it's opened, a small host-local
 convenience that doesn't cross into the client-facing ROM browsing
 section 13 forbids. See `host/melonds-patches/README.md` item 8 and
-`docs/protocol.md`'s "Authentication and pairing" section for the full
-account.
+`docs/protocol.md`'s "Authentication and device approval" section for the
+full account. **This 6-digit-code flow was replaced in a later pass
+below** -- Steam Input doesn't reliably bring up a virtual keyboard in
+Gaming Mode, so the "simulated keystrokes standing in for Steam's
+on-screen keyboard" step above doesn't actually reflect real hardware
+behavior; kept here as a historical record only.
+
+**Follow-up pass -- LAN discovery, default bind fix, and device-approval
+authentication**: three changes, all user-reported/requested against the
+first real (if simulated) usage above. (1) LAN discovery (SPEC.md section
+8.1): the host broadcasts its name/ports over a separate UDP port and the
+client scans for it and shows a selection screen on every launch instead
+of requiring `--host` -- see `docs/protocol.md`'s "Discovery payload"
+section. (2) The host's `--bind` default was `127.0.0.1`, a leftover from
+before discovery existed; combined with discovery (which always binds
+`0.0.0.0` and hands back a real LAN address), this made a fresh install
+discover a host and then get "connection refused" on every attempt --
+fixed by defaulting `--bind` to `0.0.0.0` instead, matching what
+discovery already implied about reachability. (3) The 6-digit pairing
+code above turned out to be unworkable on real Steam Deck hardware:
+Steam Input doesn't reliably bring up a virtual keyboard in Gaming Mode,
+so requiring the client to type a code was replaced with device-approval
+authentication -- the client sends a persistent, self-generated device
+identity instead of a typed code, and a human at the host approves or
+denies it by name/address (console `approve`/`deny` commands on the
+standalone host, a `QMessageBox` dialog on the melonDS-integrated host).
+See `docs/protocol.md`'s "Authentication and device approval" section
+(including its "History: the 6-digit pairing code" subsection) and
+`host/melonds-patches/README.md` for the full account.

@@ -2,8 +2,14 @@
 //
 // What this does today:
 //  - Opens a 1280x800 window (Steam Deck panel resolution)
-//  - Connects to a melonds-remote-server host and displays whatever
-//    bottom-screen frames it sends, aspect-correct-fit inside the window
+//  - On every launch, scans the LAN for available melonds-remote hosts
+//    and shows a gamepad/keyboard-navigable selection screen (spec
+//    section 8.1's discovery, adapted per user request: always show the
+//    picker rather than silently reconnecting to whichever host was used
+//    last, so switching to a different HTPC is always one screen away)
+//  - Connects to the chosen melonds-remote-server host and displays
+//    whatever bottom-screen frames it sends, aspect-correct-fit inside
+//    the window
 //  - Reads the first connected gamepad and maps it to DS buttons per
 //    SPEC.md section 7.3
 //  - Reads touchscreen (finger) events, maps them through
@@ -14,11 +20,12 @@
 //  - Logs connection/controller/touch/frame events to stdout as the
 //    "debug overlay" for this milestone (an on-screen overlay is future
 //    work, see docs/architecture.md "Known gaps")
-//  - Implements the pairing-code flow (spec section 13): if the host
-//    rejects a handshake with PairingRequired, shows a 6-digit code-entry
-//    screen (SDL text input, so Steam's on-screen keyboard drives it in
-//    Gaming Mode) instead of blindly retrying, and persists the token the
-//    host issues on success so future runs reconnect silently.
+//  - Implements device-approval authentication (spec section 13,
+//    replacing an earlier 6-digit-code-entry screen that required typing
+//    on the client -- unworkable since Steam Input doesn't reliably bring
+//    up a virtual keyboard in Gaming Mode, see docs/known-limitations.md):
+//    sends a persistent, self-generated device identity on every Hello; a
+//    human at the host approves or denies it, no typing anywhere.
 
 #include <SDL3/SDL.h>
 
@@ -27,16 +34,17 @@
 #include <chrono>
 #include <cstdio>
 #include <optional>
+#include <string>
 #include <thread>
 #include <vector>
 
 #include "bitmap_font.h"
+#include "device_identity.h"
 #include "discovery_client.h"
 #include "discovery_store.h"
 #include "melonds_remote/protocol.h"
 #include "melonds_remote/touch_mapping.h"
 #include "net_client.h"
-#include "pairing_store.h"
 
 using namespace melonds_remote;
 using namespace melonds_remote::client;
@@ -112,38 +120,6 @@ uint16_t buildButtonsFromGamepad(SDL_Gamepad* gamepad) {
     return buttons;
 }
 
-// Renders 6 boxes centered on screen: outlined for not-yet-entered
-// digits, filled for entered ones. Deliberately doesn't render the actual
-// digit glyphs (no font/text-rendering dependency in this client) --
-// SDL_StartTextInput() drives Steam's on-screen keyboard in Gaming Mode,
-// which shows the typed characters itself; this is just a progress
-// indicator of how many of the 6 digits have been entered so far.
-void renderPairingCodeEntry(SDL_Renderer* renderer, size_t digitsEntered) {
-    constexpr int kBoxCount = 6;
-    constexpr float kBoxSize = 64.0f;
-    constexpr float kBoxGap = 16.0f;
-    constexpr float kTotalWidth = kBoxCount * kBoxSize + (kBoxCount - 1) * kBoxGap;
-
-    SDL_SetRenderDrawColor(renderer, 20, 20, 24, 255);
-    SDL_RenderClear(renderer);
-
-    float startX = (static_cast<float>(kWindowWidth) - kTotalWidth) / 2.0f;
-    float y = (static_cast<float>(kWindowHeight) - kBoxSize) / 2.0f;
-
-    for (int i = 0; i < kBoxCount; ++i) {
-        SDL_FRect box{startX + static_cast<float>(i) * (kBoxSize + kBoxGap), y, kBoxSize, kBoxSize};
-        if (static_cast<size_t>(i) < digitsEntered) {
-            SDL_SetRenderDrawColor(renderer, 90, 200, 120, 255);
-            SDL_RenderFillRect(renderer, &box);
-        } else {
-            SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
-            SDL_RenderRect(renderer, &box);
-        }
-    }
-
-    SDL_RenderPresent(renderer);
-}
-
 void renderCenteredBitmapText(SDL_Renderer* renderer, const std::string& text, float y,
                                int pixelSize, SDL_Color color) {
     int width = measureBitmapText(text, pixelSize);
@@ -175,9 +151,10 @@ void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHos
 
     for (size_t i = 0; i < hosts.size(); ++i) {
         float rowY = kStartY + static_cast<float>(i) * kRowHeight;
+        std::string addressAndPort = hosts[i].address + ":" + std::to_string(hosts[i].controlPort);
         std::string label = hosts[i].hostName.empty()
-                                 ? hosts[i].address
-                                 : hosts[i].hostName + "  (" + hosts[i].address + ")";
+                                 ? addressAndPort
+                                 : hosts[i].hostName + "  (" + addressAndPort + ")";
         bool selected = static_cast<int>(i) == selectedIndex;
         SDL_Color color = selected ? SDL_Color{90, 200, 120, 255} : SDL_Color{200, 200, 200, 255};
 
@@ -198,14 +175,21 @@ void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHos
     SDL_RenderPresent(renderer);
 }
 
-// Runs when no --host was given on the command line: scans the LAN for
-// melonds-remote hosts and, if more than one answers, lets the user pick
-// via gamepad D-pad/South or keyboard arrows/Enter. Auto-selects without
-// prompting when exactly one host answers, or when a previously-picked
-// host (see discovery_store.h) is among the ones that answered this time
-// -- the list is only shown when there's a genuine choice to make (spec
-// request: "user selectable in the event there is more than 1 IP in the
-// household running a server").
+// Runs on every launch (spec request: "each time the client is booted, it
+// should show this screen in the event I want to connect to another
+// client"): scans the LAN for melonds-remote hosts and always lets the
+// user pick one via gamepad D-pad/South or keyboard arrows/Enter -- never
+// auto-connects silently, even when only one host answers, so switching
+// to a different HTPC is always available, not just when there happens
+// to be more than one. The previously-picked host (see discovery_store.h)
+// is pre-highlighted as the default selection for a quick one-button
+// reconnect, but the user can always navigate to a different one instead.
+//
+// Keeps rescanning while the list is shown (not just once up front), so
+// a host that finishes booting a few seconds late still shows up without
+// restarting the client. Selection is preserved across rescans by
+// address, and the list is sorted for a stable display order (discovery
+// itself doesn't guarantee reply order is consistent scan to scan).
 //
 // Returns std::nullopt if the user closed the window before a host was
 // chosen (SDL_EVENT_QUIT); main() treats that as "cancel the whole run",
@@ -215,7 +199,6 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
                                                      const std::string& lastHostAddress) {
     std::vector<DiscoveredHost> hosts;
     int selectedIndex = 0;
-    bool listActive = false;
 
     while (true) {
         SDL_Event event;
@@ -235,7 +218,7 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
                     }
                     break;
                 case SDL_EVENT_KEY_DOWN:
-                    if (listActive && !hosts.empty()) {
+                    if (!hosts.empty()) {
                         int count = static_cast<int>(hosts.size());
                         if (event.key.key == SDLK_UP) {
                             selectedIndex = (selectedIndex + count - 1) % count;
@@ -247,7 +230,7 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
                     }
                     break;
                 case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-                    if (listActive && !hosts.empty()) {
+                    if (!hosts.empty()) {
                         int count = static_cast<int>(hosts.size());
                         if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP) {
                             selectedIndex = (selectedIndex + count - 1) % count;
@@ -263,26 +246,33 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
             }
         }
 
-        if (!listActive) {
+        if (hosts.empty()) {
             renderDiscoverySearching(renderer);
-            hosts = discoverHosts(discoveryPort, kDiscoveryScanMs);
-            if (!hosts.empty()) {
-                if (hosts.size() == 1) {
-                    return hosts.front();
-                }
-                if (!lastHostAddress.empty()) {
-                    auto it = std::find_if(hosts.begin(), hosts.end(), [&](const DiscoveredHost& h) {
-                        return h.address == lastHostAddress;
-                    });
-                    if (it != hosts.end()) {
-                        return *it;
-                    }
-                }
-                listActive = true;
-                selectedIndex = 0;
-            }
         } else {
             renderDiscoveryList(renderer, hosts, selectedIndex);
+        }
+
+        std::string selectedAddress = hosts.empty() ? "" : hosts[static_cast<size_t>(selectedIndex)].address;
+
+        std::vector<DiscoveredHost> freshHosts = discoverHosts(discoveryPort, kDiscoveryScanMs);
+        std::sort(freshHosts.begin(), freshHosts.end(),
+                  [](const DiscoveredHost& a, const DiscoveredHost& b) { return a.address < b.address; });
+        hosts = std::move(freshHosts);
+
+        if (hosts.empty()) {
+            selectedIndex = 0;
+            continue;
+        }
+
+        auto it = std::find_if(hosts.begin(), hosts.end(),
+                                [&](const DiscoveredHost& h) { return h.address == selectedAddress; });
+        if (it != hosts.end()) {
+            selectedIndex = static_cast<int>(it - hosts.begin());
+        } else {
+            auto lastIt = std::find_if(hosts.begin(), hosts.end(), [&](const DiscoveredHost& h) {
+                return h.address == lastHostAddress;
+            });
+            selectedIndex = lastIt != hosts.end() ? static_cast<int>(lastIt - hosts.begin()) : 0;
         }
     }
 }
@@ -291,7 +281,7 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
 
 int main(int argc, char** argv) {
     NetClientConfig netConfig;
-    bool authTokenExplicit = false; // --auth-token given: skip pairing entirely (CI/scripting use)
+    bool authTokenExplicit = false; // --auth-token given: skip device-approval entirely (CI/scripting use)
     bool hostExplicit = false;      // --host/positional given: skip LAN discovery entirely
     uint16_t discoveryPort = kDefaultDiscoveryPort;
 
@@ -326,7 +316,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    const std::string pairingStorePath = defaultPairingStorePath();
     const std::string discoveryStorePath = defaultLastHostStorePath();
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
@@ -372,10 +361,12 @@ int main(int argc, char** argv) {
     }
     if (gamepadIds) SDL_free(gamepadIds);
 
-    // LAN discovery (spec section 8.1): no --host means the user wants us
-    // to find one rather than type an IP into a Steam Deck. Skipped
-    // entirely when --host/a positional address was given, matching the
-    // existing scripted/CI use (run-client.sh, --auth-token flows).
+    // LAN discovery (spec section 8.1): always shown unless --host/a
+    // positional address was given, matching the existing scripted/CI use
+    // (run-client.sh, --auth-token flows). Per user request, this always
+    // runs -- even if only one host answers, or it's the same one as last
+    // time -- rather than silently reconnecting, so a different HTPC is
+    // always one screen away.
     if (!hostExplicit) {
         std::string lastHost = loadLastHost(discoveryStorePath).value_or("");
         auto selected = discoverAndSelectHost(renderer, gamepad, discoveryPort, lastHost);
@@ -397,35 +388,24 @@ int main(int argc, char** argv) {
                     netConfig.hostAddress.c_str());
     }
 
-    // Pairing mode (spec section 13): unless the caller gave an explicit
-    // static --auth-token, use whatever pairing token we've previously
-    // been issued for this host, if any -- silent reconnect instead of
-    // prompting for a 6-digit code again.
+    // Device-approval authentication (spec section 13): unless the caller
+    // gave an explicit static --auth-token, send this client's own
+    // persistent device identity -- the same value used with every host,
+    // every time. A human at the host approves or denies it once; there
+    // is nothing to type or store per-host on the client side (see
+    // device_identity.h and docs/protocol.md's "Authentication and
+    // device approval" section).
     if (!authTokenExplicit) {
-        if (auto stored = loadPairingToken(pairingStorePath, netConfig.hostAddress)) {
-            netConfig.authToken = *stored;
-            std::printf("[pairing] using previously-paired token for %s\n", netConfig.hostAddress.c_str());
-        }
+        netConfig.authToken = loadOrCreateDeviceIdentity(defaultDeviceIdentityStorePath());
     }
-
-    // Set once a handshake comes back PairingRequired: the reconnect
-    // thread below stops retrying (a stale/missing token won't magically
-    // start working) and the render loop shows the code-entry screen
-    // instead, until the user finishes entering a code.
-    std::atomic<bool> awaitingPairingCode{false};
-
-    auto reportPairingRequired = [&]() {
-        awaitingPairingCode = true;
-        std::printf("[pairing] host requires a pairing code -- look at the host's screen/log "
-                    "for a 6-digit code and enter it here\n");
-    };
 
     NetClient net(netConfig);
     if (net.connect()) {
         std::printf("[net] connected to %s (session %u)\n", netConfig.hostAddress.c_str(),
                      net.sessionId());
-    } else if (net.lastRejectReason() == HelloRejectReason::PairingRequired) {
-        reportPairingRequired();
+    } else if (net.lastRejectReason() == HelloRejectReason::ApprovalRequired) {
+        std::printf("[net] awaiting approval on the host -- a human there needs to approve "
+                    "this device once; will keep retrying automatically\n");
     } else {
         std::fprintf(stderr,
                       "[net] failed to connect to %s -- will keep retrying in the "
@@ -436,20 +416,23 @@ int main(int argc, char** argv) {
     // Auto-reconnect (spec section 7.2): connect() does several blocking
     // socket calls, so retries run on their own thread rather than
     // stalling the render/input loop below. Backoff caps at 5s so a
-    // permanently-unreachable host doesn't spin the CPU.
+    // permanently-unreachable (or not-yet-approved) host doesn't spin the
+    // CPU. Unlike the old pairing-code flow, there is no reason to ever
+    // pause these retries waiting on client-side user action -- approval
+    // happens entirely on the host, so the same reconnect loop that
+    // handles a temporarily-down host also naturally handles "not
+    // approved yet" (it'll just start succeeding once approved).
     std::atomic<bool> shuttingDown{false};
     std::thread reconnectThread([&]() {
         uint32_t backoffMs = 1000;
         constexpr uint32_t kMaxBackoffMs = 5000;
         while (!shuttingDown.load()) {
-            if (!net.isConnected() && !awaitingPairingCode.load()) {
+            if (!net.isConnected()) {
                 std::printf("[net] attempting to (re)connect to %s...\n",
                             netConfig.hostAddress.c_str());
                 if (net.connect()) {
                     std::printf("[net] reconnected (session %u)\n", net.sessionId());
                     backoffMs = 1000;
-                } else if (net.lastRejectReason() == HelloRejectReason::PairingRequired) {
-                    reportPairingRequired();
                 } else {
                     backoffMs = std::min(backoffMs * 2, kMaxBackoffMs);
                 }
@@ -472,23 +455,8 @@ int main(int argc, char** argv) {
     const uint64_t inputIntervalUs = 1'000'000 / 120; // spec section 6.3
     uint64_t lastInputSendUs = SDL_GetTicksNS() / 1000;
 
-    bool pairingUIActive = false;
-    std::string enteredCode;
-
     bool running = true;
     while (running) {
-        bool wantPairingUI = awaitingPairingCode.load();
-        if (wantPairingUI && !pairingUIActive) {
-            SDL_StartTextInput(window); // drives Steam's on-screen keyboard in Gaming Mode
-            enteredCode.clear();
-            SDL_SetWindowTitle(window, "melonDS Remote -- enter pairing code shown on host");
-            pairingUIActive = true;
-        } else if (!wantPairingUI && pairingUIActive) {
-            SDL_StopTextInput(window);
-            SDL_SetWindowTitle(window, "melonDS Remote");
-            pairingUIActive = false;
-        }
-
         RenderRect dsRect = computeAspectFitRect(kWindowWidth, kWindowHeight);
 
         SDL_Event event;
@@ -532,48 +500,9 @@ int main(int argc, char** argv) {
                         activeFingerId.reset();
                     }
                     break;
-                case SDL_EVENT_TEXT_INPUT:
-                    if (pairingUIActive) {
-                        for (const char* p = event.text.text; *p; ++p) {
-                            if (*p >= '0' && *p <= '9' && enteredCode.size() < 6) {
-                                enteredCode.push_back(*p);
-                            }
-                        }
-                    }
-                    break;
-                case SDL_EVENT_KEY_DOWN:
-                    if (pairingUIActive && event.key.down && event.key.key == SDLK_BACKSPACE &&
-                        !enteredCode.empty()) {
-                        enteredCode.pop_back();
-                    }
-                    break;
                 default:
                     break;
             }
-        }
-
-        if (pairingUIActive && enteredCode.size() == 6) {
-            std::printf("[pairing] submitting entered code...\n");
-            net.setAuthToken(enteredCode);
-            if (net.connect()) {
-                std::string newToken = net.lastPairingToken();
-                if (!newToken.empty()) {
-                    savePairingToken(pairingStorePath, netConfig.hostAddress, newToken);
-                    std::printf("[pairing] paired successfully -- token saved, future runs won't "
-                                "need a code\n");
-                }
-                awaitingPairingCode = false;
-            } else {
-                std::fprintf(stderr,
-                              "[pairing] code rejected -- double check the code currently shown "
-                              "on the host and try again\n");
-                enteredCode.clear();
-            }
-        }
-
-        if (pairingUIActive) {
-            renderPairingCodeEntry(renderer, enteredCode.size());
-            continue;
         }
 
         uint64_t nowUs = SDL_GetTicksNS() / 1000;
@@ -608,9 +537,13 @@ int main(int argc, char** argv) {
         // dark test-pattern screen with no indication anything is even
         // trying -- the actual retry attempts only show up in stdout,
         // which Gaming Mode has no visible terminal for (same reasoning
-        // as the discovery/pairing screens using the bitmap font).
+        // as the discovery screen using the bitmap font). Distinguishing
+        // ApprovalRequired specifically tells the user where to look --
+        // there's nothing to do here, a human needs to approve on the host.
         if (!net.isConnected()) {
-            std::string status = "CONNECTING TO " + netConfig.hostAddress + "...";
+            std::string status = net.lastRejectReason() == HelloRejectReason::ApprovalRequired
+                                      ? "WAITING FOR APPROVAL ON HOST " + netConfig.hostAddress + "..."
+                                      : "CONNECTING TO " + netConfig.hostAddress + "...";
             renderCenteredBitmapText(renderer, status, 24.0f, 2, SDL_Color{220, 200, 80, 255});
         }
 

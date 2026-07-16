@@ -23,7 +23,7 @@ launching, so there's normally nothing to install by hand first.
 
 **Phase 0, a Phase 1 skeleton, Phase 2 network-robustness work, and a
 first melonDS integration patch are all implemented, and the SDL3 client
-is now build- and run-verified.** The patch builds, its handshake/pairing
+is now build- and run-verified.** The patch builds, its handshake/device-approval
 and video-capture/input-injection paths are all confirmed end-to-end
 against an actual running (homebrew) program driven through the real
 network pipeline with the real client binary — see below for exactly
@@ -33,43 +33,49 @@ what is and isn't verified yet.
   where melonDS exposes bottom-screen frames and accepts input, verified
   by building and patching real melonDS, not just reading source.
 - [`protocol/`](protocol/) — versioned wire format (including the Hello/
-  HelloAck handshake payloads and the pairing-code fields), touch-coordinate
+  HelloAck handshake payloads and LAN discovery), touch-coordinate
   mapping, fail-safe input-state tracking, and connection-attempt rate
   limiting. Fully unit tested, no external dependencies.
 - [`host/remote-server/`](host/remote-server/) — a standalone host binary
   implementing the full network/threading model (TCP control, UDP input,
   TCP video) against a synthetic test-pattern frame source and a logging
   input sink, so it can be built and tested without melonDS or a display.
-  Authenticates either via a 6-digit pairing code (default -- see
-  `docs/protocol.md`'s "Authentication and pairing") or a static
-  pre-shared token (`--auth-token`, opt-in); UDP input and the video
-  channel are both gated on a completed, authenticated handshake from the
-  same source address.
+  Authenticates either via device approval (default -- a human at the
+  host approves or denies each new client by name/address, no typing on
+  either side; see `docs/protocol.md`'s "Authentication and device
+  approval") or a static pre-shared token (`--auth-token`, opt-in); UDP
+  input and the video channel are both gated on a completed,
+  authenticated handshake from the same source address. Also broadcasts
+  itself for LAN discovery so the client doesn't need to be told its
+  address.
 - [`host/melonds-patches/`](host/melonds-patches/) — a real patch against
   upstream melonDS (`0001-remote-server-integration.patch`) that vendors
   the protocol/host code above into melonDS's own build and wires it to
-  `GPU::GetFramebuffers()` and the input/hotkey system, shows the pairing
-  code in the window's status bar, and defaults the "Open ROM" dialog to
-  EmuDeck's NDS folder. Confirmed to build from a fresh clone; its video
-  path was confirmed to deliver a real, non-static frame from a minimal
-  original homebrew ROM ([`tests/homebrew-test-rom/`](tests/homebrew-test-rom/))
-  direct-booted in the patched binary — and, going further, that ROM was
-  extended to read real DS button input and driven through the actual
-  UDP-input → `SetKeyMask()` → CPU → framebuffer → network pipeline,
-  confirming DS controls sent remotely genuinely affect a running
-  program, and conclusively resolving the pixel format as **BGRA8888**
-  with engine B as the bottom screen. See `host/melonds-patches/README.md`
-  and `tests/homebrew-test-rom/README.md` for the full verification
-  account, including the honest caveat that this is an original homebrew
-  program, not a commercial game.
+  `GPU::GetFramebuffers()` and the input/hotkey system, pops an
+  Approve/Deny dialog for new connection requests, and defaults the "Open
+  ROM" dialog to EmuDeck's NDS folder. Confirmed to build from a fresh
+  clone; its video path was confirmed to deliver a real, non-static frame
+  from a minimal original homebrew ROM
+  ([`tests/homebrew-test-rom/`](tests/homebrew-test-rom/)) direct-booted
+  in the patched binary — and, going further, that ROM was extended to
+  read real DS button input and driven through the actual UDP-input →
+  `SetKeyMask()` → CPU → framebuffer → network pipeline, confirming DS
+  controls sent remotely genuinely affect a running program, and
+  conclusively resolving the pixel format as **BGRA8888** with engine B
+  as the bottom screen. See `host/melonds-patches/README.md` and
+  `tests/homebrew-test-rom/README.md` for the full verification account,
+  including the honest caveat that this is an original homebrew program,
+  not a commercial game.
 - [`client/`](client/) — an SDL3 Steam Deck client with automatic
-  reconnect (capped exponential backoff) and a pairing-code entry screen
-  for first-time connection to a host. Built from source (SDL3 3.2.16,
-  not packaged for the development environment used here) and **run
-  successfully** against both the standalone host prototype and the
-  actual patched melonDS host — real handshake, real pairing flow, real
-  sustained video/input traffic. Not yet tested on real Steam Deck
-  hardware — see [`docs/building.md`](docs/building.md) and
+  reconnect (capped exponential backoff), a LAN host-discovery/selection
+  screen shown on every launch, and no typing required anywhere in the
+  connection flow (device approval happens on the host). Built from
+  source (SDL3 3.2.16, not packaged for the development environment used
+  here) and **run successfully** against both the standalone host
+  prototype and the actual patched melonDS host — real handshake, real
+  device-approval flow, real sustained video/input traffic. Not yet
+  tested on real Steam Deck hardware — see
+  [`docs/building.md`](docs/building.md) and
   [`docs/known-limitations.md`](docs/known-limitations.md).
 
 ## Quick start
@@ -78,15 +84,16 @@ what is and isn't verified yet.
 # Build and test everything that doesn't need SDL3 or melonDS:
 ./scripts/install-dev.sh
 
-# Run the standalone host prototype (pairing mode by default):
+# Run the standalone host prototype (device-approval mode by default):
 ./scripts/run-host.sh --state-dir ~/.config/melonds-remote
 
 # In another terminal, exercise it end-to-end without needing the client built
-# (uses --auth-token, since it doesn't simulate a human entering a code):
+# (uses --auth-token, since it doesn't simulate a human approving a device):
 python3 tests/smoke_test.py build/host/remote-server/melonds-remote-server
 
 # If you have SDL3 installed, build and run the client -- first connection to
-# a host will prompt for the 6-digit pairing code shown in the host's log:
+# a host will show "WAITING FOR APPROVAL ON HOST..." until you approve it
+# there (type 'approve <id>' at the host's console, shown in its log):
 ./scripts/install-dev.sh --with-client
 ./scripts/run-client.sh 127.0.0.1
 ```
