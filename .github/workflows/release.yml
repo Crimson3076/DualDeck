@@ -1,0 +1,69 @@
+name: Release (rolling build)
+
+# Builds the patched melonDS host + SDL3 client from scratch and
+# publishes them as a rolling "latest" GitHub Release on every push, so
+# there's always a single, current download link to grab and test
+# without needing to build anything yourself. See
+# scripts/build-release.sh for what actually gets built/packaged, and
+# docs/known-limitations.md (bundled in the archive) for what is/isn't
+# verified in a given build.
+#
+# Takes ~15-20 minutes per run since melonDS and SDL3 are both built from
+# source (neither is packaged for this runner's Ubuntu version); the
+# SDL3 build is cached across runs since it's pinned to a fixed tag and
+# doesn't change with this repo's own commits.
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build release package and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake extra-cmake-modules ninja-build build-essential git python3 \
+            libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev libarchive-dev \
+            libenet-dev libzstd-dev libfaad-dev \
+            qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-svg-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev \
+            libxi-dev libxss-dev libwayland-dev libxkbcommon-dev libdrm-dev \
+            libgbm-dev libdecor-0-dev
+
+      - name: Cache SDL3 build (pinned tag, independent of this repo's commits)
+        uses: actions/cache@v4
+        with:
+          path: .release-work/sdl3-install
+          key: sdl3-release-3.2.16-${{ runner.os }}-v1
+
+      - name: Build release package
+        env:
+          BUILD_RELEASE_WORKDIR: ${{ github.workspace }}/.release-work
+          BUILD_RELEASE_OUTPUT_DIR: ${{ github.workspace }}/release-out
+        run: ./scripts/build-release.sh
+
+      - name: Publish rolling "latest" release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "melonDS Remote -- latest build"
+          make_latest: true
+          body: |
+            Automatically built from commit ${{ github.sha }} on `${{ github.ref_name }}`.
+
+            This is a **rolling release** -- it always reflects the newest push to
+            this repo, replacing the previous build. See `RELEASE_NOTES.md` inside
+            the archive for the exact commit it was built from, and
+            `docs/known-limitations.md` (also bundled) for what is and isn't
+            verified.
+          files: release-out/*.tar.gz

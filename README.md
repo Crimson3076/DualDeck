@@ -7,6 +7,16 @@ the Steam Deck showing the bottom screen plus all controls.
 
 See [`SPEC.md`](SPEC.md) for the full project scope and requirements.
 
+## Download a build
+
+Every push automatically builds and publishes a **rolling `latest`
+release** (`.github/workflows/release.yml`) with the host and client
+binaries attached -- grab it from the repo's
+[**Releases**](../../releases/latest) page rather than building from
+source, unless you specifically want to modify the code. See
+`RELEASE_NOTES.md` inside the archive for exactly which commit it was
+built from.
+
 ## Status
 
 **Phase 0, a Phase 1 skeleton, Phase 2 network-robustness work, and a

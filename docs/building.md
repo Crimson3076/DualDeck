@@ -1,14 +1,23 @@
 # Building
 
+**Don't want to build anything?** Every push to this repo automatically
+publishes a ready-to-run build (host + client binaries) as a rolling
+`latest` GitHub Release -- see the top-level `README.md`'s "Download a
+build" section. The instructions below are for building from source
+yourself (e.g. to modify the code).
+
 ## Requirements
 
 - CMake >= 3.20
 - A C++20 compiler (GCC 13 / Clang 16 or newer verified)
 - For `client/` only: SDL3 development headers/libraries. Not required to
   build `protocol/` or `host/remote-server/`.
-- For a real melonDS-integrated host (future work, not yet in this repo):
-  Qt6, SDL2, and OpenGL development packages, per melonDS's own
-  `BUILD.md`. Not required for anything currently in this repository.
+- For the real melonDS-integrated host
+  (`host/melonds-patches/0001-remote-server-integration.patch`): Qt6,
+  SDL2, and OpenGL development packages, per melonDS's own `BUILD.md` --
+  see `host/melonds-patches/README.md` for the exact package list this
+  was verified against. Not required for `protocol/`, `host/remote-server/`
+  (the standalone prototype), or `client/`.
 
 ## Building the protocol library and standalone host server
 
@@ -113,10 +122,35 @@ host process with the real client binary in this sandbox (see
 `docs/known-limitations.md`) but not yet against real Steam Deck
 hardware/gamepad.
 
+## Building the full release package yourself
+
+`scripts/build-release.sh` is exactly what `.github/workflows/release.yml`
+runs to produce the downloadable build mentioned at the top of this
+document: it builds SDL3 from source, clones+patches+builds melonDS, then
+builds this repo's client/host against that SDL3, and packages everything
+into a tar.gz identical in structure to what the Releases page publishes.
+Useful if you want to reproduce that exact build locally, e.g. to test a
+local change before pushing:
+
+```sh
+./scripts/build-release.sh
+# writes ./release-out/melonds-remote-<commit>-linux-x86_64.tar.gz
+```
+
+Requires the apt packages listed at the top of the script (melonDS's own
+Qt6/SDL2/OpenGL dependencies, plus the X11/Wayland headers SDL3 needs).
+Takes 15-20 minutes since both melonDS and SDL3 are built from source
+every time -- set `BUILD_RELEASE_WORKDIR` to a persistent directory to
+skip rebuilding SDL3 on a second run (it's cached by cmake-install-prefix
+existence, not by any correctness-sensitive input, since the SDL3 version
+built is a fixed pinned tag independent of this repo's own commits).
+
 ## melonDS itself
 
-This repository does not vendor melonDS. To inspect or build upstream
-melonDS for reference (e.g. to verify the call sites in
+This repository does not vendor melonDS; `host/melonds-patches/` patches
+a normal upstream clone at a pinned commit instead (see that directory's
+`README.md`). To inspect or build unpatched upstream melonDS for
+reference (e.g. to verify the call sites in
 `docs/melonds-integration-analysis.md` still match current `master`):
 
 ```sh
@@ -126,7 +160,4 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"
 ```
 
-See melonDS's own `BUILD.md` for its Qt6/SDL2/OpenGL dependency list --
-building melonDS itself is out of scope for this repository until the
-Phase 1 host/client skeleton (this repo's current content) is validated
-and a melonDS fork integration begins.
+See melonDS's own `BUILD.md` for its Qt6/SDL2/OpenGL dependency list.
