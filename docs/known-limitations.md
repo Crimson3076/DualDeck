@@ -722,6 +722,41 @@ in this project):
   open the menu when starting the application or connecting to the
   host").
 
+## No exit control on the discovery/host-selection screen (GitHub issues #8, #9)
+
+Filed after the above: despite the "HOLD START + SELECT TO OPEN THE MENU"
+hint already being shown on the discovery/searching and host-selection
+screens (see the previous section), holding Start+Select there actually
+did nothing -- `discoverAndSelectHost()` (`client/src/main.cpp`) was a
+separate function with its own event loop, and had never been wired up
+to the chord/pause-menu logic that main()'s inner loop (post-host-
+selection) already had. The only way off that screen was
+`SDL_EVENT_QUIT`, which has no equivalent gamepad-only trigger in Gaming
+Mode -- so opening the client accidentally, or before a host is running,
+left no way out short of force-quitting from the Steam Quick Access Menu.
+This matches both issue reports: #8 ("no exit application option from
+the Searching for host screen") and #9's broader ask for exit/back
+controls on every client screen -- discovery/selection was the only
+screen actually missing one, since the connecting/waiting-for-approval
+and gameplay screens already run inside the same inner loop as the
+existing pause menu.
+
+Fixed by giving `discoverAndSelectHost()` its own instance of the same
+Start+Select deliberate-hold chord and pause-menu overlay (`RESUME`/
+`EXIT`, reusing `renderPauseMenu()`), following the exact same
+conventions as the in-app menu elsewhere (`kMenuChordHoldUs`'s constant
+was hoisted to file scope so both places share it; the `Escape`-only-
+without-a-gamepad gate for Desktop Mode is duplicated the same way).
+Choosing `EXIT` (or `SDL_EVENT_QUIT`) both return `std::nullopt` from
+`discoverAndSelectHost()`, which `main()` already treated as "cancel the
+whole run" before this fix, so no caller-side changes were needed beyond
+the function itself. **Verified**: build-verified (client target compiles
+cleanly against a real SDL3 build) and by code-level parity with the
+already hardware-verified pause-menu chord in the inner loop -- not
+independently re-verified on real Steam Deck hardware (no physical
+gamepad in this project's sandbox, same caveat as the "round 2" fixes
+above).
+
 ## Latency instrumentation assumes synced clocks
 
 The host's periodic latency stat (`docs/protocol.md`'s note on

@@ -67,6 +67,21 @@ constexpr uint16_t kDefaultDiscoveryPort = 8763;
 // chance to notice SDL_EVENT_QUIT", not a total search timeout.
 constexpr int kDiscoveryScanMs = 1200;
 
+// Deliberate-hold duration for the Start+Select "open menu" chord, shared
+// by discoverAndSelectHost() and main()'s inner loop so every screen uses
+// the same chord (GitHub issues #8, #9: the discovery/host-selection
+// screen previously had no exit control at all, despite already showing
+// the "HOLD START + SELECT" hint -- the hint just wasn't backed by any
+// actual handling there). Requires a sustained hold rather than firing
+// the instant both buttons are seen down in the same polled frame -- real
+// Steam Deck hardware testing showed a single button press (Start, or B)
+// opening the menu, most likely via Steam Input's default binding
+// template synthesizing a keyboard Escape for individual buttons (see the
+// gating on !gamepad in the KEY_DOWN handlers below); requiring a
+// sustained two-button hold is defense in depth against any single
+// spurious button/synthesized-input report on top of that fix.
+constexpr uint64_t kMenuChordHoldUs = 350'000; // 350ms deliberate hold
+
 // DS button bit <- SDL gamepad button, per SPEC.md section 7.3.
 struct ButtonMapping {
     SDL_GamepadButton sdlButton;
@@ -237,13 +252,27 @@ void renderPauseMenu(SDL_Renderer* renderer, const std::vector<std::string>& ite
 // itself doesn't guarantee reply order is consistent scan to scan).
 //
 // Returns std::nullopt if the user closed the window before a host was
-// chosen (SDL_EVENT_QUIT); main() treats that as "cancel the whole run",
-// not "connect anyway."
+// chosen (SDL_EVENT_QUIT), or chose EXIT from the Start+Select menu below;
+// main() treats either as "cancel the whole run", not "connect anyway."
 std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_Gamepad*& gamepad,
                                                      uint16_t discoveryPort,
                                                      const std::string& lastHostAddress) {
     std::vector<DiscoveredHost> hosts;
     int selectedIndex = 0;
+
+    // Start+Select "open menu" chord, offering an EXIT control -- this
+    // screen previously had none at all (GitHub issues #8, #9), despite
+    // already showing the "HOLD START + SELECT" hint via kMenuComboHint.
+    // Same deliberate-hold pattern and menu-navigation conventions as
+    // main()'s inner loop (see kMenuChordHoldUs's declaration for why).
+    // No "CHANGE HOST"/"RESUME SEARCH" distinction is needed here beyond
+    // RESUME (close the menu, keep searching) since there's nothing else
+    // to navigate to from this screen.
+    const std::vector<std::string> menuItems = {"RESUME", "EXIT"};
+    bool menuActive = false;
+    int menuSelectedIndex = 0;
+    uint64_t menuChordSinceUs = 0;
+    bool menuChordFired = false;
 
     while (true) {
         SDL_Event event;
@@ -262,8 +291,22 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
                         gamepad = nullptr;
                     }
                     break;
-                case SDL_EVENT_KEY_DOWN:
-                    if (!hosts.empty()) {
+                case SDL_EVENT_KEY_DOWN: {
+                    int menuCount = static_cast<int>(menuItems.size());
+                    // Only honored with no gamepad connected (Desktop
+                    // Mode/keyboard testing convenience) -- see the
+                    // matching gate in main()'s inner loop for why.
+                    if (!gamepad && event.key.key == SDLK_ESCAPE) {
+                        menuActive = !menuActive;
+                        menuSelectedIndex = 0;
+                    } else if (menuActive && event.key.key == SDLK_UP) {
+                        menuSelectedIndex = (menuSelectedIndex + menuCount - 1) % menuCount;
+                    } else if (menuActive && event.key.key == SDLK_DOWN) {
+                        menuSelectedIndex = (menuSelectedIndex + 1) % menuCount;
+                    } else if (menuActive && event.key.key == SDLK_RETURN) {
+                        if (menuItems[static_cast<size_t>(menuSelectedIndex)] == "EXIT") return std::nullopt;
+                        menuActive = false; // RESUME
+                    } else if (!menuActive && !hosts.empty()) {
                         int count = static_cast<int>(hosts.size());
                         if (event.key.key == SDLK_UP) {
                             selectedIndex = (selectedIndex + count - 1) % count;
@@ -274,8 +317,21 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
                         }
                     }
                     break;
+                }
                 case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-                    if (!hosts.empty()) {
+                    if (menuActive) {
+                        int menuCount = static_cast<int>(menuItems.size());
+                        if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP) {
+                            menuSelectedIndex = (menuSelectedIndex + menuCount - 1) % menuCount;
+                        } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_DOWN) {
+                            menuSelectedIndex = (menuSelectedIndex + 1) % menuCount;
+                        } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH) {
+                            if (menuItems[static_cast<size_t>(menuSelectedIndex)] == "EXIT") return std::nullopt;
+                            menuActive = false; // RESUME
+                        } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_EAST) {
+                            menuActive = false; // back/cancel, no action taken
+                        }
+                    } else if (!hosts.empty()) {
                         int count = static_cast<int>(hosts.size());
                         if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP) {
                             selectedIndex = (selectedIndex + count - 1) % count;
@@ -289,6 +345,28 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
                 default:
                     break;
             }
+        }
+
+        // Held Start+Select toggles the menu -- see kMenuChordHoldUs's
+        // declaration for why a deliberate hold is required.
+        bool menuChordHeld = gamepad && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_START) &&
+                             SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_BACK);
+        uint64_t nowForChordUs = SDL_GetTicksNS() / 1000;
+        if (menuChordHeld) {
+            if (menuChordSinceUs == 0) menuChordSinceUs = nowForChordUs;
+            if (!menuChordFired && nowForChordUs - menuChordSinceUs >= kMenuChordHoldUs) {
+                menuActive = !menuActive;
+                menuSelectedIndex = 0;
+                menuChordFired = true;
+            }
+        } else {
+            menuChordSinceUs = 0;
+            menuChordFired = false;
+        }
+
+        if (menuActive) {
+            renderPauseMenu(renderer, menuItems, menuSelectedIndex);
+            continue;
         }
 
         if (hosts.empty()) {
@@ -426,21 +504,13 @@ int main(int argc, char** argv) {
         netConfig.authToken = loadOrCreateDeviceIdentity(defaultDeviceIdentityStorePath());
     }
 
-    // Start+Select "open menu" chord state. Requires a deliberate
-    // continuous hold (kMenuChordHoldUs) rather than triggering the instant
-    // both buttons are seen held in the same polled frame -- real Steam
-    // Deck hardware testing showed a single button press (Start, or B)
-    // opening the menu, most likely via Steam Input's default binding
-    // template synthesizing a keyboard Escape for individual buttons (see
-    // the gating on !gamepad below in the KEY_DOWN handler); requiring a
-    // sustained two-button hold is defense in depth against any single
-    // spurious button/synthesized-input report on top of that fix.
+    // Start+Select "open menu" chord state -- see kMenuChordHoldUs's
+    // declaration above for why a deliberate hold is required.
     // menuChordSinceUs == 0 means "not currently held"; menuChordFired
     // prevents re-triggering on every frame for as long as the hold
     // continues, only resetting once the chord is released.
     uint64_t menuChordSinceUs = 0;
     bool menuChordFired = false;
-    constexpr uint64_t kMenuChordHoldUs = 350'000; // 350ms deliberate hold
 
     // Outer loop lets "Change Host" (from the in-app menu below) return to
     // the discovery/selection screen without exiting the whole process --

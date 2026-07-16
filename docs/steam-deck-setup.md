@@ -110,9 +110,14 @@ See `docs/building.md` for the actual CMake invocation either way.
    is the controller-navigable in-app exit action `SPEC.md` lists as
    Phase 3 work -- now implemented rather than only closable via the
    window's `SDL_EVENT_QUIT` (still works too, e.g. Alt+F4 in Desktop
-   Mode). A reminder of this combo is shown on screen on the discovery/
-   host-selection and connecting screens, so you don't need to remember it
-   from this doc. It deliberately requires a genuine, deliberate hold
+   Mode). The same chord also works on the discovery/searching and
+   host-selection screens from step 3, before you've connected to
+   anything -- offering just **Resume**/**Exit** there -- so there's
+   always a controller-only way out even if the client was opened by
+   accident or no host is running yet (GitHub issues #8, #9). A reminder
+   of this combo is shown on screen on the discovery/host-selection and
+   connecting screens, so you don't need to remember it from this doc.
+   It deliberately requires a genuine, deliberate hold
    (not just both buttons registering in the same instant) -- real
    hardware testing found Steam Input can synthesize a single-button
    keyboard shortcut that would otherwise open the menu unintentionally;
