@@ -105,6 +105,42 @@ LD_LIBRARY_PATH="$(pwd)/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" exec ./melonds
 WRAP
 chmod +x "${pkg_dir}/client/run-client.sh"
 
+# scripts/lib/steam_shortcut.py is layout-agnostic (takes --exe
+# explicitly), so it's bundled as-is; only the wrapper around it needs to
+# know this archive's layout (client binary next to the wrapper, not
+# under a separate build/ directory like the repo's own
+# scripts/install-steam-shortcut.sh assumes).
+cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/scripts/lib/steam_shortcut.py"
+
+cat > "${pkg_dir}/client/install-steam-shortcut.sh" <<'WRAP'
+#!/usr/bin/env bash
+# Registers melonds-remote-client as a Steam non-Steam-game shortcut --
+# see ../scripts/lib/steam_shortcut.py for exactly what this does and why
+# it's careful about it (backs up shortcuts.vdf first, refuses to run
+# while Steam is open unless --force). Any arguments given here are
+# passed through as the shortcut's launch options, e.g.:
+#   ./install-steam-shortcut.sh --host 192.168.1.50
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+launch_options=""
+extra_args=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run|--force) extra_args+=("$1"); shift ;;
+        --user) extra_args+=("$1" "$2"); shift 2 ;;
+        --user=*) extra_args+=("$1"); shift ;;
+        *) launch_options+="${launch_options:+ }$1"; shift ;;
+    esac
+done
+
+exec python3 ../scripts/lib/steam_shortcut.py \
+    --exe "$(pwd)/melonds-remote-client" \
+    --launch-options "${launch_options}" \
+    "${extra_args[@]}"
+WRAP
+chmod +x "${pkg_dir}/client/install-steam-shortcut.sh"
+
 cat > "${pkg_dir}/host/run-host.sh" <<'WRAP'
 #!/usr/bin/env bash
 # Runs the patched melonDS binary with the remote server enabled,
@@ -185,8 +221,16 @@ Run with no arguments to scan the LAN and pick a host from a list shown
 every launch, or pass \`--host <your-htpc-ip>\` to skip discovery and
 connect to one specific address. Either way, first connection to a new
 host needs a human to approve it at the host (see above); no typing is
-needed on the client. See \`docs/steam-deck-setup.md\` for Gaming Mode
-shortcut setup.
+needed on the client.
+
+To add it as a Steam Gaming Mode shortcut without the manual "Add a
+Non-Steam Game" steps, close Steam and run (from the \`client/\`
+directory):
+\`\`\`sh
+./install-steam-shortcut.sh
+\`\`\`
+See \`docs/steam-deck-setup.md\` for what this does and the Controller
+Layout step it doesn't automate.
 NOTES
 
 # The archive itself gets a *constant* filename (unlike the internal

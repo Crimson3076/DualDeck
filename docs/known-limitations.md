@@ -241,6 +241,50 @@ zero-env-var command, and this time the remote server started and
 accepted a real socket connection on its own -- see
 `host/melonds-patches/README.md` item 16 for the full account.
 
+## Easy Big Picture/Gaming Mode client install: scripted, no manual "Add a Non-Steam Game" needed
+
+Also filed as a GitHub issue ("make an easy way for users to launch from
+steam big picture mode/game mode"): adding the client as a Gaming Mode
+shortcut previously meant the standard but tedious manual Steam flow
+(Games -> Add a Non-Steam Game -> Browse... -> set Launch Options ->
+set Controller Layout).
+
+`scripts/install-steam-shortcut.sh` (thin wrapper around
+`scripts/lib/steam_shortcut.py`) automates the shortcut-adding part: it
+builds the client if needed and writes directly into Steam's binary
+`shortcuts.vdf`, using a small dependency-free implementation of that
+(community-reverse-engineered, not Valve-documented) format. Deliberately
+conservative given it's editing the user's real Steam library file:
+refuses to run while Steam is running (unless `--force`) since Steam
+caches that file in memory and can silently overwrite the change on its
+next save; always backs up the existing file first; parses its own
+freshly-written output back as a sanity check before ever touching the
+real file; and is idempotent (matches by `Exe` path, so re-running with
+different `--launch-options` updates the existing entry instead of
+duplicating it). It does **not** touch Steam Input controller-layout
+assignments (a separate per-shortcut config keyed by a derived ID) --
+`docs/steam-deck-setup.md`'s "set Controller Layout to Gamepad" step is
+still manual.
+
+**Verified**: cross-checked bidirectionally against the independent
+reference `vdf` Python package (`pip install vdf`, an established
+community implementation used by other Steam tooling) -- confirmed that
+package parses this script's binary output correctly, and that this
+script's own parser correctly reads output produced by that package's
+own `binary_dumps`, both directions preserving all fields including the
+computed legacy shortcut `appid`. Also exercised the actual CLI
+end-to-end against fake `$HOME`/Steam-userdata directory structures:
+fresh-file creation, `--dry-run` preview, preserving a pre-existing
+unrelated shortcut untouched while adding a new one, idempotent re-run
+updating the existing entry in place (still exactly 2 total entries, not
+3), the "Steam is running" guard correctly blocking without `--force` and
+proceeding with it, and the multiple-Steam-users error path (`--user`
+required, listing the available ids). **Not verified**: against a real
+Steam client actually reading the result (this sandbox has no real Steam
+installation) -- the cross-validation above is strong evidence the
+format is correct, but "Steam's Big Picture UI actually shows the
+shortcut and launches it" hasn't been observed directly.
+
 ## The SDL3 client: build- and run-verified, and now tested once on real Steam Deck hardware
 
 Earlier passes of this document said the client had never been compiled,

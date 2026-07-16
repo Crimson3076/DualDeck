@@ -103,8 +103,21 @@ See `docs/building.md` for the actual CMake invocation either way.
 
 ## Gaming Mode: adding as a non-Steam shortcut
 
-This is the standard way to run any non-Steam Linux binary in Gaming
-Mode, applied to this client:
+**Quickest path**: with Steam closed, run
+`./scripts/install-steam-shortcut.sh` (add `--host 192.168.1.50` if you'd
+rather skip discovery and always connect to one address, matching step
+4's Launch Options note below) -- it builds the client if needed and
+adds it directly to your Steam library, no manual "Add a Non-Steam Game"
+clicking required. See `scripts/lib/steam_shortcut.py`'s module docstring
+for exactly what it does and doesn't touch (it backs up `shortcuts.vdf`
+first and refuses to run while Steam is open, since Steam caches that
+file in memory and can overwrite the change on its next save). You still
+need to set its **Controller Layout** by hand afterward -- that's a
+separate per-shortcut Steam Input config this script doesn't touch, see
+step 4 below for why it matters.
+
+Or, the standard manual way any non-Steam Linux binary gets added to
+Gaming Mode:
 
 1. In Desktop Mode, open Steam.
 2. **Games → Add a Non-Steam Game to My Shortcuts...**
