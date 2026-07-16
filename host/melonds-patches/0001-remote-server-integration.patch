@@ -38,7 +38,7 @@ index 31207f8..22dc836 100644
      target_include_directories(melonDS PUBLIC ${Qt6Gui_PRIVATE_INCLUDE_DIRS})
  else()
 diff --git a/src/frontend/qt_sdl/EmuInstance.cpp b/src/frontend/qt_sdl/EmuInstance.cpp
-index a8b1021..cb2394b 100755
+index a8b1021..f0b3654 100755
 --- a/src/frontend/qt_sdl/EmuInstance.cpp
 +++ b/src/frontend/qt_sdl/EmuInstance.cpp
 @@ -20,15 +20,21 @@
@@ -110,7 +110,7 @@ index a8b1021..cb2394b 100755
 +        }
 +
 +        remoteServer = std::make_unique<melonds_remote_bridge::RemoteServerBridge>(
-+            envOr("MELONDS_REMOTE_BIND", "127.0.0.1"),
++            envOr("MELONDS_REMOTE_BIND", "0.0.0.0"),
 +            envPortOr("MELONDS_REMOTE_CONTROL_PORT", 8760),
 +            envPortOr("MELONDS_REMOTE_INPUT_PORT", 8761),
 +            envPortOr("MELONDS_REMOTE_VIDEO_PORT", 8762),
@@ -1417,10 +1417,10 @@ index 0000000..04a4dcf
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.h b/src/frontend/qt_sdl/remote_server/host/net_server.h
 new file mode 100644
-index 0000000..d2c0a1f
+index 0000000..e800d06
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.h
-@@ -0,0 +1,189 @@
+@@ -0,0 +1,203 @@
 +#pragma once
 +
 +// Minimal standalone host server: one TCP control connection (handshake +
@@ -1432,9 +1432,20 @@ index 0000000..d2c0a1f
 +// later without changing any network code.
 +//
 +// Security posture (spec section 13): binds explicitly to the given
-+// address (never INADDR_ANY implicitly), supports only one client at a
-+// time, validates every packet's magic/version/size before acting on it,
-+// and never accepts a file path or shell command from the client.
++// address rather than some hardcoded surprise value, supports only one
++// client at a time, validates every packet's magic/version/size before
++// acting on it, and never accepts a file path or shell command from the
++// client. Defaults to "0.0.0.0" (all interfaces) rather than loopback --
++// this is a LAN remote-play tool, so out-of-the-box reachability from
++// another machine is the expected behavior, not an opt-in; the
++// pairing-code/token handshake (not the bind address) is what's supposed
++// to keep that safe. This also has to match what LAN discovery already
++// promises: discovery (below) answers broadcasts on every interface by
++// default and hands back a real, externally-reachable address, so a
++// bindAddress default of "127.0.0.1" would make discovery advertise a
++// host that then refuses every connection attempt -- exactly the
++// "discovers fine, then 'connection refused' forever" bug this comment
++// is here to prevent regressing.
 +
 +#include <atomic>
 +#include <chrono>
@@ -1454,7 +1465,10 @@ index 0000000..d2c0a1f
 +namespace melonds_remote::host {
 +
 +struct NetServerConfig {
-+    std::string bindAddress = "127.0.0.1";
++    // See the file-level "Security posture" comment above for why this
++    // is "0.0.0.0" and not "127.0.0.1" -- pass --bind 127.0.0.1
++    // explicitly for same-machine-only testing.
++    std::string bindAddress = "0.0.0.0";
 +    uint16_t controlPort = 8760;
 +    uint16_t inputPort = 8761;
 +    uint16_t videoPort = 8762;

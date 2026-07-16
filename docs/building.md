@@ -81,6 +81,12 @@ headless, gamepad-less environment).
     --state-dir ~/.config/melonds-remote
 ```
 
+`--bind 127.0.0.1` above is specific to same-machine testing (host and
+client both running here). For real use across two machines, omit
+`--bind` entirely -- it now defaults to `0.0.0.0` (all interfaces), which
+is what makes the client's LAN discovery actually able to reach the host
+it just found; see `docs/bazzite-host-setup.md`.
+
 Without `--auth-token`, the server runs in **pairing mode** (spec section
 13's "six-digit pairing code"): an unrecognized client is shown a
 6-digit code to enter once, after which the host remembers it (in

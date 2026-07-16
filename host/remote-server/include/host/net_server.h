@@ -9,9 +9,20 @@
 // later without changing any network code.
 //
 // Security posture (spec section 13): binds explicitly to the given
-// address (never INADDR_ANY implicitly), supports only one client at a
-// time, validates every packet's magic/version/size before acting on it,
-// and never accepts a file path or shell command from the client.
+// address rather than some hardcoded surprise value, supports only one
+// client at a time, validates every packet's magic/version/size before
+// acting on it, and never accepts a file path or shell command from the
+// client. Defaults to "0.0.0.0" (all interfaces) rather than loopback --
+// this is a LAN remote-play tool, so out-of-the-box reachability from
+// another machine is the expected behavior, not an opt-in; the
+// pairing-code/token handshake (not the bind address) is what's supposed
+// to keep that safe. This also has to match what LAN discovery already
+// promises: discovery (below) answers broadcasts on every interface by
+// default and hands back a real, externally-reachable address, so a
+// bindAddress default of "127.0.0.1" would make discovery advertise a
+// host that then refuses every connection attempt -- exactly the
+// "discovers fine, then 'connection refused' forever" bug this comment
+// is here to prevent regressing.
 
 #include <atomic>
 #include <chrono>
@@ -31,7 +42,10 @@
 namespace melonds_remote::host {
 
 struct NetServerConfig {
-    std::string bindAddress = "127.0.0.1";
+    // See the file-level "Security posture" comment above for why this
+    // is "0.0.0.0" and not "127.0.0.1" -- pass --bind 127.0.0.1
+    // explicitly for same-machine-only testing.
+    std::string bindAddress = "0.0.0.0";
     uint16_t controlPort = 8760;
     uint16_t inputPort = 8761;
     uint16_t videoPort = 8762;

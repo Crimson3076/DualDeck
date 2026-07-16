@@ -73,13 +73,17 @@ Then build exactly as in `docs/building.md`, no container needed.
 
 ```sh
 ./build/host/remote-server/melonds-remote-server \
-    --bind <your-LAN-IP> \
     --state-dir ~/.config/melonds-remote
 ```
 
-Bind to your actual LAN-facing interface address (not `127.0.0.1`, which
-only accepts connections from the same machine) so the Steam Deck client
-can reach it. Find your LAN IP with `ip addr` or `nmcli device show`.
+No `--bind` needed -- it defaults to `0.0.0.0` (all interfaces), so the
+Steam Deck client can reach it, and so can its LAN discovery scan (the
+client no longer needs to be given this machine's address at all; see
+`docs/steam-deck-setup.md`). Pass `--bind <your-LAN-IP>` yourself only if
+you specifically want to restrict which interface answers (e.g. this
+machine has multiple NICs and you only want one reachable) -- find your
+LAN IP with `ip addr` or `nmcli device show`. `--bind 127.0.0.1` is also
+available if you only ever intend to connect from this same machine.
 Without `--auth-token`, this runs in pairing mode (spec section 13's
 six-digit pairing code, the recommended default) -- the first connection
 attempt from the client gets a code logged here to enter once; add
@@ -95,11 +99,14 @@ TCP control, 8761 UDP input, 8762 TCP video -- adjust if you passed
 different `--*-port` flags):
 
 ```sh
-sudo firewall-cmd --add-port=8760/tcp --add-port=8761/udp --add-port=8762/tcp
+sudo firewall-cmd --add-port=8760/tcp --add-port=8761/udp --add-port=8762/tcp --add-port=8763/udp
 # add --permanent and reload if you want this to survive a reboot:
-sudo firewall-cmd --permanent --add-port=8760/tcp --add-port=8761/udp --add-port=8762/tcp
+sudo firewall-cmd --permanent --add-port=8760/tcp --add-port=8761/udp --add-port=8762/tcp --add-port=8763/udp
 sudo firewall-cmd --reload
 ```
+
+(`8763/udp` is LAN discovery -- skip it if you started the host with
+`--no-discovery`.)
 
 ### Launch script
 
@@ -107,7 +114,7 @@ sudo firewall-cmd --reload
 any extra arguments -- e.g.:
 
 ```sh
-./scripts/run-host.sh --bind 192.168.1.50 --auth-token some-shared-secret
+./scripts/run-host.sh --auth-token some-shared-secret
 ```
 
 ## What's not covered here yet

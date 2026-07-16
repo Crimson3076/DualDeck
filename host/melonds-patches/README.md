@@ -219,12 +219,16 @@ environment variables before launching the patched `melonDS`:
 
 ```sh
 MELONDS_REMOTE_ENABLE=1 \
-MELONDS_REMOTE_BIND=127.0.0.1 \
-MELONDS_REMOTE_CONTROL_PORT=8760 \
-MELONDS_REMOTE_INPUT_PORT=8761 \
-MELONDS_REMOTE_VIDEO_PORT=8762 \
 ./melonDS
 ```
+
+`MELONDS_REMOTE_BIND` defaults to `0.0.0.0` (all interfaces) -- omit it
+for normal use so a Steam Deck client elsewhere on the LAN can actually
+reach what its discovery scan just found (see `docs/protocol.md`'s
+"Discovery payload" section); set it to `127.0.0.1` only to restrict to
+same-machine testing, or to a specific address to pick one interface.
+`MELONDS_REMOTE_CONTROL_PORT`/`_INPUT_PORT`/`_VIDEO_PORT` default to
+8760/8761/8762 and rarely need overriding.
 
 `MELONDS_REMOTE_AUTH_TOKEN` is optional; omit it (recommended) to use the
 pairing-code flow instead of a static shared secret -- see

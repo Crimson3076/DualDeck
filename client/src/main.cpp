@@ -604,6 +604,16 @@ int main(int argc, char** argv) {
                       static_cast<float>(dsRect.width), static_cast<float>(dsRect.height)};
         SDL_RenderTexture(renderer, texture, nullptr, &dst);
 
+        // Otherwise a failed/retrying connection just looks like a stuck
+        // dark test-pattern screen with no indication anything is even
+        // trying -- the actual retry attempts only show up in stdout,
+        // which Gaming Mode has no visible terminal for (same reasoning
+        // as the discovery/pairing screens using the bitmap font).
+        if (!net.isConnected()) {
+            std::string status = "CONNECTING TO " + netConfig.hostAddress + "...";
+            renderCenteredBitmapText(renderer, status, 24.0f, 2, SDL_Color{220, 200, 80, 255});
+        }
+
         SDL_RenderPresent(renderer);
     }
 

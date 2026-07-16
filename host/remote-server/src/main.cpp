@@ -92,7 +92,12 @@ int main(int argc, char** argv) {
                 "This only ever reveals a host name and port numbers, no auth\n"
                 "bypass -- --discovery-port sets the UDP port (default 8763),\n"
                 "--host-name sets the friendly name shown to clients (default: this\n"
-                "machine's hostname), --no-discovery turns it off entirely.\n");
+                "machine's hostname), --no-discovery turns it off entirely.\n"
+                "\n"
+                "--bind defaults to 0.0.0.0 (all interfaces) so a client elsewhere\n"
+                "on the LAN can actually reach what discovery just told it about --\n"
+                "pass --bind 127.0.0.1 explicitly to restrict to same-machine-only\n"
+                "testing instead.\n");
             return 0;
         } else {
             std::fprintf(stderr, "unrecognized argument: %s\n", arg.c_str());

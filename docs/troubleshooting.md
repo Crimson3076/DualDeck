@@ -121,16 +121,25 @@ in `tests/smoke_test.py`, so it shouldn't regress silently.
 
 ### Client can't connect at all
 
-- Confirm the host is actually listening on the address/port you passed
-  (`--bind` on the host defaults to `127.0.0.1`, which is **not**
-  reachable from another machine -- you likely want your LAN IP or
-  `0.0.0.0` plus a firewall rule, understanding the security tradeoff in
-  spec section 13). The client's reconnect thread will keep retrying with
-  backoff regardless, so a fixable misconfiguration doesn't need a
-  client restart once corrected.
+- `--bind` on the host now defaults to `0.0.0.0` (all interfaces), so a
+  fresh install should be reachable out of the box -- if you've passed
+  `--bind 127.0.0.1` yourself (or set an older `MELONDS_REMOTE_BIND` on
+  the melonDS-integrated host from before this default changed), that
+  restricts the host to same-machine-only connections, which is exactly
+  the "discovery finds it, then every connection attempt says 'connection
+  refused'" symptom -- drop the flag/env var, or point it at the host's
+  real LAN IP.
 - If using `--auth-token`, confirm client and host tokens match exactly.
 - Check for a firewall blocking the three ports (control TCP, input UDP,
-  video TCP) between client and host.
+  video TCP) *and* the discovery UDP port (default 8763) between client
+  and host.
+- The client now shows a small "CONNECTING TO &lt;address&gt;..." banner
+  on screen whenever it isn't currently connected (including during
+  reconnect retries), instead of a silent dark screen with only stdout
+  logging -- if you see that banner stuck on one address, that's the
+  address discovery found (or the one you passed via `--host`), and it's
+  the host at that address you need to fix reachability to, not a client
+  bug.
 
 ### Reconnect doesn't seem to happen after I kill the host
 
