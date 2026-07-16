@@ -943,13 +943,89 @@ Addressed the concrete remaining gaps instead:
   the same fake-stub technique: removes an existing container + both
   central directories, and is idempotent on a second run and on a
   never-installed system alike.
-- Still not addressed: launching the host itself from Steam Big
-  Picture/Gaming Mode (a new idea introduced by the rewritten issue, not
-  previously in scope for the host side -- the client already has this
-  via `install-steam-shortcut.sh`), and CI-tested install/upgrade
-  behavior (this project's CI has no rpm-ostree/Distrobox environment
-  to test against, same limitation as everything else Bazzite-specific
-  here).
+- Still not addressed at the time: launching the host itself from Steam
+  Big Picture/Gaming Mode, and CI-tested install/upgrade behavior (the
+  latter still unaddressed -- this project's CI has no rpm-ostree/
+  Distrobox environment to test against, same limitation as everything
+  else Bazzite-specific here).
+
+## Host launchable from Steam Big Picture/Gaming Mode (GitHub issue #10, continued)
+
+Addressed the one concrete gap called out above: added
+`host/install-steam-shortcut.sh`, `host/uninstall-steam-shortcut.sh`, and
+`host/launch-host.sh` (packaged alongside the existing host scripts),
+reusing `scripts/lib/steam_shortcut.py` -- the same layout-agnostic
+Steam-shortcut helper the client already uses -- bundled as a flat
+sibling file inside `host/` this time (along with a flat copy of
+`ensure-packages.sh`) rather than shared from a top-level `scripts/`
+directory, since `host/`'s own central-install-directory layout
+(`~/.config/melonds-remote/install/`, already established by
+`install-host-distrobox.sh`) is flat, unlike the client's nested one.
+
+`install-steam-shortcut.sh` registers a **"melonDS Remote Host"** Steam
+shortcut whose `Exe` is `launch-host.sh` -- a new single entry point that
+picks Distrobox (`install-host-distrobox.sh`) or a direct launch
+(`run-host.sh`) depending on whether the system is immutable, so the
+same shortcut works on both. Update-in-place and the central install
+directory work the same way as the client's shortcut (re-running from a
+newer release updates everything without leaving a stale duplicate
+shortcut), and `steam_shortcut.py`'s existing AppName-fallback matching
+means a shortcut from before this feature existed would be migrated
+rather than duplicated (not applicable in practice yet, since no
+version of this project shipped a host shortcut before now, but verified
+anyway via the same hand-crafted-fixture technique used for the client).
+
+**A real ordering bug was found and fixed while building this**: an
+early version of `install-host-distrobox.sh --install-only` (added so
+`install-steam-shortcut.sh` can prepare the Distrobox container without
+also immediately launching melonDS) moved the file-staging swap to
+*before* the `dnf install` step, as part of adding a "skip re-copying if
+already running from the central directory" fast path for repeated
+Steam-shortcut launches. That reordering meant a failed `dnf install`
+during an update would leave the *new, not-yet-verified* files already
+active -- exactly the bug `install-host-distrobox.sh`'s original design
+(swap only after the package install succeeds) was built to prevent.
+Caught by the same fake-`distrobox`/fake-`dnf`/fake-`$HOME` verification
+technique already used for the original rollback-safety work: a version-
+marker file survived a real successful install, then *did not* survive
+a simulated `dnf` failure on the following update (a real regression),
+which was traced back to the reordering and fixed by restoring the
+original "stage now, swap only after the package install succeeds"
+order, while keeping the fast-path skip for the specific case of the
+directory already being the central install (nothing to stage or swap
+there regardless of dnf's outcome). Also required removing a second,
+related mistake: `install-steam-shortcut.sh` had its own separate,
+unconditional file-copy-then-swap for the *files* alone, done before
+ever calling `install-host-distrobox.sh --install-only` for the
+*packages* -- which had exactly the same premature-activation problem.
+Fixed by having `install-steam-shortcut.sh` delegate entirely to
+`install-host-distrobox.sh --install-only` on immutable systems (that
+script alone now owns the whole stage-then-verify-then-swap sequence),
+and only doing its own simple copy-then-swap on regular systems, where
+there's no separate package-install step to gate on in the first place.
+
+**Verified** end-to-end with fake `distrobox`/`dnf`/`$HOME` stubs, on
+both a simulated immutable system and a simulated regular one: fresh
+install (stages files, creates the Distrobox container, installs
+packages, registers the shortcut, does not launch melonDS during
+install), launch via the shortcut's `Exe` (skips the redundant re-copy,
+re-verifies packages, launches melonDS with the right arguments and
+`MELONDS_REMOTE_ENABLE=1`), a real update (new files correctly swapped
+in, old version correctly preserved as `install.previous`), the dnf-
+failure-during-update regression above (caught, then re-verified fixed:
+previous install's version marker survives intact), a full uninstall
+(shortcut removed, Distrobox container removed, central directory
+removed, second run is a clean no-op), and `--dry-run` (confirmed to
+create nothing at all). **Not verified**: real Distrobox/`dnf` behavior
+against an actual Fedora/Bazzite image, and Steam's own real Big
+Picture/Gaming Mode UI actually showing and launching the shortcut --
+this sandbox has neither.
+
+Still not addressed: CI-tested install/upgrade behavior (no rpm-ostree/
+Distrobox environment in this project's CI, same limitation as
+everything else Bazzite-specific), and real Steam Deck/Bazzite hardware
+verification (impossible from this sandbox). Given these, GitHub issue
+#10 remains open.
 
 ## Latency instrumentation assumes synced clocks
 

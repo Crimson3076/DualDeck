@@ -96,12 +96,68 @@ of those places -- it all stays in your normal home directory the whole
 time (Distrobox shares it with the container automatically), regardless
 of the container or central install directory being removed.
 
-**Not verified on a real Bazzite install** (no rpm-ostree/Distrobox
-environment in this project's own sandbox -- see `docs/known-limitations.md`
-for the honest account of what is and isn't confirmed here, matching this
-doc's own existing disclaimer at the top). If `distrobox` isn't
-installed at all (Bazzite ships it by default, but a different
-rpm-ostree derivative might not), the script says so and points at
+## Launching the host from Steam Big Picture/Gaming Mode
+
+Addresses the last remaining piece of GitHub issue #10's acceptance
+criteria: "the installed host can be launched from Steam Big Picture or
+Gaming Mode and accept a client connection." Double-click
+`host/install-steam-shortcut.sh` (once, in Desktop Mode, with Steam
+closed) to add a **"melonDS Remote Host"** entry to your Steam library --
+mirrors `client/install-steam-shortcut.sh`'s approach exactly, down to
+the same stage-then-swap update safety and error-log/`kdialog` failure
+visibility.
+
+This registers the shortcut's `Exe` as `launch-host.sh`, a small entry
+point that picks the right launch path for you:
+
+- **On an immutable system** (Bazzite, etc.): behaves like
+  `install-host-distrobox.sh` -- prepares (or reuses) the Distrobox
+  container the first time, then launches melonDS from inside it every
+  time the shortcut is used.
+- **On a regular Linux system**: just runs `run-host.sh` directly, same
+  as double-clicking it yourself.
+
+Like the client's shortcut, this copies the whole `host/` directory into
+the same fixed central location (`~/.config/melonds-remote/install/`)
+install-host-distrobox.sh already uses, so re-running
+`install-steam-shortcut.sh` from a newer release's extracted archive
+updates the same shortcut and the same install in place -- no
+duplicates, and the download folder can be deleted afterward.
+
+On an immutable system, the actual file staging and Distrobox/`dnf`
+setup is entirely delegated to `install-host-distrobox.sh --install-only`
+(prepares everything but doesn't launch melonDS immediately just because
+you registered a shortcut) -- this matters for the same rollback-safety
+reason install-host-distrobox.sh already has: the new files are only
+swapped into place once the container's packages actually installed
+successfully, so a failed `dnf install` during an update can never leave
+half-applied, unverified files active in place of a working install.
+
+**Uninstalling**: double-click `host/uninstall-steam-shortcut.sh` --
+removes the Steam shortcut, the central install directory, *and* the
+Distrobox container if one was created, so this alone is a complete
+uninstall once you've used the Steam-shortcut path. (If you only ever
+used `install-host-distrobox.sh` directly and never installed the
+shortcut, `uninstall-host-distrobox.sh` alone is equivalent -- it just
+doesn't know about a shortcut that was never created.)
+
+**Not verified on a real Bazzite install** (same caveat as everything
+else Bazzite-specific here): exercised end-to-end in this project's own
+sandbox using fake `distrobox`/`dnf`/`$HOME` stubs -- fresh install,
+launch, update, a simulated `dnf` failure mid-update (confirmed the
+previous working install is left completely untouched), uninstall, and
+re-uninstall idempotency all pass, on both a simulated immutable system
+and a regular one. Real Distrobox/`dnf` behavior against a genuine
+Fedora/Bazzite image, and Steam's own real Big Picture/Gaming Mode UI,
+are not exercised by this.
+
+**`install-host-distrobox.sh` itself is also not verified on a real
+Bazzite install** (no rpm-ostree/Distrobox environment in this project's
+own sandbox -- see `docs/known-limitations.md` for the honest account of
+what is and isn't confirmed here, matching this doc's own existing
+disclaimer at the top). If `distrobox` isn't installed at all (Bazzite
+ships it by default, but a different rpm-ostree derivative might not),
+the script says so and points at
 [the Distrobox project](https://github.com/89luca89/distrobox) rather
 than guessing.
 

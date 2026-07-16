@@ -82,6 +82,15 @@ chmod +x "${pkg_dir}/host/melonDS"
 ldd "${melonds_src}/build/melonDS" | awk '{print $1}' | sort -u \
     > "${pkg_dir}/host/host-shared-library-dependencies.txt"
 
+# host/ is fully self-contained (same reasoning as client/lib/ bundling
+# SDL3): these two are also needed once install-steam-shortcut.sh copies
+# host/ into ~/.config/melonds-remote/install/ -- a flat layout with no
+# scripts/ sibling of its own, unlike the client's central install
+# directory -- so run-host.sh and install-steam-shortcut.sh must find
+# them next to themselves rather than via a `../scripts/lib/` path.
+cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/host/ensure-packages.sh"
+cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/host/steam_shortcut.py"
+
 cp "${repo_build}/client/melonds-remote-client" "${pkg_dir}/client/melonds-remote-client"
 chmod +x "${pkg_dir}/client/melonds-remote-client"
 cp -a "${sdl3_install}"/lib/libSDL3.so* "${pkg_dir}/client/lib/"
@@ -332,7 +341,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 # shellcheck source=scripts/lib/ensure-packages.sh
-source ../scripts/lib/ensure-packages.sh
+source ./ensure-packages.sh
 
 ensure_packages "host runtime" \
     "libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev libarchive-dev libenet-dev libzstd-dev libfaad-dev qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-svg-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libdecor-0-dev" \
@@ -380,6 +389,11 @@ cat > "${pkg_dir}/host/install-host-distrobox.sh" <<'WRAP'
 # missing. The swapped-out previous install is kept as one backup
 # generation (*.previous) rather than deleted outright, in case you need
 # to manually go back to it.
+#
+# Pass --install-only to prepare everything (central directory, Distrobox
+# container, packages) without actually launching melonDS -- used by
+# install-steam-shortcut.sh so registering the Steam shortcut doesn't
+# also immediately start the emulator.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -396,17 +410,37 @@ if ! command -v distrobox >/dev/null 2>&1; then
     exit 1
 fi
 
-# Keep in sync with the same paths in uninstall-host-distrobox.sh and
+install_only=0
+if [[ "${1:-}" == "--install-only" ]]; then
+    install_only=1
+    shift
+fi
+
+# Keep in sync with the same paths in uninstall-host-distrobox.sh,
+# install-steam-shortcut.sh, uninstall-steam-shortcut.sh, and
 # docs/bazzite-host-setup.md's description of this path.
 central_install_dir="${HOME}/.config/melonds-remote/install"
 staging_dir="${central_install_dir}.new"
 previous_dir="${central_install_dir}.previous"
 container_name="melonds-remote-host"
 
-echo "Staging host files at ${staging_dir} ..."
-rm -rf "${staging_dir}"
-mkdir -p "${staging_dir}"
-cp -a . "${staging_dir}/"
+already_central=0
+if [[ "$(pwd)" == "${central_install_dir}" ]]; then
+    # Already running from the central directory itself -- e.g.
+    # launch-host.sh re-invoking this script on every Steam-shortcut
+    # launch, or a user double-clicking this exact copy a second time.
+    # Re-copying the directory into itself on every single launch would
+    # just waste time (and disk churn copying the melonDS binary) for no
+    # benefit, so skip straight to the container/package step below --
+    # there's nothing new to stage or swap in.
+    already_central=1
+    echo "Already installed at ${central_install_dir} -- skipping the re-copy step."
+else
+    echo "Staging host files at ${staging_dir} ..."
+    rm -rf "${staging_dir}"
+    mkdir -p "${staging_dir}"
+    cp -a . "${staging_dir}/"
+fi
 
 echo "Creating/reusing Distrobox container \"${container_name}\" (Fedora-based) ..."
 distrobox create --name "${container_name}" --image fedora:latest --yes
@@ -419,13 +453,23 @@ distrobox enter "${container_name}" -- sudo dnf install -y \
     wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel
 
 # Only reached if everything above succeeded (set -e) -- safe to swap in
-# the new install now. Keeps just one backup generation, not unbounded.
-echo "Activating the new install ..."
-rm -rf "${previous_dir}"
-if [[ -d "${central_install_dir}" ]]; then
-    mv "${central_install_dir}" "${previous_dir}"
+# the new install now (nothing to swap if already_central -- the
+# directory already IS the install). Keeps just one backup generation,
+# not unbounded.
+if [[ "${already_central}" -eq 0 ]]; then
+    echo "Activating the new install ..."
+    rm -rf "${previous_dir}"
+    if [[ -d "${central_install_dir}" ]]; then
+        mv "${central_install_dir}" "${previous_dir}"
+    fi
+    mv "${staging_dir}" "${central_install_dir}"
 fi
-mv "${staging_dir}" "${central_install_dir}"
+
+if [[ "${install_only}" -eq 1 ]]; then
+    echo "Install complete (not launching melonDS -- run this script again without" \
+         "--install-only, or use the Steam shortcut, to launch it)."
+    exit 0
+fi
 
 echo "Launching the host inside the container ..."
 exec distrobox enter "${container_name}" -- env MELONDS_REMOTE_ENABLE=1 "${central_install_dir}/melonDS" "$@"
@@ -449,7 +493,8 @@ cat > "${pkg_dir}/host/uninstall-host-distrobox.sh" <<'WRAP'
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-# Keep in sync with the same paths in install-host-distrobox.sh.
+# Keep in sync with the same paths in install-host-distrobox.sh,
+# install-steam-shortcut.sh, and uninstall-steam-shortcut.sh.
 central_install_dir="${HOME}/.config/melonds-remote/install"
 container_name="melonds-remote-host"
 
@@ -474,6 +519,222 @@ if [[ "${removed_anything}" -eq 0 ]]; then
 fi
 WRAP
 chmod +x "${pkg_dir}/host/uninstall-host-distrobox.sh"
+
+cat > "${pkg_dir}/host/launch-host.sh" <<'WRAP'
+#!/usr/bin/env bash
+# Single entry point for the host Steam Big Picture/Gaming Mode shortcut
+# (GitHub issue #10: "the installed host can be launched from Steam Big
+# Picture or Gaming Mode and accept a client connection"). Picks the
+# right launch path depending on whether this is an immutable
+# (rpm-ostree, e.g. Bazzite) system or a regular one, so the same
+# shortcut works either way without the user needing to know which
+# applies to their system. install-steam-shortcut.sh points the Steam
+# shortcut's Exe at this script, never at melonDS or run-host.sh
+# directly.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+if [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1; then
+    exec ./install-host-distrobox.sh "$@"
+else
+    exec ./run-host.sh "$@"
+fi
+WRAP
+chmod +x "${pkg_dir}/host/launch-host.sh"
+
+cat > "${pkg_dir}/host/install-steam-shortcut.sh" <<'WRAP'
+#!/usr/bin/env bash
+# Registers the melonDS Remote host as a Steam non-Steam-game shortcut,
+# so it can be launched from Steam Big Picture/Gaming Mode with only a
+# controller (GitHub issue #10). Mirrors
+# ../client/install-steam-shortcut.sh's approach, reusing the same
+# layout-agnostic steam_shortcut.py -- bundled flat alongside this
+# script rather than shared from a top-level scripts/ directory, since
+# host/ is fully self-contained (same reasoning as client/lib/ bundling
+# SDL3).
+#
+# Copies this whole host/ directory into a fixed central location
+# (~/.config/melonds-remote/install/ -- the same directory
+# install-host-distrobox.sh already uses on immutable systems) and
+# points the shortcut at launch-host.sh there, not at melonDS or
+# run-host.sh directly: that one entry point picks Distrobox or a direct
+# launch depending on whether this is an immutable system, so the same
+# shortcut works either way. Re-running this from a newer release's
+# extracted archive updates the same shortcut in place instead of
+# leaving a stale duplicate pointing at a since-deleted download folder
+# (same reasoning as the client's cross-release-directory fix).
+#
+# A failed update can't break a working install: on an immutable system,
+# staging the files AND installing the container's packages is entirely
+# delegated to install-host-distrobox.sh --install-only, whose own
+# stage-then-swap logic only activates the new files once the package
+# install actually succeeds (see that script) -- duplicating a separate
+# file copy/swap here, ahead of the package-install step, would let a
+# dnf failure leave new, not-yet-verified files active anyway, which is
+# exactly the bug this is meant to prevent. On a regular (non-immutable)
+# system there's no separate package-install step to gate on, so a
+# plain stage-then-swap file copy here is already safe on its own.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+# Surfaces failures visibly instead of just closing silently when
+# double-clicked with no visible terminal attached -- logs to a
+# persistent file and, when available (SteamOS Desktop Mode/Bazzite are
+# both KDE Plasma), pops up a graphical error dialog via kdialog. Same
+# pattern as client/install-steam-shortcut.sh.
+error_log="${HOME}/.config/melonds-remote/install.log"
+on_error() {
+    local exit_code="$1" line_no="$2" failing_cmd="$3"
+    mkdir -p "$(dirname "${error_log}")"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") install-steam-shortcut.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "melonDS Remote Host" \
+            --error "Installing the Steam shortcut failed: ${failing_cmd}
+(exit code ${exit_code})
+
+Details logged to:
+${error_log}" 2>/dev/null || true
+    fi
+}
+trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
+
+launch_options=""
+extra_args=()
+dry_run=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run) extra_args+=("$1"); dry_run=1; shift ;;
+        --force) extra_args+=("$1"); shift ;;
+        --user) extra_args+=("$1" "$2"); shift 2 ;;
+        --user=*) extra_args+=("$1"); shift ;;
+        *) launch_options+="${launch_options:+ }$1"; shift ;;
+    esac
+done
+
+# Keep in sync with the same constant in install-host-distrobox.sh,
+# uninstall-host-distrobox.sh, and uninstall-steam-shortcut.sh.
+central_install_dir="${HOME}/.config/melonds-remote/install"
+staging_dir="${central_install_dir}.new"
+previous_dir="${central_install_dir}.previous"
+
+if [[ "${dry_run}" -eq 0 ]]; then
+    if [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1; then
+        echo "Preparing the Distrobox container (this can take a few minutes the first time) ..."
+        ./install-host-distrobox.sh --install-only
+    else
+        rm -rf "${staging_dir}"
+        mkdir -p "${staging_dir}"
+        cp -a . "${staging_dir}/"
+        chmod +x "${staging_dir}"/*.sh
+
+        rm -rf "${previous_dir}"
+        if [[ -d "${central_install_dir}" ]]; then
+            mv "${central_install_dir}" "${previous_dir}"
+        fi
+        mv "${staging_dir}" "${central_install_dir}"
+    fi
+fi
+
+python3 ./steam_shortcut.py \
+    --exe "${central_install_dir}/launch-host.sh" \
+    --name "melonDS Remote Host" \
+    --launch-options "${launch_options}" \
+    "${extra_args[@]}" && shortcut_exit=0 || shortcut_exit=$?
+if [[ "${shortcut_exit}" -ne 0 ]]; then
+    on_error "${shortcut_exit}" "${LINENO}" "steam_shortcut.py"
+    exit "${shortcut_exit}"
+fi
+WRAP
+chmod +x "${pkg_dir}/host/install-steam-shortcut.sh"
+
+cat > "${pkg_dir}/host/uninstall-steam-shortcut.sh" <<'WRAP'
+#!/usr/bin/env bash
+# Removes the "melonDS Remote Host" Steam non-Steam-game shortcut added
+# by install-steam-shortcut.sh, the central install directory
+# (~/.config/melonds-remote/install) it copies everything into, and the
+# Distrobox container if one was created -- i.e. this is the complete
+# host uninstall once a Steam shortcut has been set up. (If you only
+# ever used install-host-distrobox.sh directly and never installed the
+# Steam shortcut, uninstall-host-distrobox.sh alone is equivalent.)
+#
+# Always targets the fixed central install directory below, regardless
+# of where this script itself is run from -- this exact file is also
+# the copy install-steam-shortcut.sh placed there, and must keep
+# removing the same shortcut from there indefinitely, even after the
+# original archive has been deleted (same reasoning as
+# client/uninstall-steam-shortcut.sh).
+set -euo pipefail
+
+error_log="${HOME}/.config/melonds-remote/install.log"
+on_error() {
+    local exit_code="$1" line_no="$2" failing_cmd="$3"
+    mkdir -p "$(dirname "${error_log}")"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") uninstall-steam-shortcut.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "melonDS Remote Host" \
+            --error "Removing the Steam shortcut failed: ${failing_cmd}
+(exit code ${exit_code})
+
+Details logged to:
+${error_log}" 2>/dev/null || true
+    fi
+}
+trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
+
+# Keep in sync with the same constant in install-steam-shortcut.sh,
+# install-host-distrobox.sh, and uninstall-host-distrobox.sh.
+central_install_dir="${HOME}/.config/melonds-remote/install"
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+container_name="melonds-remote-host"
+
+steam_shortcut_py=""
+for candidate in \
+    "${central_install_dir}/steam_shortcut.py" \
+    "${self_dir}/steam_shortcut.py"
+do
+    if [[ -f "${candidate}" ]]; then
+        steam_shortcut_py="${candidate}"
+        break
+    fi
+done
+
+if [[ -z "${steam_shortcut_py}" ]]; then
+    echo "Nothing installed at ${central_install_dir}, and no local copy of" \
+         "steam_shortcut.py found either -- nothing to remove."
+    exit 0
+fi
+
+python3 "${steam_shortcut_py}" \
+    --exe "${central_install_dir}/launch-host.sh" \
+    --name "melonDS Remote Host" \
+    --remove \
+    "$@"
+
+dry_run=0
+for arg in "$@"; do
+    [[ "${arg}" == "--dry-run" ]] && dry_run=1
+done
+
+if [[ "${dry_run}" -eq 0 ]]; then
+    if command -v distrobox >/dev/null 2>&1 && distrobox list 2>/dev/null | grep -qw "${container_name}"; then
+        echo "Removing Distrobox container \"${container_name}\" ..."
+        distrobox rm "${container_name}" --force
+    fi
+
+    # cd out first -- this script may itself be running from inside
+    # central_install_dir (it's the copy install-steam-shortcut.sh made
+    # there), so deleting the shell's own current directory out from
+    # under it is avoided by leaving before removing anything.
+    cd /
+    for dir in "${central_install_dir}" "${central_install_dir}.new" "${central_install_dir}.previous"; do
+        if [[ -d "${dir}" ]]; then
+            echo "Removing ${dir}"
+            rm -rf -- "${dir}"
+        fi
+    done
+fi
+WRAP
+chmod +x "${pkg_dir}/host/uninstall-steam-shortcut.sh"
 
 cp "${repo_root}/docs/building.md" "${repo_root}/docs/steam-deck-setup.md" \
    "${repo_root}/docs/bazzite-host-setup.md" "${repo_root}/docs/troubleshooting.md" \
