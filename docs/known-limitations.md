@@ -384,6 +384,64 @@ real Steam client or real Steam Deck hardware, same caveat as above --
 this is strong evidence the fix is correct but hasn't been observed
 launching a real shortcut on a real Deck.
 
+## Hardening the client install/uninstall scripts (GitHub issue #11)
+
+Filed after the above shipped, in the same rewritten-with-detailed-
+acceptance-criteria style as issue #10: asked to harden and polish the
+already-working central-install-directory workflow rather than replace
+it. Most of the acceptance criteria were already satisfied by the work
+above (single stable install location, exactly-one-shortcut updates in
+place, device identity/saved-host state already protected by keeping
+`install/` a subdirectory separate from `device_id.txt`/`last_host.txt`,
+uninstall already removing only this project's own files). Two concrete
+gaps remained and were addressed directly:
+
+- **A failed update could still lose a working install**: both
+  `install-steam-shortcut.sh` (repo and packaged) previously deleted the
+  old central install *before* copying the new one in -- a failure
+  partway through a copy left nothing usable. Now applies the exact same
+  stage-then-swap pattern already built for the host's
+  `install-host-distrobox.sh` (see the Bazzite section above): new files
+  are staged at `install.new`, and only swapped into place (keeping the
+  replaced version as a one-generation `install.previous` backup) once
+  staging fully succeeds. **Verified**: a real successful install; a
+  simulated failure inside `steam_shortcut.py` itself (Steam "running")
+  correctly logs the error while leaving already-staged files in place
+  (harmless, since the shortcut's `Exe` path never changes between
+  versions); and, more usefully, an actual accidental exercise of a
+  *different* real failure path (the auto-build step failing when the
+  source binary went missing) confirmed the existing install directory's
+  contents were byte-for-byte unchanged (compared via checksum)
+  afterward, with the failure logged accurately. `uninstall-steam-shortcut.sh`
+  now also cleans up `install.new`/`install.previous` alongside `install/`
+  itself, verified via the same fake-`$HOME` technique, including that a
+  second uninstall run (or one against a machine where nothing was ever
+  installed) is a clean no-op.
+- **Errors could vanish with nothing to see** if a script run by
+  double-clicking it in Dolphin has no visible terminal at all --
+  install/uninstall now both trap any failure, log a timestamped,
+  specific message (including the exact failing command) to
+  `~/.config/melonds-remote-client/install.log`, and pop up a graphical
+  `kdialog` error box when available (SteamOS Desktop Mode and Bazzite
+  are both KDE Plasma, where `kdialog` is a standard component) --
+  degrading silently to log-only if `kdialog` isn't present, never
+  failing the error-reporting itself. **Verified** the logging path
+  directly (no `kdialog` binary exists in this project's sandbox to
+  exercise that specific branch, so that part is reviewed/syntax-checked
+  only, not run-verified) -- confirmed accurate, correctly-timestamped
+  log entries for both a `steam_shortcut.py`-level failure and a
+  build-step failure, in both the repo and packaged variants.
+- Also documented shortcuts.vdf recovery steps in
+  `docs/troubleshooting.md` (restoring from the automatic `.bak-*`
+  backup, diagnosing a stuck "Steam appears to be running" false
+  positive, and where to look for the new error log).
+
+Still not addressed from issue #11's scope: controller-friendly artwork/
+icon metadata for the shortcut (currently blank -- no icon asset exists
+anywhere in this repo yet to bundle), and a repeatable/automated test
+suite for the install/update/uninstall paths beyond this project's
+existing manual fake-`$HOME` verification technique.
+
 ## Release scripts streamlined: no user-selection prompt, no `.desktop` launchers (tried, reverted)
 
 Two follow-up requests after the above: reduce manual input further, and

@@ -154,7 +154,14 @@ again later from a newer release still updates the same shortcut instead
 of leaving a stale duplicate behind. This also fixes an earlier bug
 where a shortcut pointed straight at the raw client binary instead of
 the wrapper that sets up its bundled SDL3 library, which could leave the
-shortcut launching to nothing on a real Deck.
+shortcut launching to nothing on a real Deck. A failed update can't lose
+a working install either -- the new files are staged separately and only
+swapped in once that succeeds, keeping the replaced version as a
+one-generation backup. If either script ever fails, check
+`~/.config/melonds-remote-client/install.log` (or the graphical error
+box it pops up on KDE Plasma, via `kdialog`) -- see
+`docs/troubleshooting.md` if Steam's shortcut list itself looks wrong
+afterward.
 
 **Removing it**: with Steam closed, double-click
 `client/uninstall-steam-shortcut.sh` (or run

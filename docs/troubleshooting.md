@@ -207,6 +207,42 @@ Start/View/B -- setting the layout to a plain "Gamepad" template (rather
 than whatever Steam auto-picked) makes buttons pass straight through
 rather than also firing keyboard shortcuts.
 
+### install-steam-shortcut.sh / uninstall-steam-shortcut.sh failed, or Steam's shortcuts.vdf looks wrong
+
+These scripts are careful about editing Steam's binary `shortcuts.vdf`
+(see `scripts/lib/steam_shortcut.py`'s module docstring), but if
+something still goes wrong:
+
+- **Where to look first**: `~/.config/melonds-remote-client/install.log`
+  -- both scripts log every failure there with a timestamp and the exact
+  command that failed, and (on SteamOS Desktop Mode/Bazzite, both KDE
+  Plasma) pop up a `kdialog` error box too, specifically because
+  double-clicking a script from Dolphin often has no visible terminal to
+  read a stray error message from otherwise.
+- **Restoring a previous shortcuts.vdf**: every real write backs up the
+  existing file first, right next to it, as
+  `shortcuts.vdf.bak-<unix-timestamp>` (see the "Backed up existing
+  shortcuts.vdf to ..." line these scripts print). If Steam's shortcuts
+  list looks wrong or `shortcuts.vdf` won't parse (e.g. a Steam update
+  changed its format, or it was interrupted mid-write by something other
+  than this project's own scripts, which round-trip-validate their own
+  output before ever touching the real file), quit Steam, copy the most
+  recent `.bak-*` file back over `shortcuts.vdf` in the same
+  `<Steam userdata>/<user-id>/config/` folder, and relaunch Steam.
+- **"Steam appears to be running" but you're sure it's fully quit**:
+  the check is a plain `pgrep -x steam`; a stuck background Steam
+  process (e.g. `steamwebhelper` still lingering after a crash) can
+  trigger a false positive. Confirm with `pgrep -a steam` in a terminal,
+  end any lingering process, or pass `--force` if you're confident it's
+  safe.
+- **A failed install/update didn't lose my previous working shortcut**:
+  `install-steam-shortcut.sh` stages the new files separately and only
+  swaps them into place once staging succeeds, keeping the replaced
+  version as `~/.config/melonds-remote-client/install.previous` rather
+  than deleting it outright -- if you ever need to manually go back to
+  it, move that directory back to `~/.config/melonds-remote-client/install`
+  yourself (with Steam closed).
+
 ## Diagnostics
 
 Run the host with `--stats-interval-ms 1000` (or another short interval)

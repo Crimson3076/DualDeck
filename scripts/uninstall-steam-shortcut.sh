@@ -24,6 +24,27 @@
 #   ./scripts/uninstall-steam-shortcut.sh --dry-run   # preview only, writes nothing
 set -euo pipefail
 
+# Surfaces failures visibly instead of just closing silently when
+# double-clicked with no visible terminal attached (GitHub issue #11) --
+# logs to a persistent file and, when available (SteamOS Desktop Mode/
+# Bazzite are both KDE Plasma), pops up a graphical error dialog via
+# kdialog.
+error_log="${HOME}/.config/melonds-remote-client/install.log"
+on_error() {
+    local exit_code="$1" line_no="$2" failing_cmd="$3"
+    mkdir -p "$(dirname "${error_log}")"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") uninstall-steam-shortcut.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "melonDS Remote" \
+            --error "Removing the Steam shortcut failed: ${failing_cmd}
+(exit code ${exit_code})
+
+Details logged to:
+${error_log}" 2>/dev/null || true
+    fi
+}
+trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
+
 # Keep in sync with the same constant in scripts/install-steam-shortcut.sh
 # and the packaged client/install-steam-shortcut.sh / uninstall-steam-shortcut.sh
 # heredocs in scripts/build-release.sh.
@@ -58,8 +79,16 @@ for arg in "$@"; do
     [[ "${arg}" == "--dry-run" ]] && dry_run=1
 done
 
-if [[ "${dry_run}" -eq 0 && -d "${central_install_dir}" ]]; then
-    echo "Removing ${central_install_dir}"
+if [[ "${dry_run}" -eq 0 ]]; then
+    # cd out first -- this script may itself be running from inside
+    # central_install_dir (it's the copy install-steam-shortcut.sh made
+    # there), so deleting the shell's own current directory out from
+    # under it is avoided by leaving before removing anything.
     cd /
-    rm -rf -- "${central_install_dir}"
+    for dir in "${central_install_dir}" "${central_install_dir}.new" "${central_install_dir}.previous"; do
+        if [[ -d "${dir}" ]]; then
+            echo "Removing ${dir}"
+            rm -rf -- "${dir}"
+        fi
+    done
 fi

@@ -14,6 +14,11 @@
 # uninstall-steam-shortcut.sh keeps working even if this checkout moves
 # or is deleted later.
 #
+# A failed update can't break a working install (GitHub issue #11): the
+# new files are staged in a separate directory first and only swapped
+# into place once staging succeeds, keeping the replaced version as a
+# one-generation backup (*.previous) rather than deleting it outright.
+#
 # Usage:
 #   ./scripts/install-steam-shortcut.sh                    # discovery mode, no fixed host
 #   ./scripts/install-steam-shortcut.sh --host 192.168.1.50 # skip discovery, fixed host
@@ -23,6 +28,27 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_dir="${repo_root}/build"
 binary="${build_dir}/client/melonds-remote-client"
+
+# Surfaces failures visibly instead of just closing silently when
+# double-clicked with no visible terminal attached (GitHub issue #11) --
+# logs to a persistent file and, when available (SteamOS Desktop Mode/
+# Bazzite are both KDE Plasma), pops up a graphical error dialog via
+# kdialog.
+error_log="${HOME}/.config/melonds-remote-client/install.log"
+on_error() {
+    local exit_code="$1" line_no="$2" failing_cmd="$3"
+    mkdir -p "$(dirname "${error_log}")"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") install-steam-shortcut.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "melonDS Remote" \
+            --error "Installing the Steam shortcut failed: ${failing_cmd}
+(exit code ${exit_code})
+
+Details logged to:
+${error_log}" 2>/dev/null || true
+    fi
+}
+trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
 
 if [[ ! -x "${binary}" ]]; then
     echo "Client binary not found, building..." >&2
@@ -63,22 +89,36 @@ done
 # and the packaged client/install-steam-shortcut.sh / uninstall-steam-shortcut.sh
 # heredocs in scripts/build-release.sh.
 central_install_dir="${HOME}/.config/melonds-remote-client/install"
+staging_dir="${central_install_dir}.new"
+previous_dir="${central_install_dir}.previous"
 exe="${central_install_dir}/client/melonds-remote-client"
 
 if [[ "${dry_run}" -eq 0 ]]; then
-    rm -rf "${central_install_dir}"
-    mkdir -p "${central_install_dir}/client" "${central_install_dir}/scripts/lib"
+    rm -rf "${staging_dir}"
+    mkdir -p "${staging_dir}/client" "${staging_dir}/scripts/lib"
 
-    cp "${binary}" "${central_install_dir}/client/melonds-remote-client"
-    chmod +x "${central_install_dir}/client/melonds-remote-client"
+    cp "${binary}" "${staging_dir}/client/melonds-remote-client"
+    chmod +x "${staging_dir}/client/melonds-remote-client"
 
-    cp "${repo_root}/scripts/lib/steam_shortcut.py" "${central_install_dir}/scripts/lib/steam_shortcut.py"
+    cp "${repo_root}/scripts/lib/steam_shortcut.py" "${staging_dir}/scripts/lib/steam_shortcut.py"
 
-    cp "${repo_root}/scripts/uninstall-steam-shortcut.sh" "${central_install_dir}/client/uninstall-steam-shortcut.sh"
-    chmod +x "${central_install_dir}/client/uninstall-steam-shortcut.sh"
+    cp "${repo_root}/scripts/uninstall-steam-shortcut.sh" "${staging_dir}/client/uninstall-steam-shortcut.sh"
+    chmod +x "${staging_dir}/client/uninstall-steam-shortcut.sh"
+
+    # Only reached if staging succeeded -- safe to activate now. Keeps
+    # just one backup generation, not unbounded.
+    rm -rf "${previous_dir}"
+    if [[ -d "${central_install_dir}" ]]; then
+        mv "${central_install_dir}" "${previous_dir}"
+    fi
+    mv "${staging_dir}" "${central_install_dir}"
 fi
 
-exec python3 "${repo_root}/scripts/lib/steam_shortcut.py" \
+python3 "${repo_root}/scripts/lib/steam_shortcut.py" \
     --exe "${exe}" \
     --launch-options "${launch_options}" \
-    "${extra_args[@]}"
+    "${extra_args[@]}" && shortcut_exit=0 || shortcut_exit=$?
+if [[ "${shortcut_exit}" -ne 0 ]]; then
+    on_error "${shortcut_exit}" "${LINENO}" "steam_shortcut.py"
+    exit "${shortcut_exit}"
+fi
