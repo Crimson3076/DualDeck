@@ -42,18 +42,24 @@ prompt if run from a terminal without `kdialog`) with four choices:
 - **Remove from Steam / uninstall** -- removes the Steam shortcut, the
   installed files, and the Distrobox container if one was created (with
   a confirmation first). Never touches ROMs, saves, or firmware.
-- **Check for updates** -- a read-only check against the latest GitHub
-  release; never downloads or installs anything by itself.
+- **Check for updates / update** -- checks the latest GitHub release
+  against your installed version. If you're already current, that's all
+  it does. If a newer version exists, it asks for confirmation before
+  doing anything further -- say yes and it downloads that release,
+  installs it over your current one (same stage-then-swap safety as
+  everything else here), and refreshes the Steam shortcut. Say no, or
+  there's nothing newer, and nothing is downloaded or changed.
 
 Everything this menu does is really just a thin front end over the
 individual scripts described below (`run-host.sh`,
-`install-host-distrobox.sh`, `install-steam-shortcut.sh`, etc.) -- those
-still exist and still work standalone if you want to script something
-directly or troubleshoot a specific step, but there's no need to know
-which one applies to your system: the menu figures that out for you.
-See "Easier Bazzite host install and updates" below for what the
-Distrobox path actually does under the hood, and "Launching the host
-from Steam Big Picture/Gaming Mode" for the Steam-shortcut part.
+`install-host-distrobox.sh`, `install-steam-shortcut.sh`, `apply-update.sh`,
+etc.) -- those still exist and still work standalone if you want to
+script something directly or troubleshoot a specific step, but there's
+no need to know which one applies to your system: the menu figures that
+out for you. See "Easier Bazzite host install and updates" below for
+what the Distrobox path actually does under the hood, and "Launching
+the host from Steam Big Picture/Gaming Mode" for the Steam-shortcut
+part.
 
 On Bazzite's KDE Plasma/Dolphin desktop, double-clicking an executable
 `.sh` file offers to run it directly -- no terminal or typing needed.

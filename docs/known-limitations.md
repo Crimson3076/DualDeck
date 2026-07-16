@@ -1073,11 +1073,89 @@ return-value handling are both correct. **Not verified**: a real
 `kdialog` binary or Steam's actual Big Picture/Gaming Mode UI -- neither
 exists in this sandbox.
 
-Still not addressed: CI-tested install/upgrade behavior (no rpm-ostree/
-Distrobox environment in this project's CI, same limitation as
-everything else Bazzite-specific), and real Steam Deck/Bazzite hardware
-verification (impossible from this sandbox). Given these, GitHub issue
-#10 remains open.
+Still not addressed at the time: real one-click *updating* (as opposed
+to just checking) -- see below -- and CI-tested install/upgrade
+behavior.
+
+## "Check for updates" now actually offers to update (GitHub issue #10, continued)
+
+User follow-up: "does check for updates also auto install updates? it
+should do that for the user." `check-for-updates.sh` itself stayed
+exactly as it was (read-only, shared by both host and client, safe to
+run unattended or in scripts) -- but `melonds-remote-host.sh`'s "Check
+for updates" menu choice now parses its report, and if a newer version
+exists, asks for confirmation (`kdialog --yesno` or a terminal `y/N`
+prompt) before doing anything further. Confirm and it hands off to a
+new `host/apply-update.sh`, which downloads the latest release from a
+fixed GitHub Releases URL (`.../releases/latest/download/melonds-remote-linux-x86_64.tar.gz`
+-- a stable redirect that always points at whichever release is
+currently latest, no API/JSON parsing needed for the download step
+itself, only for the version-string comparison `check-for-updates.sh`
+already did), extracts it to a temp directory, and hands off *again* --
+to that freshly-downloaded release's own `install-steam-shortcut.sh
+--force`. That reuse is deliberate: none of the stage-then-swap file
+safety or Distrobox/`dnf`-gated activation logic verified earlier in
+this file needed to be duplicated or re-risked here -- `apply-update.sh`'s
+only real job is fetching and extracting. `--force` is passed through
+so the update doesn't silently do nothing just because Steam happens to
+be open at the time (the confirmation prompt already covers "are you
+sure"); if Steam genuinely was never set up on the machine, the
+Steam-shortcut part fails visibly (its own error-trap logs and shows a
+dialog) while the file update itself still completes regardless, since
+that copy step doesn't depend on Steam at all.
+
+**A real gap was found and fixed while verifying this**: `check-for-updates.sh`
+and the archive's top-level `VERSION` file were never being copied into
+the central install directory by `install-host-distrobox.sh`/
+`install-steam-shortcut.sh` -- only `host/`'s own contents were. That's
+invisible as long as a user always re-launches from wherever they most
+recently downloaded and extracted an archive, but `melonds-remote-host.sh`
+itself *is* one of the files that gets copied into the central
+directory (it's a flat sibling inside `host/`), and its "Check for
+updates" choice references `../check-for-updates.sh` -- so running that
+same menu script a second time, from inside the central directory
+instead of a fresh download (e.g. after deleting the original archive,
+which the docs already say is safe to do), would fail with a
+file-not-found error the first time anyone actually exercised that
+path. Fixed by having both installer scripts also copy
+`check-for-updates.sh`/`VERSION` to `~/.config/melonds-remote/` (one
+level up from `install/`, as stable siblings that survive the
+`install`/`install.previous` swap dance), which happens to resolve via
+the *same* unmodified `../check-for-updates.sh` reference regardless of
+which of the two locations `melonds-remote-host.sh` is currently
+running from. Both uninstallers were updated to remove these two
+sibling files too, so uninstalling stays complete.
+
+**Verified**: with fake `distrobox`/`dnf`/`$HOME` stubs for the
+install/uninstall/rollback mechanics (as before), but the actual
+download-and-extract step was exercised against the **real, currently
+published GitHub release** (not a fake stub) -- a real `curl` download,
+real `tar` extraction, and a real invocation of that release's own
+`install-steam-shortcut.sh --force`, including one run that hit a
+genuine transient GitHub 503 mid-test (unrelated to this change --
+proof `check-for-updates.sh`'s existing "couldn't reach GitHub, exit 0"
+degradation path works under a real failure, not just a simulated one)
+and a later successful run against the same real endpoint once it
+recovered. Confirmed: the temp download directory is always cleaned up
+(via an `EXIT` trap, deliberately *not* skipped by an `exec` at the
+handoff point, since `exec` replacing the process image would skip
+pending traps and leak the temp directory); `check-for-updates.sh`/
+`VERSION` correctly resolve via `../check-for-updates.sh` both from the
+original archive location and from inside the central install
+directory after the fix; both uninstallers correctly remove the two
+sibling files alongside everything else, idempotently. **Not verified**:
+a real `kdialog` binary showing the actual confirmation dialog, or
+letting an update run to completion against a genuine Bazzite/Distrobox
+environment -- neither exists in this sandbox.
+
+Still not addressed: the same auto-update treatment for the client
+(`client/install-steam-shortcut.sh`/`run-client.sh` don't have an
+equivalent "check and offer to update" menu, since the client has no
+consolidated menu script at all yet -- only the host does), CI-tested
+install/upgrade behavior (no rpm-ostree/Distrobox environment in this
+project's CI, same limitation as everything else Bazzite-specific), and
+real Steam Deck/Bazzite hardware verification (impossible from this
+sandbox). Given these, GitHub issue #10 remains open.
 
 ## Latency instrumentation assumes synced clocks
 

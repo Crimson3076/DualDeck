@@ -440,6 +440,17 @@ else
     rm -rf "${staging_dir}"
     mkdir -p "${staging_dir}"
     cp -a . "${staging_dir}/"
+
+    # So check-for-updates.sh keeps working via melonds-remote-host.sh's
+    # "../check-for-updates.sh" reference even when a copy of that menu
+    # script is later run from inside the central directory itself
+    # (e.g. after the original downloaded archive has been deleted) --
+    # these two live one level up, as siblings of install/, so they
+    # survive the install/install.previous swap below untouched.
+    # Best-effort: a missing source (e.g. this got invoked some other
+    # way) shouldn't fail the whole install over a convenience file.
+    cp "../check-for-updates.sh" "$(dirname "${central_install_dir}")/check-for-updates.sh" 2>/dev/null || true
+    cp "../VERSION" "$(dirname "${central_install_dir}")/VERSION" 2>/dev/null || true
 fi
 
 echo "Creating/reusing Distrobox container \"${container_name}\" (Fedora-based) ..."
@@ -510,6 +521,16 @@ for dir in "${central_install_dir}" "${central_install_dir}.new" "${central_inst
     if [[ -d "${dir}" ]]; then
         echo "Removing ${dir} ..."
         rm -rf -- "${dir}"
+        removed_anything=1
+    fi
+done
+
+# check-for-updates.sh/VERSION are staged as siblings of install/ (see
+# install-host-distrobox.sh/install-steam-shortcut.sh), not inside any
+# of the three directories just removed above -- clean those up too.
+for file in "$(dirname "${central_install_dir}")/check-for-updates.sh" "$(dirname "${central_install_dir}")/VERSION"; do
+    if [[ -f "${file}" ]]; then
+        rm -f -- "${file}"
         removed_anything=1
     fi
 done
@@ -602,7 +623,7 @@ choose_action() {
             launch "Launch melonDS now" \
             steam-add "Add to Steam (Big Picture / Gaming Mode)" \
             steam-remove "Remove from Steam / uninstall" \
-            update "Check for updates" \
+            update "Check for updates / update" \
             2>/dev/null || echo "cancel"
     else
         # All of this goes to stderr, not stdout -- the caller captures
@@ -615,7 +636,7 @@ choose_action() {
             echo "  1) Launch melonDS now"
             echo "  2) Add to Steam (Big Picture / Gaming Mode)"
             echo "  3) Remove from Steam / uninstall"
-            echo "  4) Check for updates"
+            echo "  4) Check for updates / update"
             echo "  5) Exit"
         } >&2
         read -rp "Choice [1-5]: " choice
@@ -655,7 +676,22 @@ case "${action}" in
         fi
         ;;
     update)
-        info "$(../check-for-updates.sh)"
+        update_report="$(../check-for-updates.sh)"
+        if echo "${update_report}" | grep -q "update available:"; then
+            latest_version="$(echo "${update_report}" | sed -n 's/.*update available: //p' | head -1)"
+            if confirm "${update_report}
+
+Install ${latest_version} now? This downloads it from GitHub and also adds/updates the Steam shortcut."; then
+                if ./apply-update.sh; then
+                    info "Updated to ${latest_version}. Restart Steam (or switch to Gaming Mode) to see the change."
+                fi
+                # A failure here already logged and showed its own error
+                # dialog (apply-update.sh has the same error-trap pattern
+                # as this script) -- nothing more to do.
+            fi
+        else
+            info "${update_report}"
+        fi
         ;;
     *)
         exit 0
@@ -663,6 +699,81 @@ case "${action}" in
 esac
 WRAP
 chmod +x "${pkg_dir}/host/melonds-remote-host.sh"
+
+cat > "${pkg_dir}/host/apply-update.sh" <<'WRAP'
+#!/usr/bin/env bash
+# Downloads the latest melonDS Remote release and installs it, by
+# handing off to that release's own install-steam-shortcut.sh --
+# reusing its already-verified stage-then-swap file safety and
+# Distrobox/dnf-gated activation on immutable systems, rather than
+# duplicating any of that logic here. This script's only job is
+# fetching and extracting the new release archive. Normally invoked
+# from melonds-remote-host.sh's "Check for updates" menu choice after
+# the user confirms; also runnable standalone.
+#
+# Passes --force through to install-steam-shortcut.sh so an update
+# doesn't silently do nothing just because Steam happens to be open --
+# the confirmation prompt in the menu is the actual "are you sure" gate
+# here, not that check. If Steam genuinely was never set up on this
+# machine, installing the Steam shortcut part fails visibly (its own
+# error-trap logs and shows a dialog) while the files themselves are
+# still updated either way, since that copy step doesn't depend on
+# Steam at all.
+#
+# Only ever downloads from this exact, hardcoded GitHub Releases URL
+# over HTTPS -- never anything derived from user input, an environment
+# variable, or a config file.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+error_log="${HOME}/.config/melonds-remote/install.log"
+on_error() {
+    local exit_code="$1" line_no="$2" failing_cmd="$3"
+    mkdir -p "$(dirname "${error_log}")"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") apply-update.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "melonDS Remote Host" --error "Updating failed: ${failing_cmd}
+(exit code ${exit_code})
+
+Details logged to:
+${error_log}" 2>/dev/null || true
+    fi
+}
+trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
+
+if ! command -v curl >/dev/null 2>&1; then
+    echo "error: curl is required to download updates -- install it, or download" >&2
+    echo "the latest release manually from https://github.com/Crimson3076/DualDeck/releases/latest" >&2
+    exit 1
+fi
+
+repo="Crimson3076/DualDeck"
+download_url="https://github.com/${repo}/releases/latest/download/melonds-remote-linux-x86_64.tar.gz"
+
+work_dir="$(mktemp -d)"
+trap 'rm -rf "${work_dir}"' EXIT
+
+echo "Downloading the latest release..."
+curl -fsSL --max-time 180 -o "${work_dir}/release.tar.gz" "${download_url}"
+
+echo "Extracting..."
+tar xzf "${work_dir}/release.tar.gz" -C "${work_dir}"
+
+extracted_dir=""
+for candidate in "${work_dir}"/melonds-remote-*; do
+    [[ -d "${candidate}" ]] && extracted_dir="${candidate}" && break
+done
+if [[ -z "${extracted_dir}" ]]; then
+    echo "error: couldn't find the extracted release directory" >&2
+    exit 1
+fi
+
+echo "Installing..."
+# Not exec'd: the work_dir EXIT trap above must still fire to clean up
+# the download afterward, which exec'ing over this process would skip.
+"${extracted_dir}/host/install-steam-shortcut.sh" --force
+WRAP
+chmod +x "${pkg_dir}/host/apply-update.sh"
 
 cat > "${pkg_dir}/host/install-steam-shortcut.sh" <<'WRAP'
 #!/usr/bin/env bash
@@ -754,6 +865,13 @@ if [[ "${dry_run}" -eq 0 ]]; then
             mv "${central_install_dir}" "${previous_dir}"
         fi
         mv "${staging_dir}" "${central_install_dir}"
+
+        # Same reasoning as install-host-distrobox.sh's equivalent copy:
+        # keeps "../check-for-updates.sh" resolvable from a copy of
+        # melonds-remote-host.sh later run from inside the central
+        # directory itself.
+        cp "../check-for-updates.sh" "$(dirname "${central_install_dir}")/check-for-updates.sh" 2>/dev/null || true
+        cp "../VERSION" "$(dirname "${central_install_dir}")/VERSION" 2>/dev/null || true
     fi
 fi
 
@@ -854,6 +972,12 @@ if [[ "${dry_run}" -eq 0 ]]; then
             rm -rf -- "${dir}"
         fi
     done
+
+    # check-for-updates.sh/VERSION are staged as siblings of install/
+    # (see install-steam-shortcut.sh/install-host-distrobox.sh), not
+    # inside any of the three directories just removed above.
+    rm -f -- "$(dirname "${central_install_dir}")/check-for-updates.sh" \
+             "$(dirname "${central_install_dir}")/VERSION"
 fi
 WRAP
 chmod +x "${pkg_dir}/host/uninstall-steam-shortcut.sh"
