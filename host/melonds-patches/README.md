@@ -291,6 +291,31 @@ Qt6, SDL2, GCC 13) — not just written and assumed correct:
     but this sandbox can't create a compute-capable GL context to check),
     and real Steam Deck hardware/GPU (this was verified against Mesa
     software rendering only).
+16. **Config/UI toggle for the remote server** (closes the "No Config/UI
+    toggle" limitation, and the melonds-remote project's GitHub issue
+    #3 -- "integrate into melonDS without launching from run-host.sh"):
+    added persisted `MelonDSRemote.*` Config keys (`Config.cpp`) mirroring
+    each `MELONDS_REMOTE_*` env var, checked as a fallback whenever the
+    matching env var isn't set (`EmuInstance.cpp`), plus an actual
+    checkbox -- **"Enable melonDS Remote (Steam Deck streaming)"** -- on
+    Emu Settings' General tab (`EmuSettingsDialog.ui`/`.cpp`) for
+    `MelonDSRemote.Enable` specifically, the one setting that actually
+    needs to be turned on rather than just have a sensible default.
+    **Verified end-to-end** against this exact patched binary: launched
+    with zero `MELONDS_REMOTE_*` env vars set (simulating a direct
+    Steam/EmuDeck shortcut launch, no `run-host.sh`-style wrapper) --
+    confirmed the remote server does *not* start; opened Emu Settings via
+    the real Qt UI (driven with `xdotool` under Xvfb, screenshotted with
+    `import` at each step to confirm the checkbox rendered and toggled),
+    checked the new box, clicked OK, clicked through the resulting
+    "emulation will be reset" confirmation dialog, and confirmed
+    `melonDS.toml` now had `[MelonDSRemote]\nEnable = true`; killed and
+    relaunched the process with the same zero-env-var command line, and
+    this time the log showed `NetServer: listening on 0.0.0.0
+    (control=8760...)` / `melonds-remote: remote server enabled`, with a
+    real socket connection to port 8760 succeeding -- confirming the
+    Config-only path genuinely starts the server with no env vars or
+    wrapper script involved.
 
 **A stdout-buffering gotcha surfaced while verifying item 12**: an early
 attempt to observe the `onClientConnectionChanged` log lines above via
@@ -333,9 +358,27 @@ list above), so this should be mechanical in most cases.
 
 ## Running with the remote server enabled
 
-There is no Config/UI toggle yet (deliberately -- see "smallest viable
-implementation" in `docs/melonds-integration-analysis.md`). Enable it via
-environment variables before launching the patched `melonDS`:
+Two ways to enable it, checked in this order (env var wins if set, for
+scripting/CI use -- see `EmuInstance.cpp`):
+
+1. **Emu Settings checkbox** (persisted, works with any launch method --
+   Steam/EmuDeck shortcut, `melonDS` run directly, whatever): open
+   **Config > Emu settings > General** and check **"Enable melonDS
+   Remote (Steam Deck streaming)"**, then OK through the "emulation will
+   be reset" prompt. This is the fix for the "only works via a wrapper
+   script setting env vars" gap (there previously was no Config/UI
+   toggle at all -- see the melonds-integration-analysis.md history
+   below) -- it takes effect on melonDS's *next launch*, not live,
+   since the remote server is constructed once at `EmuInstance` startup.
+   Bind address/ports/auth-token/state-dir/discovery all have matching
+   `MelonDSRemote.*` Config keys (see `Config.cpp`) if you need to
+   change them from their defaults without env vars either -- there's no
+   UI for those yet, only the checkbox, so set them by editing
+   `melonDS.toml` directly (`[MelonDSRemote]` section) if needed.
+2. **Environment variables** (unchanged, still useful for scripting/CI
+   -- e.g. a fresh sandbox with no persisted config, or overriding the
+   checkbox for one run without changing it): set before launching the
+   patched `melonDS`:
 
 ```sh
 MELONDS_REMOTE_ENABLE=1 \
@@ -367,7 +410,11 @@ one-client-at-a-time v0.1 scope.
 
 ## Known limitations of this patch specifically
 
-- No Config/UI toggle -- environment variables only.
+- A basic Config/UI toggle now exists (the Emu Settings checkbox --
+  see "Running with the remote server enabled" above), enough to make
+  it work without a wrapper script setting env vars. Bind
+  address/ports/auth-token/state-dir/discovery still have no UI, only
+  Config keys you'd set by hand-editing `melonDS.toml`.
 - All three 3D renderers (Software, OpenGL, OpenGLCompute) now produce
   frames for the remote client -- see "OpenGL/OpenGLCompute video
   capture" below. `OpenGLCompute` specifically hasn't been independently

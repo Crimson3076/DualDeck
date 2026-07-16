@@ -210,6 +210,37 @@ which this sandbox's software rasterizer doesn't support), and real
 Steam Deck hardware (the actual GPU/driver this was originally reported
 on).
 
+## Config/UI toggle for the remote server: implemented (was env-var-only)
+
+Filed as a GitHub issue against this project ("integrate into melonDS
+without launching from run-host.sh -- useful for users who have games
+launching via Steam Big Picture"): previously, the only way to turn the
+remote server on at all was `MELONDS_REMOTE_ENABLE=1` set before
+launching the patched `melonDS`, which meant it silently never started
+for anyone launching melonDS directly from a Steam/EmuDeck shortcut
+(the normal way Big Picture/Gaming Mode launches anything) instead of
+through a wrapper script that sets that env var.
+
+Fixed by adding persisted `MelonDSRemote.*` Config keys (mirroring each
+`MELONDS_REMOTE_*` env var) that are read as a fallback whenever the env
+var isn't set, plus an actual **"Enable melonDS Remote (Steam Deck
+streaming)"** checkbox on Emu Settings' General tab for the one setting
+that actually needs deliberately turning on (the rest -- bind
+address/ports/auth token/state dir/discovery -- already have sensible
+defaults matching the old env-var defaults, so they don't need their own
+UI to be usable, just Config keys for anyone who wants to override
+them). Takes effect on melonDS's next launch, not live, since the remote
+server is constructed once when the process starts.
+
+**Verified end-to-end** against the real patched binary: with zero
+`MELONDS_REMOTE_*` env vars set, the remote server did not start;
+toggled the new checkbox on via the real Qt UI (driven with `xdotool`
+under Xvfb) and confirmed `melonDS.toml` persisted
+`MelonDSRemote.Enable = true`; killed and relaunched the same
+zero-env-var command, and this time the remote server started and
+accepted a real socket connection on its own -- see
+`host/melonds-patches/README.md` item 16 for the full account.
+
 ## The SDL3 client: build- and run-verified, and now tested once on real Steam Deck hardware
 
 Earlier passes of this document said the client had never been compiled,
