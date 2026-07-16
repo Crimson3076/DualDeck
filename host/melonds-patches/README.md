@@ -240,6 +240,23 @@ Qt6, SDL2, GCC 13) — not just written and assumed correct:
     remote touch set it, which is an unambiguous logic gap given
     `EmuThread.cpp`'s per-frame `isTouching ? TouchScreen(...) :
     ReleaseScreen()` check.
+14. **One-time diagnostic log when the remote client gets no video**
+    (real Steam Deck hardware surfaced this: controls/touch worked, video
+    didn't): `EmuThread.cpp`'s frame-push block now has an `else` branch
+    for when `GPU::GetFramebuffers()` returns false/no bottom buffer
+    while `remoteServer` is active, printing a specific one-time message
+    telling the host operator to switch the 3D renderer to Software (see
+    `docs/known-limitations.md`'s "round 2" real-usage entry and
+    `docs/troubleshooting.md`). Verified end-to-end against this exact
+    patched binary + the real homebrew test ROM + the real SDL3 client
+    under Xvfb: with the software renderer (this sandbox's default), the
+    happy path is unaffected (`NetServer: stats -- ... video: sent=286
+    (57.1 fps) ...` kept incrementing, and the new warning did **not**
+    fire) -- confirming the added `else` branch doesn't regress the
+    existing success path. The warning branch itself couldn't be
+    triggered in this sandbox (no GPU to switch to an OpenGL renderer
+    with), so it's build- and code-review-verified for the failure case,
+    not observed firing for real.
 
 **A stdout-buffering gotcha surfaced while verifying item 12**: an early
 attempt to observe the `onClientConnectionChanged` log lines above via

@@ -387,7 +387,7 @@ index a0bc623..a237b7a 100644
      hotkeyRelease = lastHotkeyMask & ~hotkeyMask;
      lastHotkeyMask = hotkeyMask;
 diff --git a/src/frontend/qt_sdl/EmuThread.cpp b/src/frontend/qt_sdl/EmuThread.cpp
-index c3fbdfe..5fac077 100755
+index c3fbdfe..5ff450d 100755
 --- a/src/frontend/qt_sdl/EmuThread.cpp
 +++ b/src/frontend/qt_sdl/EmuThread.cpp
 @@ -55,6 +55,8 @@
@@ -399,7 +399,7 @@ index c3fbdfe..5fac077 100755
  using namespace melonDS;
  
  
-@@ -322,6 +324,33 @@ void EmuThread::run()
+@@ -322,6 +324,52 @@ void EmuThread::run()
  
              emuInstance->drawScreen();
  
@@ -427,6 +427,25 @@ index c3fbdfe..5fac077 100755
 +                {
 +                    emuInstance->remoteServer->pushBottomFrame(
 +                        botBuf, melonds_remote::host::kFrameSizeBytes);
++                }
++                else
++                {
++                    // Real-hardware report: a client connected but saw no
++                    // video at all. GetFramebuffers() returning false here
++                    // means the 3D renderer is set to OpenGL rather than
++                    // Software -- printed once (not every frame) so it's
++                    // visible without flooding the log.
++                    static bool warnedNoRemoteFramebuffer = false;
++                    if (!warnedNoRemoteFramebuffer)
++                    {
++                        warnedNoRemoteFramebuffer = true;
++                        fprintf(stderr,
++                            "melonds-remote: GPU::GetFramebuffers() returned no bottom-screen "
++                            "RAM pointer -- the remote client will show a blank/test-pattern "
++                            "screen instead of real video. This happens when the 3D renderer "
++                            "is set to OpenGL; switch Emu Settings > Video Settings > Renderer "
++                            "to \"Software\" for remote streaming to work.\n");
++                    }
 +                }
 +            }
 +

@@ -90,6 +90,12 @@ const ButtonMapping kButtonMappings[] = {
 
 constexpr int16_t kStickDeadzone = 8000;
 
+// Shown on the discovery and connecting screens (spec request: tell the
+// user how to open the menu up front, not only once it's already open --
+// the pause menu's own "START+SELECT TO CLOSE" hint doesn't help someone
+// who doesn't know to open it in the first place).
+constexpr const char* kMenuComboHint = "HOLD START + SELECT TO OPEN THE MENU";
+
 // Wall-clock (epoch) microseconds, for the wire ControllerState.clientTimestampUs
 // field specifically. Deliberately not SDL_GetTicksNS() (which is time since
 // SDL_Init(), not comparable across processes/machines) -- the host uses this
@@ -139,6 +145,8 @@ void renderDiscoverySearching(SDL_Renderer* renderer) {
     renderCenteredBitmapText(renderer, "MAKE SURE A MELONDS REMOTE HOST IS RUNNING ON THIS NETWORK",
                               static_cast<float>(kWindowHeight) / 2.0f + 40.0f, 2,
                               SDL_Color{140, 140, 140, 255});
+    renderCenteredBitmapText(renderer, kMenuComboHint, static_cast<float>(kWindowHeight) - 80.0f, 2,
+                              SDL_Color{140, 140, 140, 255});
     SDL_RenderPresent(renderer);
 }
 
@@ -173,7 +181,9 @@ void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHos
     }
 
     renderCenteredBitmapText(renderer, "D-PAD TO MOVE, A TO SELECT",
-                              static_cast<float>(kWindowHeight) - 80.0f, 2,
+                              static_cast<float>(kWindowHeight) - 100.0f, 2,
+                              SDL_Color{140, 140, 140, 255});
+    renderCenteredBitmapText(renderer, kMenuComboHint, static_cast<float>(kWindowHeight) - 60.0f, 2,
                               SDL_Color{140, 140, 140, 255});
     SDL_RenderPresent(renderer);
 }
@@ -416,10 +426,21 @@ int main(int argc, char** argv) {
         netConfig.authToken = loadOrCreateDeviceIdentity(defaultDeviceIdentityStorePath());
     }
 
-    // Debounces the Start+Select "open menu" chord so holding both down
-    // doesn't toggle the menu open-and-shut every single frame -- only
-    // acts on the transition from "not both held" to "both held".
-    bool menuChordHeldLastFrame = false;
+    // Start+Select "open menu" chord state. Requires a deliberate
+    // continuous hold (kMenuChordHoldUs) rather than triggering the instant
+    // both buttons are seen held in the same polled frame -- real Steam
+    // Deck hardware testing showed a single button press (Start, or B)
+    // opening the menu, most likely via Steam Input's default binding
+    // template synthesizing a keyboard Escape for individual buttons (see
+    // the gating on !gamepad below in the KEY_DOWN handler); requiring a
+    // sustained two-button hold is defense in depth against any single
+    // spurious button/synthesized-input report on top of that fix.
+    // menuChordSinceUs == 0 means "not currently held"; menuChordFired
+    // prevents re-triggering on every frame for as long as the hold
+    // continues, only resetting once the chord is released.
+    uint64_t menuChordSinceUs = 0;
+    bool menuChordFired = false;
+    constexpr uint64_t kMenuChordHoldUs = 350'000; // 350ms deliberate hold
 
     // Outer loop lets "Change Host" (from the in-app menu below) return to
     // the discovery/selection screen without exiting the whole process --
@@ -568,9 +589,19 @@ int main(int argc, char** argv) {
                         break;
                     case SDL_EVENT_KEY_DOWN: {
                         int count = static_cast<int>(menuItems.size());
-                        if (event.key.key == SDLK_ESCAPE) {
-                            // Desktop-mode/testing convenience: same toggle
-                            // as the Start+Select gamepad chord below.
+                        // Only honored with no gamepad connected (Desktop
+                        // Mode/keyboard testing convenience). On real Steam
+                        // Deck hardware a gamepad is always present, and
+                        // Steam Input's default binding template for a
+                        // newly-added non-Steam shortcut synthesizes a
+                        // keyboard Escape for individual button presses
+                        // (observed: B and Start both opened the menu on
+                        // real hardware even though neither is bound to it
+                        // alone in the gamepad chord below) -- gating this
+                        // on !gamepad means those synthesized keys are
+                        // ignored and only the real Start+Select gamepad
+                        // chord can open the menu.
+                        if (!gamepad && event.key.key == SDLK_ESCAPE) {
                             menuActive = !menuActive;
                             menuSelectedIndex = 0;
                         } else if (menuActive && event.key.key == SDLK_UP) {
@@ -621,15 +652,24 @@ int main(int argc, char** argv) {
 
             // Held Start+Select toggles the menu -- polled once per frame
             // (not event-driven) since it's a simultaneous-hold chord, not
-            // a single button press; edge-triggered against last frame so
-            // holding both down doesn't reopen/close it every frame.
+            // a single button press. Must be held continuously for
+            // kMenuChordHoldUs before it fires (see menuChordSinceUs's
+            // declaration above for why), and won't fire again until both
+            // buttons are released and re-pressed.
             bool menuChordHeld = gamepad && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_START) &&
                                  SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_BACK);
-            if (menuChordHeld && !menuChordHeldLastFrame) {
-                menuActive = !menuActive;
-                menuSelectedIndex = 0;
+            uint64_t nowForChordUs = SDL_GetTicksNS() / 1000;
+            if (menuChordHeld) {
+                if (menuChordSinceUs == 0) menuChordSinceUs = nowForChordUs;
+                if (!menuChordFired && nowForChordUs - menuChordSinceUs >= kMenuChordHoldUs) {
+                    menuActive = !menuActive;
+                    menuSelectedIndex = 0;
+                    menuChordFired = true;
+                }
+            } else {
+                menuChordSinceUs = 0;
+                menuChordFired = false;
             }
-            menuChordHeldLastFrame = menuChordHeld;
 
             if (menuActive) {
                 renderPauseMenu(renderer, menuItems, menuSelectedIndex);
@@ -676,6 +716,7 @@ int main(int argc, char** argv) {
                                           ? "WAITING FOR APPROVAL ON HOST " + netConfig.hostAddress + "..."
                                           : "CONNECTING TO " + netConfig.hostAddress + "...";
                 renderCenteredBitmapText(renderer, status, 24.0f, 2, SDL_Color{220, 200, 80, 255});
+                renderCenteredBitmapText(renderer, kMenuComboHint, 54.0f, 2, SDL_Color{140, 140, 140, 255});
             }
 
             SDL_RenderPresent(renderer);

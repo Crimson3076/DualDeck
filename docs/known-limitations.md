@@ -127,7 +127,7 @@ auto-launch anything at startup -- the host operator still picks a game
 through melonDS's own menu (or a `.nds` path on the command line, as
 before), just starting from a more useful default folder.
 
-## The SDL3 client: now build- and run-verified, not yet tested on real Steam Deck hardware
+## The SDL3 client: build- and run-verified, and now tested once on real Steam Deck hardware
 
 Earlier passes of this document said the client had never been compiled,
 since no SDL3 package was available in this development environment.
@@ -152,15 +152,20 @@ against it:
   (the client's connection thread is what established the session
   above), though a deliberate host-restart-mid-session test was not
   separately performed.
-- **Still open**: no manual testing has happened on real Steam Deck
-  hardware (LCD, OLED, Gaming Mode, or Desktop Mode) -- this environment
-  has no physical gamepad, and the client only accepts `SDL_Gamepad`
-  input (no keyboard fallback), so button-press-driven visual behavior
-  could not be demonstrated here, only connectivity and continuous
-  video/input traffic. `SPEC.md` section 19's "Manual Steam Deck tests"
-  list is still entirely open. The binary built here is also specific to
-  this environment's Ubuntu 24.04 x86_64 SDL3 build; see the release
-  packaging notes for what that means for portability to a real Deck.
+- **First real Steam Deck hardware test**: controller input and touch
+  input both worked. This same run also surfaced three real bugs, all
+  from the "Real-usage bug fixes" section below (video not appearing at
+  all, the in-app menu opening on a single button instead of a
+  deliberate Start+Select hold, and no on-screen indication of how to
+  open the menu in the first place) -- none of which this sandbox's
+  Xvfb/`xdotool`-keyboard-driven testing could have caught, since it has
+  no real gamepad, no Steam Input layer, and (being GPU-less) forced
+  software 3D rendering throughout every prior test in this project.
+  `SPEC.md` section 19's "Manual Steam Deck tests" list is otherwise
+  still open (OLED vs LCD, Gaming Mode vs Desktop Mode coverage, etc.);
+  the binary built here is also specific to this environment's Ubuntu
+  24.04 x86_64 SDL3 build -- see the release packaging notes for what
+  that means for portability to a real Deck.
 
 ## Video transport is Stage 1 only
 
@@ -303,6 +308,63 @@ output at all until the process was killed, even though multiple
 messages had clearly been printed. Switched all of them to stderr, which
 isn't buffered the same way and is what the host side (`NetServer`)
 already uses for exactly this reason.
+
+## Real-usage bug fixes, round 2: real Steam Deck hardware
+
+Three more issues, this time from the client's first run on an actual
+Steam Deck (not just the GPU-less Xvfb sandbox used for every prior test
+in this project):
+
+- **No video reached the client at all**, though controls and touch
+  input both worked. Root cause: the melonDS-integrated patch's frame
+  source only gets real pixel data out of `GPU::GetFramebuffers()` when
+  the 3D renderer is set to **Software** -- with the **OpenGL** renderer
+  it hands back a GL texture handle instead, which was silently ignored
+  (see the "Video transport" and melonDS-integration sections above).
+  Every prior test in this project ran in a GPU-less sandbox that
+  effectively forced the software renderer, so this had never come up
+  before. Not a code regression -- a pre-existing, already-documented
+  Stage 1 limitation surfacing for the first time on real hardware. Since
+  this can't be fixed in software (the OpenGL 3D renderer path is a
+  separate, deferred piece of work -- see
+  `docs/melonds-integration-analysis.md` section 1.2), the patch now
+  prints a one-time, specific diagnostic instead of failing silently:
+  `EmuThread.cpp`'s frame-push block logs `melonds-remote:
+  GPU::GetFramebuffers() returned no bottom-screen RAM pointer...`
+  telling the host operator exactly which setting to change
+  (`docs/troubleshooting.md` has the full text). This also explains "I
+  can't see what I'm tapping" from the same hardware run: touch input
+  reaching the emulator was never in question, there was just no video
+  feedback to aim it by.
+- **The in-app menu opened by itself on a single Start or B press**
+  instead of requiring the deliberate Start+Select hold it's designed
+  for. The client's `Escape`-toggles-menu keyboard shortcut (added purely
+  for keyboard-driven Desktop Mode testing) fired unconditionally,
+  regardless of whether a gamepad was connected; the leading explanation
+  is that Steam Input's default controller-binding template for a
+  freshly-added non-Steam shortcut synthesizes a keyboard `Escape` press
+  for some individual buttons (a common Steam Input behavior, meant to
+  keep keyboard-only UI usable via a controller). Fixed two ways:
+  `client/src/main.cpp`'s `Escape` handling now only fires when no
+  gamepad is connected at all, and the actual Start+Select gamepad chord
+  now requires a continuous ~350ms hold (`kMenuChordHoldUs`) before it
+  fires, rather than triggering the instant both buttons are seen held in
+  the same polled frame -- both as defense against whatever Steam Input's
+  exact synthesis behavior turns out to be. `docs/steam-deck-setup.md`
+  also now recommends setting the shortcut's Steam Input **Controller
+  Layout** to a plain "Gamepad" template, which avoids any such synthesis
+  in the first place. Not independently re-verified on real hardware (no
+  physical gamepad or Steam Input layer exists in this project's sandbox
+  -- see the caveat above) -- build-verified only.
+- **No indication anywhere of how to open the menu** before you already
+  know the combo -- the existing "START+SELECT TO CLOSE" hint only shows
+  once the menu is already open. Fixed by adding a
+  "HOLD START + SELECT TO OPEN THE MENU" hint to the discovery/searching
+  screen, the host-selection list, and the "CONNECTING TO.../WAITING FOR
+  APPROVAL..." banner -- i.e. visible from the moment the client starts,
+  through connecting, per the original request ("inform the user how to
+  open the menu when starting the application or connecting to the
+  host").
 
 ## Latency instrumentation assumes synced clocks
 

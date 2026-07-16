@@ -161,6 +161,51 @@ the OS's default TCP timeout if the host process was killed uncleanly
 (no FIN sent) rather than shut down gracefully -- a clean `Ctrl+C`
 shutdown on the host is much faster to detect than `kill -9`.
 
+### Client connects fine (controls/touch work) but the screen stays blank
+
+This is almost always the host's 3D renderer being set to **OpenGL**
+instead of **Software** -- `GPU::GetFramebuffers()` (the melonDS-integrated
+patch's frame source) only returns real RAM pointers for the software 3D
+renderer; with OpenGL it hands back a GL texture handle instead, so
+there's nothing to send and the client just keeps showing its local test
+pattern (see `docs/known-limitations.md`'s "Video transport" and melonDS
+integration sections). On the host, check for this one-time line in the
+melonDS log:
+
+```
+melonds-remote: GPU::GetFramebuffers() returned no bottom-screen RAM
+pointer -- the remote client will show a blank/test-pattern screen
+instead of real video. This happens when the 3D renderer is set to
+OpenGL; switch Emu Settings > Video Settings > Renderer to "Software"
+for remote streaming to work.
+```
+
+If you see it, change that setting on the host (melonDS's own window --
+**Config > Emu Settings > Video Settings**, or the equivalent for your
+melonDS build) to **Software** and reconnect. Note that touch/controller
+input can work correctly even with no video, since input doesn't depend
+on the framebuffer at all -- "controls work but I can't see anything" is
+this bug, not a separate touch/input problem.
+
+### The in-app menu pops open by itself when I press a single button (Start, or B) on the real Deck controller
+
+The menu is supposed to require a deliberate Start+Select hold, not a
+single button. If a single button opens it on real hardware but not in
+any keyboard-driven testing, the most likely cause is Steam Input's
+default controller-binding template for a freshly-added non-Steam
+shortcut synthesizing a keyboard `Escape` press for individual buttons
+(commonly done so keyboard-only UI still works via a controller) --
+the client's `Escape` shortcut is Desktop-Mode/no-gamepad testing
+convenience only and is ignored whenever a real gamepad is connected, and
+the actual Start+Select chord additionally requires a ~350ms continuous
+hold before it fires, specifically to guard against this. If you still
+see it after updating to a build with both of those fixes, open Steam's
+overlay for that non-Steam shortcut (while it's running, or via **Manage
+Game > Controller Layout** in Desktop Mode) and check what's bound to
+Start/View/B -- setting the layout to a plain "Gamepad" template (rather
+than whatever Steam auto-picked) makes buttons pass straight through
+rather than also firing keyboard shortcuts.
+
 ## Diagnostics
 
 Run the host with `--stats-interval-ms 1000` (or another short interval)

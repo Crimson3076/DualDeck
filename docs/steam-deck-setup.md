@@ -1,10 +1,21 @@
 # Steam Deck Setup
 
 This is the required "Steam Deck setup instructions" deliverable
-(`SPEC.md` section 25). **Status: written from the SDL3/SteamOS API and
-Steam documentation, not yet verified on real Steam Deck hardware** --
-see `docs/known-limitations.md`. Treat this as a starting point and
-correct it once someone runs it on a real Deck.
+(`SPEC.md` section 25). **Status: now tested on real Steam Deck
+hardware once** -- controls and touch input worked, but that first pass
+also surfaced two real bugs (the menu opening on a single button instead
+of a deliberate hold, and no video reaching the client) which are now
+fixed/mitigated; see `docs/known-limitations.md` and
+`docs/troubleshooting.md` for the specifics, and correct this file
+further as more real-hardware runs turn up issues.
+
+**Before you start**: on the host, make sure melonDS's 3D renderer is
+set to **Software**, not OpenGL (**Config > Emu Settings > Video
+Settings > Renderer**) -- the remote video path only works with the
+software renderer (see `docs/troubleshooting.md`'s "screen stays blank"
+entry). This is melonDS's own default, but it's easy to have switched it
+for better local framerates without realizing it breaks remote
+streaming.
 
 ## Prerequisite: build the client
 
@@ -74,14 +85,22 @@ See `docs/building.md` for the actual CMake invocation either way.
    stream renders letterboxed at 4:3, the Deck's built-in controller
    moves the game/logs show button state, and the touchscreen registers
    only inside the rendered DS rectangle (spec section 7.4).
-6. Hold **Start+Select** together (or press Escape in Desktop Mode) to
-   open the in-app menu -- fully controller-navigable (D-pad to move,
-   South/A to select), with **Resume**, **Change Host** (jump back to the
-   host-selection screen from step 3 without restarting the client), and
-   **Exit**. This is the controller-navigable in-app exit action `SPEC.md`
-   lists as Phase 3 work -- now implemented rather than only closable via
-   the window's `SDL_EVENT_QUIT` (still works too, e.g. Alt+F4 in Desktop
-   Mode).
+6. Hold **Start+Select together for about a third of a second** (or press
+   Escape in Desktop Mode with no gamepad connected) to open the in-app
+   menu -- fully controller-navigable (D-pad to move, South/A to select),
+   with **Resume**, **Change Host** (jump back to the host-selection
+   screen from step 3 without restarting the client), and **Exit**. This
+   is the controller-navigable in-app exit action `SPEC.md` lists as
+   Phase 3 work -- now implemented rather than only closable via the
+   window's `SDL_EVENT_QUIT` (still works too, e.g. Alt+F4 in Desktop
+   Mode). A reminder of this combo is shown on screen on the discovery/
+   host-selection and connecting screens, so you don't need to remember it
+   from this doc. It deliberately requires a genuine, deliberate hold
+   (not just both buttons registering in the same instant) -- real
+   hardware testing found Steam Input can synthesize a single-button
+   keyboard shortcut that would otherwise open the menu unintentionally;
+   see the Gaming Mode section below and `docs/troubleshooting.md` if a
+   single button still opens it for you.
 
 ## Gaming Mode: adding as a non-Steam shortcut
 
@@ -107,6 +126,18 @@ Mode, applied to this client:
    - **Compatibility**: a Proton layer is not needed since this is a
      native Linux binary; leave "Force the use of a specific Steam Play
      compatibility tool" unchecked.
+   - **Controller Layout**: real hardware testing found Steam's
+     auto-picked default template for a freshly-added non-Steam shortcut
+     can synthesize keyboard shortcuts (e.g. Escape) for individual
+     buttons on top of their normal gamepad signal, which the client
+     can't reliably distinguish from you actually pressing that key. Open
+     **Controller Layout** for this shortcut (from its right-click menu,
+     or from the Quick Access Menu once it's running) and pick a plain
+     **Gamepad** template rather than whatever Steam guessed, so buttons
+     pass through as raw gamepad input only. The client is defensive
+     against this either way (see step 6 above and
+     `docs/troubleshooting.md`), but a clean pass-through layout is the
+     more correct fix.
 5. Switch to Gaming Mode; the shortcut appears in your library like any
    other game and can be launched fully controller-driven.
 
