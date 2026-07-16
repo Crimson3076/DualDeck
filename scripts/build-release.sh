@@ -185,5 +185,12 @@ remembered after that. See \`docs/steam-deck-setup.md\` for Gaming Mode
 shortcut setup.
 NOTES
 
-tar czf "${out_dir}/${pkg_name}.tar.gz" -C "${work_dir}" "${pkg_name}"
-echo "Wrote ${out_dir}/${pkg_name}.tar.gz"
+# The archive itself gets a *constant* filename (unlike the internal
+# directory name above, which embeds the commit for clarity once
+# extracted) so that re-uploading it to the same GitHub Release asset
+# name replaces the previous build instead of accumulating a new,
+# differently-named asset on every push (softprops/action-gh-release
+# matches on asset filename to decide what to replace).
+archive_name="melonds-remote-linux-x86_64.tar.gz"
+tar czf "${out_dir}/${archive_name}" -C "${work_dir}" "${pkg_name}"
+echo "Wrote ${out_dir}/${archive_name} (contains ${pkg_name}/)"

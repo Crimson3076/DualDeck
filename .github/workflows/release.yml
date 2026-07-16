@@ -33,6 +33,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Remove stale assets from before the fixed-filename scheme
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view latest --repo "${{ github.repository }}" --json assets \
+            --jq '.assets[].name' | grep -v '^melonds-remote-linux-x86_64\.tar\.gz$' | \
+            xargs -r -I{} gh release delete-asset latest {} --repo "${{ github.repository }}" -y
+
       - name: Cache SDL3 build (pinned tag, independent of this repo's commits)
         uses: actions/cache@v4
         with:
