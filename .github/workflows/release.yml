@@ -1,12 +1,21 @@
-name: Release (rolling build)
+name: Release (versioned build)
 
 # Builds the patched melonDS host + SDL3 client from scratch and
-# publishes them as a rolling "latest" GitHub Release on every push, so
-# there's always a single, current download link to grab and test
-# without needing to build anything yourself. See
-# scripts/build-release.sh for what actually gets built/packaged, and
-# docs/known-limitations.md (bundled in the archive) for what is/isn't
-# verified in a given build.
+# publishes them as a new, uniquely-tagged GitHub Release, so there's
+# always something to grab and test without needing to build anything
+# yourself. See scripts/build-release.sh for what actually gets
+# built/packaged, and docs/known-limitations.md (bundled in the archive)
+# for what is/isn't verified in a given build.
+#
+# Deliberately **manual only** (workflow_dispatch), not triggered by
+# every push: this used to run automatically on every push and publish
+# to a single shared "latest" tag, which meant one bad commit silently
+# clobbered the only downloadable build with no way to get the previous
+# one back. Now every run gets its own tag (v0.1.<run number>) and its
+# own release, so nothing is ever overwritten or deleted -- older builds
+# stay on the Releases page if a newer one turns out to be broken. Run
+# it (Actions tab -> this workflow -> "Run workflow") at whatever points
+# actually feel release-worthy, not on every commit.
 #
 # Takes ~15-20 minutes per run since melonDS and SDL3 are both built from
 # source (neither is packaged for this runner's Ubuntu version); the
@@ -19,8 +28,6 @@ name: Release (rolling build)
 # genuinely clean machine.
 
 on:
-  push:
-    branches: ["**"]
   workflow_dispatch: {}
 
 permissions:
@@ -33,14 +40,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Remove stale assets from before the fixed-filename scheme
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release view latest --repo "${{ github.repository }}" --json assets \
-            --jq '.assets[].name' | grep -v '^melonds-remote-linux-x86_64\.tar\.gz$' | \
-            xargs -r -I{} gh release delete-asset latest {} --repo "${{ github.repository }}" -y
+      - name: Compute version tag
+        id: version
+        run: echo "tag=v0.1.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
 
       - name: Cache SDL3 build (pinned tag, independent of this repo's commits)
         uses: actions/cache@v4
@@ -54,18 +56,20 @@ jobs:
           BUILD_RELEASE_OUTPUT_DIR: ${{ github.workspace }}/release-out
         run: ./scripts/build-release.sh
 
-      - name: Publish rolling "latest" release
+      - name: Publish versioned release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: "melonDS Remote -- latest build"
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "melonDS Remote -- ${{ steps.version.outputs.tag }}"
           make_latest: true
           body: |
-            Automatically built from commit ${{ github.sha }} on `${{ github.ref_name }}`.
+            Built from commit ${{ github.sha }} on `${{ github.ref_name }}`,
+            triggered manually via workflow_dispatch.
 
-            This is a **rolling release** -- it always reflects the newest push to
-            this repo, replacing the previous build. See `RELEASE_NOTES.md` inside
-            the archive for the exact commit it was built from, and
-            `docs/known-limitations.md` (also bundled) for what is and isn't
-            verified.
+            This release is never overwritten or deleted by a later build -- if
+            this version turns out to have a problem, previous versions remain
+            available on the [**Releases**](../../releases) page. See
+            `RELEASE_NOTES.md` inside the archive for the exact commit it was
+            built from, and `docs/known-limitations.md` (also bundled) for what
+            is and isn't verified.
           files: release-out/*.tar.gz

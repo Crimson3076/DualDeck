@@ -2,8 +2,9 @@
 # Builds a complete downloadable release package from scratch: the
 # patched melonDS host binary and the SDL3 client binary, packaged
 # together with docs and wrapper scripts into one tar.gz. Used by
-# .github/workflows/release.yml to publish a rolling "latest" GitHub
-# Release on every push, and safe to run locally the same way.
+# .github/workflows/release.yml to publish a uniquely-tagged GitHub
+# Release whenever that workflow is run manually, and safe to run
+# locally the same way.
 #
 # Build-time dependencies are detected and installed automatically (apt/
 # dnf/pacman) -- see ensure_packages() below. No manual `apt install`
@@ -140,12 +141,12 @@ cp "${repo_root}/LICENSE" "${pkg_dir}/"
 commit_full="$(cd "${repo_root}" && git rev-parse HEAD)"
 built_at="$(date -u +"%Y-%m-%d %H:%M UTC")"
 cat > "${pkg_dir}/RELEASE_NOTES.md" <<NOTES
-# melonDS Remote -- rolling build
+# melonDS Remote
 
-Built automatically from commit \`${commit_full}\` on branch
-\`${branch_name}\`, ${built_at}. This is a rolling release: it always
-reflects the newest push, so double check the commit hash above against
-what you expect if timing matters.
+Built from commit \`${commit_full}\` on branch \`${branch_name}\`,
+${built_at}. This is a distinct, permanently-retained release -- it will
+not be overwritten by a later build, so if this version has a problem,
+just grab an earlier one from the Releases page instead.
 
 Contains \`host/\` (melonDS patched with
 \`host/melonds-patches/0001-remote-server-integration.patch\`, built

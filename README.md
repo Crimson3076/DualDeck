@@ -9,14 +9,16 @@ See [`SPEC.md`](SPEC.md) for the full project scope and requirements.
 
 ## Download a build
 
-Every push automatically builds and publishes a **rolling `latest`
-release** (`.github/workflows/release.yml`) with the host and client
-binaries attached -- grab it from the repo's
-[**Releases**](../../releases/latest) page rather than building from
-source, unless you specifically want to modify the code. See
-`RELEASE_NOTES.md` inside the archive for exactly which commit it was
-built from. `run-host.sh`/`run-client.sh` inside the archive check for
-and auto-install any missing runtime libraries (apt/dnf/pacman) before
+`.github/workflows/release.yml` builds the host and client binaries and
+publishes them as a GitHub Release -- grab one from the repo's
+[**Releases**](../../releases) page rather than building from source,
+unless you specifically want to modify the code. It's triggered manually
+(not on every push), and each run gets its own version tag and release
+rather than overwriting a shared one, so older builds stay downloadable
+if a newer one turns out to be broken. See `RELEASE_NOTES.md` inside the
+archive for exactly which commit a given release was built from.
+`run-host.sh`/`run-client.sh` inside the archive check for and
+auto-install any missing runtime libraries (apt/dnf/pacman) before
 launching, so there's normally nothing to install by hand first.
 
 ## Status

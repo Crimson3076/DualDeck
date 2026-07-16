@@ -1,10 +1,10 @@
 # Building
 
-**Don't want to build anything?** Every push to this repo automatically
-publishes a ready-to-run build (host + client binaries) as a rolling
-`latest` GitHub Release -- see the top-level `README.md`'s "Download a
-build" section. The instructions below are for building from source
-yourself (e.g. to modify the code).
+**Don't want to build anything?** A manually-triggered workflow
+publishes ready-to-run builds (host + client binaries) as versioned
+GitHub Releases, each kept around permanently -- see the top-level
+`README.md`'s "Download a build" section. The instructions below are for
+building from source yourself (e.g. to modify the code).
 
 ## Requirements
 
