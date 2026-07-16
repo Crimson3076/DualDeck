@@ -1021,6 +1021,58 @@ against an actual Fedora/Bazzite image, and Steam's own real Big
 Picture/Gaming Mode UI actually showing and launching the shortcut --
 this sandbox has neither.
 
+Still not addressed at the time: CI-tested install/upgrade behavior,
+and real Steam Deck/Bazzite hardware verification.
+
+## One consolidated host menu instead of five separate scripts (GitHub issue #10, continued)
+
+User feedback after the Steam-shortcut work above: five host scripts
+(`run-host.sh`, `install-host-distrobox.sh`, `uninstall-host-distrobox.sh`,
+`install-steam-shortcut.sh`, `uninstall-steam-shortcut.sh`) plus the
+`launch-host.sh` dispatcher is real progress but still asks a user to
+know which one applies to them. Requested this be "condensed down into
+one menu that opens up with an executable."
+
+Added `host/melonds-remote-host.sh` as that one entry point -- a menu
+with four choices (Launch now / Add to Steam / Remove from Steam /
+Check for updates), using a graphical `kdialog --menu` when available
+(SteamOS Desktop Mode and Bazzite are both KDE Plasma) and a plain
+numbered terminal prompt otherwise. It's a thin dispatcher, not a
+rewrite: each choice just calls the already-tested script that does the
+real work (`launch-host.sh`, `install-steam-shortcut.sh`,
+`uninstall-steam-shortcut.sh`, `../check-for-updates.sh`) rather than
+reimplementing any of that logic -- deliberately, so none of the
+rollback-safety/error-visibility work already verified above needed to
+be touched or re-risked. The five underlying scripts still exist and
+still work standalone (e.g. for scripting), but this is now the only
+one documented as the thing to actually double-click.
+
+**A real bug was caught while testing this**: the terminal (no-`kdialog`)
+fallback's menu-display text (`echo "1) Launch melonDS now"` etc.) was
+being printed to stdout, the same stream the calling code captures via
+`action="$(choose_action)"` to read back which option was picked --
+so the captured `action` variable ended up containing the entire
+displayed menu text with the real selection tacked onto the end,
+breaking every `case` match silently (every choice fell through to the
+default "do nothing" branch, and "Add to Steam" through the terminal
+prompt did nothing at all). Caught immediately by a first real test run
+(chose "Add to Steam" through the terminal-mode path, then checked
+whether the central install directory or Steam shortcut actually
+appeared -- neither did). Fixed by redirecting the whole menu-display
+block to stderr, leaving only the actual selection on stdout.
+
+**Verified** with the same fake-`distrobox`/`dnf`/`$HOME` stubs as
+before, plus a fake `kdialog` stub: every menu choice on both a
+simulated immutable and a simulated regular system (launch, add to
+Steam, remove with confirmation, remove again idempotently, check for
+updates against the real GitHub API, exit, and an invalid/empty input
+falling through to a safe no-op) via the terminal fallback; the same
+"Add to Steam" and Cancel choices via the fake-`kdialog` menu path,
+confirming argument formatting (`--menu`/`--msgbox`/`--yesno`) and
+return-value handling are both correct. **Not verified**: a real
+`kdialog` binary or Steam's actual Big Picture/Gaming Mode UI -- neither
+exists in this sandbox.
+
 Still not addressed: CI-tested install/upgrade behavior (no rpm-ostree/
 Distrobox environment in this project's CI, same limitation as
 everything else Bazzite-specific), and real Steam Deck/Bazzite hardware

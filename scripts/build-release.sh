@@ -542,6 +542,128 @@ fi
 WRAP
 chmod +x "${pkg_dir}/host/launch-host.sh"
 
+cat > "${pkg_dir}/host/melonds-remote-host.sh" <<'WRAP'
+#!/usr/bin/env bash
+# The one thing to double-click to set up or run the melonDS Remote
+# host -- shows a simple menu and delegates to whichever of
+# run-host.sh / install-host-distrobox.sh / install-steam-shortcut.sh /
+# uninstall-steam-shortcut.sh / check-for-updates.sh actually applies,
+# so a user never has to figure out which of those five scripts they
+# need (GitHub issue #10: "the normal path requires no terminal
+# commands"). Those scripts still exist and still work standalone (e.g.
+# for scripting or troubleshooting) -- this is just the single entry
+# point a human actually needs to know about.
+#
+# Uses a graphical kdialog menu when available (SteamOS Desktop Mode
+# and Bazzite are both KDE Plasma, where kdialog is standard) and falls
+# back to a plain numbered prompt in a terminal otherwise.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+error_log="${HOME}/.config/melonds-remote/install.log"
+on_error() {
+    local exit_code="$1" line_no="$2" failing_cmd="$3"
+    mkdir -p "$(dirname "${error_log}")"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") melonds-remote-host.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "melonDS Remote Host" --error "Something went wrong: ${failing_cmd}
+(exit code ${exit_code})
+
+Details logged to:
+${error_log}" 2>/dev/null || true
+    fi
+}
+trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
+
+have_kdialog() { command -v kdialog >/dev/null 2>&1; }
+
+info() {
+    if have_kdialog; then
+        kdialog --title "melonDS Remote Host" --msgbox "$1" 2>/dev/null
+    else
+        echo
+        echo "$1"
+        echo
+    fi
+}
+
+confirm() {
+    if have_kdialog; then
+        kdialog --title "melonDS Remote Host" --yesno "$1" 2>/dev/null
+    else
+        read -rp "$1 [y/N] " reply
+        [[ "${reply}" =~ ^[Yy]$ ]]
+    fi
+}
+
+choose_action() {
+    if have_kdialog; then
+        kdialog --title "melonDS Remote Host" --menu "What would you like to do?" \
+            launch "Launch melonDS now" \
+            steam-add "Add to Steam (Big Picture / Gaming Mode)" \
+            steam-remove "Remove from Steam / uninstall" \
+            update "Check for updates" \
+            2>/dev/null || echo "cancel"
+    else
+        # All of this goes to stderr, not stdout -- the caller captures
+        # this function's stdout as the actual selection
+        # ("action=\"\$(choose_action)\"" below), so any of the menu
+        # display text leaking onto stdout would get appended to that
+        # and break the case match entirely.
+        {
+            echo "melonDS Remote Host"
+            echo "  1) Launch melonDS now"
+            echo "  2) Add to Steam (Big Picture / Gaming Mode)"
+            echo "  3) Remove from Steam / uninstall"
+            echo "  4) Check for updates"
+            echo "  5) Exit"
+        } >&2
+        read -rp "Choice [1-5]: " choice
+        case "${choice}" in
+            1) echo "launch" ;;
+            2) echo "steam-add" ;;
+            3) echo "steam-remove" ;;
+            4) echo "update" ;;
+            *) echo "cancel" ;;
+        esac
+    fi
+}
+
+action="$(choose_action)"
+
+case "${action}" in
+    launch)
+        # exec, not a plain call: this becomes the foreground process,
+        # same as launching melonDS any other way (Steam shortcut,
+        # double-clicking run-host.sh directly, etc.) -- no menu process
+        # left hanging around behind it.
+        exec ./launch-host.sh
+        ;;
+    steam-add)
+        if ./install-steam-shortcut.sh; then
+            info "Added melonDS Remote Host to Steam. Restart Steam (or switch to Gaming Mode) to see it, and set its Controller Layout to a plain Gamepad template once it's there."
+        fi
+        # A failure here already logged and showed its own error dialog
+        # (install-steam-shortcut.sh has the same error-trap pattern as
+        # this script) -- nothing more to do.
+        ;;
+    steam-remove)
+        if confirm "This removes the Steam shortcut, the installed files, and the Distrobox container if one was created. Your ROMs, saves, and firmware are never touched. Continue?"; then
+            if ./uninstall-steam-shortcut.sh; then
+                info "Removed."
+            fi
+        fi
+        ;;
+    update)
+        info "$(../check-for-updates.sh)"
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+WRAP
+chmod +x "${pkg_dir}/host/melonds-remote-host.sh"
+
 cat > "${pkg_dir}/host/install-steam-shortcut.sh" <<'WRAP'
 #!/usr/bin/env bash
 # Registers the melonDS Remote host as a Steam non-Steam-game shortcut,

@@ -22,26 +22,42 @@ to run the real melonDS-integrated host without building anything,
 download the latest release archive instead (see the top-level
 `README.md`'s "Download a build") and extract it.
 
-**On Bazzite specifically (and any other immutable/rpm-ostree system)**,
-double-click `host/install-host-distrobox.sh` instead of `run-host.sh` --
-`run-host.sh`'s usual auto-install-missing-libraries step can't install
-anything on an immutable base, so double-clicking it directly is likely
-to fail there with a missing-shared-library error the first time (it
-does tell you to use `install-host-distrobox.sh` instead if it detects
-this). `install-host-distrobox.sh` creates (or reuses) a Fedora-based
-Distrobox container named `melonds-remote-host`, installs everything the
-host needs inside it, and launches melonDS from there -- no manual
-Distrobox commands needed, and safe to just double-click again later,
-including from a newer release's extracted archive, to pick up an
-update (it re-syncs the host files and re-checks the container's
-packages each time, so nothing needs to be redone by hand). See "Easier
-Bazzite host install and updates" below for what this actually does.
+**Double-click `host/melonds-remote-host.sh`.** That's the only host
+script you need to know about -- it shows a menu (a graphical one via
+`kdialog` on Bazzite/SteamOS's KDE Plasma desktop, or a plain numbered
+prompt if run from a terminal without `kdialog`) with four choices:
 
-On a regular (non-immutable) Linux HTPC, just double-click
-`host/run-host.sh` as usual -- on Bazzite's KDE Plasma/Dolphin desktop,
-double-clicking an executable `.sh` file offers to run it directly, no
-terminal or typing needed either way. See `docs/steam-deck-setup.md`'s
-equivalent section for the client side.
+- **Launch melonDS now** -- works whether or not this is your first
+  time: on a regular Linux system it just runs melonDS directly
+  (auto-installing missing libraries first); on an immutable system
+  like Bazzite it transparently sets up (or reuses) a Distrobox
+  container with everything melonDS needs, then launches from there.
+  Either way, running this again later (including from a newer
+  release's extracted archive) picks up updates automatically -- there's
+  no separate "install" step to remember.
+- **Add to Steam (Big Picture / Gaming Mode)** -- registers a "melonDS
+  Remote Host" entry in your Steam library, so it's launchable with just
+  a controller. Safe to re-run from a newer release to update the
+  existing entry in place.
+- **Remove from Steam / uninstall** -- removes the Steam shortcut, the
+  installed files, and the Distrobox container if one was created (with
+  a confirmation first). Never touches ROMs, saves, or firmware.
+- **Check for updates** -- a read-only check against the latest GitHub
+  release; never downloads or installs anything by itself.
+
+Everything this menu does is really just a thin front end over the
+individual scripts described below (`run-host.sh`,
+`install-host-distrobox.sh`, `install-steam-shortcut.sh`, etc.) -- those
+still exist and still work standalone if you want to script something
+directly or troubleshoot a specific step, but there's no need to know
+which one applies to your system: the menu figures that out for you.
+See "Easier Bazzite host install and updates" below for what the
+Distrobox path actually does under the hood, and "Launching the host
+from Steam Big Picture/Gaming Mode" for the Steam-shortcut part.
+
+On Bazzite's KDE Plasma/Dolphin desktop, double-clicking an executable
+`.sh` file offers to run it directly -- no terminal or typing needed.
+See `docs/steam-deck-setup.md`'s equivalent section for the client side.
 
 ## Easier Bazzite host install and updates: `install-host-distrobox.sh`
 
@@ -100,12 +116,13 @@ of the container or central install directory being removed.
 
 Addresses the last remaining piece of GitHub issue #10's acceptance
 criteria: "the installed host can be launched from Steam Big Picture or
-Gaming Mode and accept a client connection." Double-click
-`host/install-steam-shortcut.sh` (once, in Desktop Mode, with Steam
-closed) to add a **"melonDS Remote Host"** entry to your Steam library --
-mirrors `client/install-steam-shortcut.sh`'s approach exactly, down to
-the same stage-then-swap update safety and error-log/`kdialog` failure
-visibility.
+Gaming Mode and accept a client connection." Pick "Add to Steam" from
+`host/melonds-remote-host.sh`'s menu (see above), or double-click
+`host/install-steam-shortcut.sh` directly (once, in Desktop Mode, with
+Steam closed) -- either way it adds a **"melonDS Remote Host"** entry to
+your Steam library, mirroring `client/install-steam-shortcut.sh`'s
+approach exactly, down to the same stage-then-swap update safety and
+error-log/`kdialog` failure visibility.
 
 This registers the shortcut's `Exe` as `launch-host.sh`, a small entry
 point that picks the right launch path for you:
