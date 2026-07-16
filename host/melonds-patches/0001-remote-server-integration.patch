@@ -1,8 +1,8 @@
 diff --git a/src/frontend/qt_sdl/CMakeLists.txt b/src/frontend/qt_sdl/CMakeLists.txt
-index 31207f8..823ed65 100644
+index 31207f8..22dc836 100644
 --- a/src/frontend/qt_sdl/CMakeLists.txt
 +++ b/src/frontend/qt_sdl/CMakeLists.txt
-@@ -60,6 +60,15 @@ set(SOURCES_QT_SDL
+@@ -60,6 +60,16 @@ set(SOURCES_QT_SDL
  
      LANDialog.cpp
      NetplayDialog.cpp
@@ -12,13 +12,14 @@ index 31207f8..823ed65 100644
 +    remote_server/protocol/src/input_state_tracker.cpp
 +    remote_server/protocol/src/rate_limiter.cpp
 +    remote_server/host/net_server.cpp
++    remote_server/host/pairing_manager.cpp
 +    remote_server/MelonDSFrameSource.cpp
 +    remote_server/MelonDSInputSink.cpp
 +    remote_server/RemoteServerBridge.cpp
  )
  
  option(USE_QT6 "Use Qt 6 instead of Qt 5" ON)
-@@ -185,6 +194,17 @@ target_include_directories(melonDS PUBLIC
+@@ -185,6 +195,17 @@ target_include_directories(melonDS PUBLIC
      "${CMAKE_CURRENT_SOURCE_DIR}"
      "${CMAKE_CURRENT_SOURCE_DIR}/..")
  
@@ -37,10 +38,10 @@ index 31207f8..823ed65 100644
      target_include_directories(melonDS PUBLIC ${Qt6Gui_PRIVATE_INCLUDE_DIRS})
  else()
 diff --git a/src/frontend/qt_sdl/EmuInstance.cpp b/src/frontend/qt_sdl/EmuInstance.cpp
-index a8b1021..da6537b 100755
+index a8b1021..3cb58de 100755
 --- a/src/frontend/qt_sdl/EmuInstance.cpp
 +++ b/src/frontend/qt_sdl/EmuInstance.cpp
-@@ -20,6 +20,8 @@
+@@ -20,15 +20,21 @@
  #include <stdio.h>
  #include <string.h>
  
@@ -49,7 +50,20 @@ index a8b1021..da6537b 100755
  #include <codecvt>
  #include <locale>
  #include <memory>
-@@ -50,6 +52,8 @@
++#include <optional>
+ #include <tuple>
+ #include <string>
+ #include <utility>
+ #include <fstream>
+ 
+ #include <QDateTime>
++#include <QCoreApplication>
++#include <QMetaObject>
++#include <QStatusBar>
+ 
+ #include <zstd.h>
+ #ifdef ARCHIVE_SUPPORT_ENABLED
+@@ -50,6 +56,8 @@
  
  #include "NDSCart/CartSD.h"
  
@@ -58,7 +72,7 @@ index a8b1021..da6537b 100755
  using std::make_unique;
  using std::pair;
  using std::string;
-@@ -131,6 +135,35 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
+@@ -131,6 +139,66 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
  
      net.RegisterInstance(instanceID);
  
@@ -81,12 +95,43 @@ index a8b1021..da6537b 100755
 +            return v ? static_cast<uint16_t>(std::stoi(v)) : def;
 +        };
 +
++        // Where paired-client tokens are remembered across restarts (spec
++        // section 13's "six-digit pairing code" option). Defaults under
++        // $HOME/.config so a normal install just works with no extra
++        // configuration; MELONDS_REMOTE_STATE_DIR overrides it.
++        std::string pairingStateFilePath;
++        {
++            const char* stateDir = getenv("MELONDS_REMOTE_STATE_DIR");
++            const char* home = getenv("HOME");
++            if (stateDir && *stateDir)
++                pairingStateFilePath = std::string(stateDir) + "/paired_devices.txt";
++            else if (home && *home)
++                pairingStateFilePath = std::string(home) + "/.config/melonds-remote/paired_devices.txt";
++        }
++
 +        remoteServer = std::make_unique<melonds_remote_bridge::RemoteServerBridge>(
 +            envOr("MELONDS_REMOTE_BIND", "127.0.0.1"),
 +            envPortOr("MELONDS_REMOTE_CONTROL_PORT", 8760),
 +            envPortOr("MELONDS_REMOTE_INPUT_PORT", 8761),
 +            envPortOr("MELONDS_REMOTE_VIDEO_PORT", 8762),
-+            envOr("MELONDS_REMOTE_AUTH_TOKEN", ""));
++            envOr("MELONDS_REMOTE_AUTH_TOKEN", ""),
++            pairingStateFilePath,
++            [this](std::optional<std::string> code) {
++                // Fired on NetServer's control thread -- marshal to the Qt
++                // UI thread via qApp (always valid once Qt is up, unlike
++                // mainWindow which isn't created until just below this
++                // block) before touching any widget.
++                QMetaObject::invokeMethod(qApp, [this, code]() {
++                    if (!mainWindow) return;
++                    if (code) {
++                        mainWindow->statusBar()->showMessage(
++                            QString("melonDS Remote pairing code: %1 -- enter this on the client (expires in 5 min)")
++                                .arg(QString::fromStdString(*code)));
++                    } else {
++                        mainWindow->statusBar()->clearMessage();
++                    }
++                }, Qt::QueuedConnection);
++            });
 +        remoteServer->start();
 +        Platform::Log(Platform::LogLevel::Info, "melonds-remote: remote server enabled\n");
 +    }
@@ -94,7 +139,7 @@ index a8b1021..da6537b 100755
      emuThread = new EmuThread(this);
  
      numWindows = 0;
-@@ -156,6 +189,12 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
+@@ -156,6 +224,12 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
  EmuInstance::~EmuInstance()
  {
      deleting = true;
@@ -282,6 +327,45 @@ index c3fbdfe..5fac077 100755
  #ifdef MELONCAP
              MelonCap::Update();
  #endif // MELONCAP
+diff --git a/src/frontend/qt_sdl/Window.cpp b/src/frontend/qt_sdl/Window.cpp
+index 92189a5..9e89ffa 100755
+--- a/src/frontend/qt_sdl/Window.cpp
++++ b/src/frontend/qt_sdl/Window.cpp
+@@ -33,6 +33,7 @@
+ #include <QMenuBar>
+ #include <QMimeDatabase>
+ #include <QFileDialog>
++#include <QDir>
+ #include <QInputDialog>
+ #include <QPaintEvent>
+ #include <QPainter>
+@@ -1253,9 +1254,25 @@ QStringList MainWindow::pickROM(bool gba)
+ #endif
+     extraFilters += ";;All files (*.*)";
+ 
++    // Default the very first "Open ROM" dialog to EmuDeck's standard NDS
++    // ROM directory (~/Emulation/roms/nds) if the user hasn't picked a
++    // folder before and that directory actually exists -- a small,
++    // host-local convenience (melonds-remote project). This only ever
++    // affects the *default* directory a file dialog opens to; it does
++    // not browse, list, or auto-select any ROM on the user's behalf, and
++    // it's irrelevant to the GBA slot dialog (EmuDeck's GBA folder is a
++    // different path this doesn't attempt to guess).
++    QString startDir = globalCfg.GetQString("LastROMFolder");
++    if (startDir.isEmpty() && !gba)
++    {
++        QString emuDeckNdsDir = QDir::homePath() + "/Emulation/roms/nds";
++        if (QDir(emuDeckNdsDir).exists())
++            startDir = emuDeckNdsDir;
++    }
++
+     const QString filename = QFileDialog::getOpenFileName(
+         this, "Open " + console + " ROM",
+-        globalCfg.GetQString("LastROMFolder"),
++        startDir,
+         "All supported files (*" + allROMs + ")" + extraFilters
+     );
+ 
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.cpp b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.cpp
 new file mode 100644
 index 0000000..6ad11d1
@@ -422,23 +506,26 @@ index 0000000..05308c9
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
 new file mode 100644
-index 0000000..2733bc2
+index 0000000..965d918
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,40 @@
 +#include "RemoteServerBridge.h"
 +
 +namespace melonds_remote_bridge {
 +
 +RemoteServerBridge::RemoteServerBridge(std::string bindAddress, uint16_t controlPort,
 +                                        uint16_t inputPort, uint16_t videoPort,
-+                                        std::string authToken) {
++                                        std::string authToken, std::string pairingStateFilePath,
++                                        std::function<void(std::optional<std::string>)> onPairingCodeChanged) {
 +    melonds_remote::host::NetServerConfig config;
 +    config.bindAddress = std::move(bindAddress);
 +    config.controlPort = controlPort;
 +    config.inputPort = inputPort;
 +    config.videoPort = videoPort;
 +    config.authToken = std::move(authToken);
++    config.pairingStateFilePath = std::move(pairingStateFilePath);
++    config.onPairingCodeChanged = std::move(onPairingCodeChanged);
 +    server_ = std::make_unique<melonds_remote::host::NetServer>(config, inputSink_, frameSource_);
 +}
 +
@@ -465,10 +552,10 @@ index 0000000..2733bc2
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
 new file mode 100644
-index 0000000..d618f19
+index 0000000..6ef3b76
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,61 @@
 +#pragma once
 +
 +// Ties the standalone melonds-remote protocol/host networking code
@@ -484,7 +571,9 @@ index 0000000..d618f19
 +
 +#include <cstddef>
 +#include <cstdint>
++#include <functional>
 +#include <memory>
++#include <optional>
 +#include <string>
 +
 +#include "MelonDSFrameSource.h"
@@ -495,8 +584,16 @@ index 0000000..d618f19
 +
 +class RemoteServerBridge {
 +public:
++    // `pairingStateFilePath` and `onPairingCodeChanged` implement the
++    // 6-digit pairing code flow (see host/pairing_manager.h); only used
++    // when `authToken` is empty. `onPairingCodeChanged` is invoked on
++    // NetServer's control thread, not the Qt UI thread -- callers must
++    // marshal it themselves (e.g. QMetaObject::invokeMethod with
++    // Qt::QueuedConnection) before touching any widget.
 +    RemoteServerBridge(std::string bindAddress, uint16_t controlPort, uint16_t inputPort,
-+                        uint16_t videoPort, std::string authToken);
++                        uint16_t videoPort, std::string authToken,
++                        std::string pairingStateFilePath = {},
++                        std::function<void(std::optional<std::string>)> onPairingCodeChanged = {});
 +    ~RemoteServerBridge();
 +
 +    RemoteServerBridge(const RemoteServerBridge&) = delete;
@@ -606,10 +703,10 @@ index 0000000..903d848
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.cpp b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
 new file mode 100644
-index 0000000..9fdd496
+index 0000000..2436cfb
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
-@@ -0,0 +1,562 @@
+@@ -0,0 +1,604 @@
 +#include "host/net_server.h"
 +
 +#include <arpa/inet.h>
@@ -742,14 +839,31 @@ index 0000000..9fdd496
 +
 +NetServer::NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource)
 +    : config_(std::move(config)), inputSink_(inputSink), frameSource_(frameSource),
++      pairingManager_(config_.pairingStateFilePath, config_.pairingCodeTtl),
 +      rateLimiter_(config_.maxConnectionAttemptsPerWindow, config_.connectionAttemptWindowUs) {
-+    if (config_.authToken.empty()) {
++    if (!config_.authToken.empty()) {
 +        std::fprintf(stderr,
-+                      "NetServer: WARNING -- no auth token configured, accepting any client "
-+                      "that can reach %s:%u. Set --auth-token for anything but purely local "
-+                      "testing (spec section 13).\n",
-+                      config_.bindAddress.c_str(), config_.controlPort);
++                      "NetServer: static auth token configured -- pairing-code flow is disabled, "
++                      "the exact token is required.\n");
++    } else {
++        std::fprintf(stderr,
++                      "NetServer: no static auth token configured; using pairing-code mode. An "
++                      "unrecognized connection attempt will display a 6-digit code here to enter "
++                      "on the client (spec section 13).\n");
 +    }
++
++    pairingManager_.setOnCodeChanged([this](std::optional<std::string> code) {
++        if (code) {
++            std::fprintf(stderr,
++                          "NetServer: pairing code: %s (enter this on the client; expires in %lds)\n",
++                          code->c_str(), static_cast<long>(config_.pairingCodeTtl.count()));
++        } else {
++            std::fprintf(stderr, "NetServer: pairing code cleared\n");
++        }
++        if (config_.onPairingCodeChanged) {
++            config_.onPairingCodeChanged(code);
++        }
++    });
 +}
 +
 +NetServer::~NetServer() {
@@ -862,6 +976,7 @@ index 0000000..9fdd496
 +
 +        bool handshakeOk = false;
 +        HelloRejectReason rejectReason = HelloRejectReason::ProtocolVersionMismatch;
++        std::string issuedPairingToken;
 +
 +        uint8_t headerBuf[kPacketHeaderWireSize];
 +        ssize_t n = ::recv(clientFd, headerBuf, sizeof(headerBuf), MSG_WAITALL);
@@ -877,14 +992,37 @@ index 0000000..9fdd496
 +                if (got == static_cast<ssize_t>(payloadBuf.size())) {
 +                    auto hello = parseHelloPayload(payloadBuf.data(), payloadBuf.size());
 +                    if (hello) {
-+                        if (config_.authToken.empty() ||
-+                            constantTimeEquals(hello->authToken, config_.authToken)) {
-+                            handshakeOk = true;
++                        if (!config_.authToken.empty()) {
++                            // Legacy/CI-friendly static-token mode: exact match or reject,
++                            // pairing-code flow is bypassed entirely.
++                            if (constantTimeEquals(hello->authToken, config_.authToken)) {
++                                handshakeOk = true;
++                            } else {
++                                std::fprintf(stderr,
++                                              "NetServer: rejecting handshake from %s (bad auth token)\n",
++                                              ipStr);
++                                rejectReason = HelloRejectReason::AuthenticationFailed;
++                            }
 +                        } else {
-+                            std::fprintf(stderr,
-+                                          "NetServer: rejecting handshake from %s (bad auth token)\n",
-+                                          ipStr);
-+                            rejectReason = HelloRejectReason::AuthenticationFailed;
++                            switch (pairingManager_.check(hello->authToken)) {
++                                case PairingManager::CheckResult::ValidExistingToken:
++                                    handshakeOk = true;
++                                    break;
++                                case PairingManager::CheckResult::ValidCode:
++                                    handshakeOk = true;
++                                    issuedPairingToken = pairingManager_.lastIssuedToken();
++                                    std::fprintf(stderr,
++                                                  "NetServer: %s paired successfully with a new device token\n",
++                                                  ipStr);
++                                    break;
++                                case PairingManager::CheckResult::NeedsCode:
++                                case PairingManager::CheckResult::WrongCode:
++                                    std::fprintf(stderr,
++                                                  "NetServer: rejecting handshake from %s (pairing required)\n",
++                                                  ipStr);
++                                    rejectReason = HelloRejectReason::PairingRequired;
++                                    break;
++                            }
 +                        }
 +                    } else {
 +                        std::fprintf(stderr, "NetServer: rejecting handshake (malformed Hello payload)\n");
@@ -901,6 +1039,7 @@ index 0000000..9fdd496
 +        ack.accepted = handshakeOk ? 1 : 0;
 +        ack.rejectReason = handshakeOk ? HelloRejectReason::None : rejectReason;
 +        ack.sessionId = handshakeOk ? static_cast<uint32_t>(nowMicros()) : 0;
++        ack.pairingToken = issuedPairingToken;
 +        ByteBuffer ackPacket = buildHelloAckPacket(ack);
 +        sendAll(clientFd, ackPacket.data(), ackPacket.size());
 +
@@ -1174,10 +1313,10 @@ index 0000000..9fdd496
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.h b/src/frontend/qt_sdl/remote_server/host/net_server.h
 new file mode 100644
-index 0000000..6a7243b
+index 0000000..73e8c33
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.h
-@@ -0,0 +1,136 @@
+@@ -0,0 +1,168 @@
 +#pragma once
 +
 +// Minimal standalone host server: one TCP control connection (handshake +
@@ -1194,13 +1333,17 @@ index 0000000..6a7243b
 +// and never accepts a file path or shell command from the client.
 +
 +#include <atomic>
++#include <chrono>
 +#include <cstdint>
++#include <functional>
 +#include <mutex>
++#include <optional>
 +#include <string>
 +#include <thread>
 +
 +#include "host/emulator_input_sink.h"
 +#include "host/frame_source.h"
++#include "host/pairing_manager.h"
 +#include "melonds_remote/input_state_tracker.h"
 +#include "melonds_remote/rate_limiter.h"
 +
@@ -1216,7 +1359,34 @@ index 0000000..6a7243b
 +
 +    // Empty means authentication is disabled -- spec section 13 requires
 +    // this to be a conscious, warned-about choice, not a silent default.
++    //
++    // If non-empty, this is a static pre-shared token checked before
++    // anything else (legacy/CI-friendly path, e.g. tests/smoke_test.py):
++    // an exact match is accepted outright and the pairing-code flow below
++    // never runs. Leave empty to use pairing mode instead (recommended
++    // for real use): unrecognized clients are shown a 6-digit code (see
++    // pairingStateFilePath / onPairingCodeChanged) instead of a fixed
++    // secret you have to configure and distribute yourself.
 +    std::string authToken;
++
++    // Where issued pairing tokens are persisted so a paired client stays
++    // paired across host restarts (see PairingManager). Empty disables
++    // persistence -- pairing still works for the life of the process,
++    // it's just forgotten on restart. Ignored entirely when authToken is
++    // set (static-token mode bypasses pairing).
++    std::string pairingStateFilePath;
++
++    // How long a generated pairing code stays valid before a fresh one
++    // is needed.
++    std::chrono::seconds pairingCodeTtl{300};
++
++    // Optional hook for surfacing the pairing code somewhere beyond the
++    // console (e.g. melonDS's own window). Called with the new code when
++    // one is generated, and with std::nullopt when it's consumed/expires.
++    // Invoked synchronously on NetServer's control-connection thread --
++    // if the callback touches UI state, it must marshal to the UI thread
++    // itself (e.g. Qt::QueuedConnection).
++    std::function<void(std::optional<std::string>)> onPairingCodeChanged;
 +
 +    // If a control-channel connection is silent (no heartbeat, no other
 +    // control traffic) for longer than this, it is dropped. Distinct from
@@ -1279,6 +1449,7 @@ index 0000000..6a7243b
 +    NetServerConfig config_;
 +    IEmulatorInputSink& inputSink_;
 +    IFrameSource& frameSource_;
++    PairingManager pairingManager_;
 +
 +    std::atomic<bool> running_{false};
 +    std::thread controlThread_;
@@ -1311,6 +1482,243 @@ index 0000000..6a7243b
 +    // unauthenticated input).
 +    std::atomic<bool> clientAuthenticated_{false};
 +    std::atomic<uint32_t> authenticatedClientAddr_{0}; // sockaddr_in::sin_addr.s_addr, network byte order
++};
++
++} // namespace melonds_remote::host
+diff --git a/src/frontend/qt_sdl/remote_server/host/pairing_manager.cpp b/src/frontend/qt_sdl/remote_server/host/pairing_manager.cpp
+new file mode 100644
+index 0000000..38ee853
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/host/pairing_manager.cpp
+@@ -0,0 +1,134 @@
++#include "host/pairing_manager.h"
++
++#include <cstdio>
++#include <filesystem>
++#include <fstream>
++#include <random>
++#include <sstream>
++
++namespace melonds_remote::host {
++
++namespace {
++
++std::mt19937 makeSeededRng() {
++    std::random_device rd;
++    std::seed_seq seed{rd(), rd(), rd(), rd(), rd(), rd(), rd(), rd()};
++    return std::mt19937(seed);
++}
++
++} // namespace
++
++PairingManager::PairingManager(std::string stateFilePath, std::chrono::seconds codeTtl)
++    : stateFilePath_(std::move(stateFilePath)), codeTtl_(codeTtl), rng_(makeSeededRng()) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    loadTokensLocked();
++}
++
++void PairingManager::loadTokensLocked() {
++    if (stateFilePath_.empty()) return;
++
++    std::ifstream in(stateFilePath_);
++    if (!in.is_open()) return; // fine -- no prior pairings, or first run
++
++    std::string line;
++    while (std::getline(in, line)) {
++        if (!line.empty()) {
++            knownTokens_.insert(line);
++        }
++    }
++}
++
++void PairingManager::persistTokenLocked(const std::string& token) {
++    if (stateFilePath_.empty()) return;
++
++    std::error_code ec;
++    std::filesystem::path path(stateFilePath_);
++    if (path.has_parent_path()) {
++        std::filesystem::create_directories(path.parent_path(), ec);
++    }
++
++    // Append-only: every previously-paired device keeps working even if
++    // the process restarts mid-write of a later line.
++    std::ofstream out(stateFilePath_, std::ios::app);
++    if (out.is_open()) {
++        out << token << '\n';
++    }
++}
++
++std::string PairingManager::generateCode() {
++    std::uniform_int_distribution<int> dist(0, 999999);
++    int value = dist(rng_);
++    char buf[7];
++    std::snprintf(buf, sizeof(buf), "%06d", value);
++    return std::string(buf);
++}
++
++std::string PairingManager::generateToken() {
++    // 128 bits of randomness as 32 hex characters -- opaque, not
++    // meant to be typed by a human (unlike the 6-digit code).
++    std::uniform_int_distribution<int> nibble(0, 15);
++    static const char kHexDigits[] = "0123456789abcdef";
++    std::string token(32, '0');
++    for (char& c : token) {
++        c = kHexDigits[nibble(rng_)];
++    }
++    return token;
++}
++
++void PairingManager::setCodeLocked(std::optional<std::string> code) {
++    currentCode_ = std::move(code);
++    if (currentCode_) {
++        codeExpiry_ = std::chrono::steady_clock::now() + codeTtl_;
++    }
++    if (onCodeChanged_) {
++        onCodeChanged_(currentCode_);
++    }
++}
++
++void PairingManager::expireIfNeededLocked() {
++    if (currentCode_ && std::chrono::steady_clock::now() >= codeExpiry_) {
++        setCodeLocked(std::nullopt);
++    }
++}
++
++PairingManager::CheckResult PairingManager::check(const std::string& presented) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    expireIfNeededLocked();
++
++    if (!presented.empty() && knownTokens_.count(presented) > 0) {
++        return CheckResult::ValidExistingToken;
++    }
++
++    if (currentCode_ && !presented.empty() && presented == *currentCode_) {
++        std::string newToken = generateToken();
++        knownTokens_.insert(newToken);
++        persistTokenLocked(newToken);
++        lastIssuedToken_ = newToken;
++        setCodeLocked(std::nullopt); // single-use: consumed
++        return CheckResult::ValidCode;
++    }
++
++    if (currentCode_) {
++        return CheckResult::WrongCode;
++    }
++
++    setCodeLocked(generateCode());
++    return CheckResult::NeedsCode;
++}
++
++std::string PairingManager::lastIssuedToken() const {
++    std::lock_guard<std::mutex> lock(mutex_);
++    return lastIssuedToken_;
++}
++
++std::optional<std::string> PairingManager::currentCode() const {
++    std::lock_guard<std::mutex> lock(mutex_);
++    return currentCode_;
++}
++
++void PairingManager::setOnCodeChanged(std::function<void(std::optional<std::string>)> callback) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    onCodeChanged_ = std::move(callback);
++}
++
++} // namespace melonds_remote::host
+diff --git a/src/frontend/qt_sdl/remote_server/host/pairing_manager.h b/src/frontend/qt_sdl/remote_server/host/pairing_manager.h
+new file mode 100644
+index 0000000..61c940a
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/host/pairing_manager.h
+@@ -0,0 +1,91 @@
++#pragma once
++
++// Implements the "pairing code" flow from SPEC.md section 13's "later
++// pairing options" (six-digit pairing code, pre-shared token -- both now
++// supported side by side, see NetServerConfig::authToken vs this class):
++//
++//   1. An unrecognized client attempt causes a fresh, short-lived,
++//      single-use 6-digit code to be generated and surfaced to whoever is
++//      at the host (console log, and optionally a GUI hook).
++//   2. The user reads the code and enters it on the client, which retries
++//      the handshake with that code as the Hello payload's authToken.
++//   3. On a correct code, the host issues a long-lived opaque pairing
++//      token in the HelloAck, which the client persists and sends on all
++//      future connections instead of prompting for a code again.
++//
++// Independent of NetServerConfig::authToken, which remains a static
++// pre-shared secret for scripting/CI use (checked first by NetServer;
++// this class is only consulted when no static token is configured).
++
++#include <chrono>
++#include <functional>
++#include <mutex>
++#include <optional>
++#include <random>
++#include <string>
++#include <unordered_set>
++
++namespace melonds_remote::host {
++
++class PairingManager {
++public:
++    // `stateFilePath` is where previously-issued pairing tokens are
++    // persisted (one per line) so a paired client survives a host
++    // restart. An empty path disables persistence -- pairing still works
++    // within the current process lifetime, just isn't remembered across
++    // restarts (used by tests that shouldn't touch the filesystem).
++    explicit PairingManager(std::string stateFilePath,
++                            std::chrono::seconds codeTtl = std::chrono::seconds(300));
++
++    PairingManager(const PairingManager&) = delete;
++    PairingManager& operator=(const PairingManager&) = delete;
++
++    enum class CheckResult {
++        ValidExistingToken, // matched a previously-issued token: accept, nothing new to hand back
++        ValidCode,          // matched the active code: accept, a new token was just issued
++        NeedsCode,          // no match and no code was active; one was just generated as a side effect
++        WrongCode,          // no match, but a code IS currently active (mistyped or stale)
++    };
++
++    // Checks `presented` (the Hello payload's authToken field) against
++    // known pairing tokens and the currently-active pairing code. As a
++    // side effect, generates a fresh code if nothing matches and no code
++    // is currently active (see the onCodeChanged callback).
++    CheckResult check(const std::string& presented);
++
++    // Only meaningful immediately after check() returns ValidCode.
++    std::string lastIssuedToken() const;
++
++    // The currently-active pairing code, if any.
++    std::optional<std::string> currentCode() const;
++
++    // Fired synchronously (on whatever thread calls check()) whenever the
++    // active code changes: a fresh code when one is generated, or
++    // std::nullopt when it's consumed or expires. Callers needing
++    // UI-thread delivery (e.g. a Qt window) must marshal it themselves.
++    void setOnCodeChanged(std::function<void(std::optional<std::string>)> callback);
++
++private:
++    std::string generateCode();
++    std::string generateToken();
++    void loadTokensLocked();
++    void persistTokenLocked(const std::string& token);
++    void setCodeLocked(std::optional<std::string> code);
++    void expireIfNeededLocked();
++
++    mutable std::mutex mutex_;
++    std::string stateFilePath_;
++    std::chrono::seconds codeTtl_;
++
++    std::optional<std::string> currentCode_;
++    std::chrono::steady_clock::time_point codeExpiry_;
++
++    std::string lastIssuedToken_;
++    std::unordered_set<std::string> knownTokens_;
++
++    std::function<void(std::optional<std::string>)> onCodeChanged_;
++
++    std::mt19937 rng_;
 +};
 +
 +} // namespace melonds_remote::host
@@ -1386,10 +1794,10 @@ index 0000000..48014b9
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
 new file mode 100644
-index 0000000..3263469
+index 0000000..9ef31aa
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
-@@ -0,0 +1,196 @@
+@@ -0,0 +1,219 @@
 +#pragma once
 +
 +// melonDS Remote wire protocol definitions.
@@ -1413,7 +1821,7 @@ index 0000000..3263469
 +namespace melonds_remote {
 +
 +// Bumped whenever the wire format changes incompatibly.
-+inline constexpr uint16_t kProtocolVersion = 1;
++inline constexpr uint16_t kProtocolVersion = 2;
 +
 +// Sentinel at the start of every packet so malformed/foreign traffic on the
 +// same port can be rejected cheaply before any further parsing.
@@ -1471,6 +1879,16 @@ index 0000000..3263469
 +// "Handshake" for the full negotiation description; this is the minimal
 +// version implemented so far -- capability negotiation fields beyond
 +// display size are not yet included.
++//
++// `authToken` does double duty (spec section 13's "later pairing options"
++// list, now implemented): if the host was started with a static
++// `--auth-token`, this must match it exactly. Otherwise the host runs in
++// pairing mode -- this field should be either a previously-issued
++// `HelloAckPayload::pairingToken` (silent reconnect, no user interaction)
++// or a freshly-entered 6-digit pairing code shown on the host (first-time
++// pairing). An empty or unrecognized value gets rejected with
++// `PairingRequired` so the client knows to prompt for a code rather than
++// show a generic auth failure.
 +struct HelloPayload {
 +    std::string clientName;    // up to kMaxProtocolStringLength bytes
 +    std::string clientPlatform; // up to kMaxProtocolStringLength bytes
@@ -1484,6 +1902,12 @@ index 0000000..3263469
 +    ProtocolVersionMismatch = 1,
 +    AuthenticationFailed = 2,
 +    HostBusy = 3,
++    // No static auth token configured and the presented value isn't a
++    // known pairing token or a currently-active pairing code. The host
++    // has (or will, on this same attempt) generate/display a fresh
++    // 6-digit code; the client should prompt the user to enter it and
++    // retry, rather than treat this like a generic auth failure.
++    PairingRequired = 4,
 +};
 +
 +// HelloAck (host -> client) handshake payload.
@@ -1493,6 +1917,13 @@ index 0000000..3263469
 +    uint32_t sessionId = 0;
 +    uint16_t nativeWidth = 256;
 +    uint16_t nativeHeight = 192;
++    // Only non-empty when `accepted` and this handshake just consumed a
++    // fresh pairing code (i.e. this is a brand-new pairing, not a
++    // reconnect with an already-known token). The client must persist
++    // this and send it back as `HelloPayload::authToken` on all future
++    // connections to this host, instead of asking the user to re-enter a
++    // code. Up to kMaxProtocolStringLength bytes.
++    std::string pairingToken;
 +};
 +
 +// Full controller state, sent at a fixed rate (recommended 120 Hz) rather
@@ -1737,10 +2168,10 @@ index 0000000..a1aff53
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
 new file mode 100644
-index 0000000..a081f74
+index 0000000..0e3633e
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
-@@ -0,0 +1,254 @@
+@@ -0,0 +1,264 @@
 +#include "melonds_remote/protocol.h"
 +
 +#include <cstring>
@@ -1958,11 +2389,12 @@ index 0000000..a081f74
 +    appendU32(out, ack.sessionId);
 +    appendU16(out, ack.nativeWidth);
 +    appendU16(out, ack.nativeHeight);
++    appendString(out, ack.pairingToken);
 +}
 +
 +std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t size) {
-+    constexpr size_t kWireSize = 1 + 1 + 4 + 2 + 2;
-+    if (data == nullptr || size != kWireSize) {
++    constexpr size_t kFixedWireSize = 1 + 1 + 4 + 2 + 2;
++    if (data == nullptr || size < kFixedWireSize) {
 +        return std::nullopt;
 +    }
 +
@@ -1976,14 +2408,23 @@ index 0000000..a081f74
 +    ack.accepted = accepted;
 +
 +    uint8_t reason = data[offset]; offset += 1;
-+    if (reason > static_cast<uint8_t>(HelloRejectReason::HostBusy)) {
++    if (reason > static_cast<uint8_t>(HelloRejectReason::PairingRequired)) {
 +        return std::nullopt;
 +    }
 +    ack.rejectReason = static_cast<HelloRejectReason>(reason);
 +
 +    ack.sessionId = readU32(data, offset); offset += 4;
 +    ack.nativeWidth = readU16(data, offset); offset += 2;
-+    ack.nativeHeight = readU16(data, offset);
++    ack.nativeHeight = readU16(data, offset); offset += 2;
++
++    auto pairingToken = readString(data, size, offset);
++    if (!pairingToken) return std::nullopt;
++    ack.pairingToken = std::move(*pairingToken);
++
++    if (offset != size) {
++        // trailing garbage: reject rather than silently ignore
++        return std::nullopt;
++    }
 +
 +    return ack;
 +}

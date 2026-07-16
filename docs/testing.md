@@ -45,7 +45,7 @@ ctest --test-dir build --output-on-failure
 ## Integration smoke test (`tests/smoke_test.py`)
 
 Exercises the real `melonds-remote-server` binary (started with
-`--auth-token`) over actual TCP/UDP sockets:
+`--auth-token`, the static-token path) over actual TCP/UDP sockets:
 
 - a handshake with the wrong auth token is rejected (`accepted=0`,
   `rejectReason=AuthenticationFailed`)
@@ -76,25 +76,50 @@ python3 tests/smoke_test.py build/host/remote-server/melonds-remote-server
 
 Exits non-zero and prints the server's log output on any failure.
 
+## Pairing-flow smoke test (`tests/pairing_smoke_test.py`)
+
+Exercises the same `melonds-remote-server` binary in its **default**
+mode (no `--auth-token`, so pairing mode is active), covering the state
+machine `PairingManager` implements (spec section 13's "six-digit pairing
+code"): an unpaired connection is rejected with `PairingRequired` and
+gets a code logged; presenting that code pairs successfully and issues a
+persistent token; reconnecting with the token succeeds silently with no
+new token issued; the original code is single-use and doesn't work a
+second time; and a paired token survives a full host process restart
+when `--state-dir` is given.
+
+```sh
+python3 tests/pairing_smoke_test.py build/host/remote-server/melonds-remote-server
+```
+
+This is a protocol-level test (raw sockets standing in for a client).
+The corresponding real-client verification -- the actual
+`melonds-remote-client` binary detecting `PairingRequired`, rendering its
+code-entry screen, and pairing via simulated keystrokes standing in for
+Steam's on-screen keyboard -- is documented (not yet automated) in
+`host/melonds-patches/README.md` item 8.
+
 ## What is not yet tested
 
-- The SDL3 client (`client/`) has no automated tests; it has not been
-  build-verified in this development sandbox (no SDL3 package available
-  here -- see `docs/building.md`). Manual testing on a Steam Deck or Linux
-  desktop with SDL3 installed is required before relying on it. This
-  includes the client's auto-reconnect thread (`client/src/main.cpp`) --
-  its logic was reviewed and `client/src/net_client.cpp`/`.h` were
-  compiled standalone (outside the SDL3-gated CMake target, since only
-  `main.cpp` needs SDL3) with strict warnings to catch data races around
-  the added reconnect thread, but the reconnect behavior itself has not
-  been exercised end-to-end against a real host.
+- Real Steam Deck hardware: the SDL3 client has been build- and
+  run-verified (real handshake/pairing, real sustained video/input
+  traffic against both the standalone host and the actual patched
+  melonDS host -- see `docs/known-limitations.md`), but only headlessly
+  in this sandbox, with no physical gamepad and simulated keystrokes
+  standing in for Steam's on-screen keyboard. Manual testing on real
+  Deck hardware (Gaming Mode and Desktop Mode, both LCD and OLED models)
+  is still needed.
 - No test yet exercises packet loss, delayed/out-of-order UDP delivery
   under real network conditions (only the pure sequence-number logic is
-  unit tested), or a long-running (30-minute) session.
-- No melonDS integration exists yet, so nothing here tests actual DS
-  input injection or real framebuffer capture -- only the standalone
-  host/protocol layer against a synthetic frame source and logging input
-  sink.
-- No CI workflow has been added in this pass; `ctest` and
-  `tests/smoke_test.py` are meant to be run manually (or wired into CI in
-  a follow-up) until then.
+  unit tested).
+- A real commercial DS game has not been (and, per this project's own
+  constraints around not including/sourcing commercial ROMs, can't be in
+  this environment) tested; verification of input injection and video
+  capture used a minimal, fully original homebrew program instead --
+  see `tests/homebrew-test-rom/README.md` and
+  `host/melonds-patches/README.md`.
+- `.github/workflows/ci.yml` builds and tests `protocol/` and
+  `host/remote-server/` and compiles `client/src/net_client.cpp`
+  standalone, but does not attempt a full SDL3 client build (no SDL3
+  system package pinned in the CI image yet) -- see
+  `docs/known-limitations.md`.

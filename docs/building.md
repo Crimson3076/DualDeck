@@ -69,36 +69,49 @@ headless, gamepad-less environment).
 ```sh
 ./build/host/remote-server/melonds-remote-server --bind 127.0.0.1 \
     --control-port 8760 --input-port 8761 --video-port 8762 --timeout-ms 500 \
-    --auth-token some-shared-secret
+    --state-dir ~/.config/melonds-remote
 ```
 
-If `--auth-token` is omitted, the server logs a loud warning and accepts
-any client that can reach it (spec section 13 requires this to be a
-conscious choice, not a silent default -- fine for purely local testing,
-not for anything reachable from the rest of your LAN). Run
-`--help` for the full flag list.
+Without `--auth-token`, the server runs in **pairing mode** (spec section
+13's "six-digit pairing code"): an unrecognized client is shown a
+6-digit code to enter once, after which the host remembers it (in
+`--state-dir`, if given) and reconnects don't need a code again. Pass
+`--auth-token SECRET` instead for a static pre-shared token that bypasses
+pairing entirely (useful for scripting/CI). Run `--help` for the full
+flag list, including `--pairing-code-ttl-s`.
 
 See `scripts/run-host.sh` for a convenience wrapper, and
 `docs/testing.md` for a smoke-test script that exercises the handshake
 (including the auth-token and rate-limiting paths), UDP input path, and
 video path against a running server without needing the SDL3 client
-built.
+built. (The smoke test uses `--auth-token`, the static/legacy path, since
+it doesn't simulate a human entering a pairing code.)
 
 ## Running the SDL3 client locally
 
 ```sh
-./build/client/melonds-remote-client --host 192.168.1.50 --auth-token some-shared-secret
+./build/client/melonds-remote-client --host 192.168.1.50
 ```
 
 Also accepts a bare positional host address (`melonds-remote-client
-192.168.1.50`) for `scripts/run-client.sh`'s convenience form; use
-`--auth-token` whenever the host was started with one, since a mismatched
-or missing token is rejected. The client retries the connection with
-capped exponential backoff (1s up to 5s) on a background thread whenever
-it isn't currently connected, so it recovers automatically after the host
-restarts or a network interruption (spec section 7.2) -- as noted above,
-this reconnect behavior has not been exercised on real hardware yet since
-the client itself isn't build-verified in this sandbox.
+192.168.1.50`) for `scripts/run-client.sh`'s convenience form. If the
+host is in pairing mode (the default) and this is the first connection to
+it, the client shows a 6-digit code-entry screen (SDL text input, so
+Steam's on-screen keyboard drives it in Gaming Mode) -- enter the code
+the host just displayed. The client saves the token it's issued to
+`~/.config/melonds-remote-client/pairing_tokens.txt` and reuses it
+silently on every future run against that host address. Pass
+`--auth-token SECRET` only if the host was started with a static token
+instead. The client retries the connection with capped exponential
+backoff (1s up to 5s) on a background thread whenever it isn't currently
+connected (paused while awaiting pairing-code entry, so it doesn't burn
+through the host's connection-attempt rate limit with a code that hasn't
+changed), so it recovers automatically after the host
+restarts or a network interruption (spec section 7.2). This reconnect
+behavior, and the pairing flow above, have been exercised against a real
+host process with the real client binary in this sandbox (see
+`docs/known-limitations.md`) but not yet against real Steam Deck
+hardware/gamepad.
 
 ## melonDS itself
 

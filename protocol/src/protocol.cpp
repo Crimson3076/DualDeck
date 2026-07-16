@@ -215,11 +215,12 @@ void serializeHelloAckPayload(ByteBuffer& out, const HelloAckPayload& ack) {
     appendU32(out, ack.sessionId);
     appendU16(out, ack.nativeWidth);
     appendU16(out, ack.nativeHeight);
+    appendString(out, ack.pairingToken);
 }
 
 std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t size) {
-    constexpr size_t kWireSize = 1 + 1 + 4 + 2 + 2;
-    if (data == nullptr || size != kWireSize) {
+    constexpr size_t kFixedWireSize = 1 + 1 + 4 + 2 + 2;
+    if (data == nullptr || size < kFixedWireSize) {
         return std::nullopt;
     }
 
@@ -233,14 +234,23 @@ std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t 
     ack.accepted = accepted;
 
     uint8_t reason = data[offset]; offset += 1;
-    if (reason > static_cast<uint8_t>(HelloRejectReason::HostBusy)) {
+    if (reason > static_cast<uint8_t>(HelloRejectReason::PairingRequired)) {
         return std::nullopt;
     }
     ack.rejectReason = static_cast<HelloRejectReason>(reason);
 
     ack.sessionId = readU32(data, offset); offset += 4;
     ack.nativeWidth = readU16(data, offset); offset += 2;
-    ack.nativeHeight = readU16(data, offset);
+    ack.nativeHeight = readU16(data, offset); offset += 2;
+
+    auto pairingToken = readString(data, size, offset);
+    if (!pairingToken) return std::nullopt;
+    ack.pairingToken = std::move(*pairingToken);
+
+    if (offset != size) {
+        // trailing garbage: reject rather than silently ignore
+        return std::nullopt;
+    }
 
     return ack;
 }

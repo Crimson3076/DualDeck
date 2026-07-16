@@ -21,16 +21,33 @@ follows the patch boundary proposed in
 4. `src/frontend/qt_sdl/EmuInstance.{h,cpp}` — owns a
    `RemoteServerBridge` (null unless enabled), constructed/started in
    `EmuInstance`'s constructor and stopped at the top of its destructor,
-   alongside the existing emulation thread's lifecycle.
+   alongside the existing emulation thread's lifecycle. Also computes a
+   default pairing-token state-file path (`$MELONDS_REMOTE_STATE_DIR` or
+   `$HOME/.config/melonds-remote/paired_devices.txt`) and wires a
+   pairing-code-changed callback that marshals onto the Qt UI thread
+   (`QMetaObject::invokeMethod(qApp, ..., Qt::QueuedConnection)`, since
+   the callback fires on `NetServer`'s own thread) to show the code in
+   `mainWindow`'s status bar.
+5. `src/frontend/qt_sdl/Window.cpp` — `pickROM()`'s "Open ROM" dialog
+   defaults to EmuDeck's standard NDS ROM directory
+   (`~/Emulation/roms/nds`) the first time it's opened, if that directory
+   exists and melonDS hasn't already remembered a `LastROMFolder`. A
+   small, host-local convenience -- see `docs/known-limitations.md` for
+   why this doesn't cross into the client-facing ROM browsing spec
+   section 13 forbids.
 
 The protocol/host networking code itself (`protocol/`,
-`host/remote-server/net_server.{h,cpp}`, `emulator_input_sink.h`,
-`frame_source.h`) is vendored byte-for-byte from this repository into
-`src/frontend/qt_sdl/remote_server/` in the patch, plus three new
-melonDS-specific adapter files (`MelonDSFrameSource`, `MelonDSInputSink`,
-`RemoteServerBridge`) that implement `IFrameSource`/`IEmulatorInputSink`
-against real melonDS state instead of the standalone prototype's
-synthetic frame source / logging sink.
+`host/remote-server/net_server.{h,cpp}`, `host/remote-server/pairing_manager.{h,cpp}`,
+`emulator_input_sink.h`, `frame_source.h`) is vendored byte-for-byte from
+this repository into `src/frontend/qt_sdl/remote_server/` in the patch,
+plus three new melonDS-specific adapter files (`MelonDSFrameSource`,
+`MelonDSInputSink`, `RemoteServerBridge`) that implement
+`IFrameSource`/`IEmulatorInputSink` against real melonDS state instead of
+the standalone prototype's synthetic frame source / logging sink.
+`PairingManager` (the 6-digit pairing-code state machine, spec section
+13) lives in `host/remote-server/` alongside `NetServer` specifically so
+it's shared unchanged between the standalone prototype and this patch,
+rather than being melonDS-specific.
 
 ## What has actually been verified
 
@@ -121,6 +138,24 @@ Qt6, SDL2, GCC 13) — not just written and assumed correct:
    video draining; see `docs/known-limitations.md` for the duration
    actually achieved and the frame-count/RSS/error results in this
    sandboxed environment.
+8. **Pairing-code flow, real host + real SDL3 client** (spec section 13):
+   verified two ways. First, protocol-level against this exact fresh-clone
+   patched binary: an unpaired `Hello` was rejected with `PairingRequired`
+   and the code from the log accepted on retry, issuing a token that then
+   worked on reconnect while the (now-consumed) code did not -- see
+   "Applying the patch" below for the exact fresh-clone build this was
+   run against. Second, against the standalone `host/remote-server`
+   prototype with the **actual** `melonds-remote-client` binary (not a
+   raw-socket stand-in): the client detected the `PairingRequired`
+   rejection, rendered its 6-digit entry screen, accepted simulated
+   keystrokes (`xdotool type`, standing in for Steam's on-screen keyboard
+   in Gaming Mode) for the code shown in the host's log, paired
+   successfully, saved the issued token to
+   `~/.config/melonds-remote-client/pairing_tokens.txt`, and a completely
+   separate client process launched afterward with no code entry
+   reconnected silently using that saved token. The melonDS-integrated
+   host's status-bar display of the code was separately confirmed with a
+   screenshot showing "melonDS Remote pairing code: ..." in the window.
 
 Two real things were caught and fixed during this verification, not
 assumed correct from review:
@@ -162,9 +197,15 @@ MELONDS_REMOTE_BIND=127.0.0.1 \
 MELONDS_REMOTE_CONTROL_PORT=8760 \
 MELONDS_REMOTE_INPUT_PORT=8761 \
 MELONDS_REMOTE_VIDEO_PORT=8762 \
-MELONDS_REMOTE_AUTH_TOKEN=some-shared-secret \
 ./melonDS
 ```
+
+`MELONDS_REMOTE_AUTH_TOKEN` is optional; omit it (recommended) to use the
+pairing-code flow instead of a static shared secret -- see
+`docs/protocol.md`'s "Authentication and pairing" section. When set, it
+disables pairing entirely in favor of that exact pre-shared token.
+`MELONDS_REMOTE_STATE_DIR` overrides where paired-device tokens are
+remembered (default `$HOME/.config/melonds-remote/paired_devices.txt`).
 
 Only instance 0 (melonDS supports multiple emulator instances for local
 multiplayer testing) starts the remote server, matching this project's
@@ -188,6 +229,11 @@ one-client-at-a-time v0.1 scope.
   above. Not yet exercised: a commercial-style game's own input-handling
   code (would need a real commercial ROM, out of scope for this
   repository) or a physical Steam Deck controller feeding the client.
+- The pairing-code flow has been exercised end-to-end (item 8 above) with
+  simulated keystrokes standing in for Steam's on-screen keyboard; not
+  yet exercised with the actual on-screen keyboard on real Steam Deck
+  hardware. There's no UI to list/revoke individual paired devices, only
+  deleting the whole state file.
 - Session IDs are generated and returned in `HelloAck` but not yet
   validated on any later packet (matches the standalone prototype's
   current scope, see `docs/known-limitations.md`).

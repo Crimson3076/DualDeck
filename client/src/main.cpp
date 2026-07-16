@@ -1,11 +1,4 @@
-// melonDS Remote -- Steam Deck client (Phase 1 skeleton).
-//
-// NOTE ON BUILD STATUS: this file has been written and reviewed against
-// the SDL3 API but has NOT been build-verified in the development
-// sandbox used to write it, because no SDL3 package is installable there
-// (see docs/building.md). Build and run this on a real Linux desktop or
-// Steam Deck with SDL3 installed, and fix up any API mismatches against
-// the SDL3 version actually available before relying on it.
+// melonDS Remote -- Steam Deck client.
 //
 // What this does today:
 //  - Opens a 1280x800 window (Steam Deck panel resolution)
@@ -21,6 +14,11 @@
 //  - Logs connection/controller/touch/frame events to stdout as the
 //    "debug overlay" for this milestone (an on-screen overlay is future
 //    work, see docs/architecture.md "Known gaps")
+//  - Implements the pairing-code flow (spec section 13): if the host
+//    rejects a handshake with PairingRequired, shows a 6-digit code-entry
+//    screen (SDL text input, so Steam's on-screen keyboard drives it in
+//    Gaming Mode) instead of blindly retrying, and persists the token the
+//    host issues on success so future runs reconnect silently.
 
 #include <SDL3/SDL.h>
 
@@ -35,6 +33,7 @@
 #include "melonds_remote/protocol.h"
 #include "melonds_remote/touch_mapping.h"
 #include "net_client.h"
+#include "pairing_store.h"
 
 using namespace melonds_remote;
 using namespace melonds_remote::client;
@@ -102,10 +101,43 @@ uint16_t buildButtonsFromGamepad(SDL_Gamepad* gamepad) {
     return buttons;
 }
 
+// Renders 6 boxes centered on screen: outlined for not-yet-entered
+// digits, filled for entered ones. Deliberately doesn't render the actual
+// digit glyphs (no font/text-rendering dependency in this client) --
+// SDL_StartTextInput() drives Steam's on-screen keyboard in Gaming Mode,
+// which shows the typed characters itself; this is just a progress
+// indicator of how many of the 6 digits have been entered so far.
+void renderPairingCodeEntry(SDL_Renderer* renderer, size_t digitsEntered) {
+    constexpr int kBoxCount = 6;
+    constexpr float kBoxSize = 64.0f;
+    constexpr float kBoxGap = 16.0f;
+    constexpr float kTotalWidth = kBoxCount * kBoxSize + (kBoxCount - 1) * kBoxGap;
+
+    SDL_SetRenderDrawColor(renderer, 20, 20, 24, 255);
+    SDL_RenderClear(renderer);
+
+    float startX = (static_cast<float>(kWindowWidth) - kTotalWidth) / 2.0f;
+    float y = (static_cast<float>(kWindowHeight) - kBoxSize) / 2.0f;
+
+    for (int i = 0; i < kBoxCount; ++i) {
+        SDL_FRect box{startX + static_cast<float>(i) * (kBoxSize + kBoxGap), y, kBoxSize, kBoxSize};
+        if (static_cast<size_t>(i) < digitsEntered) {
+            SDL_SetRenderDrawColor(renderer, 90, 200, 120, 255);
+            SDL_RenderFillRect(renderer, &box);
+        } else {
+            SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+            SDL_RenderRect(renderer, &box);
+        }
+    }
+
+    SDL_RenderPresent(renderer);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     NetClientConfig netConfig;
+    bool authTokenExplicit = false; // --auth-token given: skip pairing entirely (CI/scripting use)
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -121,6 +153,7 @@ int main(int argc, char** argv) {
             netConfig.hostAddress = nextArg();
         } else if (arg == "--auth-token") {
             netConfig.authToken = nextArg();
+            authTokenExplicit = true;
         } else if (arg == "--client-name") {
             netConfig.clientName = nextArg();
         } else if (!arg.empty() && arg[0] != '-') {
@@ -130,6 +163,18 @@ int main(int argc, char** argv) {
         } else {
             std::fprintf(stderr, "unrecognized argument: %s\n", arg.c_str());
             return 1;
+        }
+    }
+
+    // Pairing mode (spec section 13): unless the caller gave an explicit
+    // static --auth-token, use whatever pairing token we've previously
+    // been issued for this host, if any -- silent reconnect instead of
+    // prompting for a 6-digit code again.
+    const std::string pairingStorePath = defaultPairingStorePath();
+    if (!authTokenExplicit) {
+        if (auto stored = loadPairingToken(pairingStorePath, netConfig.hostAddress)) {
+            netConfig.authToken = *stored;
+            std::printf("[pairing] using previously-paired token for %s\n", netConfig.hostAddress.c_str());
         }
     }
 
@@ -176,10 +221,24 @@ int main(int argc, char** argv) {
     }
     if (gamepadIds) SDL_free(gamepadIds);
 
+    // Set once a handshake comes back PairingRequired: the reconnect
+    // thread below stops retrying (a stale/missing token won't magically
+    // start working) and the render loop shows the code-entry screen
+    // instead, until the user finishes entering a code.
+    std::atomic<bool> awaitingPairingCode{false};
+
+    auto reportPairingRequired = [&]() {
+        awaitingPairingCode = true;
+        std::printf("[pairing] host requires a pairing code -- look at the host's screen/log "
+                    "for a 6-digit code and enter it here\n");
+    };
+
     NetClient net(netConfig);
     if (net.connect()) {
         std::printf("[net] connected to %s (session %u)\n", netConfig.hostAddress.c_str(),
                      net.sessionId());
+    } else if (net.lastRejectReason() == HelloRejectReason::PairingRequired) {
+        reportPairingRequired();
     } else {
         std::fprintf(stderr,
                       "[net] failed to connect to %s -- will keep retrying in the "
@@ -196,12 +255,14 @@ int main(int argc, char** argv) {
         uint32_t backoffMs = 1000;
         constexpr uint32_t kMaxBackoffMs = 5000;
         while (!shuttingDown.load()) {
-            if (!net.isConnected()) {
+            if (!net.isConnected() && !awaitingPairingCode.load()) {
                 std::printf("[net] attempting to (re)connect to %s...\n",
                             netConfig.hostAddress.c_str());
                 if (net.connect()) {
                     std::printf("[net] reconnected (session %u)\n", net.sessionId());
                     backoffMs = 1000;
+                } else if (net.lastRejectReason() == HelloRejectReason::PairingRequired) {
+                    reportPairingRequired();
                 } else {
                     backoffMs = std::min(backoffMs * 2, kMaxBackoffMs);
                 }
@@ -224,8 +285,23 @@ int main(int argc, char** argv) {
     const uint64_t inputIntervalUs = 1'000'000 / 120; // spec section 6.3
     uint64_t lastInputSendUs = SDL_GetTicksNS() / 1000;
 
+    bool pairingUIActive = false;
+    std::string enteredCode;
+
     bool running = true;
     while (running) {
+        bool wantPairingUI = awaitingPairingCode.load();
+        if (wantPairingUI && !pairingUIActive) {
+            SDL_StartTextInput(window); // drives Steam's on-screen keyboard in Gaming Mode
+            enteredCode.clear();
+            SDL_SetWindowTitle(window, "melonDS Remote -- enter pairing code shown on host");
+            pairingUIActive = true;
+        } else if (!wantPairingUI && pairingUIActive) {
+            SDL_StopTextInput(window);
+            SDL_SetWindowTitle(window, "melonDS Remote");
+            pairingUIActive = false;
+        }
+
         RenderRect dsRect = computeAspectFitRect(kWindowWidth, kWindowHeight);
 
         SDL_Event event;
@@ -269,9 +345,48 @@ int main(int argc, char** argv) {
                         activeFingerId.reset();
                     }
                     break;
+                case SDL_EVENT_TEXT_INPUT:
+                    if (pairingUIActive) {
+                        for (const char* p = event.text.text; *p; ++p) {
+                            if (*p >= '0' && *p <= '9' && enteredCode.size() < 6) {
+                                enteredCode.push_back(*p);
+                            }
+                        }
+                    }
+                    break;
+                case SDL_EVENT_KEY_DOWN:
+                    if (pairingUIActive && event.key.down && event.key.key == SDLK_BACKSPACE &&
+                        !enteredCode.empty()) {
+                        enteredCode.pop_back();
+                    }
+                    break;
                 default:
                     break;
             }
+        }
+
+        if (pairingUIActive && enteredCode.size() == 6) {
+            std::printf("[pairing] submitting entered code...\n");
+            net.setAuthToken(enteredCode);
+            if (net.connect()) {
+                std::string newToken = net.lastPairingToken();
+                if (!newToken.empty()) {
+                    savePairingToken(pairingStorePath, netConfig.hostAddress, newToken);
+                    std::printf("[pairing] paired successfully -- token saved, future runs won't "
+                                "need a code\n");
+                }
+                awaitingPairingCode = false;
+            } else {
+                std::fprintf(stderr,
+                              "[pairing] code rejected -- double check the code currently shown "
+                              "on the host and try again\n");
+                enteredCode.clear();
+            }
+        }
+
+        if (pairingUIActive) {
+            renderPairingCodeEntry(renderer, enteredCode.size());
+            continue;
         }
 
         uint64_t nowUs = SDL_GetTicksNS() / 1000;

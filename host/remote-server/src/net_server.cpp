@@ -130,14 +130,31 @@ bool sendAll(int fd, const uint8_t* data, size_t size) {
 
 NetServer::NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource)
     : config_(std::move(config)), inputSink_(inputSink), frameSource_(frameSource),
+      pairingManager_(config_.pairingStateFilePath, config_.pairingCodeTtl),
       rateLimiter_(config_.maxConnectionAttemptsPerWindow, config_.connectionAttemptWindowUs) {
-    if (config_.authToken.empty()) {
+    if (!config_.authToken.empty()) {
         std::fprintf(stderr,
-                      "NetServer: WARNING -- no auth token configured, accepting any client "
-                      "that can reach %s:%u. Set --auth-token for anything but purely local "
-                      "testing (spec section 13).\n",
-                      config_.bindAddress.c_str(), config_.controlPort);
+                      "NetServer: static auth token configured -- pairing-code flow is disabled, "
+                      "the exact token is required.\n");
+    } else {
+        std::fprintf(stderr,
+                      "NetServer: no static auth token configured; using pairing-code mode. An "
+                      "unrecognized connection attempt will display a 6-digit code here to enter "
+                      "on the client (spec section 13).\n");
     }
+
+    pairingManager_.setOnCodeChanged([this](std::optional<std::string> code) {
+        if (code) {
+            std::fprintf(stderr,
+                          "NetServer: pairing code: %s (enter this on the client; expires in %lds)\n",
+                          code->c_str(), static_cast<long>(config_.pairingCodeTtl.count()));
+        } else {
+            std::fprintf(stderr, "NetServer: pairing code cleared\n");
+        }
+        if (config_.onPairingCodeChanged) {
+            config_.onPairingCodeChanged(code);
+        }
+    });
 }
 
 NetServer::~NetServer() {
@@ -250,6 +267,7 @@ void NetServer::controlLoop() {
 
         bool handshakeOk = false;
         HelloRejectReason rejectReason = HelloRejectReason::ProtocolVersionMismatch;
+        std::string issuedPairingToken;
 
         uint8_t headerBuf[kPacketHeaderWireSize];
         ssize_t n = ::recv(clientFd, headerBuf, sizeof(headerBuf), MSG_WAITALL);
@@ -265,14 +283,37 @@ void NetServer::controlLoop() {
                 if (got == static_cast<ssize_t>(payloadBuf.size())) {
                     auto hello = parseHelloPayload(payloadBuf.data(), payloadBuf.size());
                     if (hello) {
-                        if (config_.authToken.empty() ||
-                            constantTimeEquals(hello->authToken, config_.authToken)) {
-                            handshakeOk = true;
+                        if (!config_.authToken.empty()) {
+                            // Legacy/CI-friendly static-token mode: exact match or reject,
+                            // pairing-code flow is bypassed entirely.
+                            if (constantTimeEquals(hello->authToken, config_.authToken)) {
+                                handshakeOk = true;
+                            } else {
+                                std::fprintf(stderr,
+                                              "NetServer: rejecting handshake from %s (bad auth token)\n",
+                                              ipStr);
+                                rejectReason = HelloRejectReason::AuthenticationFailed;
+                            }
                         } else {
-                            std::fprintf(stderr,
-                                          "NetServer: rejecting handshake from %s (bad auth token)\n",
-                                          ipStr);
-                            rejectReason = HelloRejectReason::AuthenticationFailed;
+                            switch (pairingManager_.check(hello->authToken)) {
+                                case PairingManager::CheckResult::ValidExistingToken:
+                                    handshakeOk = true;
+                                    break;
+                                case PairingManager::CheckResult::ValidCode:
+                                    handshakeOk = true;
+                                    issuedPairingToken = pairingManager_.lastIssuedToken();
+                                    std::fprintf(stderr,
+                                                  "NetServer: %s paired successfully with a new device token\n",
+                                                  ipStr);
+                                    break;
+                                case PairingManager::CheckResult::NeedsCode:
+                                case PairingManager::CheckResult::WrongCode:
+                                    std::fprintf(stderr,
+                                                  "NetServer: rejecting handshake from %s (pairing required)\n",
+                                                  ipStr);
+                                    rejectReason = HelloRejectReason::PairingRequired;
+                                    break;
+                            }
                         }
                     } else {
                         std::fprintf(stderr, "NetServer: rejecting handshake (malformed Hello payload)\n");
@@ -289,6 +330,7 @@ void NetServer::controlLoop() {
         ack.accepted = handshakeOk ? 1 : 0;
         ack.rejectReason = handshakeOk ? HelloRejectReason::None : rejectReason;
         ack.sessionId = handshakeOk ? static_cast<uint32_t>(nowMicros()) : 0;
+        ack.pairingToken = issuedPairingToken;
         ByteBuffer ackPacket = buildHelloAckPacket(ack);
         sendAll(clientFd, ackPacket.data(), ackPacket.size());
 

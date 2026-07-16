@@ -30,14 +30,26 @@ See `docs/building.md` for the actual CMake invocation either way.
 2. Open a terminal (Konsole).
 3. Run the client directly:
    ```sh
-   ./melonds-remote-client --host <htpc-ip-address> --auth-token <your-token>
+   ./melonds-remote-client --host <htpc-ip-address>
    ```
-4. Confirm: window opens fullscreen at 1280x800, the test pattern (or a
-   real host's bottom-screen stream, once melonDS integration exists)
-   renders letterboxed at 4:3, the Deck's built-in controller moves the
-   test overlay/logs show button state, and the touchscreen registers
+4. **First connection to a given host**: the host has no idea who you are
+   yet, so it rejects the handshake and generates a 6-digit pairing code
+   (spec section 13) -- printed in the host's log/terminal, and also
+   shown in the melonDS window's status bar if you're running the
+   melonDS-integrated host. The client shows a 6-box entry screen and
+   starts SDL text input, which in Gaming Mode brings up Steam's
+   on-screen keyboard automatically; in Desktop Mode, just type the digits
+   on a physical keyboard. Once entered, the client pairs and saves a
+   token to `~/.config/melonds-remote-client/pairing_tokens.txt` -- future
+   runs against the same host address reconnect silently, no code needed
+   again. (If you'd rather skip pairing entirely, e.g. for scripted
+   testing, start the host with `--auth-token`/`MELONDS_REMOTE_AUTH_TOKEN`
+   and pass the same value here with `--auth-token`.)
+5. Confirm: window opens fullscreen at 1280x800, the host's bottom-screen
+   stream renders letterboxed at 4:3, the Deck's built-in controller
+   moves the game/logs show button state, and the touchscreen registers
    only inside the rendered DS rectangle (spec section 7.4).
-5. Exit with the window's quit control (currently `SDL_EVENT_QUIT`, i.e.
+6. Exit with the window's quit control (currently `SDL_EVENT_QUIT`, i.e.
    closing the window -- a controller-navigable in-app exit action is
    listed as Phase 3 work in `SPEC.md` and not yet implemented; see
    `docs/known-limitations.md`).
@@ -51,8 +63,11 @@ Mode, applied to this client:
 2. **Games → Add a Non-Steam Game to My Shortcuts...**
 3. **Browse...** to the built `melonds-remote-client` binary.
 4. After adding, right-click it in your library → **Properties**:
-   - **Launch Options**: add your host address/token, e.g.
-     `--host 192.168.1.50 --auth-token your-token`
+   - **Launch Options**: add your host address, e.g. `--host 192.168.1.50`
+     (add `--auth-token your-token` too only if the host was started with
+     a static token instead of pairing mode). The first launch will need
+     the on-screen keyboard for the pairing code (see "Desktop Mode" step
+     4 above); every launch after that reconnects silently.
    - **Compatibility**: a Proton layer is not needed since this is a
      native Linux binary; leave "Force the use of a specific Steam Play
      compatibility tool" unchecked.

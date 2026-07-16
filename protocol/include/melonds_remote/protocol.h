@@ -21,7 +21,7 @@
 namespace melonds_remote {
 
 // Bumped whenever the wire format changes incompatibly.
-inline constexpr uint16_t kProtocolVersion = 1;
+inline constexpr uint16_t kProtocolVersion = 2;
 
 // Sentinel at the start of every packet so malformed/foreign traffic on the
 // same port can be rejected cheaply before any further parsing.
@@ -79,6 +79,16 @@ inline constexpr size_t kMaxProtocolStringLength = 64;
 // "Handshake" for the full negotiation description; this is the minimal
 // version implemented so far -- capability negotiation fields beyond
 // display size are not yet included.
+//
+// `authToken` does double duty (spec section 13's "later pairing options"
+// list, now implemented): if the host was started with a static
+// `--auth-token`, this must match it exactly. Otherwise the host runs in
+// pairing mode -- this field should be either a previously-issued
+// `HelloAckPayload::pairingToken` (silent reconnect, no user interaction)
+// or a freshly-entered 6-digit pairing code shown on the host (first-time
+// pairing). An empty or unrecognized value gets rejected with
+// `PairingRequired` so the client knows to prompt for a code rather than
+// show a generic auth failure.
 struct HelloPayload {
     std::string clientName;    // up to kMaxProtocolStringLength bytes
     std::string clientPlatform; // up to kMaxProtocolStringLength bytes
@@ -92,6 +102,12 @@ enum class HelloRejectReason : uint8_t {
     ProtocolVersionMismatch = 1,
     AuthenticationFailed = 2,
     HostBusy = 3,
+    // No static auth token configured and the presented value isn't a
+    // known pairing token or a currently-active pairing code. The host
+    // has (or will, on this same attempt) generate/display a fresh
+    // 6-digit code; the client should prompt the user to enter it and
+    // retry, rather than treat this like a generic auth failure.
+    PairingRequired = 4,
 };
 
 // HelloAck (host -> client) handshake payload.
@@ -101,6 +117,13 @@ struct HelloAckPayload {
     uint32_t sessionId = 0;
     uint16_t nativeWidth = 256;
     uint16_t nativeHeight = 192;
+    // Only non-empty when `accepted` and this handshake just consumed a
+    // fresh pairing code (i.e. this is a brand-new pairing, not a
+    // reconnect with an already-known token). The client must persist
+    // this and send it back as `HelloPayload::authToken` on all future
+    // connections to this host, instead of asking the user to re-enter a
+    // code. Up to kMaxProtocolStringLength bytes.
+    std::string pairingToken;
 };
 
 // Full controller state, sent at a fixed rate (recommended 120 Hz) rather

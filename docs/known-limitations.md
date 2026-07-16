@@ -112,6 +112,18 @@ Concretely, on SPEC.md section 20's acceptance criteria:
   growth, and the process still alive and responsive; see the stability
   run above.
 
+**EmuDeck ROM directory default**: the patch also makes melonDS's own
+"Open ROM" dialog default to EmuDeck's standard NDS ROM directory
+(`~/Emulation/roms/nds`) the first time it's opened (i.e. before melonDS
+has ever remembered a `LastROMFolder`), if that directory exists --
+`src/frontend/qt_sdl/Window.cpp`'s `pickROM()`. This is a small,
+host-local convenience, not a new protocol feature: it does not browse,
+list, or auto-select a ROM on the client's behalf (`SPEC.md` section 13
+explicitly forbids exposing ROM browsing to the client), and it doesn't
+auto-launch anything at startup -- the host operator still picks a game
+through melonDS's own menu (or a `.nds` path on the command line, as
+before), just starting from a more useful default folder.
+
 ## The SDL3 client: now build- and run-verified, not yet tested on real Steam Deck hardware
 
 Earlier passes of this document said the client had never been compiled,
@@ -154,16 +166,36 @@ Raw BGRA8888 frames over TCP, no compression, per `SPEC.md` section 8.4's
 acceptable for LAN but not evaluated against the Stage 2 options
 (H.264/H.265/AV1/MJPEG/custom delta encoding) at all yet.
 
-## Authentication is minimal
+## Authentication: pairing codes and pre-shared tokens both implemented; no QR/certificate pairing
 
-A single pre-shared token (`--auth-token`), compared in constant time,
-checked once at handshake. Not implemented: six-digit pairing codes, QR
-codes, certificate-based pairing, or any post-handshake re-authentication
-(a session that's been accepted stays accepted until it disconnects or
-times out; there is no `sessionId` validation on subsequent packets in
-this version, so nothing currently distinguishes a stale session from a
-current one at the protocol level beyond the one-connection-at-a-time
-plus source-IP-match rule enforced by the transport).
+Two of spec section 13's four "later pairing options" are implemented,
+end-to-end verified (real host + real SDL3 client, not just unit tests --
+see `host/melonds-patches/README.md`):
+
+- **Six-digit pairing code** (the default when no `--auth-token` is
+  configured): an unrecognized connection attempt causes the host to
+  generate and display a short-lived, single-use 6-digit code (console
+  log always; the melonDS-integrated host also shows it in the window's
+  status bar). The user enters it once on the client (an SDL text-input
+  screen that drives Steam's on-screen keyboard in Gaming Mode); the host
+  then issues a persistent opaque token, which the client saves and
+  reuses silently on every future connection (including the existing
+  auto-reconnect-on-drop logic) -- no code needed again unless the host's
+  paired-device state is deleted. See `docs/protocol.md`'s "Authentication
+  and pairing" section for the full state machine.
+- **Pre-shared token** (`--auth-token TOKEN`): unchanged from before,
+  still available as an explicit opt-in for scripting/CI
+  (`tests/smoke_test.py` uses it) -- bypasses pairing entirely.
+
+**Not implemented**: QR codes, certificate-based pairing, or any
+post-handshake re-authentication (a session that's been accepted stays
+accepted until it disconnects or times out; there is no `sessionId`
+validation on subsequent packets in this version, so nothing currently
+distinguishes a stale session from a current one at the protocol level
+beyond the one-connection-at-a-time plus source-IP-match rule enforced by
+the transport). There is also no UI to list or revoke individual paired
+devices -- only deleting the whole paired-device state file (forgetting
+every previously-paired client at once).
 
 ## No discovery, no multi-client, no IPv6
 

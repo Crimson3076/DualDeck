@@ -4,9 +4,15 @@ The required "Bazzite host setup instructions" deliverable (`SPEC.md`
 section 25), for the primary target platform (section 3: Bazzite,
 Fedora-based, KDE Plasma, Wayland, AMD GPU preferred). **Status: written
 from general Bazzite/Fedora Atomic knowledge, not verified on a real
-Bazzite install** -- see `docs/known-limitations.md`. This only covers
-building and running today's standalone `host/remote-server` prototype;
-there is no melonDS integration to install yet.
+Bazzite install** -- see `docs/known-limitations.md`. This covers
+building and running the standalone `host/remote-server` prototype. A
+real melonDS integration patch now exists
+(`host/melonds-patches/0001-remote-server-integration.patch`) and has
+been build/run-verified in this project's own development sandbox, but
+*that specific verification* was on Ubuntu, not Bazzite -- building it
+here follows the same Distrobox approach below, just against melonDS's
+own (larger) Qt6/SDL2/OpenGL dependency list instead of this prototype's
+none; see `host/melonds-patches/README.md`.
 
 ## Why Bazzite needs a different approach than a normal distro
 
@@ -68,12 +74,18 @@ Then build exactly as in `docs/building.md`, no container needed.
 ```sh
 ./build/host/remote-server/melonds-remote-server \
     --bind <your-LAN-IP> \
-    --auth-token <a-shared-secret>
+    --state-dir ~/.config/melonds-remote
 ```
 
 Bind to your actual LAN-facing interface address (not `127.0.0.1`, which
 only accepts connections from the same machine) so the Steam Deck client
 can reach it. Find your LAN IP with `ip addr` or `nmcli device show`.
+Without `--auth-token`, this runs in pairing mode (spec section 13's
+six-digit pairing code, the recommended default) -- the first connection
+attempt from the client gets a code logged here to enter once; add
+`--auth-token <a-shared-secret>` instead if you'd rather manage a static
+shared secret yourself. See `docs/protocol.md`'s "Authentication and
+pairing" section.
 
 ### Firewall
 
@@ -100,14 +112,16 @@ any extra arguments -- e.g.:
 
 ## What's not covered here yet
 
-- Running melonDS itself on Bazzite: out of scope until the melonDS
-  integration patch exists (`docs/melonds-integration-analysis.md`). Once
-  it does, expect the same Distrobox-vs-layered-package tradeoff for
-  Qt6/SDL2/OpenGL build dependencies, plus GPU passthrough considerations
-  specific to running a Qt/OpenGL application from inside a container
-  (Bazzite's Distrobox setup generally handles this for AMD GPUs via
-  Mesa, but this hasn't been tested against melonDS specifically since
-  melonDS isn't integrated yet).
+- Actually building/running the patched melonDS *on Bazzite specifically*:
+  the patch (`host/melonds-patches/0001-remote-server-integration.patch`)
+  exists and has been verified in this project's own development sandbox
+  (Ubuntu 24.04), but not on real Bazzite. Expect the same
+  Distrobox-vs-layered-package tradeoff described above for melonDS's own
+  (larger) Qt6/SDL2/OpenGL dependency list, plus GPU passthrough
+  considerations specific to running a Qt/OpenGL application from inside
+  a container (Bazzite's Distrobox setup generally handles this for AMD
+  GPUs via Mesa, but this hasn't been tested against melonDS specifically
+  on Bazzite).
 - A systemd user service / autostart unit so the host server comes up
   automatically -- not implemented; `scripts/run-host.sh` is a manual
   foreground launch for now.

@@ -14,13 +14,17 @@
 // and never accepts a file path or shell command from the client.
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <functional>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
 #include "host/emulator_input_sink.h"
 #include "host/frame_source.h"
+#include "host/pairing_manager.h"
 #include "melonds_remote/input_state_tracker.h"
 #include "melonds_remote/rate_limiter.h"
 
@@ -36,7 +40,34 @@ struct NetServerConfig {
 
     // Empty means authentication is disabled -- spec section 13 requires
     // this to be a conscious, warned-about choice, not a silent default.
+    //
+    // If non-empty, this is a static pre-shared token checked before
+    // anything else (legacy/CI-friendly path, e.g. tests/smoke_test.py):
+    // an exact match is accepted outright and the pairing-code flow below
+    // never runs. Leave empty to use pairing mode instead (recommended
+    // for real use): unrecognized clients are shown a 6-digit code (see
+    // pairingStateFilePath / onPairingCodeChanged) instead of a fixed
+    // secret you have to configure and distribute yourself.
     std::string authToken;
+
+    // Where issued pairing tokens are persisted so a paired client stays
+    // paired across host restarts (see PairingManager). Empty disables
+    // persistence -- pairing still works for the life of the process,
+    // it's just forgotten on restart. Ignored entirely when authToken is
+    // set (static-token mode bypasses pairing).
+    std::string pairingStateFilePath;
+
+    // How long a generated pairing code stays valid before a fresh one
+    // is needed.
+    std::chrono::seconds pairingCodeTtl{300};
+
+    // Optional hook for surfacing the pairing code somewhere beyond the
+    // console (e.g. melonDS's own window). Called with the new code when
+    // one is generated, and with std::nullopt when it's consumed/expires.
+    // Invoked synchronously on NetServer's control-connection thread --
+    // if the callback touches UI state, it must marshal to the UI thread
+    // itself (e.g. Qt::QueuedConnection).
+    std::function<void(std::optional<std::string>)> onPairingCodeChanged;
 
     // If a control-channel connection is silent (no heartbeat, no other
     // control traffic) for longer than this, it is dropped. Distinct from
@@ -99,6 +130,7 @@ private:
     NetServerConfig config_;
     IEmulatorInputSink& inputSink_;
     IFrameSource& frameSource_;
+    PairingManager pairingManager_;
 
     std::atomic<bool> running_{false};
     std::thread controlThread_;

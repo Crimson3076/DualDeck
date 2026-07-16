@@ -1,11 +1,9 @@
-# NOTE: not build-verified in the sandbox this was authored in -- no SDL3
-# package was available there. See docs/building.md.
-
 find_package(SDL3 REQUIRED CONFIG)
 
 add_executable(melonds-remote-client
     src/main.cpp
     src/net_client.cpp
+    src/pairing_store.cpp
 )
 
 target_link_libraries(melonds-remote-client PRIVATE

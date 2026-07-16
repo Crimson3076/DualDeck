@@ -101,7 +101,10 @@ bool NetClient::connect() {
     helloPayload.clientPlatform = config_.clientPlatform;
     helloPayload.displayWidth = config_.displayWidth;
     helloPayload.displayHeight = config_.displayHeight;
-    helloPayload.authToken = config_.authToken;
+    {
+        std::lock_guard<std::mutex> tokenLock(handshakeResultMutex_);
+        helloPayload.authToken = config_.authToken;
+    }
     ByteBuffer hello = buildHelloPacket(helloPayload);
     if (!sendAll(controlFd_, hello.data(), hello.size())) {
         std::fprintf(stderr, "failed to send Hello\n");
@@ -134,9 +137,20 @@ bool NetClient::connect() {
         closePartialConnection();
         return false;
     }
+    {
+        std::lock_guard<std::mutex> resultLock(handshakeResultMutex_);
+        lastRejectReason_ = ack->rejectReason;
+        lastPairingToken_ = ack->pairingToken;
+    }
     if (!ack->accepted) {
-        std::fprintf(stderr, "handshake rejected by host (reason code %d)\n",
-                      static_cast<int>(ack->rejectReason));
+        if (ack->rejectReason == HelloRejectReason::PairingRequired) {
+            std::fprintf(stderr,
+                          "handshake rejected by host: pairing required -- enter the 6-digit "
+                          "code shown on the host\n");
+        } else {
+            std::fprintf(stderr, "handshake rejected by host (reason code %d)\n",
+                          static_cast<int>(ack->rejectReason));
+        }
         closePartialConnection();
         return false;
     }
@@ -215,6 +229,21 @@ void NetClient::sendControllerState(const ControllerState& state) {
     if (!connected_.load() || udpFd_ < 0) return;
     ByteBuffer packet = buildControllerStatePacket(state);
     ::send(udpFd_, packet.data(), packet.size(), MSG_NOSIGNAL);
+}
+
+HelloRejectReason NetClient::lastRejectReason() const {
+    std::lock_guard<std::mutex> lock(handshakeResultMutex_);
+    return lastRejectReason_;
+}
+
+std::string NetClient::lastPairingToken() const {
+    std::lock_guard<std::mutex> lock(handshakeResultMutex_);
+    return lastPairingToken_;
+}
+
+void NetClient::setAuthToken(std::string token) {
+    std::lock_guard<std::mutex> lock(handshakeResultMutex_);
+    config_.authToken = std::move(token);
 }
 
 bool NetClient::getLatestFrame(std::vector<uint8_t>& outFrame) {

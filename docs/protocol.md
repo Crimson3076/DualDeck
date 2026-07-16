@@ -1,4 +1,4 @@
-# Wire Protocol (v1)
+# Wire Protocol (v2)
 
 This document is the authoritative description of the wire format
 implemented in `protocol/`. It intentionally covers only what is
@@ -13,7 +13,7 @@ same fixed-size header.
 | Offset | Size | Field            | Notes                                   |
 |-------:|-----:|------------------|------------------------------------------|
 | 0      | 4    | `magic`          | Always `0x444D5231` ("DMR1"). Packets with any other value are rejected before further parsing. |
-| 4      | 2    | `protocolVersion`| Currently `1`. A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
+| 4      | 2    | `protocolVersion`| Currently `2` (bumped from `1` when the pairing-code fields below were added to `HelloAckPayload` -- an incompatible wire change). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
 | 6      | 2    | `packetType`     | See table below.                        |
 | 8      | 4    | `payloadSize`    | Size of the payload that follows, in bytes. Receivers must verify this matches the number of bytes actually available before parsing the payload. |
 
@@ -117,7 +117,7 @@ declared length that would run past the end of the received buffer.
 | `clientPlatform`  | length-prefixed string | e.g. "linux". Informational/logging only today. |
 | `displayWidth`    | `u16`         | Client's display width in pixels. Not currently used by the host. |
 | `displayHeight`   | `u16`         | Client's display height in pixels. Not currently used by the host. |
-| `authToken`       | length-prefixed string | Must equal the host's configured `--auth-token` exactly, or the handshake is rejected. Empty if the host has authentication disabled. |
+| `authToken`       | length-prefixed string | See "Authentication and pairing" below -- meaning depends on whether the host has a static `--auth-token` configured. |
 
 The whole `Hello` payload is capped at 512 bytes by the host before it will
 even attempt to parse it, so a hostile `payloadSize` can't be used to make
@@ -129,7 +129,7 @@ touch/microphone capability flags. `clientName`/`clientPlatform`/display
 size exist on the wire today but the host does not yet act on them beyond
 logging.
 
-## HelloAck payload (10 bytes)
+## HelloAck payload (10 fixed bytes + a length-prefixed string)
 
 | Offset | Size | Field          | Notes |
 |-------:|-----:|----------------|-------|
@@ -138,12 +138,60 @@ logging.
 | 2      | 4    | `sessionId`    | Non-zero, host-chosen, only when `accepted == 1`. Informational today (logging/future reconnect correlation); not yet validated on subsequent packets. |
 | 6      | 2    | `nativeWidth`  | Always 256. |
 | 8      | 2    | `nativeHeight` | Always 192. |
+| 10     | var. | `pairingToken` | length-prefixed string (added in protocol v2). Non-empty only when `accepted == 1` and this handshake just consumed a fresh pairing code -- see "Authentication and pairing" below. The client must persist it and send it back as `authToken` on all future connections to this host. |
 
 `HelloRejectReason`: `0` = none (accepted), `1` = protocol version
 mismatch, `2` = authentication failed, `3` = host busy (reserved, not
 currently sent since the host doesn't yet reject on "busy" -- an extra
 control connection while one is active is simply closed without a
-handshake attempt).
+handshake attempt), `4` = pairing required (added in protocol v2 -- see
+below).
+
+## Authentication and pairing
+
+Implements spec section 13's "later pairing options" (six-digit pairing
+code, pre-shared token). Which mode is active is a single host-side
+choice (`NetServerConfig::authToken` empty or not), not negotiated:
+
+**Static token mode** (`--auth-token TOKEN` given to the host): the
+`Hello` payload's `authToken` must equal that value exactly (compared in
+constant time), or the handshake is rejected with `AuthenticationFailed`.
+No pairing code is ever generated in this mode. Intended for
+scripting/CI (`tests/smoke_test.py` uses this) or anyone who'd rather
+manage a shared secret themselves.
+
+**Pairing mode** (no `--auth-token`, the recommended default): the host
+maintains a set of previously-issued opaque pairing tokens plus at most
+one currently-active 6-digit code (`melonds_remote::host::PairingManager`,
+`host/remote-server/include/host/pairing_manager.h`). For each `Hello`:
+
+1. If `authToken` matches a previously-issued pairing token: accept
+   silently, `pairingToken` in the `HelloAck` is empty (nothing new to
+   hand back) -- this is what makes reconnects (including the client's
+   auto-reconnect-on-drop) not require re-entering a code.
+2. Else if `authToken` matches the currently-active 6-digit code: accept,
+   consume the code (single-use), generate a new persistent pairing
+   token, and return it in `HelloAck.pairingToken`. The client must save
+   this for future connections.
+3. Else if no code is currently active: generate one (default TTL 5
+   minutes), surface it (console log, and the melonDS-integrated host
+   also shows it in the window's status bar), and reject this attempt
+   with `PairingRequired`.
+4. Else (a code is active but `authToken` didn't match it): reject with
+   `PairingRequired` without generating a new code, so a client mid-typing
+   the currently-displayed code doesn't have it invalidated out from under
+   them.
+
+Issued pairing tokens are persisted to `--state-dir PATH` (standalone
+host) or `$HOME/.config/melonds-remote/paired_devices.txt` by default, or
+`$MELONDS_REMOTE_STATE_DIR` if set (melonDS-integrated host), so a paired
+client stays paired across host restarts. There is currently no UI to
+list or revoke individual paired devices -- only deleting the state file
+entirely (forgetting everyone) is possible.
+
+The SDL3 client persists whatever token it's issued to
+`$HOME/.config/melonds-remote-client/pairing_tokens.txt`, keyed by host
+address, and uses it automatically on future runs against the same host.
 
 ## Handshake (as currently implemented)
 
@@ -152,11 +200,13 @@ handshake attempt).
 2. Host checks, in order: source-IP connection-attempt rate limit (see
    "Rate limiting" below) -- applied before any handshake bytes are even
    read; `magic`/`protocolVersion`/`payloadSize` bound; successful parse of
-   the Hello payload; and finally, if the host has `--auth-token` set,
-   that `authToken` matches exactly. On success, replies with a
-   `HelloAck` (`accepted=1`, a fresh `sessionId`) and keeps the connection
-   open. On any failure, replies with `HelloAck` (`accepted=0`, the
-   relevant `rejectReason`) and then closes the connection.
+   the Hello payload; and finally the `authToken` check described in
+   "Authentication and pairing" above (either an exact static-token match,
+   or the pairing-code/pairing-token logic). On success, replies with a
+   `HelloAck` (`accepted=1`, a fresh `sessionId`, and `pairingToken` if a
+   code was just consumed) and keeps the connection open. On any failure,
+   replies with `HelloAck` (`accepted=0`, the relevant `rejectReason`) and
+   then closes the connection.
 3. Only once a client is accepted does the host start acting on
    `ControllerState` packets on the UDP input port, and only accepts a
    video connection on the video port -- both are matched against the

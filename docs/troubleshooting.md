@@ -36,15 +36,36 @@ listening on that port. Either stop it (`pkill melonds-remote-server`
 or find the PID with `ss -tlnp | grep 8760`) or pick different ports
 with `--control-port`/`--input-port`/`--video-port`.
 
-### `NetServer: WARNING -- no auth token configured...`
+### `NetServer: no static auth token configured; using pairing-code mode...`
 
 Expected and intentional (spec section 13) if you didn't pass
-`--auth-token`. Fine for `127.0.0.1`-only local testing; set a token
-before binding to a LAN-reachable address, and make sure the client is
-given the same token (`--auth-token` on `melonds-remote-client`, or
-`NetClientConfig::authToken` if embedding `NetClient` yourself).
+`--auth-token` -- this is the recommended default, not a warning to fix.
+An unrecognized client gets a 6-digit pairing code (shown here, and in
+the melonDS window's status bar for the integrated host); once the
+client's entered it, it's remembered and won't be asked again. If you'd
+rather skip pairing entirely (e.g. scripted testing), pass
+`--auth-token`/`MELONDS_REMOTE_AUTH_TOKEN` on the host and the matching
+`--auth-token` on the client.
 
-### Client's handshake is rejected but the token looks right
+### Client's handshake keeps getting rejected with "pairing required"
+
+- This is expected the *first* time a client connects to a host --
+  that's the point at which you're supposed to enter the code. Look at
+  the host's log (or, for the melonDS-integrated host, its window's
+  status bar) for the current 6-digit code and enter it on the client.
+- If it keeps happening on every run instead of just the first: check
+  that `$HOME` (or whatever the code is running as) is writable and that
+  `~/.config/melonds-remote-client/pairing_tokens.txt` is actually being
+  written after a successful pairing -- a read-only home directory would
+  make the client "forget" its token every restart.
+- A code only stays valid for 5 minutes (`--pairing-code-ttl-s` on the
+  host) and is single-use; if you waited too long or already used it,
+  the host will show a new one on the next attempt.
+
+### Client's handshake is rejected but the static token looks right
+
+(Only relevant if you're using `--auth-token`/`MELONDS_REMOTE_AUTH_TOKEN`
+instead of pairing mode.)
 
 - Check for accidental whitespace/newline differences if the token is
   coming from a shell variable, config file, or copy-paste.

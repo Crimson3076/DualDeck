@@ -324,3 +324,21 @@ this project deliberately does not include or seek out. Real Steam Deck
 hardware, a physical gamepad, and a real commercial game are still
 outside what this sandboxed environment can provide; see
 `docs/known-limitations.md` for the precise, current list.
+
+**Follow-up pass -- pairing codes and an EmuDeck-aware ROM default**:
+implements two of SPEC.md section 13's "later pairing options" (six-digit
+pairing code, pre-shared token, both now supported side by side) via a
+new shared `PairingManager` (`host/remote-server/pairing_manager.{h,cpp}`,
+vendored into the patch like `NetServer`), wired into `EmuInstance.cpp`
+so the melonDS window's status bar shows the code when one's generated.
+Verified end-to-end against a real host and the **actual** SDL3 client
+binary (not a protocol-level stand-in): unpaired connect → code shown →
+client renders a 6-digit entry screen → simulated keystrokes (standing in
+for Steam's on-screen keyboard) → paired, token persisted → a fresh
+client process reconnects silently with no code needed. Also defaults
+melonDS's "Open ROM" dialog to EmuDeck's standard NDS folder
+(`~/Emulation/roms/nds`) the first time it's opened, a small host-local
+convenience that doesn't cross into the client-facing ROM browsing
+section 13 forbids. See `host/melonds-patches/README.md` item 8 and
+`docs/protocol.md`'s "Authentication and pairing" section for the full
+account.
