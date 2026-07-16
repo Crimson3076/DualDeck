@@ -10,7 +10,10 @@ follows the patch boundary proposed in
    `emuInstance->drawScreen()` call, calls
    `GPU::GetFramebuffers()` itself and, if it returns real pointers
    (software renderer), copies the bottom buffer into the remote
-   server's frame source.
+   server's frame source. If it returns false (OpenGL/OpenGLCompute 3D
+   renderer instead), falls back to a GPU-side readback via the new
+   `GLBottomScreenCapture` class (`remote_server/GLBottomScreenCapture.{h,cpp}`)
+   -- see "OpenGL/OpenGLCompute video capture" below.
 2. `src/frontend/qt_sdl/EmuInstanceInput.cpp` — `inputProcess()` merges
    the latest remote `ControllerState` into `inputMask`/`isTouching`/
    `touchX`/`touchY`/`hotkeyMask`, the same way local SDL joystick input
@@ -257,6 +260,37 @@ Qt6, SDL2, GCC 13) — not just written and assumed correct:
     triggered in this sandbox (no GPU to switch to an OpenGL renderer
     with), so it's build- and code-review-verified for the failure case,
     not observed firing for real.
+15. **OpenGL/OpenGLCompute video capture** (turning item 14's diagnostic
+    into an actual fix): a new `GLBottomScreenCapture` class
+    (`remote_server/GLBottomScreenCapture.{h,cpp}`) reads the bottom
+    screen back directly from `GLRenderer`'s `FPOutputTex` array texture
+    (layer 1) when `GetFramebuffers()` returns false, using
+    `glReadPixels(..., GL_BGRA, GL_UNSIGNED_BYTE, ...)` so no manual
+    byte-swap is needed, with a `glBlitFramebuffer` downscale step for
+    users who raised `3D.GL.ScaleFactor` above 1x (the wire protocol
+    stays fixed at native 256x192). `EmuThread.cpp`'s `else` branch from
+    item 14 now tries this first, keeping the diagnostic log as a
+    fallback for whatever it doesn't cover. See
+    `docs/known-limitations.md`'s "OpenGL/OpenGLCompute 3D renderer"
+    section for the full account -- **verified end-to-end** against this
+    exact patched binary + the real homebrew test ROM + the real SDL3
+    client, under Xvfb with Mesa's software GL rasterizer
+    (`LIBGL_ALWAYS_SOFTWARE=1`, since this sandbox has no GPU but *can*
+    still create a real OpenGL context this way, unlike the
+    gamepad/Steam Input hardware needed for item 14's original bug):
+    with `3D.Renderer=OpenGL` and default `3D.GL.ScaleFactor=1`,
+    sustained ~58 fps with the fallback diagnostic **not** firing
+    (confirming the direct-read path); with `3D.GL.ScaleFactor=2`
+    (512x384 texture, forcing the downscale-blit branch), sustained
+    ~57.5 fps with **zero** dropped frames and the fallback diagnostic
+    again not firing. Not independently verified: pixel-level content
+    correctness (the KEYINPUT-reactive-color test used for the software
+    path's original verification predates the protocol's v3 handshake
+    bump and its handshake is now rejected -- updating it was out of
+    scope for this pass), `OpenGLCompute` specifically (same code path,
+    but this sandbox can't create a compute-capable GL context to check),
+    and real Steam Deck hardware/GPU (this was verified against Mesa
+    software rendering only).
 
 **A stdout-buffering gotcha surfaced while verifying item 12**: an early
 attempt to observe the `onClientConnectionChanged` log lines above via
@@ -334,9 +368,11 @@ one-client-at-a-time v0.1 scope.
 ## Known limitations of this patch specifically
 
 - No Config/UI toggle -- environment variables only.
-- Only the software 3D renderer path produces frames for the remote
-  client (see `docs/melonds-integration-analysis.md` section 1.2 for why
-  the OpenGL renderer path is deferred).
+- All three 3D renderers (Software, OpenGL, OpenGLCompute) now produce
+  frames for the remote client -- see "OpenGL/OpenGLCompute video
+  capture" below. `OpenGLCompute` specifically hasn't been independently
+  verified (same code path per `GPU_OpenGL.h`, but this project's test
+  environment can't create a compute-capable GL context to check).
 - Only three emulator actions are mapped to existing hotkeys (pause/
   resume, fast-forward, swap screens); save state, load state, and the
   rest of `SPEC.md` section 7.5 are not wired up yet.

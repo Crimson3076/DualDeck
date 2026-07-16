@@ -4,18 +4,17 @@ This is the required "Steam Deck setup instructions" deliverable
 (`SPEC.md` section 25). **Status: now tested on real Steam Deck
 hardware once** -- controls and touch input worked, but that first pass
 also surfaced two real bugs (the menu opening on a single button instead
-of a deliberate hold, and no video reaching the client) which are now
-fixed/mitigated; see `docs/known-limitations.md` and
-`docs/troubleshooting.md` for the specifics, and correct this file
-further as more real-hardware runs turn up issues.
+of a deliberate hold, and no video reaching the client because the host
+was using melonDS's OpenGL 3D renderer) which are now fixed; see
+`docs/known-limitations.md` and `docs/troubleshooting.md` for the
+specifics, and correct this file further as more real-hardware runs turn
+up issues.
 
-**Before you start**: on the host, make sure melonDS's 3D renderer is
-set to **Software**, not OpenGL (**Config > Emu Settings > Video
-Settings > Renderer**) -- the remote video path only works with the
-software renderer (see `docs/troubleshooting.md`'s "screen stays blank"
-entry). This is melonDS's own default, but it's easy to have switched it
-for better local framerates without realizing it breaks remote
-streaming.
+The host's 3D renderer (**Software**, **OpenGL**, or **OpenGLCompute** --
+**Config > Emu Settings > Video Settings > Renderer**) no longer matters
+for remote video to work; pick whichever gives you the best local
+gameplay performance. If video still doesn't show up, see
+`docs/troubleshooting.md`'s "screen stays blank" entry.
 
 ## Prerequisite: build the client
 

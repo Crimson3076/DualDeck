@@ -1,8 +1,8 @@
 diff --git a/src/frontend/qt_sdl/CMakeLists.txt b/src/frontend/qt_sdl/CMakeLists.txt
-index 31207f8..d6e6be0 100644
+index 31207f8..86c64ed 100644
 --- a/src/frontend/qt_sdl/CMakeLists.txt
 +++ b/src/frontend/qt_sdl/CMakeLists.txt
-@@ -60,6 +60,16 @@ set(SOURCES_QT_SDL
+@@ -60,6 +60,17 @@ set(SOURCES_QT_SDL
  
      LANDialog.cpp
      NetplayDialog.cpp
@@ -16,10 +16,11 @@ index 31207f8..d6e6be0 100644
 +    remote_server/MelonDSFrameSource.cpp
 +    remote_server/MelonDSInputSink.cpp
 +    remote_server/RemoteServerBridge.cpp
++    remote_server/GLBottomScreenCapture.cpp
  )
  
  option(USE_QT6 "Use Qt 6 instead of Qt 5" ON)
-@@ -185,6 +195,17 @@ target_include_directories(melonDS PUBLIC
+@@ -185,6 +196,17 @@ target_include_directories(melonDS PUBLIC
      "${CMAKE_CURRENT_SOURCE_DIR}"
      "${CMAKE_CURRENT_SOURCE_DIR}/..")
  
@@ -387,19 +388,20 @@ index a0bc623..a237b7a 100644
      hotkeyRelease = lastHotkeyMask & ~hotkeyMask;
      lastHotkeyMask = hotkeyMask;
 diff --git a/src/frontend/qt_sdl/EmuThread.cpp b/src/frontend/qt_sdl/EmuThread.cpp
-index c3fbdfe..5ff450d 100755
+index c3fbdfe..5022fe5 100755
 --- a/src/frontend/qt_sdl/EmuThread.cpp
 +++ b/src/frontend/qt_sdl/EmuThread.cpp
-@@ -55,6 +55,8 @@
+@@ -55,6 +55,9 @@
  
  #include "EmuInstance.h"
  
 +#include "remote_server/RemoteServerBridge.h"
++#include "remote_server/GLBottomScreenCapture.h"
 +
  using namespace melonDS;
  
  
-@@ -322,6 +324,52 @@ void EmuThread::run()
+@@ -322,6 +325,76 @@ void EmuThread::run()
  
              emuInstance->drawScreen();
  
@@ -430,21 +432,45 @@ index c3fbdfe..5ff450d 100755
 +                }
 +                else
 +                {
-+                    // Real-hardware report: a client connected but saw no
-+                    // video at all. GetFramebuffers() returning false here
-+                    // means the 3D renderer is set to OpenGL rather than
-+                    // Software -- printed once (not every frame) so it's
-+                    // visible without flooding the log.
-+                    static bool warnedNoRemoteFramebuffer = false;
-+                    if (!warnedNoRemoteFramebuffer)
++                    // GetFramebuffers() returning false means the 3D
++                    // renderer is OpenGL/OpenGLCompute rather than
++                    // Software, and `topBuf` (when useOpenGL) points at
++                    // the GLuint name of GLRenderer's FPOutputTex array
++                    // texture (see GLBottomScreenCapture.h for the layer
++                    // layout this relies on) -- read the bottom screen
++                    // back from it directly rather than leaving the
++                    // remote client with nothing.
++                    static melonds_remote_bridge::GLBottomScreenCapture glCapture;
++                    static std::vector<uint8_t> glFrame;
++                    bool captured = false;
++                    if (useOpenGL && topBuf)
 +                    {
-+                        warnedNoRemoteFramebuffer = true;
-+                        fprintf(stderr,
-+                            "melonds-remote: GPU::GetFramebuffers() returned no bottom-screen "
-+                            "RAM pointer -- the remote client will show a blank/test-pattern "
-+                            "screen instead of real video. This happens when the 3D renderer "
-+                            "is set to OpenGL; switch Emu Settings > Video Settings > Renderer "
-+                            "to \"Software\" for remote streaming to work.\n");
++                        GLuint texArray = *reinterpret_cast<GLuint*>(topBuf);
++                        captured = glCapture.captureBottomScreen(texArray, glFrame);
++                        if (captured)
++                        {
++                            emuInstance->remoteServer->pushBottomFrame(
++                                glFrame.data(), melonds_remote::host::kFrameSizeBytes);
++                        }
++                    }
++
++                    if (!captured)
++                    {
++                        // Either not actually the OpenGL path, or the GL
++                        // readback itself failed for some other reason --
++                        // printed once (not every frame) so it's visible
++                        // without flooding the log.
++                        static bool warnedNoRemoteFramebuffer = false;
++                        if (!warnedNoRemoteFramebuffer)
++                        {
++                            warnedNoRemoteFramebuffer = true;
++                            fprintf(stderr,
++                                "melonds-remote: could not capture a bottom-screen frame for the "
++                                "remote client (GPU::GetFramebuffers() returned no RAM pointer, and "
++                                "the OpenGL readback fallback also didn't produce one) -- the "
++                                "client will show a blank/test-pattern screen instead of real "
++                                "video.\n");
++                        }
 +                    }
 +                }
 +            }
@@ -491,6 +517,162 @@ index 92189a5..9e89ffa 100755
          "All supported files (*" + allROMs + ")" + extraFilters
      );
  
+diff --git a/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.cpp b/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.cpp
+new file mode 100644
+index 0000000..1f2ef4e
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.cpp
+@@ -0,0 +1,81 @@
++#include "GLBottomScreenCapture.h"
++
++#include "host/frame_source.h"
++
++namespace melonds_remote_bridge {
++
++namespace {
++constexpr GLsizei kOutW = melonds_remote::host::kFrameWidth;
++constexpr GLsizei kOutH = melonds_remote::host::kFrameHeight;
++}
++
++GLBottomScreenCapture::~GLBottomScreenCapture() {
++    if (downscaleFB_) glDeleteFramebuffers(1, &downscaleFB_);
++    if (downscaleTex_) glDeleteTextures(1, &downscaleTex_);
++    if (readFB_) glDeleteFramebuffers(1, &readFB_);
++}
++
++bool GLBottomScreenCapture::captureBottomScreen(GLuint texArray, std::vector<uint8_t>& outBgra) {
++    GLint prevRead = 0, prevDraw = 0;
++    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
++    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDraw);
++
++    glBindTexture(GL_TEXTURE_2D_ARRAY, texArray);
++    GLint texW = 0, texH = 0;
++    glGetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, 0, GL_TEXTURE_WIDTH, &texW);
++    glGetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, 0, GL_TEXTURE_HEIGHT, &texH);
++
++    bool ok = false;
++    if (texW >= kOutW && texH >= kOutH) {
++        if (!readFB_) glGenFramebuffers(1, &readFB_);
++        glBindFramebuffer(GL_READ_FRAMEBUFFER, readFB_);
++        // Layer 1 = bottom screen; see this class's header comment for
++        // where that layer convention comes from.
++        glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texArray, 0, 1);
++        glReadBuffer(GL_COLOR_ATTACHMENT0);
++
++        if (glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
++            outBgra.resize(melonds_remote::host::kFrameSizeBytes);
++
++            if (texW == kOutW && texH == kOutH) {
++                // Common case (default 1x internal 3D resolution): read
++                // directly, no downscale needed.
++                glReadPixels(0, 0, kOutW, kOutH, GL_BGRA, GL_UNSIGNED_BYTE, outBgra.data());
++                ok = true;
++            } else {
++                // User raised melonDS's internal 3D render resolution
++                // above 1x -- downscale to native DS resolution via a GPU
++                // blit, since the wire protocol/client are both fixed at
++                // 256x192 in this version.
++                if (!downscaleTex_) {
++                    glGenTextures(1, &downscaleTex_);
++                    glBindTexture(GL_TEXTURE_2D, downscaleTex_);
++                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, kOutW, kOutH, 0, GL_RGBA,
++                                 GL_UNSIGNED_BYTE, nullptr);
++                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
++                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++                }
++                if (!downscaleFB_) glGenFramebuffers(1, &downscaleFB_);
++                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, downscaleFB_);
++                glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
++                                       downscaleTex_, 0);
++
++                if (glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
++                    glBlitFramebuffer(0, 0, texW, texH, 0, 0, kOutW, kOutH, GL_COLOR_BUFFER_BIT,
++                                       GL_LINEAR);
++
++                    glBindFramebuffer(GL_READ_FRAMEBUFFER, downscaleFB_);
++                    glReadBuffer(GL_COLOR_ATTACHMENT0);
++                    glReadPixels(0, 0, kOutW, kOutH, GL_BGRA, GL_UNSIGNED_BYTE, outBgra.data());
++                    ok = true;
++                }
++            }
++        }
++    }
++
++    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(prevRead));
++    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(prevDraw));
++    return ok;
++}
++
++} // namespace melonds_remote_bridge
+diff --git a/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.h b/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.h
+new file mode 100644
+index 0000000..963efac
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.h
+@@ -0,0 +1,63 @@
++#pragma once
++
++// Reads the bottom-screen layer back from melonDS's OpenGL/OpenGLCompute
++// 3D renderer's final-output array texture, for hosts that don't use the
++// software 3D renderer (see docs/known-limitations.md's "Video transport"
++// entry and docs/melonds-integration-analysis.md section 1.2 for why
++// GPU::GetFramebuffers() alone isn't enough in that case: it hands back a
++// GL texture handle instead of a RAM pointer, and doesn't split out the
++// bottom screen on its own).
++//
++// GPU_OpenGL.cpp's GLRenderer stores both screens in one GL_TEXTURE_2D_ARRAY
++// (FPOutputTex[frontbuf]), format GL_RGBA/GL_UNSIGNED_BYTE, dimensions
++// (256*ScaleFactor) x (192*ScaleFactor) x 2 layers -- layer 0 is the top
++// screen, layer 1 is the bottom (see GLRenderer::Init()'s
++// glFramebufferTextureLayer(..., FPOutputTex[i], 0, 0/1) calls and
++// RenderScreen()'s GL_COLOR_ATTACHMENT0/1 usage). This is an internal
++// implementation detail, not part of GetFramebuffers()'s documented
++// contract, the same way the software path's "engine B is the bottom
++// screen" is -- both were established by reading melonDS's own renderer
++// source, not guessed.
++//
++// Must be called with melonDS's GL context current (EmuThread.cpp only
++// reaches this code when useOpenGL is true, right after
++// emuInstance->makeCurrentGL() earlier in the same frame).
++
++#include "PlatformOGL.h"
++
++#include <cstddef>
++#include <cstdint>
++#include <vector>
++
++namespace melonds_remote_bridge {
++
++class GLBottomScreenCapture {
++public:
++    ~GLBottomScreenCapture();
++
++    GLBottomScreenCapture(const GLBottomScreenCapture&) = delete;
++    GLBottomScreenCapture& operator=(const GLBottomScreenCapture&) = delete;
++    GLBottomScreenCapture() = default;
++
++    // `texArray` is the GL_TEXTURE_2D_ARRAY handle GetFramebuffers()
++    // pointed at (dereferenced by the caller -- see EmuThread.cpp).
++    // Reads layer 1 (bottom screen) into `outBgra`, downscaling to
++    // 256x192 first via a GPU blit if the texture is larger (i.e. the
++    // user raised melonDS's internal 3D resolution above 1x -- the wire
++    // protocol and client are both fixed at native DS resolution, so
++    // higher internal resolution doesn't reach the remote client in this
++    // version). Resizes `outBgra` to exactly
++    // melonds_remote::host::kFrameSizeBytes on success. Returns false
++    // (leaving `outBgra` unchanged) if the texture isn't at least
++    // 256x192 or the readback otherwise couldn't be completed -- callers
++    // should fall back to their own diagnostic in that case, since it
++    // means this renderer isn't laid out the way this class assumes.
++    bool captureBottomScreen(GLuint texArray, std::vector<uint8_t>& outBgra);
++
++private:
++    GLuint readFB_ = 0;
++    GLuint downscaleFB_ = 0;
++    GLuint downscaleTex_ = 0;
++};
++
++} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.cpp b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.cpp
 new file mode 100644
 index 0000000..6ad11d1

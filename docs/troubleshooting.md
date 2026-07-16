@@ -163,29 +163,30 @@ shutdown on the host is much faster to detect than `kill -9`.
 
 ### Client connects fine (controls/touch work) but the screen stays blank
 
-This is almost always the host's 3D renderer being set to **OpenGL**
-instead of **Software** -- `GPU::GetFramebuffers()` (the melonDS-integrated
-patch's frame source) only returns real RAM pointers for the software 3D
-renderer; with OpenGL it hands back a GL texture handle instead, so
-there's nothing to send and the client just keeps showing its local test
-pattern (see `docs/known-limitations.md`'s "Video transport" and melonDS
-integration sections). On the host, check for this one-time line in the
-melonDS log:
+The 3D renderer (**Software**, **OpenGL**, or **OpenGLCompute**) is now
+captured either way (see `docs/known-limitations.md`'s
+"OpenGL/OpenGLCompute 3D renderer" section), so this should be rare on a
+current build. If you still hit it, check the host's log for this
+one-time line:
 
 ```
-melonds-remote: GPU::GetFramebuffers() returned no bottom-screen RAM
-pointer -- the remote client will show a blank/test-pattern screen
-instead of real video. This happens when the 3D renderer is set to
-OpenGL; switch Emu Settings > Video Settings > Renderer to "Software"
-for remote streaming to work.
+melonds-remote: could not capture a bottom-screen frame for the remote
+client (GPU::GetFramebuffers() returned no RAM pointer, and the OpenGL
+readback fallback also didn't produce one) -- the client will show a
+blank/test-pattern screen instead of real video.
 ```
 
-If you see it, change that setting on the host (melonDS's own window --
-**Config > Emu Settings > Video Settings**, or the equivalent for your
-melonDS build) to **Software** and reconnect. Note that touch/controller
-input can work correctly even with no video, since input doesn't depend
-on the framebuffer at all -- "controls work but I can't see anything" is
-this bug, not a separate touch/input problem.
+That means neither capture path worked -- most likely `OpenGLCompute`
+specifically hitting some renderer-internal state this project's GL
+capture code doesn't handle (it was verified against the plain
+`OpenGL` renderer, not `OpenGLCompute` -- see the caveats in
+`docs/known-limitations.md`). As a workaround, switch the host's 3D
+renderer to **Software** or plain **OpenGL** (**Config > Emu Settings >
+Video Settings > Renderer**) and reconnect; please also report which
+renderer/GPU combination triggered it. Note that touch/controller input
+can work correctly even with no video, since input doesn't depend on the
+framebuffer at all -- "controls work but I can't see anything" is this
+bug, not a separate touch/input problem.
 
 ### The in-app menu pops open by itself when I press a single button (Start, or B) on the real Deck controller
 

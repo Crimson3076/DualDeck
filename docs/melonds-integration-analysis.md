@@ -67,7 +67,7 @@ bool SoftRenderer::GetFramebuffers(void** top, void** bottom)
   means a fresh melonDS installation already produces framebuffers this
   code path can read directly with zero configuration changes.
 
-### 1.2 OpenGL renderer (`src/GPU_OpenGL.cpp`) — deferred, not the initial target
+### 1.2 OpenGL renderer (`src/GPU_OpenGL.cpp`) — now implemented (`GLBottomScreenCapture`)
 
 `GLRenderer::GetFramebuffers` (`src/GPU_OpenGL.cpp:915`):
 
@@ -83,14 +83,25 @@ bool GLRenderer::GetFramebuffers(void** top, void** bottom)
 ```
 
 - Returns `false` and hands back an OpenGL array-texture index, not a
-  pixel buffer. Reading pixels back would require a `glReadPixels`/PBO
-  path we would have to add ourselves, executed on the GL context's
-  thread, which risks stalling the render pipeline if done naively.
-- Per Section 6.1 of the spec ("support both software and hardware
-  renderer paths where practical"), this is real but secondary work. The
-  proposed patch boundary below only touches the software path in
-  Phase 1; a follow-up patch would add an async PBO readback for the
-  OpenGL path once the software path is proven.
+  pixel buffer.
+- **Originally deferred** here as real but secondary work (this section
+  used to end with "a follow-up patch would add an async PBO readback
+  for the OpenGL path once the software path is proven"). That follow-up
+  landed after real Steam Deck hardware testing hit exactly this gap
+  (see `docs/known-limitations.md`'s "Real-usage bug fixes, round 2"):
+  `GLBottomScreenCapture` (`src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.{h,cpp}`
+  in the patch) reads `FPOutputTex[frontbuf]` layer 1 (bottom screen)
+  back with a synchronous `glReadPixels(..., GL_BGRA, GL_UNSIGNED_BYTE, ...)`
+  each frame, downscaling via `glBlitFramebuffer` first if
+  `3D.GL.ScaleFactor` is above 1x. This is the simple synchronous
+  version, not the async double-buffered PBO readback originally
+  envisioned here -- see `docs/known-limitations.md`'s
+  "OpenGL/OpenGLCompute 3D renderer" section for exactly what was
+  verified (sustained ~58fps in this project's sandbox using Mesa
+  software GL rendering) and what wasn't (a PBO-based async version
+  would be the natural follow-up if the synchronous readback turns out
+  to cost noticeable frame time on real hardware -- not yet measured
+  there).
 
 ### 1.3 Frame-complete timing — the Qt/SDL frontend's main loop
 
@@ -234,10 +245,12 @@ Section 24, item 10 of `SPEC.md`.
 
 ## 6. Known limitations of this analysis
 
-- The OpenGL renderer path (§1.2) is understood at the API level and
-  confirmed by reading `GLRenderer::GetFramebuffers()`; no PBO/async-
-  readback design has been prototyped, and the patch (§8) only handles
-  the software renderer.
+- The OpenGL renderer path (§1.2) is now handled by the patch too
+  (`GLBottomScreenCapture`, added after real Steam Deck hardware testing
+  hit this gap) -- but only via a synchronous `glReadPixels` each frame,
+  not the async/PBO design originally envisioned here. See
+  `docs/known-limitations.md`'s "OpenGL/OpenGLCompute 3D renderer"
+  section for what was and wasn't verified.
 - DSi-specific paths (microphone, camera, NAND) were not investigated
   since they are explicit non-goals for v0.1 (`SPEC.md` §21).
 - The call sites documented in sections 1-3 were confirmed to still

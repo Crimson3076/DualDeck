@@ -127,6 +127,89 @@ auto-launch anything at startup -- the host operator still picks a game
 through melonDS's own menu (or a `.nds` path on the command line, as
 before), just starting from a more useful default folder.
 
+## OpenGL/OpenGLCompute 3D renderer: now supported for remote video capture
+
+Previously, remote video capture only worked with melonDS's **Software**
+3D renderer -- `GPU::GetFramebuffers()` only hands back real RAM pointers
+for that renderer; with **OpenGL** or **OpenGLCompute** it hands back a
+GL texture handle instead (see the "Real-usage bug fixes, round 2" entry
+below for how this was first discovered, on real Steam Deck hardware).
+Fixing the OpenGL renderer path properly (rather than just diagnosing it)
+was the first thing tackled after that hardware round, since it was the
+single biggest constraint on what games could actually be played well on
+the host while still streaming.
+
+**How it works**: `GPU_OpenGL.cpp`'s `GLRenderer` stores both screens in
+one `GL_TEXTURE_2D_ARRAY` (`FPOutputTex[frontbuf]`, format
+`GL_RGBA`/`GL_UNSIGNED_BYTE`) -- layer 0 is the top screen, layer 1 is
+the bottom (established by reading `GLRenderer::Init()`'s
+`glFramebufferTextureLayer(..., FPOutputTex[i], 0, 0/1)` calls, the same
+way the software path's "engine B is the bottom screen" was established
+by reading `GPU_Soft.cpp`, not guessed). A new class,
+`GLBottomScreenCapture` (`src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.{h,cpp}`
+in the patch), reads that layer back directly:
+
+- Dereferences the `GLuint` texture name `GetFramebuffers()` already
+  points `top` at when it returns false (previously unused in that
+  branch).
+- Queries the texture's actual size via `glGetTexLevelParameteriv`
+  (rather than assuming a size), and binds a framebuffer to read
+  layer 1 with `glReadPixels(..., GL_BGRA, GL_UNSIGNED_BYTE, ...)` --
+  requesting `GL_BGRA` directly from the GPU means no manual R/B byte
+  swap is needed to match the wire format, unlike the client-side
+  `SDL_PIXELFORMAT_BGRA8888`-vs-`BGRA32` bug this project hit earlier
+  (see "Real-usage bug fixes" below) -- this is a standard, well-defined
+  `glReadPixels` format/type combination for exactly this purpose, not a
+  hand-rolled conversion.
+- If the user raised melonDS's internal 3D render resolution above 1x
+  (`3D.GL.ScaleFactor`), the texture is larger than native DS
+  resolution -- downscaled to 256x192 via a GPU `glBlitFramebuffer` first,
+  since the wire protocol and client are both fixed at native DS
+  resolution in this version (higher internal resolution doesn't reach
+  the remote client, it just renders more cleanly before being
+  downscaled for streaming).
+- `EmuThread.cpp`'s existing frame-push block calls this when
+  `GetFramebuffers()` returns false and a GL context is current, keeping
+  the previous one-time diagnostic log as a fallback for any case this
+  doesn't cover (so a broken capture never fails silently).
+
+**Verified end-to-end** against the real patched melonDS binary + the
+real homebrew test ROM + the real SDL3 client, under Xvfb using Mesa's
+software GL rasterizer (`LIBGL_ALWAYS_SOFTWARE=1`, since this sandbox has
+no GPU) -- this environment happens to be able to create a real (if
+software-emulated) OpenGL context, unlike the earlier round of hardware
+bugs which needed a real gamepad/Steam Input this sandbox still can't
+provide:
+
+- With `3D.Renderer=OpenGL` and the default `3D.GL.ScaleFactor=1`: sustained
+  ~58 fps video delivery over multiple stats windows
+  (`NetServer: stats -- ... video: sent=293 (58.3 fps) ...`), no dropped
+  frames beyond normal polling variance, and the fallback diagnostic did
+  **not** fire -- confirming the direct-read (no downscale) path works.
+- With `3D.GL.ScaleFactor=2` (512x384 internal texture, exercising the
+  downscale-blit branch specifically): sustained ~57.5 fps with **zero**
+  dropped frames, fallback diagnostic did not fire -- confirming the
+  `glBlitFramebuffer` downscale path also works.
+- Existing protocol/host unit tests and the full CMake build still pass
+  unchanged (this patch only touches the melonDS-side integration files,
+  not `protocol/`/`host/remote-server/`).
+
+**Not independently verified**: pixel-level correctness (i.e. confirming
+the actual DS content, not just frame count/rate) the way the software
+path's KEYINPUT-reactive color test did --
+`tests/homebrew-test-rom/interactive_pipeline_test.py` predates the
+protocol's v3 handshake bump and its handshake is now rejected
+(`bad magic/type/version`), and updating that script was out of scope for
+this pass. Confidence instead comes from: the capture path using
+well-defined, standard GL calls rather than hand-rolled byte
+manipulation, matching real DS output (not zeros/garbage) at real DS
+frame rate for a sustained period, and zero errors/drops on either
+side. Also not tested: `OpenGLCompute` specifically (same `GLRenderer`
+code path per `GPU_OpenGL.h`, but compute shaders need GL 4.3+/GLES 3.1+,
+which this sandbox's software rasterizer doesn't support), and real
+Steam Deck hardware (the actual GPU/driver this was originally reported
+on).
+
 ## The SDL3 client: build- and run-verified, and now tested once on real Steam Deck hardware
 
 Earlier passes of this document said the client had never been compiled,
@@ -317,25 +400,19 @@ in this project):
 
 - **No video reached the client at all**, though controls and touch
   input both worked. Root cause: the melonDS-integrated patch's frame
-  source only gets real pixel data out of `GPU::GetFramebuffers()` when
-  the 3D renderer is set to **Software** -- with the **OpenGL** renderer
-  it hands back a GL texture handle instead, which was silently ignored
-  (see the "Video transport" and melonDS-integration sections above).
+  source only got real pixel data out of `GPU::GetFramebuffers()` when
+  the 3D renderer was set to **Software** -- with the **OpenGL** renderer
+  it hands back a GL texture handle instead, which was silently ignored.
   Every prior test in this project ran in a GPU-less sandbox that
   effectively forced the software renderer, so this had never come up
   before. Not a code regression -- a pre-existing, already-documented
-  Stage 1 limitation surfacing for the first time on real hardware. Since
-  this can't be fixed in software (the OpenGL 3D renderer path is a
-  separate, deferred piece of work -- see
-  `docs/melonds-integration-analysis.md` section 1.2), the patch now
-  prints a one-time, specific diagnostic instead of failing silently:
-  `EmuThread.cpp`'s frame-push block logs `melonds-remote:
-  GPU::GetFramebuffers() returned no bottom-screen RAM pointer...`
-  telling the host operator exactly which setting to change
-  (`docs/troubleshooting.md` has the full text). This also explains "I
-  can't see what I'm tapping" from the same hardware run: touch input
-  reaching the emulator was never in question, there was just no video
-  feedback to aim it by.
+  Stage 1 limitation surfacing for the first time on real hardware.
+  Immediately after this hardware round, the OpenGL renderer path was
+  actually implemented (not just diagnosed) -- see the dedicated
+  "OpenGL/OpenGLCompute 3D renderer" section above for how. This also
+  explains "I can't see what I'm tapping" from the same hardware run:
+  touch input reaching the emulator was never in question, there was
+  just no video feedback to aim it by.
 - **The in-app menu opened by itself on a single Start or B press**
   instead of requiring the deliberate Start+Select hold it's designed
   for. The client's `Escape`-toggles-menu keyboard shortcut (added purely
