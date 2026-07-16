@@ -25,7 +25,13 @@ zero required arguments and check for/auto-install any missing runtime
 libraries (apt/dnf/pacman) before launching. On SteamOS Desktop Mode or Bazzite (both KDE Plasma/Dolphin),
 double-clicking an executable `.sh` file offers to run it directly --
 see `docs/steam-deck-setup.md`/`docs/bazzite-host-setup.md` for the
-quick-start section at the top of each.
+quick-start section at the top of each. `install-steam-shortcut.sh`
+copies everything the shortcut needs into a fixed central directory
+(`~/.config/melonds-remote-client/install/`), so the extracted archive
+folder can be deleted afterward -- installing again from a newer release
+later still updates the same shortcut rather than duplicating it, and
+`uninstall-steam-shortcut.sh` keeps working regardless of which
+download folder (if any) is still around.
 
 ## Status
 

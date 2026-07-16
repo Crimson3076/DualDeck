@@ -312,6 +312,78 @@ preview, and the same `vdf`-package round-trip cross-check. **Not
 verified**: against a real Steam client, same caveat as the install
 script above.
 
+**Fixed install/uninstall breaking across release downloads (real bug
+report)**: the removal script above shipped in v0.1.11 with a real bug --
+each release archive extracts into a directory whose name embeds the
+commit hash (`melonds-remote-<commit>-linux-x86_64/`), and both install
+and uninstall registered/matched the Steam shortcut's `Exe` as wherever
+the binary happened to currently sit, inside that per-release folder.
+Download a newer release into a new folder and the uninstaller's
+computed `Exe` no longer matched the old shortcut entry, so removal
+silently no-opped and a fresh install added a stale duplicate instead of
+updating the existing one -- exactly what the reporting user hit.
+
+While fixing this, reading the actual linked binary (`readelf -d`)
+turned up a second, related bug: the packaged
+`client/install-steam-shortcut.sh` pointed Steam's `Exe` straight at the
+raw `melonds-remote-client` binary rather than at `client/run-client.sh`
+(the wrapper that sets `LD_LIBRARY_PATH` so the bundled
+`client/lib/libSDL3.so*` gets found). There's no `$ORIGIN`-relative
+RPATH anywhere in the CMake build, so the binary's baked-in
+`DT_RUNPATH` just points at the CI build machine's ephemeral
+`/tmp/sdl3-install/lib`, which doesn't exist on a real user's machine.
+Since Steam launches `Exe` directly, bypassing `run-client.sh`'s
+`LD_LIBRARY_PATH` export entirely, the client would fail to find
+`libSDL3.so.0` when launched via the Steam shortcut specifically -- a
+plausible root cause for an earlier real-hardware report of "shortcut
+created, hit Play, nothing happened" that was never conclusively
+diagnosed at the time (it was provisionally worked around by a Steam
+Deck reboot, cause unconfirmed).
+
+**Fix**: both install scripts now copy everything the shortcut needs
+(binary, bundled SDL3 lib, `run-client.sh`, `ensure-packages.sh`, and a
+copy of `steam_shortcut.py` plus the uninstall script itself) into a
+fixed central directory, `~/.config/melonds-remote-client/install/`
+(a sibling of the existing `device_id.txt`/`last_host.txt` state
+directory, kept as a subdirectory so uninstall's cleanup can never touch
+those), and point the Steam shortcut's `Exe` at `run-client.sh` inside
+that copy -- fixing the `LD_LIBRARY_PATH` bug as a side effect, since
+Steam now always launches the wrapper, never the raw binary. Re-running
+install later, even from a completely different, newer release's
+extracted folder, always resolves to this same fixed path, so it updates
+the existing shortcut instead of duplicating it, and the original
+extracted/downloaded folder can be deleted immediately after installing.
+Uninstall now also deletes this central directory (not just the Steam
+shortcut entry), so nothing is left behind, and -- critically -- no
+longer depends on its own invocation location or the original repo/
+archive still existing, since it's the copy living in the central
+directory (or an identical stand-alone copy) that actually does the
+work.
+
+To migrate shortcuts installed by an older version of this project
+(pointing at a now-stale per-release path), `remove_shortcut`/
+`upsert_shortcut` in `scripts/lib/steam_shortcut.py` now also match by
+`AppName` (default `"melonDS Remote"`) as a fallback when `Exe` doesn't
+match anything, and overwrite the stale `Exe` on a match -- safe because
+this project only ever creates shortcuts under that one fixed default
+name.
+
+**Verified**: extended the same fake-`$HOME`/userdata-directory
+technique -- installing from one fake "download" tree and then
+reinstalling from a second, differently-named one still ends up with
+exactly one shortcut entry (not two), pointing at the fixed central
+path; a hand-crafted legacy entry (`AppName` matching, stale `Exe`) gets
+migrated in place by both install and removal instead of left as an
+orphaned duplicate; uninstall deletes the central `install/` directory
+while leaving `device_id.txt`/`last_host.txt` untouched, and is a clean
+no-op if run again (or if nothing was ever installed); the packaged
+`run-client.sh` wrapper, copied verbatim into the central directory,
+was confirmed to still export a `LD_LIBRARY_PATH` including its own
+`client/lib` before exec'ing the binary. **Not verified**: against a
+real Steam client or real Steam Deck hardware, same caveat as above --
+this is strong evidence the fix is correct but hasn't been observed
+launching a real shortcut on a real Deck.
+
 ## Release scripts streamlined: no user-selection prompt, no `.desktop` launchers (tried, reverted)
 
 Two follow-up requests after the above: reduce manual input further, and

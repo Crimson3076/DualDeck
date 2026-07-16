@@ -120,22 +120,54 @@ cat > "${pkg_dir}/client/install-steam-shortcut.sh" <<'WRAP'
 # while Steam is open unless --force). Any arguments given here are
 # passed through as the shortcut's launch options, e.g.:
 #   ./install-steam-shortcut.sh --host 192.168.1.50
+#
+# Copies this whole client/ + scripts/lib/ tree into a fixed central
+# directory -- see central_install_dir below -- and points the Steam
+# shortcut at the copy there (specifically at run-client.sh, not the
+# raw binary, so the bundled SDL3 library is found via LD_LIBRARY_PATH).
+# That way, re-running this from a newer release's extracted archive
+# later always updates the same shortcut instead of leaving a stale
+# duplicate around pointing at a now-deleted download folder, and the
+# extracted archive can be deleted once this has run --
+# uninstall-steam-shortcut.sh only ever needs the central copy.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 launch_options=""
 extra_args=()
+dry_run=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --dry-run|--force) extra_args+=("$1"); shift ;;
+        --dry-run) extra_args+=("$1"); dry_run=1; shift ;;
+        --force) extra_args+=("$1"); shift ;;
         --user) extra_args+=("$1" "$2"); shift 2 ;;
         --user=*) extra_args+=("$1"); shift ;;
         *) launch_options+="${launch_options:+ }$1"; shift ;;
     esac
 done
 
+# Keep in sync with the same constant in scripts/install-steam-shortcut.sh,
+# scripts/uninstall-steam-shortcut.sh, and this archive's own
+# uninstall-steam-shortcut.sh.
+central_install_dir="${HOME}/.config/melonds-remote-client/install"
+
+if [[ "${dry_run}" -eq 0 ]]; then
+    rm -rf "${central_install_dir}"
+    mkdir -p "${central_install_dir}/client/lib" "${central_install_dir}/scripts/lib"
+
+    cp melonds-remote-client "${central_install_dir}/client/melonds-remote-client"
+    chmod +x "${central_install_dir}/client/melonds-remote-client"
+    cp -a lib/. "${central_install_dir}/client/lib/"
+    cp run-client.sh "${central_install_dir}/client/run-client.sh"
+    chmod +x "${central_install_dir}/client/run-client.sh"
+    cp uninstall-steam-shortcut.sh "${central_install_dir}/client/uninstall-steam-shortcut.sh"
+    chmod +x "${central_install_dir}/client/uninstall-steam-shortcut.sh"
+    cp ../scripts/lib/ensure-packages.sh "${central_install_dir}/scripts/lib/ensure-packages.sh"
+    cp ../scripts/lib/steam_shortcut.py "${central_install_dir}/scripts/lib/steam_shortcut.py"
+fi
+
 exec python3 ../scripts/lib/steam_shortcut.py \
-    --exe "$(pwd)/melonds-remote-client" \
+    --exe "${central_install_dir}/client/run-client.sh" \
     --launch-options "${launch_options}" \
     "${extra_args[@]}"
 WRAP
@@ -143,19 +175,63 @@ chmod +x "${pkg_dir}/client/install-steam-shortcut.sh"
 
 cat > "${pkg_dir}/client/uninstall-steam-shortcut.sh" <<'WRAP'
 #!/usr/bin/env bash
-# Removes the Steam non-Steam-game shortcut added by
-# install-steam-shortcut.sh -- see ../scripts/lib/steam_shortcut.py for
-# exactly what this does and why it's careful about it (backs up
-# shortcuts.vdf first, refuses to run while Steam is open unless
-# --force). Matches by the client binary's path, so this still works
-# even if melonds-remote-client itself has since been deleted.
+# Removes the melonDS Remote Steam non-Steam-game shortcut added by
+# install-steam-shortcut.sh, and deletes the central install directory
+# that script copies everything into. See ../scripts/lib/steam_shortcut.py
+# for exactly what the shortcut-removal part does and why it's careful
+# about it (backs up shortcuts.vdf first, refuses to run while Steam is
+# open unless --force).
+#
+# Always targets the fixed central install directory below for the
+# actual --exe match, regardless of where this script itself is run
+# from: this exact file is also the one copied into that central
+# directory by install-steam-shortcut.sh, and must keep removing the
+# same shortcut from there indefinitely, even after this archive has
+# been deleted. It does fall back to this archive's own sibling copy of
+# steam_shortcut.py (see below) purely so a freshly downloaded archive
+# can still clean up a shortcut from an older version of this project
+# that was never migrated to the central directory -- steam_shortcut.py's
+# own AppName fallback (see its module docstring) is what actually finds
+# and removes that kind of stale entry.
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")"
 
-exec python3 ../scripts/lib/steam_shortcut.py \
-    --exe "$(pwd)/melonds-remote-client" \
+# Keep in sync with the same constant in install-steam-shortcut.sh above,
+# and in scripts/install-steam-shortcut.sh / scripts/uninstall-steam-shortcut.sh.
+central_install_dir="${HOME}/.config/melonds-remote-client/install"
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+steam_shortcut_py=""
+for candidate in \
+    "${central_install_dir}/scripts/lib/steam_shortcut.py" \
+    "${self_dir}/../scripts/lib/steam_shortcut.py"
+do
+    if [[ -f "${candidate}" ]]; then
+        steam_shortcut_py="${candidate}"
+        break
+    fi
+done
+
+if [[ -z "${steam_shortcut_py}" ]]; then
+    echo "Nothing installed at ${central_install_dir}, and no local copy of" \
+         "steam_shortcut.py found either -- nothing to remove."
+    exit 0
+fi
+
+python3 "${steam_shortcut_py}" \
+    --exe "${central_install_dir}/client/run-client.sh" \
     --remove \
     "$@"
+
+dry_run=0
+for arg in "$@"; do
+    [[ "${arg}" == "--dry-run" ]] && dry_run=1
+done
+
+if [[ "${dry_run}" -eq 0 && -d "${central_install_dir}" ]]; then
+    echo "Removing ${central_install_dir}"
+    cd /
+    rm -rf -- "${central_install_dir}"
+fi
 WRAP
 chmod +x "${pkg_dir}/client/uninstall-steam-shortcut.sh"
 
@@ -269,10 +345,16 @@ Non-Steam Game" steps: close Steam, then double-click
 \`\`\`
 Applies to every local Steam user automatically -- no prompt to pick one,
 since the Deck's controller-only input can't type an answer to that kind
-of question. See \`docs/steam-deck-setup.md\` for what this does and the
-Controller Layout step it doesn't automate. To undo it later, close
+of question. Copies everything the shortcut needs into a fixed central
+directory (\`~/.config/melonds-remote-client/install/\`), so this
+extracted folder can be deleted afterward -- re-running install from a
+newer release later still updates the same shortcut rather than
+duplicating it. See \`docs/steam-deck-setup.md\` for what this does and
+the Controller Layout step it doesn't automate. To undo it later, close
 Steam and double-click \`client/uninstall-steam-shortcut.sh\` the same
-way -- also applies to every local Steam user automatically.
+way (works even from this same disposable folder, or later straight from
+the central directory) -- also applies to every local Steam user
+automatically, and deletes that central directory too.
 NOTES
 
 # The archive itself gets a *constant* filename (unlike the internal

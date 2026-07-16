@@ -6,15 +6,18 @@
 # this does and why it's careful about it (backs up shortcuts.vdf first,
 # refuses to run while Steam is open unless --force).
 #
+# Copies the built binary (plus everything needed to uninstall it later)
+# into a fixed central directory -- see central_install_dir below -- and
+# points the Steam shortcut at that copy rather than at this build tree
+# directly. That way, re-running this after a rebuild always updates the
+# same shortcut instead of leaving a stale duplicate around, and
+# uninstall-steam-shortcut.sh keeps working even if this checkout moves
+# or is deleted later.
+#
 # Usage:
 #   ./scripts/install-steam-shortcut.sh                    # discovery mode, no fixed host
 #   ./scripts/install-steam-shortcut.sh --host 192.168.1.50 # skip discovery, fixed host
 #   ./scripts/install-steam-shortcut.sh --dry-run           # preview only, writes nothing
-#
-# After running this, restart Steam (or just switch to Gaming Mode) and
-# the shortcut appears in your library. You still need to set its
-# Controller Layout to a plain "Gamepad" template by hand once --
-# see docs/steam-deck-setup.md's Gaming Mode section for why.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -29,9 +32,15 @@ fi
 
 launch_options=""
 extra_args=()
+dry_run=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --dry-run|--force)
+        --dry-run)
+            extra_args+=("$1")
+            dry_run=1
+            shift
+            ;;
+        --force)
             extra_args+=("$1")
             shift
             ;;
@@ -50,7 +59,26 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Keep in sync with the same constant in scripts/uninstall-steam-shortcut.sh
+# and the packaged client/install-steam-shortcut.sh / uninstall-steam-shortcut.sh
+# heredocs in scripts/build-release.sh.
+central_install_dir="${HOME}/.config/melonds-remote-client/install"
+exe="${central_install_dir}/client/melonds-remote-client"
+
+if [[ "${dry_run}" -eq 0 ]]; then
+    rm -rf "${central_install_dir}"
+    mkdir -p "${central_install_dir}/client" "${central_install_dir}/scripts/lib"
+
+    cp "${binary}" "${central_install_dir}/client/melonds-remote-client"
+    chmod +x "${central_install_dir}/client/melonds-remote-client"
+
+    cp "${repo_root}/scripts/lib/steam_shortcut.py" "${central_install_dir}/scripts/lib/steam_shortcut.py"
+
+    cp "${repo_root}/scripts/uninstall-steam-shortcut.sh" "${central_install_dir}/client/uninstall-steam-shortcut.sh"
+    chmod +x "${central_install_dir}/client/uninstall-steam-shortcut.sh"
+fi
+
 exec python3 "${repo_root}/scripts/lib/steam_shortcut.py" \
-    --exe "${binary}" \
+    --exe "${exe}" \
     --launch-options "${launch_options}" \
     "${extra_args[@]}"

@@ -139,12 +139,27 @@ can overwrite the change on its next save). You still need to set its
 Steam Input config this script doesn't touch, see step 4 below for why
 it matters.
 
+It copies the client binary (and, for the prebuilt-archive path, its
+bundled SDL3 library and launcher wrapper) into a fixed central
+directory, `~/.config/melonds-remote-client/install/`, and points the
+Steam shortcut's `Exe` at that copy rather than at wherever you happen
+to have extracted or built it -- so the extracted release folder (or a
+`build/` directory) can be deleted right after this runs, and installing
+again later from a newer release still updates the same shortcut instead
+of leaving a stale duplicate behind. This also fixes an earlier bug
+where a shortcut pointed straight at the raw client binary instead of
+the wrapper that sets up its bundled SDL3 library, which could leave the
+shortcut launching to nothing on a real Deck.
+
 **Removing it**: with Steam closed, double-click
 `client/uninstall-steam-shortcut.sh` (or run
 `./scripts/uninstall-steam-shortcut.sh` from source) -- same no-typing,
 applies-to-every-local-user behavior as the install script, and is safe
 to run again even if the shortcut is already gone (it just does
-nothing).
+nothing). Also deletes the central install directory above, so nothing
+is left behind. Works even if the original download/build is long gone,
+since it only ever depends on that central directory, not on wherever it
+was invoked from.
 
 Or, the standard manual way any non-Steam Linux binary gets added to
 Gaming Mode:

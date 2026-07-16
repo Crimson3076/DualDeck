@@ -19,11 +19,17 @@ documented by Valve, so this is deliberately conservative:
   check, and restores the backup if that fails, rather than leaving a
   possibly-corrupt file in place.
 - Idempotent: re-running with the same --exe updates that entry in place
-  (matched by Exe path) instead of adding a duplicate.
+  (matched by Exe path, or by --name as a fallback -- see below) instead
+  of adding a duplicate.
+- Matching falls back to --name (default "melonDS Remote") when Exe
+  doesn't match anything, so a shortcut created by an older version of
+  this project's install script -- pointing at some now-stale path, e.g.
+  a deleted per-release download directory -- gets migrated in place
+  instead of left behind as an orphaned duplicate.
 - Pass --remove to undo this instead -- removes the entry matching --exe
-  (works even if that path no longer exists on disk) and is itself
-  idempotent: running it again once nothing matches is a harmless no-op,
-  not an error.
+  or --name (works even if that path no longer exists on disk) and is
+  itself idempotent: running it again once nothing matches is a harmless
+  no-op, not an error.
 - Applies to every local Steam user by default rather than prompting to
   pick one -- a Steam Deck's controller-only input has no reliable way
   to type an answer to that kind of prompt (--user overrides this for
@@ -156,13 +162,20 @@ def load_shortcuts(path: str) -> dict:
     return root
 
 
-def remove_shortcut(root: dict, exe: str) -> bool:
-    """Removes any shortcut entries whose Exe matches, re-indexing the
-    remaining entries to contiguous numeric keys (matches the convention
-    upsert_shortcut relies on when picking the next free index). Returns
-    True if anything was removed."""
+def remove_shortcut(root: dict, exe: str, appname: str) -> bool:
+    """Removes any shortcut entries whose Exe OR AppName matches, re-indexing
+    the remaining entries to contiguous numeric keys (matches the convention
+    upsert_shortcut relies on when picking the next free index). The AppName
+    fallback catches entries created before this project switched to a fixed
+    central install directory -- their Exe points at some old, possibly now-
+    deleted per-release download path, so Exe alone would never match again.
+    Returns True if anything was removed."""
     shortcuts = root["shortcuts"]
-    remaining = [v for v in shortcuts.values() if not (isinstance(v, dict) and v.get("Exe") == exe)]
+
+    def matches(entry: object) -> bool:
+        return isinstance(entry, dict) and (entry.get("Exe") == exe or entry.get("AppName") == appname)
+
+    remaining = [v for v in shortcuts.values() if not matches(v)]
     if len(remaining) == len(shortcuts):
         return False
     root["shortcuts"] = {str(i): entry for i, entry in enumerate(remaining)}
@@ -172,7 +185,13 @@ def remove_shortcut(root: dict, exe: str) -> bool:
 def upsert_shortcut(root: dict, appname: str, exe: str, startdir: str, launch_options: str) -> None:
     shortcuts = root["shortcuts"]
     for key, entry in shortcuts.items():
-        if isinstance(entry, dict) and entry.get("Exe") == exe:
+        # Falls back to matching by AppName alone (see remove_shortcut's
+        # docstring) so a pre-existing entry from before this project used a
+        # fixed central install directory gets migrated in place instead of
+        # left behind as an orphaned duplicate -- hence Exe must be
+        # overwritten here too, not just the other fields.
+        if isinstance(entry, dict) and (entry.get("Exe") == exe or entry.get("AppName") == appname):
+            entry["Exe"] = exe
             entry["AppName"] = appname
             entry["StartDir"] = startdir
             entry["LaunchOptions"] = launch_options
@@ -215,13 +234,17 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing anything")
     parser.add_argument("--force", action="store_true", help="Proceed even if Steam appears to be running")
     parser.add_argument("--remove", action="store_true",
-                         help="Remove the shortcut instead of adding/updating it (matched by --exe path)")
+                         help="Remove the shortcut instead of adding/updating it "
+                              "(matched by --exe path, falling back to --name)")
     args = parser.parse_args()
 
     exe = os.path.abspath(os.path.expanduser(args.exe))
-    if not args.remove and not os.path.isfile(exe):
+    if not args.remove and not args.dry_run and not os.path.isfile(exe):
         # Removal matches on the stored path string alone, so it must still
-        # work even if the binary itself was since deleted or moved.
+        # work even if the binary itself was since deleted or moved. A
+        # --dry-run install preview is allowed to name a path that doesn't
+        # exist yet either -- callers may pass a not-yet-populated central
+        # install directory just to preview what a real run would do.
         print(f"error: --exe path does not exist: {exe}", file=sys.stderr)
         return 1
 
@@ -266,7 +289,7 @@ def main() -> int:
 
         root = load_shortcuts(shortcuts_path)
         if args.remove:
-            if not remove_shortcut(root, exe):
+            if not remove_shortcut(root, exe, args.name):
                 print(f"No shortcut for {exe!r} found in {shortcuts_path} -- nothing to remove")
                 continue
         else:
