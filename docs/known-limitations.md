@@ -293,6 +293,25 @@ installation) -- the cross-validation above is strong evidence the
 format is correct, but "Steam's Big Picture UI actually shows the
 shortcut and launches it" hasn't been observed directly.
 
+**Removal script**: `scripts/uninstall-steam-shortcut.sh` (also
+packaged as `client/uninstall-steam-shortcut.sh`) undoes the above --
+same underlying `scripts/lib/steam_shortcut.py`, now with a `--remove`
+mode rather than a separate script, so it shares all the same safety
+behavior (backup first, refuses while Steam is running unless `--force`,
+round-trip-validates its own output, applies to every local Steam user
+automatically with zero typing). It matches purely on the stored `Exe`
+path, so it still works even if the client binary itself was since
+deleted or the `build/` directory removed. Unlike the install path,
+finding nothing to remove is treated as a harmless no-op (exit 0), not
+an error, since re-running it after it already succeeded (or against a
+user who never had the shortcut) is an expected, safe case.
+**Verified**: same fake-`$HOME`/userdata-directory technique as above --
+removing a shortcut while a decoy unrelated entry survives untouched,
+re-running the removal a second time as a clean no-op, `--dry-run`
+preview, and the same `vdf`-package round-trip cross-check. **Not
+verified**: against a real Steam client, same caveat as the install
+script above.
+
 ## Release scripts streamlined: no user-selection prompt, no `.desktop` launchers (tried, reverted)
 
 Two follow-up requests after the above: reduce manual input further, and

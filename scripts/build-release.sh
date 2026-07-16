@@ -141,6 +141,24 @@ exec python3 ../scripts/lib/steam_shortcut.py \
 WRAP
 chmod +x "${pkg_dir}/client/install-steam-shortcut.sh"
 
+cat > "${pkg_dir}/client/uninstall-steam-shortcut.sh" <<'WRAP'
+#!/usr/bin/env bash
+# Removes the Steam non-Steam-game shortcut added by
+# install-steam-shortcut.sh -- see ../scripts/lib/steam_shortcut.py for
+# exactly what this does and why it's careful about it (backs up
+# shortcuts.vdf first, refuses to run while Steam is open unless
+# --force). Matches by the client binary's path, so this still works
+# even if melonds-remote-client itself has since been deleted.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+exec python3 ../scripts/lib/steam_shortcut.py \
+    --exe "$(pwd)/melonds-remote-client" \
+    --remove \
+    "$@"
+WRAP
+chmod +x "${pkg_dir}/client/uninstall-steam-shortcut.sh"
+
 cat > "${pkg_dir}/host/run-host.sh" <<'WRAP'
 #!/usr/bin/env bash
 # Runs the patched melonDS binary with the remote server enabled,
@@ -201,8 +219,9 @@ verified and portability notes.
 ## Running it
 
 Every script here (\`run-host.sh\`, \`run-client.sh\`,
-\`install-steam-shortcut.sh\`) is directly double-click-runnable from a
-file manager -- no arguments or typing required for any of them. On
+\`install-steam-shortcut.sh\`, \`uninstall-steam-shortcut.sh\`) is
+directly double-click-runnable from a file manager -- no arguments or
+typing required for any of them. On
 SteamOS Desktop Mode / Bazzite (both KDE Plasma/Dolphin), double-clicking
 an executable \`.sh\` file offers to run it directly, no terminal needed.
 (On a GNOME-based file manager instead, you may need to enable
@@ -251,7 +270,9 @@ Non-Steam Game" steps: close Steam, then double-click
 Applies to every local Steam user automatically -- no prompt to pick one,
 since the Deck's controller-only input can't type an answer to that kind
 of question. See \`docs/steam-deck-setup.md\` for what this does and the
-Controller Layout step it doesn't automate.
+Controller Layout step it doesn't automate. To undo it later, close
+Steam and double-click \`client/uninstall-steam-shortcut.sh\` the same
+way -- also applies to every local Steam user automatically.
 NOTES
 
 # The archive itself gets a *constant* filename (unlike the internal

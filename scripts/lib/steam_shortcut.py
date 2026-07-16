@@ -20,6 +20,10 @@ documented by Valve, so this is deliberately conservative:
   possibly-corrupt file in place.
 - Idempotent: re-running with the same --exe updates that entry in place
   (matched by Exe path) instead of adding a duplicate.
+- Pass --remove to undo this instead -- removes the entry matching --exe
+  (works even if that path no longer exists on disk) and is itself
+  idempotent: running it again once nothing matches is a harmless no-op,
+  not an error.
 - Applies to every local Steam user by default rather than prompting to
   pick one -- a Steam Deck's controller-only input has no reliable way
   to type an answer to that kind of prompt (--user overrides this for
@@ -152,6 +156,19 @@ def load_shortcuts(path: str) -> dict:
     return root
 
 
+def remove_shortcut(root: dict, exe: str) -> bool:
+    """Removes any shortcut entries whose Exe matches, re-indexing the
+    remaining entries to contiguous numeric keys (matches the convention
+    upsert_shortcut relies on when picking the next free index). Returns
+    True if anything was removed."""
+    shortcuts = root["shortcuts"]
+    remaining = [v for v in shortcuts.values() if not (isinstance(v, dict) and v.get("Exe") == exe)]
+    if len(remaining) == len(shortcuts):
+        return False
+    root["shortcuts"] = {str(i): entry for i, entry in enumerate(remaining)}
+    return True
+
+
 def upsert_shortcut(root: dict, appname: str, exe: str, startdir: str, launch_options: str) -> None:
     shortcuts = root["shortcuts"]
     for key, entry in shortcuts.items():
@@ -197,10 +214,14 @@ def main() -> int:
                                         "applies to every local user by default, so this is optional")
     parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing anything")
     parser.add_argument("--force", action="store_true", help="Proceed even if Steam appears to be running")
+    parser.add_argument("--remove", action="store_true",
+                         help="Remove the shortcut instead of adding/updating it (matched by --exe path)")
     args = parser.parse_args()
 
     exe = os.path.abspath(os.path.expanduser(args.exe))
-    if not os.path.isfile(exe):
+    if not args.remove and not os.path.isfile(exe):
+        # Removal matches on the stored path string alone, so it must still
+        # work even if the binary itself was since deleted or moved.
         print(f"error: --exe path does not exist: {exe}", file=sys.stderr)
         return 1
 
@@ -244,7 +265,12 @@ def main() -> int:
         shortcuts_path = os.path.join(userdata_dir, "config", "shortcuts.vdf")
 
         root = load_shortcuts(shortcuts_path)
-        upsert_shortcut(root, args.name, exe, os.path.dirname(exe), args.launch_options)
+        if args.remove:
+            if not remove_shortcut(root, exe):
+                print(f"No shortcut for {exe!r} found in {shortcuts_path} -- nothing to remove")
+                continue
+        else:
+            upsert_shortcut(root, args.name, exe, os.path.dirname(exe), args.launch_options)
         new_data = write_vdf_map(root)
 
         # Round-trip check: make sure what we're about to write actually
@@ -256,8 +282,11 @@ def main() -> int:
             continue
 
         if args.dry_run:
-            print(f"Would write {len(new_data)} bytes to {shortcuts_path}")
-            print(f"Shortcut: name={args.name!r} exe={exe!r} launch_options={args.launch_options!r}")
+            if args.remove:
+                print(f"Would remove shortcut for {exe!r} from {shortcuts_path}")
+            else:
+                print(f"Would write {len(new_data)} bytes to {shortcuts_path}")
+                print(f"Shortcut: name={args.name!r} exe={exe!r} launch_options={args.launch_options!r}")
             continue
 
         os.makedirs(os.path.dirname(shortcuts_path), exist_ok=True)
@@ -269,20 +298,30 @@ def main() -> int:
         with open(shortcuts_path, "wb") as f:
             f.write(new_data)
 
-        print(f"Added/updated \"{args.name}\" shortcut in {shortcuts_path}")
+        if args.remove:
+            print(f"Removed shortcut for {exe!r} from {shortcuts_path}")
+        else:
+            print(f"Added/updated \"{args.name}\" shortcut in {shortcuts_path}")
         any_written = True
 
     if args.dry_run:
         return 0
     if not any_written:
+        if args.remove:
+            print("Nothing removed -- shortcut not found for any local Steam user "
+                  "(already removed, or never installed).")
+            return 0
         print("error: nothing was written -- see errors above", file=sys.stderr)
         return 1
 
-    print("Restart Steam (or switch to Gaming Mode) to see it in your library.")
-    print(
-        "Reminder: set its Controller Layout to a plain \"Gamepad\" template once it's "
-        "there -- see docs/steam-deck-setup.md's Gaming Mode section for why."
-    )
+    if args.remove:
+        print("Restart Steam (or switch to Gaming Mode) for the removal to take effect.")
+    else:
+        print("Restart Steam (or switch to Gaming Mode) to see it in your library.")
+        print(
+            "Reminder: set its Controller Layout to a plain \"Gamepad\" template once it's "
+            "there -- see docs/steam-deck-setup.md's Gaming Mode section for why."
+        )
     return 0
 
 
