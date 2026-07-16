@@ -93,6 +93,20 @@ struct NetServerConfig {
     // Qt::QueuedConnection).
     std::function<void(std::vector<DeviceApprovalManager::PendingRequest>)> onPendingRequestsChanged;
 
+    // Fired with `true` once a client's handshake completes (control
+    // channel authenticated and accepted), and with `false` when that
+    // same client's control connection ends (graceful disconnect,
+    // malformed packet, or heartbeat timeout) -- never fired for a
+    // rejected handshake attempt. Lets a host-side UI react to "someone
+    // is actively streaming right now" (e.g. the melonDS integration uses
+    // this to show only the top screen locally while a client has the
+    // bottom screen, per SPEC.md's "Wii U GamePad" model, restoring
+    // whatever screen layout was configured before once the client
+    // disconnects). Invoked synchronously on NetServer's
+    // control-connection thread -- if the callback touches UI state, it
+    // must marshal to the UI thread itself (e.g. Qt::QueuedConnection).
+    std::function<void(bool)> onClientConnectionChanged;
+
     // If a control-channel connection is silent (no heartbeat, no other
     // control traffic) for longer than this, it is dropped. Distinct from
     // inputTimeoutUs, which governs the UDP input stream.

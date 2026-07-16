@@ -212,8 +212,21 @@ cross-thread communication goes through the small, mutex-protected
   HTPC is always available. No capability negotiation yet, though --
   `clientName`/`clientPlatform`/display size are on the wire but unused
   by the host beyond logging.
-- Video transport is raw BGRA8888 over TCP (Stage 1 per spec section 8.4);
-  no compression yet.
+- Video transport is raw B,G,R,A bytes-in-memory over TCP (Stage 1 per
+  spec section 8.4); no compression yet. On the client this must be
+  `SDL_PIXELFORMAT_BGRA32`, not `SDL_PIXELFORMAT_BGRA8888` -- see
+  `docs/known-limitations.md`'s "Real-usage bug fixes" section for why
+  those aren't the same thing on a little-endian machine.
+- The host defaults melonDS's own window to showing only the top screen
+  while a client is actively streaming the bottom one (matching SPEC.md's
+  "Wii U GamePad" model), restoring whatever screen layout was configured
+  before once the client disconnects -- `NetServerConfig::onClientConnectionChanged`,
+  wired to melonDS's existing `ScreenSizing` config in `EmuInstance.cpp`.
+- The client has an in-app menu (Resume/Change Host/Exit), opened by
+  holding Start+Select together (or Escape in Desktop Mode) -- see
+  `docs/steam-deck-setup.md`. "Change Host" re-enters the discovery/
+  selection screen without exiting the process, via an outer loop in
+  `main()` around the per-host connect/render/reconnect-thread logic.
 - The SDL3 client (`client/`) is now build- and run-verified: SDL3 3.2.16
   was built from source (not packaged for this sandbox's distro -- see
   `docs/building.md`) and the real client binary was run against both the

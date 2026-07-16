@@ -141,7 +141,7 @@ in `tests/smoke_test.py`, so it shouldn't regress silently.
   and host.
 - The client now shows a small status banner on screen whenever it isn't
   currently connected (including during reconnect retries), instead of a
-  silent dark screen with only stdout logging: "CONNECTING TO
+  silent dark screen with only stderr logging: "CONNECTING TO
   &lt;address&gt;..." for a plain connection failure, or "WAITING FOR
   APPROVAL ON HOST &lt;address&gt;..." specifically when the host rejected
   the handshake with `ApprovalRequired` (nothing to fix reachability-wise

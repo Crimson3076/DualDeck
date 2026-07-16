@@ -378,6 +378,9 @@ void NetServer::controlLoop() {
             // address (spec section 13).
             authenticatedClientAddr_ = clientAddr.sin_addr.s_addr;
             clientAuthenticated_ = true;
+            if (config_.onClientConnectionChanged) {
+                config_.onClientConnectionChanged(true);
+            }
 
             // Keep reading (heartbeats / disconnect notices / garbage) until
             // the peer closes, goes silent past controlHeartbeatTimeoutUs
@@ -407,6 +410,9 @@ void NetServer::controlLoop() {
         controlClientFd_ = -1;
         clientAuthenticated_ = false;
         authenticatedClientAddr_ = 0;
+        if (handshakeOk && config_.onClientConnectionChanged) {
+            config_.onClientConnectionChanged(false);
+        }
 
         {
             std::lock_guard<std::mutex> lock(trackerMutex_);

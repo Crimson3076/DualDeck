@@ -96,8 +96,9 @@ table, not part of the wire format.
 ## Video payload
 
 Stage 1 transport (spec section 8.4): the payload is a raw pixel buffer,
-`256 * 192 * 4 = 196608` bytes, **BGRA8888** byte order -- matching
-melonDS's software renderer output directly (see
+`256 * 192 * 4 = 196608` bytes, **B,G,R,X bytes in memory, in that order**
+(byte 0 = blue, 1 = green, 2 = red, 3 = unused/alpha) -- matching melonDS's
+software renderer output directly (see
 `docs/melonds-integration-analysis.md` section 1.1), so the eventual real
 integration does not need a color conversion step. `host/remote-server`'s
 `SyntheticFrameSource` already produces frames in this same format so the
@@ -105,6 +106,22 @@ client-side decode path is exercised end-to-end today. This byte order
 was empirically confirmed (not just assumed) against a real patched
 melonDS binary delivering live frames from a running program -- see
 `tests/homebrew-test-rom/README.md`.
+
+**On the client, this is `SDL_PIXELFORMAT_BGRA32`, not
+`SDL_PIXELFORMAT_BGRA8888`.** SDL names its 32-bit "packed" formats
+(`..._8888`) after a bit layout read MSB-to-LSB of the pixel as a single
+integer, not a byte order in memory -- on a little-endian machine (the
+common case, including Steam Deck) `SDL_PIXELFORMAT_BGRA8888` actually
+means the same in-memory byte order as `SDL_PIXELFORMAT_ARGB8888`, a
+completely different order than this wire format uses. Only the `_32`
+suffixed aliases (`SDL_PIXELFORMAT_BGRA32` etc.) are defined by SDL to
+always mean "bytes in memory match the name," regardless of host
+endianness -- see `SDL_pixels.h`. Using the packed name instead of the
+`_32` alias here was a real bug (client screen colors visibly wrong --
+confirmed by feeding a solid-red B,G,R,X buffer through both constants
+and reading back the actually-rendered color: `BGRA8888` displayed it as
+black, `BGRA32` displayed it correctly as red), now fixed in
+`client/src/main.cpp`.
 
 ## Discovery payload
 

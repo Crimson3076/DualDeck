@@ -38,7 +38,7 @@ index 31207f8..d6e6be0 100644
      target_include_directories(melonDS PUBLIC ${Qt6Gui_PRIVATE_INCLUDE_DIRS})
  else()
 diff --git a/src/frontend/qt_sdl/EmuInstance.cpp b/src/frontend/qt_sdl/EmuInstance.cpp
-index a8b1021..25a8b2f 100755
+index a8b1021..fdd9450 100755
 --- a/src/frontend/qt_sdl/EmuInstance.cpp
 +++ b/src/frontend/qt_sdl/EmuInstance.cpp
 @@ -20,15 +20,24 @@
@@ -75,7 +75,7 @@ index a8b1021..25a8b2f 100755
  using std::make_unique;
  using std::pair;
  using std::string;
-@@ -131,6 +142,103 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
+@@ -131,6 +142,147 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
  
      net.RegisterInstance(instanceID);
  
@@ -171,7 +171,51 @@ index a8b1021..25a8b2f 100755
 +            },
 +            !getenv("MELONDS_REMOTE_NO_DISCOVERY"),
 +            envPortOr("MELONDS_REMOTE_DISCOVERY_PORT", 8763),
-+            envOr("MELONDS_REMOTE_HOST_NAME", ""));
++            envOr("MELONDS_REMOTE_HOST_NAME", ""),
++            [this, previousScreenSizing = std::make_shared<int>(-1)](bool connected) {
++                // Fired on NetServer's control thread -- marshal to the Qt
++                // UI thread the same way the other remote-server callbacks
++                // above do, before touching mainWindow's config/layout.
++                QMetaObject::invokeMethod(qApp, [this, previousScreenSizing, connected]() {
++                    if (!mainWindow) return;
++                    Config::Table& windowCfg = mainWindow->getWindowConfig();
++
++                    if (connected)
++                    {
++                        // Per SPEC.md's "Wii U GamePad" model: the bottom
++                        // screen is going to the client, so showing it here
++                        // too is redundant -- show only the top screen
++                        // locally while someone is actively streaming.
++                        // Remembers whatever was configured before (unless
++                        // it was already TopOnly) so disconnecting restores
++                        // it rather than always resetting to some fixed
++                        // default.
++                        int current = windowCfg.GetInt("ScreenSizing");
++                        if (current != screenSizing_TopOnly)
++                            *previousScreenSizing = current;
++                        windowCfg.SetInt("ScreenSizing", screenSizing_TopOnly);
++                        // stderr (not Platform::Log's stdout) to match
++                        // NetServer's own per-connection-event logging
++                        // convention -- stdout is fully buffered once
++                        // redirected to a file/pipe, so a stdout message
++                        // here could sit unflushed long after the event
++                        // actually happened.
++                        std::fprintf(stderr,
++                                      "melonds-remote: client streaming -- showing top screen only "
++                                      "locally (was ScreenSizing=%d)\n", current);
++                    }
++                    else if (*previousScreenSizing >= 0)
++                    {
++                        std::fprintf(stderr,
++                                      "melonds-remote: client disconnected -- restoring local "
++                                      "ScreenSizing=%d\n", *previousScreenSizing);
++                        windowCfg.SetInt("ScreenSizing", *previousScreenSizing);
++                        *previousScreenSizing = -1;
++                    }
++
++                    emit mainWindow->screenLayoutChange();
++                }, Qt::QueuedConnection);
++            });
 +        remoteServer->start();
 +        Platform::Log(Platform::LogLevel::Info, "melonds-remote: remote server enabled\n");
 +    }
@@ -179,7 +223,7 @@ index a8b1021..25a8b2f 100755
      emuThread = new EmuThread(this);
  
      numWindows = 0;
-@@ -156,6 +264,12 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
+@@ -156,6 +308,12 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
  EmuInstance::~EmuInstance()
  {
      deleting = true;
@@ -193,7 +237,7 @@ index a8b1021..25a8b2f 100755
  
      emuThread->emuExit();
 diff --git a/src/frontend/qt_sdl/EmuInstance.h b/src/frontend/qt_sdl/EmuInstance.h
-index a1eab0e..bbad4f8 100755
+index a1eab0e..a4b1d15 100755
 --- a/src/frontend/qt_sdl/EmuInstance.h
 +++ b/src/frontend/qt_sdl/EmuInstance.h
 @@ -21,6 +21,8 @@
@@ -219,7 +263,7 @@ index a1eab0e..bbad4f8 100755
  const int kMaxWindows = 4;
  
  enum
-@@ -378,6 +387,13 @@ private:
+@@ -378,6 +387,20 @@ private:
      bool isTouching;
      melonDS::u16 touchX, touchY;
  
@@ -230,11 +274,18 @@ index a1eab0e..bbad4f8 100755
 +    // framebuffer into it after each RunFrame().
 +    std::unique_ptr<melonds_remote_bridge::RemoteServerBridge> remoteServer;
 +
++    // Tracks whether the *current* touch was caused by remote input, so
++    // inputProcess() releases it when the remote client lifts its finger
++    // without clobbering a touch caused by local mouse/touchscreen input
++    // instead (see the merge logic in EmuInstanceInput.cpp for why this
++    // can't just be "isTouching = remote.touchActive" every frame).
++    bool remoteTouchActive = false;
++
      friend class EmuThread;
      friend class MainWindow;
  };
 diff --git a/src/frontend/qt_sdl/EmuInstanceInput.cpp b/src/frontend/qt_sdl/EmuInstanceInput.cpp
-index a0bc623..5e549a8 100644
+index a0bc623..a237b7a 100644
 --- a/src/frontend/qt_sdl/EmuInstanceInput.cpp
 +++ b/src/frontend/qt_sdl/EmuInstanceInput.cpp
 @@ -25,8 +25,37 @@
@@ -275,7 +326,7 @@ index a0bc623..5e549a8 100644
  const char* EmuInstance::buttonNames[12] =
  {
      "A",
-@@ -454,6 +483,44 @@ void EmuInstance::inputProcess()
+@@ -454,6 +483,59 @@ void EmuInstance::inputProcess()
      }
  
      hotkeyMask = keyHotkeyMask | joyHotkeyMask;
@@ -303,6 +354,21 @@ index a0bc623..5e549a8 100644
 +            isTouching = true;
 +            touchX = remote.touchX;
 +            touchY = remote.touchY;
++            remoteTouchActive = true;
++        }
++        else if (remoteTouchActive)
++        {
++            // The remote client's finger just lifted (touchActive dropped
++            // to 0, e.g. on FINGER_UP or a disconnect/timeout releasing to
++            // InputStateTracker::releasedState()) -- release the touch
++            // that remote input caused. Without this, isTouching only ever
++            // gets set (never cleared) by the branch above, so the DS
++            // touch screen would stay pressed at the last remote position
++            // forever after the very first remote tap, since nothing else
++            // in this function clears it once a frame goes by with no
++            // local mouse/touchscreen event either.
++            isTouching = false;
++            remoteTouchActive = false;
 +        }
 +
 +        // Only the emulator actions with an existing, unambiguous hotkey
@@ -546,10 +612,10 @@ index 0000000..05308c9
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
 new file mode 100644
-index 0000000..d93ed9e
+index 0000000..d064889
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,55 @@
 +#include "RemoteServerBridge.h"
 +
 +namespace melonds_remote_bridge {
@@ -559,7 +625,8 @@ index 0000000..d93ed9e
 +    std::string authToken, std::string approvalStateFilePath,
 +    std::function<void(std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest>)>
 +        onPendingRequestsChanged,
-+    bool discoveryEnabled, uint16_t discoveryPort, std::string hostName) {
++    bool discoveryEnabled, uint16_t discoveryPort, std::string hostName,
++    std::function<void(bool)> onClientConnectionChanged) {
 +    melonds_remote::host::NetServerConfig config;
 +    config.bindAddress = std::move(bindAddress);
 +    config.controlPort = controlPort;
@@ -571,6 +638,7 @@ index 0000000..d93ed9e
 +    config.discoveryEnabled = discoveryEnabled;
 +    config.discoveryPort = discoveryPort;
 +    config.hostName = std::move(hostName);
++    config.onClientConnectionChanged = std::move(onClientConnectionChanged);
 +    server_ = std::make_unique<melonds_remote::host::NetServer>(config, inputSink_, frameSource_);
 +}
 +
@@ -605,10 +673,10 @@ index 0000000..d93ed9e
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
 new file mode 100644
-index 0000000..5a25373
+index 0000000..2e62a63
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,80 @@
 +#pragma once
 +
 +// Ties the standalone melonds-remote protocol/host networking code
@@ -649,12 +717,18 @@ index 0000000..5a25373
 +    // `discoveryEnabled`/`discoveryPort`/`hostName` implement LAN
 +    // discovery (spec section 8.1): on by default, see
 +    // NetServerConfig::discoveryEnabled for the security reasoning.
++    //
++    // `onClientConnectionChanged` forwards NetServerConfig::onClientConnectionChanged
++    // (see host/net_server.h) -- fired true/false as a client's session
++    // starts/ends, so the caller can e.g. switch the local window to a
++    // top-screen-only layout while someone is actively streaming.
 +    RemoteServerBridge(
 +        std::string bindAddress, uint16_t controlPort, uint16_t inputPort, uint16_t videoPort,
 +        std::string authToken, std::string approvalStateFilePath = {},
 +        std::function<void(std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest>)>
 +            onPendingRequestsChanged = {},
-+        bool discoveryEnabled = true, uint16_t discoveryPort = 8763, std::string hostName = {});
++        bool discoveryEnabled = true, uint16_t discoveryPort = 8763, std::string hostName = {},
++        std::function<void(bool)> onClientConnectionChanged = {});
 +    ~RemoteServerBridge();
 +
 +    RemoteServerBridge(const RemoteServerBridge&) = delete;
@@ -1081,10 +1155,10 @@ index 0000000..903d848
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.cpp b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
 new file mode 100644
-index 0000000..565532d
+index 0000000..9759500
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
-@@ -0,0 +1,699 @@
+@@ -0,0 +1,705 @@
 +#include "host/net_server.h"
 +
 +#include <arpa/inet.h>
@@ -1465,6 +1539,9 @@ index 0000000..565532d
 +            // address (spec section 13).
 +            authenticatedClientAddr_ = clientAddr.sin_addr.s_addr;
 +            clientAuthenticated_ = true;
++            if (config_.onClientConnectionChanged) {
++                config_.onClientConnectionChanged(true);
++            }
 +
 +            // Keep reading (heartbeats / disconnect notices / garbage) until
 +            // the peer closes, goes silent past controlHeartbeatTimeoutUs
@@ -1494,6 +1571,9 @@ index 0000000..565532d
 +        controlClientFd_ = -1;
 +        clientAuthenticated_ = false;
 +        authenticatedClientAddr_ = 0;
++        if (handshakeOk && config_.onClientConnectionChanged) {
++            config_.onClientConnectionChanged(false);
++        }
 +
 +        {
 +            std::lock_guard<std::mutex> lock(trackerMutex_);
@@ -1786,10 +1866,10 @@ index 0000000..565532d
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.h b/src/frontend/qt_sdl/remote_server/host/net_server.h
 new file mode 100644
-index 0000000..29e520d
+index 0000000..6d454c5
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.h
-@@ -0,0 +1,228 @@
+@@ -0,0 +1,242 @@
 +#pragma once
 +
 +// Minimal standalone host server: one TCP control connection (handshake +
@@ -1884,6 +1964,20 @@ index 0000000..29e520d
 +    // touches UI state, it must marshal to the UI thread itself (e.g.
 +    // Qt::QueuedConnection).
 +    std::function<void(std::vector<DeviceApprovalManager::PendingRequest>)> onPendingRequestsChanged;
++
++    // Fired with `true` once a client's handshake completes (control
++    // channel authenticated and accepted), and with `false` when that
++    // same client's control connection ends (graceful disconnect,
++    // malformed packet, or heartbeat timeout) -- never fired for a
++    // rejected handshake attempt. Lets a host-side UI react to "someone
++    // is actively streaming right now" (e.g. the melonDS integration uses
++    // this to show only the top screen locally while a client has the
++    // bottom screen, per SPEC.md's "Wii U GamePad" model, restoring
++    // whatever screen layout was configured before once the client
++    // disconnects). Invoked synchronously on NetServer's
++    // control-connection thread -- if the callback touches UI state, it
++    // must marshal to the UI thread itself (e.g. Qt::QueuedConnection).
++    std::function<void(bool)> onClientConnectionChanged;
 +
 +    // If a control-channel connection is silent (no heartbeat, no other
 +    // control traffic) for longer than this, it is dropped. Distinct from

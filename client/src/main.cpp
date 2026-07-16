@@ -17,9 +17,12 @@
 //    ignores touches outside the rendered DS rectangle
 //  - Sends a full ControllerState packet at a fixed ~120Hz rate
 //    regardless of whether anything changed (spec section 6.3)
-//  - Logs connection/controller/touch/frame events to stdout as the
+//  - Logs connection/controller/touch/frame events to stderr as the
 //    "debug overlay" for this milestone (an on-screen overlay is future
-//    work, see docs/architecture.md "Known gaps")
+//    work, see docs/architecture.md "Known gaps") -- stderr specifically,
+//    not stdout, since stdout is fully buffered once redirected to a file
+//    (the common case for troubleshooting), which can delay or lose these
+//    messages entirely for a while; stderr isn't.
 //  - Implements device-approval authentication (spec section 13,
 //    replacing an earlier 6-digit-code-entry screen that required typing
 //    on the client -- unworkable since Steam Input doesn't reliably bring
@@ -170,6 +173,38 @@ void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHos
     }
 
     renderCenteredBitmapText(renderer, "D-PAD TO MOVE, A TO SELECT",
+                              static_cast<float>(kWindowHeight) - 80.0f, 2,
+                              SDL_Color{140, 140, 140, 255});
+    SDL_RenderPresent(renderer);
+}
+
+void renderPauseMenu(SDL_Renderer* renderer, const std::vector<std::string>& items, int selectedIndex) {
+    SDL_SetRenderDrawColor(renderer, 20, 20, 24, 220);
+    SDL_RenderClear(renderer);
+    renderCenteredBitmapText(renderer, "MENU", 100.0f, 4, SDL_Color{220, 220, 220, 255});
+
+    constexpr float kRowHeight = 70.0f;
+    constexpr int kPixelSize = 4;
+    float startY = static_cast<float>(kWindowHeight) / 2.0f -
+                    (static_cast<float>(items.size()) * kRowHeight) / 2.0f;
+
+    for (size_t i = 0; i < items.size(); ++i) {
+        float rowY = startY + static_cast<float>(i) * kRowHeight;
+        bool selected = static_cast<int>(i) == selectedIndex;
+        SDL_Color color = selected ? SDL_Color{90, 200, 120, 255} : SDL_Color{200, 200, 200, 255};
+
+        if (selected) {
+            int width = measureBitmapText(items[i], kPixelSize);
+            float x = (static_cast<float>(kWindowWidth) - static_cast<float>(width)) / 2.0f;
+            SDL_FRect highlight{x - 24.0f, rowY - 10.0f, static_cast<float>(width) + 48.0f,
+                                 static_cast<float>(kFontGlyphHeight * kPixelSize) + 20.0f};
+            SDL_SetRenderDrawColor(renderer, 50, 70, 55, 255);
+            SDL_RenderFillRect(renderer, &highlight);
+        }
+        renderCenteredBitmapText(renderer, items[i], rowY, kPixelSize, color);
+    }
+
+    renderCenteredBitmapText(renderer, "D-PAD TO MOVE, A TO SELECT, START+SELECT TO CLOSE",
                               static_cast<float>(kWindowHeight) - 80.0f, 2,
                               SDL_Color{140, 140, 140, 255});
     SDL_RenderPresent(renderer);
@@ -339,10 +374,18 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // BGRA8888 matches the wire format documented in docs/protocol.md and
-    // melonDS's own software-renderer output, so no per-frame color
-    // conversion is needed on the client.
-    SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGRA8888,
+    // The wire format (docs/protocol.md) and melonDS's own software-renderer
+    // output are B,G,R,X bytes in memory -- SDL_PIXELFORMAT_BGRA32 is the
+    // constant that actually means that. SDL_PIXELFORMAT_BGRA8888 (no "32")
+    // is a *packed*-format name, not a byte-order-in-memory one: on a
+    // little-endian machine it names a completely different byte order
+    // (equivalent to ARGB8888's byte order) due to how SDL defines packed
+    // formats as a bit layout read MSB-to-LSB of a 32-bit int, which is
+    // reversed in memory on little-endian -- feeding real B,G,R,X bytes to
+    // a texture declared BGRA8888 showed as flatly wrong colors (verified:
+    // pure red bytes rendered as black). Do not "fix" this back to
+    // BGRA8888 -- see SDL_pixels.h's SDL_PIXELFORMAT_BGRA32 definition.
+    SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGRA32,
                                               SDL_TEXTUREACCESS_STREAMING, kDSWidth, kDSHeight);
     if (!texture) {
         std::fprintf(stderr, "SDL_CreateTexture failed: %s\n", SDL_GetError());
@@ -357,36 +400,9 @@ int main(int argc, char** argv) {
     SDL_JoystickID* gamepadIds = SDL_GetGamepads(&gamepadCount);
     if (gamepadIds && gamepadCount > 0) {
         gamepad = SDL_OpenGamepad(gamepadIds[0]);
-        std::printf("[input] opened gamepad: %s\n", gamepad ? SDL_GetGamepadName(gamepad) : "?");
+        std::fprintf(stderr, "[input] opened gamepad: %s\n", gamepad ? SDL_GetGamepadName(gamepad) : "?");
     }
     if (gamepadIds) SDL_free(gamepadIds);
-
-    // LAN discovery (spec section 8.1): always shown unless --host/a
-    // positional address was given, matching the existing scripted/CI use
-    // (run-client.sh, --auth-token flows). Per user request, this always
-    // runs -- even if only one host answers, or it's the same one as last
-    // time -- rather than silently reconnecting, so a different HTPC is
-    // always one screen away.
-    if (!hostExplicit) {
-        std::string lastHost = loadLastHost(discoveryStorePath).value_or("");
-        auto selected = discoverAndSelectHost(renderer, gamepad, discoveryPort, lastHost);
-        if (!selected) {
-            std::printf("[discovery] cancelled before a host was chosen -- exiting\n");
-            if (gamepad) SDL_CloseGamepad(gamepad);
-            SDL_DestroyTexture(texture);
-            SDL_DestroyRenderer(renderer);
-            SDL_DestroyWindow(window);
-            SDL_Quit();
-            return 0;
-        }
-        netConfig.hostAddress = selected->address;
-        netConfig.controlPort = selected->controlPort;
-        netConfig.inputPort = selected->inputPort;
-        netConfig.videoPort = selected->videoPort;
-        saveLastHost(discoveryStorePath, netConfig.hostAddress);
-        std::printf("[discovery] selected host \"%s\" at %s\n", selected->hostName.c_str(),
-                    netConfig.hostAddress.c_str());
-    }
 
     // Device-approval authentication (spec section 13): unless the caller
     // gave an explicit static --auth-token, send this client's own
@@ -394,165 +410,286 @@ int main(int argc, char** argv) {
     // every time. A human at the host approves or denies it once; there
     // is nothing to type or store per-host on the client side (see
     // device_identity.h and docs/protocol.md's "Authentication and
-    // device approval" section).
+    // device approval" section). Loaded once, outside the reconnect-loop
+    // below, since it doesn't depend on which host is chosen.
     if (!authTokenExplicit) {
         netConfig.authToken = loadOrCreateDeviceIdentity(defaultDeviceIdentityStorePath());
     }
 
-    NetClient net(netConfig);
-    if (net.connect()) {
-        std::printf("[net] connected to %s (session %u)\n", netConfig.hostAddress.c_str(),
-                     net.sessionId());
-    } else if (net.lastRejectReason() == HelloRejectReason::ApprovalRequired) {
-        std::printf("[net] awaiting approval on the host -- a human there needs to approve "
-                    "this device once; will keep retrying automatically\n");
-    } else {
-        std::fprintf(stderr,
-                      "[net] failed to connect to %s -- will keep retrying in the "
-                      "background, showing a local test pattern meanwhile\n",
-                      netConfig.hostAddress.c_str());
-    }
+    // Debounces the Start+Select "open menu" chord so holding both down
+    // doesn't toggle the menu open-and-shut every single frame -- only
+    // acts on the transition from "not both held" to "both held".
+    bool menuChordHeldLastFrame = false;
 
-    // Auto-reconnect (spec section 7.2): connect() does several blocking
-    // socket calls, so retries run on their own thread rather than
-    // stalling the render/input loop below. Backoff caps at 5s so a
-    // permanently-unreachable (or not-yet-approved) host doesn't spin the
-    // CPU. Unlike the old pairing-code flow, there is no reason to ever
-    // pause these retries waiting on client-side user action -- approval
-    // happens entirely on the host, so the same reconnect loop that
-    // handles a temporarily-down host also naturally handles "not
-    // approved yet" (it'll just start succeeding once approved).
-    std::atomic<bool> shuttingDown{false};
-    std::thread reconnectThread([&]() {
-        uint32_t backoffMs = 1000;
-        constexpr uint32_t kMaxBackoffMs = 5000;
-        while (!shuttingDown.load()) {
+    // Outer loop lets "Change Host" (from the in-app menu below) return to
+    // the discovery/selection screen without exiting the whole process --
+    // everything from discovery through the connected render loop reruns
+    // per host. Only reachable when !hostExplicit (an explicit --host/
+    // positional address has nothing to fall back to, so that menu entry
+    // is hidden in that case -- see menuItems below).
+    bool quitApp = false;
+    while (!quitApp) {
+        // LAN discovery (spec section 8.1): always shown unless --host/a
+        // positional address was given, matching the existing scripted/CI
+        // use (run-client.sh, --auth-token flows). Per user request, this
+        // always runs -- even if only one host answers, or it's the same
+        // one as last time -- rather than silently reconnecting, so a
+        // different HTPC is always one screen away.
+        if (!hostExplicit) {
+            std::string lastHost = loadLastHost(discoveryStorePath).value_or("");
+            auto selected = discoverAndSelectHost(renderer, gamepad, discoveryPort, lastHost);
+            if (!selected) {
+                std::fprintf(stderr, "[discovery] cancelled before a host was chosen -- exiting\n");
+                quitApp = true;
+                break;
+            }
+            netConfig.hostAddress = selected->address;
+            netConfig.controlPort = selected->controlPort;
+            netConfig.inputPort = selected->inputPort;
+            netConfig.videoPort = selected->videoPort;
+            saveLastHost(discoveryStorePath, netConfig.hostAddress);
+            std::fprintf(stderr, "[discovery] selected host \"%s\" at %s\n", selected->hostName.c_str(),
+                        netConfig.hostAddress.c_str());
+        }
+
+        NetClient net(netConfig);
+        if (net.connect()) {
+            std::fprintf(stderr, "[net] connected to %s (session %u)\n", netConfig.hostAddress.c_str(),
+                         net.sessionId());
+        } else if (net.lastRejectReason() == HelloRejectReason::ApprovalRequired) {
+            std::fprintf(stderr, "[net] awaiting approval on the host -- a human there needs to approve "
+                        "this device once; will keep retrying automatically\n");
+        } else {
+            std::fprintf(stderr,
+                          "[net] failed to connect to %s -- will keep retrying in the "
+                          "background, showing a local test pattern meanwhile\n",
+                          netConfig.hostAddress.c_str());
+        }
+
+        // Auto-reconnect (spec section 7.2): connect() does several blocking
+        // socket calls, so retries run on their own thread rather than
+        // stalling the render/input loop below. Backoff caps at 5s so a
+        // permanently-unreachable (or not-yet-approved) host doesn't spin the
+        // CPU. Unlike the old pairing-code flow, there is no reason to ever
+        // pause these retries waiting on client-side user action -- approval
+        // happens entirely on the host, so the same reconnect loop that
+        // handles a temporarily-down host also naturally handles "not
+        // approved yet" (it'll just start succeeding once approved).
+        std::atomic<bool> shuttingDown{false};
+        std::thread reconnectThread([&]() {
+            uint32_t backoffMs = 1000;
+            constexpr uint32_t kMaxBackoffMs = 5000;
+            while (!shuttingDown.load()) {
+                if (!net.isConnected()) {
+                    std::fprintf(stderr, "[net] attempting to (re)connect to %s...\n",
+                                netConfig.hostAddress.c_str());
+                    if (net.connect()) {
+                        std::fprintf(stderr, "[net] reconnected (session %u)\n", net.sessionId());
+                        backoffMs = 1000;
+                    } else {
+                        backoffMs = std::min(backoffMs * 2, kMaxBackoffMs);
+                    }
+                }
+                for (uint32_t waited = 0; waited < backoffMs && !shuttingDown.load(); waited += 100) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+            }
+        });
+
+        uint32_t sequence = 0;
+        bool touchActive = false;
+        uint16_t touchX = 0;
+        uint16_t touchY = 0;
+        std::optional<int64_t> activeFingerId;
+
+        std::vector<uint8_t> frame;
+        std::vector<uint8_t> testPattern(static_cast<size_t>(kDSWidth) * kDSHeight * 4, 0x40);
+
+        const uint64_t inputIntervalUs = 1'000'000 / 120; // spec section 6.3
+        uint64_t lastInputSendUs = SDL_GetTicksNS() / 1000;
+
+        // In-app menu (spec request: "no sort of menu to configure settings
+        // or exit"): held Start+Select toggles it. "Change Host" is only
+        // offered when discovery is in play at all -- an explicit --host
+        // has no host list to go back to.
+        std::vector<std::string> menuItems = {"RESUME"};
+        if (!hostExplicit) menuItems.push_back("CHANGE HOST");
+        menuItems.push_back("EXIT");
+        bool menuActive = false;
+        int menuSelectedIndex = 0;
+        bool changeHostRequested = false;
+
+        bool runningInner = true;
+        while (runningInner) {
+            RenderRect dsRect = computeAspectFitRect(kWindowWidth, kWindowHeight);
+
+            SDL_Event event;
+            while (SDL_PollEvent(&event)) {
+                switch (event.type) {
+                    case SDL_EVENT_QUIT:
+                        runningInner = false;
+                        quitApp = true;
+                        break;
+                    case SDL_EVENT_GAMEPAD_ADDED:
+                        if (!gamepad) {
+                            gamepad = SDL_OpenGamepad(event.gdevice.which);
+                            std::fprintf(stderr, "[input] gamepad connected\n");
+                        }
+                        break;
+                    case SDL_EVENT_GAMEPAD_REMOVED:
+                        if (gamepad && SDL_GetGamepadID(gamepad) == event.gdevice.which) {
+                            SDL_CloseGamepad(gamepad);
+                            gamepad = nullptr;
+                            std::fprintf(stderr, "[input] gamepad disconnected\n");
+                        }
+                        break;
+                    case SDL_EVENT_FINGER_DOWN:
+                    case SDL_EVENT_FINGER_MOTION: {
+                        if (menuActive) break;
+                        double px = static_cast<double>(event.tfinger.x) * kWindowWidth;
+                        double py = static_cast<double>(event.tfinger.y) * kWindowHeight;
+                        auto mapped = mapPointToDSCoords(px, py, dsRect);
+                        if (mapped) {
+                            touchActive = true;
+                            touchX = mapped->first;
+                            touchY = mapped->second;
+                            activeFingerId = static_cast<int64_t>(event.tfinger.fingerID);
+                        } else if (event.type == SDL_EVENT_FINGER_DOWN) {
+                            // touch started outside the DS rectangle: ignored per spec 7.4
+                        }
+                        break;
+                    }
+                    case SDL_EVENT_FINGER_UP:
+                        if (activeFingerId &&
+                            *activeFingerId == static_cast<int64_t>(event.tfinger.fingerID)) {
+                            touchActive = false;
+                            activeFingerId.reset();
+                        }
+                        break;
+                    case SDL_EVENT_KEY_DOWN: {
+                        int count = static_cast<int>(menuItems.size());
+                        if (event.key.key == SDLK_ESCAPE) {
+                            // Desktop-mode/testing convenience: same toggle
+                            // as the Start+Select gamepad chord below.
+                            menuActive = !menuActive;
+                            menuSelectedIndex = 0;
+                        } else if (menuActive && event.key.key == SDLK_UP) {
+                            menuSelectedIndex = (menuSelectedIndex + count - 1) % count;
+                        } else if (menuActive && event.key.key == SDLK_DOWN) {
+                            menuSelectedIndex = (menuSelectedIndex + 1) % count;
+                        } else if (menuActive && event.key.key == SDLK_RETURN) {
+                            const std::string& picked = menuItems[static_cast<size_t>(menuSelectedIndex)];
+                            if (picked == "RESUME") {
+                                menuActive = false;
+                            } else if (picked == "CHANGE HOST") {
+                                changeHostRequested = true;
+                                runningInner = false;
+                            } else if (picked == "EXIT") {
+                                quitApp = true;
+                                runningInner = false;
+                            }
+                        }
+                        break;
+                    }
+                    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+                        if (menuActive) {
+                            int count = static_cast<int>(menuItems.size());
+                            if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP) {
+                                menuSelectedIndex = (menuSelectedIndex + count - 1) % count;
+                            } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_DOWN) {
+                                menuSelectedIndex = (menuSelectedIndex + 1) % count;
+                            } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH) {
+                                const std::string& picked = menuItems[static_cast<size_t>(menuSelectedIndex)];
+                                if (picked == "RESUME") {
+                                    menuActive = false;
+                                } else if (picked == "CHANGE HOST") {
+                                    changeHostRequested = true;
+                                    runningInner = false;
+                                } else if (picked == "EXIT") {
+                                    quitApp = true;
+                                    runningInner = false;
+                                }
+                            } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_EAST) {
+                                menuActive = false; // back/cancel, no action taken
+                            }
+                        }
+                        break;
+                    default:
+                        break;
+                }
+            }
+
+            // Held Start+Select toggles the menu -- polled once per frame
+            // (not event-driven) since it's a simultaneous-hold chord, not
+            // a single button press; edge-triggered against last frame so
+            // holding both down doesn't reopen/close it every frame.
+            bool menuChordHeld = gamepad && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_START) &&
+                                 SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_BACK);
+            if (menuChordHeld && !menuChordHeldLastFrame) {
+                menuActive = !menuActive;
+                menuSelectedIndex = 0;
+            }
+            menuChordHeldLastFrame = menuChordHeld;
+
+            if (menuActive) {
+                renderPauseMenu(renderer, menuItems, menuSelectedIndex);
+                continue;
+            }
+
+            uint64_t nowUs = SDL_GetTicksNS() / 1000;
+            if (nowUs - lastInputSendUs >= inputIntervalUs) {
+                ControllerState state;
+                state.sequence = sequence++;
+                state.clientTimestampUs = wallClockNowUs();
+                state.dsButtons = buildButtonsFromGamepad(gamepad);
+                state.emulatorActions = 0;
+                state.touchActive = touchActive ? 1 : 0;
+                state.touchX = touchX;
+                state.touchY = touchY;
+                net.sendControllerState(state);
+                lastInputSendUs = nowUs;
+            }
+
+            const uint8_t* pixels = testPattern.data();
+            if (net.isConnected() && net.getLatestFrame(frame) &&
+                frame.size() == testPattern.size()) {
+                pixels = frame.data();
+            }
+            SDL_UpdateTexture(texture, nullptr, pixels, kDSWidth * 4);
+
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+            SDL_RenderClear(renderer);
+
+            SDL_FRect dst{static_cast<float>(dsRect.x), static_cast<float>(dsRect.y),
+                          static_cast<float>(dsRect.width), static_cast<float>(dsRect.height)};
+            SDL_RenderTexture(renderer, texture, nullptr, &dst);
+
+            // Otherwise a failed/retrying connection just looks like a stuck
+            // dark test-pattern screen with no indication anything is even
+            // trying -- the actual retry attempts only show up in stdout,
+            // which Gaming Mode has no visible terminal for (same reasoning
+            // as the discovery screen using the bitmap font). Distinguishing
+            // ApprovalRequired specifically tells the user where to look --
+            // there's nothing to do here, a human needs to approve on the host.
             if (!net.isConnected()) {
-                std::printf("[net] attempting to (re)connect to %s...\n",
-                            netConfig.hostAddress.c_str());
-                if (net.connect()) {
-                    std::printf("[net] reconnected (session %u)\n", net.sessionId());
-                    backoffMs = 1000;
-                } else {
-                    backoffMs = std::min(backoffMs * 2, kMaxBackoffMs);
-                }
+                std::string status = net.lastRejectReason() == HelloRejectReason::ApprovalRequired
+                                          ? "WAITING FOR APPROVAL ON HOST " + netConfig.hostAddress + "..."
+                                          : "CONNECTING TO " + netConfig.hostAddress + "...";
+                renderCenteredBitmapText(renderer, status, 24.0f, 2, SDL_Color{220, 200, 80, 255});
             }
-            for (uint32_t waited = 0; waited < backoffMs && !shuttingDown.load(); waited += 100) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
-        }
-    });
 
-    uint32_t sequence = 0;
-    bool touchActive = false;
-    uint16_t touchX = 0;
-    uint16_t touchY = 0;
-    std::optional<int64_t> activeFingerId;
-
-    std::vector<uint8_t> frame;
-    std::vector<uint8_t> testPattern(static_cast<size_t>(kDSWidth) * kDSHeight * 4, 0x40);
-
-    const uint64_t inputIntervalUs = 1'000'000 / 120; // spec section 6.3
-    uint64_t lastInputSendUs = SDL_GetTicksNS() / 1000;
-
-    bool running = true;
-    while (running) {
-        RenderRect dsRect = computeAspectFitRect(kWindowWidth, kWindowHeight);
-
-        SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            switch (event.type) {
-                case SDL_EVENT_QUIT:
-                    running = false;
-                    break;
-                case SDL_EVENT_GAMEPAD_ADDED:
-                    if (!gamepad) {
-                        gamepad = SDL_OpenGamepad(event.gdevice.which);
-                        std::printf("[input] gamepad connected\n");
-                    }
-                    break;
-                case SDL_EVENT_GAMEPAD_REMOVED:
-                    if (gamepad && SDL_GetGamepadID(gamepad) == event.gdevice.which) {
-                        SDL_CloseGamepad(gamepad);
-                        gamepad = nullptr;
-                        std::printf("[input] gamepad disconnected\n");
-                    }
-                    break;
-                case SDL_EVENT_FINGER_DOWN:
-                case SDL_EVENT_FINGER_MOTION: {
-                    double px = static_cast<double>(event.tfinger.x) * kWindowWidth;
-                    double py = static_cast<double>(event.tfinger.y) * kWindowHeight;
-                    auto mapped = mapPointToDSCoords(px, py, dsRect);
-                    if (mapped) {
-                        touchActive = true;
-                        touchX = mapped->first;
-                        touchY = mapped->second;
-                        activeFingerId = static_cast<int64_t>(event.tfinger.fingerID);
-                    } else if (event.type == SDL_EVENT_FINGER_DOWN) {
-                        // touch started outside the DS rectangle: ignored per spec 7.4
-                    }
-                    break;
-                }
-                case SDL_EVENT_FINGER_UP:
-                    if (activeFingerId &&
-                        *activeFingerId == static_cast<int64_t>(event.tfinger.fingerID)) {
-                        touchActive = false;
-                        activeFingerId.reset();
-                    }
-                    break;
-                default:
-                    break;
-            }
+            SDL_RenderPresent(renderer);
         }
 
-        uint64_t nowUs = SDL_GetTicksNS() / 1000;
-        if (nowUs - lastInputSendUs >= inputIntervalUs) {
-            ControllerState state;
-            state.sequence = sequence++;
-            state.clientTimestampUs = wallClockNowUs();
-            state.dsButtons = buildButtonsFromGamepad(gamepad);
-            state.emulatorActions = 0;
-            state.touchActive = touchActive ? 1 : 0;
-            state.touchX = touchX;
-            state.touchY = touchY;
-            net.sendControllerState(state);
-            lastInputSendUs = nowUs;
+        shuttingDown = true;
+        reconnectThread.join();
+        net.disconnect();
+
+        if (changeHostRequested) {
+            std::fprintf(stderr, "[menu] changing host -- returning to discovery\n");
         }
-
-        const uint8_t* pixels = testPattern.data();
-        if (net.isConnected() && net.getLatestFrame(frame) &&
-            frame.size() == testPattern.size()) {
-            pixels = frame.data();
-        }
-        SDL_UpdateTexture(texture, nullptr, pixels, kDSWidth * 4);
-
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-        SDL_RenderClear(renderer);
-
-        SDL_FRect dst{static_cast<float>(dsRect.x), static_cast<float>(dsRect.y),
-                      static_cast<float>(dsRect.width), static_cast<float>(dsRect.height)};
-        SDL_RenderTexture(renderer, texture, nullptr, &dst);
-
-        // Otherwise a failed/retrying connection just looks like a stuck
-        // dark test-pattern screen with no indication anything is even
-        // trying -- the actual retry attempts only show up in stdout,
-        // which Gaming Mode has no visible terminal for (same reasoning
-        // as the discovery screen using the bitmap font). Distinguishing
-        // ApprovalRequired specifically tells the user where to look --
-        // there's nothing to do here, a human needs to approve on the host.
-        if (!net.isConnected()) {
-            std::string status = net.lastRejectReason() == HelloRejectReason::ApprovalRequired
-                                      ? "WAITING FOR APPROVAL ON HOST " + netConfig.hostAddress + "..."
-                                      : "CONNECTING TO " + netConfig.hostAddress + "...";
-            renderCenteredBitmapText(renderer, status, 24.0f, 2, SDL_Color{220, 200, 80, 255});
-        }
-
-        SDL_RenderPresent(renderer);
     }
 
-    shuttingDown = true;
-    reconnectThread.join();
-    net.disconnect();
     if (gamepad) SDL_CloseGamepad(gamepad);
     SDL_DestroyTexture(texture);
     SDL_DestroyRenderer(renderer);

@@ -49,11 +49,14 @@ running program -- **not** a unit test of the merge logic in isolation.
 This also **conclusively resolved** the two items the previous pass of
 this document flagged as open:
 
-- **Pixel channel order is BGRA8888** (byte0=Blue, byte1=Green,
-  byte2=Red, byte3=Alpha) -- determined by observing which byte changed
-  for each button-controlled color channel across a continuous session,
-  which the earlier one-sample-per-run static-color test couldn't
-  distinguish.
+- **Pixel channel order is B,G,R,A bytes in memory** (byte0=Blue,
+  byte1=Green, byte2=Red, byte3=Alpha) -- determined by observing which
+  byte changed for each button-controlled color channel across a
+  continuous session, which the earlier one-sample-per-run static-color
+  test couldn't distinguish. This byte-order finding was and is correct;
+  what turned out wrong later was the *client's SDL texture format
+  constant* used to display those same bytes -- see "Real-usage bug
+  fixes" below for that specific, distinct bug.
 - **Engine B (not engine A) is the "bottom" screen** delivered by
   `GPU::GetFramebuffers()`.
 
@@ -225,6 +228,81 @@ every previously-approved client at once).
 - Only one client at a time, by design (`SPEC.md` section 7.1's initial
   scope, and an explicit non-goal in section 21).
 - IPv4 only (including discovery).
+
+## Real-usage bug fixes: touch, colors, screen layout, in-app menu
+
+Four issues reported from actually using the client against the real
+melonDS-integrated host (not caught by earlier protocol-level/unit
+testing, since none of them are wire-format bugs):
+
+- **Touch got stuck on after the first tap**: `EmuInstanceInput.cpp`'s
+  remote-input merge set `isTouching = true` when a remote touch was
+  active, but never set it back to `false` when the touch ended -- once a
+  client tapped the touchscreen once, melonDS treated it as permanently
+  held at that position forever after (see `EmuThread.cpp`'s
+  `isTouching ? TouchScreen(...) : ReleaseScreen()` check, run every
+  frame). Fixed by tracking whether the *current* touch was caused by
+  remote input (`EmuInstance::remoteTouchActive`) and releasing it
+  specifically when the remote client's touch ends, without clobbering a
+  touch caused by local mouse/touchscreen input instead. Build-verified;
+  not exercised against a real touch-reactive DS program (would need a
+  new homebrew ROM that reads the touchscreen controller registers, which
+  wasn't built for this pass -- see the interactive-ROM caveats above for
+  why building new homebrew assets is deliberately limited here).
+- **Client screen colors were badly wrong**: `client/src/main.cpp` created
+  its video texture with `SDL_PIXELFORMAT_BGRA8888`. SDL names its 32-bit
+  "packed" formats after a bit layout read MSB-to-LSB as a single integer,
+  not a byte order in memory -- on a little-endian machine (the normal
+  case, including Steam Deck) `SDL_PIXELFORMAT_BGRA8888` actually means
+  the same in-memory byte order as `SDL_PIXELFORMAT_ARGB8888`, a
+  completely different order than the wire format (and melonDS's own
+  framebuffer) uses. Only `SDL_PIXELFORMAT_BGRA32` (the "32" alias) is
+  defined by SDL to always mean "bytes in memory match the name",
+  regardless of host endianness. Confirmed empirically, not just from
+  reading `SDL_pixels.h`: feeding an isolated test program the exact
+  B,G,R,X bytes melonDS produces for pure red, `BGRA8888` displayed it as
+  **black**, `BGRA32` displayed it correctly as **red**. Fixed by
+  switching to `SDL_PIXELFORMAT_BGRA32`; re-verified live against the
+  standalone host's animated gradient pattern, which now shows the full
+  yellow/orange/magenta/teal/blue range instead of the washed-out
+  blue/purple/teal-only palette the bug produced. See `docs/protocol.md`'s
+  "Video payload" section.
+- **melonDS's own window showed both screens while a client was actively
+  streaming the bottom one**: redundant, and not the "Wii U GamePad"
+  layout `SPEC.md` describes (TV/host shows top screen, handheld/client
+  shows bottom). Fixed by wiring a new `NetServerConfig::onClientConnectionChanged`
+  callback (fired true/false as a client's session starts/ends) to set
+  melonDS's existing `ScreenSizing` config to `screenSizing_TopOnly` while
+  connected, restoring whatever was configured before once the client
+  disconnects. Verified live against the real melonDS-integrated host +
+  real client: connecting logged `melonds-remote: client streaming --
+  showing top screen only locally (was ScreenSizing=0)` and disconnecting
+  logged `melonds-remote: client disconnected -- restoring local
+  ScreenSizing=0`.
+- **No way to exit or reconnect without killing the process**: the client
+  had no in-app menu at all -- Gaming Mode has no window chrome to click a
+  close button, and there was no way to switch to a different discovered
+  host without restarting the whole client. Fixed by adding a gamepad
+  Start+Select-held chord (or Escape in Desktop Mode) that opens an
+  in-app menu with **Resume**, **Change Host** (returns to the
+  discovery/selection screen without exiting the process -- hidden when
+  `--host` was given explicitly, since there's no host list to go back
+  to), and **Exit**. Verified live: opening the menu, moving the
+  selection, confirming "Change Host" (disconnects and shows the
+  discovery screen again, reselecting reconnects), and confirming "Exit"
+  (clean process exit, confirmed via `ps` showing no lingering process)
+  all behaved as expected.
+
+Also, while investigating these: the client's informational log messages
+(`[net] connected to ...`, `[discovery] selected host ...`, etc.) were
+using `std::printf` (stdout) instead of `std::fprintf(stderr, ...)`.
+stdout is fully buffered once redirected to a file (the common case for
+troubleshooting/log capture), which was observed firsthand during this
+investigation: a client run with stdout redirected showed **no** log
+output at all until the process was killed, even though multiple
+messages had clearly been printed. Switched all of them to stderr, which
+isn't buffered the same way and is what the host side (`NetServer`)
+already uses for exactly this reason.
 
 ## Latency instrumentation assumes synced clocks
 

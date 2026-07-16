@@ -14,7 +14,12 @@ follows the patch boundary proposed in
 2. `src/frontend/qt_sdl/EmuInstanceInput.cpp` — `inputProcess()` merges
    the latest remote `ControllerState` into `inputMask`/`isTouching`/
    `touchX`/`touchY`/`hotkeyMask`, the same way local SDL joystick input
-   is merged with keyboard input just above it.
+   is merged with keyboard input just above it. A new
+   `EmuInstance::remoteTouchActive` member (`EmuInstance.h`) tracks
+   whether the *current* touch was caused by remote input specifically,
+   so it can be released when the remote client's touch ends without
+   clobbering a touch caused by local mouse/touchscreen input instead --
+   see "What has actually been verified" below for the bug this fixes.
 3. Emulator actions ride the same merge, mapped onto existing hotkeys
    (`HK_Pause`, `HK_FastForward`, `HK_SwapScreens`) where a direct
    equivalent already exists.
@@ -31,6 +36,12 @@ follows the patch boundary proposed in
    summary in `mainWindow`'s status bar. LAN discovery (enabled/port/host
    name) is also configured here, from `MELONDS_REMOTE_NO_DISCOVERY`/
    `MELONDS_REMOTE_DISCOVERY_PORT`/`MELONDS_REMOTE_HOST_NAME` env vars.
+   A further callback (`onClientConnectionChanged`) fires true/false as a
+   client's session starts/ends, setting melonDS's own `ScreenSizing`
+   config to `screenSizing_TopOnly` while someone is actively streaming
+   the bottom screen (matching SPEC.md's "Wii U GamePad" model: TV/host
+   shows the top screen, handheld/client shows the bottom) and restoring
+   whatever was configured before once the client disconnects.
 5. `src/frontend/qt_sdl/Window.cpp` — `pickROM()`'s "Open ROM" dialog
    defaults to EmuDeck's standard NDS ROM directory
    (`~/Emulation/roms/nds`) the first time it's opened, if that directory
@@ -205,6 +216,41 @@ Qt6, SDL2, GCC 13) — not just written and assumed correct:
     standalone prototype's console `approve`/`deny` commands (same
     underlying `DeviceApprovalManager::approve()` call either way) rather
     than the melonDS-integrated binary's popup specifically.
+12. **Auto top-screen-only layout while a client is streaming** (spec
+    section 12's "Wii U GamePad" model): verified against *this exact*
+    patched binary (not the standalone prototype, since this is
+    melonDS-specific `ScreenSizing`/`mainWindow` behavior) running a real
+    ROM under Xvfb, with the real `melonds-remote-client` connecting and
+    disconnecting. Confirmed via log lines emitted by the new
+    `onClientConnectionChanged` callback: connecting logged `melonds-remote:
+    client streaming -- showing top screen only locally (was
+    ScreenSizing=0)`, and disconnecting logged `melonds-remote: client
+    disconnected -- restoring local ScreenSizing=0` -- both directions
+    round-tripping correctly through the real `Config::Table` the window
+    actually uses. (Stdout buffering caught and worked around during this
+    same verification pass -- see the note below.)
+13. **Touch-stuck-on fix**: build-verified only (compiles clean with the
+    new `remoteTouchActive` tracking described above); not re-exercised
+    against a real touch-reactive DS program, since that would need a new
+    homebrew ROM reading the touchscreen controller registers, which
+    wasn't built for this pass (see the ROM-asset caveats throughout this
+    document for why new homebrew assets are added sparingly). The bug
+    and fix are still high-confidence from source review alone: the
+    original code had no `else` branch to ever clear `isTouching` once a
+    remote touch set it, which is an unambiguous logic gap given
+    `EmuThread.cpp`'s per-frame `isTouching ? TouchScreen(...) :
+    ReleaseScreen()` check.
+
+**A stdout-buffering gotcha surfaced while verifying item 12**: an early
+attempt to observe the `onClientConnectionChanged` log lines above via
+`Platform::Log` (which writes to stdout) found the redirected log file
+completely empty long after the events had clearly happened, because
+stdout is fully buffered once redirected to a file/pipe (unlike stderr).
+Switched those two log lines to `std::fprintf(stderr, ...)`, matching
+`NetServer`'s own convention for exactly this reason. The client
+(`client/src/main.cpp`) had the identical latent issue for its own
+informational log messages and was fixed the same way -- see
+`docs/known-limitations.md`'s "Real-usage bug fixes" section.
 
 Two real things were caught and fixed during this verification, not
 assumed correct from review:

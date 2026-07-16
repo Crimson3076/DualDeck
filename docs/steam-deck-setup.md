@@ -74,10 +74,14 @@ See `docs/building.md` for the actual CMake invocation either way.
    stream renders letterboxed at 4:3, the Deck's built-in controller
    moves the game/logs show button state, and the touchscreen registers
    only inside the rendered DS rectangle (spec section 7.4).
-6. Exit with the window's quit control (currently `SDL_EVENT_QUIT`, i.e.
-   closing the window -- a controller-navigable in-app exit action is
-   listed as Phase 3 work in `SPEC.md` and not yet implemented; see
-   `docs/known-limitations.md`).
+6. Hold **Start+Select** together (or press Escape in Desktop Mode) to
+   open the in-app menu -- fully controller-navigable (D-pad to move,
+   South/A to select), with **Resume**, **Change Host** (jump back to the
+   host-selection screen from step 3 without restarting the client), and
+   **Exit**. This is the controller-navigable in-app exit action `SPEC.md`
+   lists as Phase 3 work -- now implemented rather than only closable via
+   the window's `SDL_EVENT_QUIT` (still works too, e.g. Alt+F4 in Desktop
+   Mode).
 
 ## Gaming Mode: adding as a non-Steam shortcut
 
@@ -111,9 +115,12 @@ Mode, applied to this client:
 Once launched, the physical Deck controls should behave per `SPEC.md`
 section 7.3's table (D-pad → DS D-pad, A/B/X/Y → DS A/B/X/Y, L1/R1 → DS
 L/R, Start/View → DS Start/Select, touchscreen → DS touchscreen, left
-stick as an optional alternate D-pad). These are currently a fixed
-mapping in `client/src/main.cpp` (`kButtonMappings`), not yet exposed
-through Steam Input action sets -- that remapping-via-Steam-Input work is
+stick as an optional alternate D-pad). Start and View are dual-purpose:
+pressed individually they still go to the DS as Start/Select; **held
+together** they instead open the in-app menu (see step 6 above) and stop
+being forwarded to the DS for as long as the menu is open. These are
+currently a fixed mapping in `client/src/main.cpp` (`kButtonMappings`),
+not yet exposed through Steam Input action sets -- that remapping-via-Steam-Input work is
 Phase 3 (`SPEC.md`) and not implemented yet.
 
 ## If something doesn't work
