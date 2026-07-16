@@ -11,7 +11,12 @@ name: Release (rolling build)
 # Takes ~15-20 minutes per run since melonDS and SDL3 are both built from
 # source (neither is packaged for this runner's Ubuntu version); the
 # SDL3 build is cached across runs since it's pinned to a fixed tag and
-# doesn't change with this repo's own commits.
+# doesn't change with this repo's own commits. Build-time dependencies
+# are NOT installed as a separate step here -- scripts/build-release.sh
+# detects and installs its own (via scripts/lib/ensure-packages.sh), the
+# same as it would for anyone running it locally. This also means every
+# CI run is a live end-to-end test of that auto-install path on a
+# genuinely clean machine.
 
 on:
   push:
@@ -27,18 +32,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            cmake extra-cmake-modules ninja-build build-essential git python3 \
-            libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev libarchive-dev \
-            libenet-dev libzstd-dev libfaad-dev \
-            qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-svg-dev \
-            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev \
-            libxi-dev libxss-dev libwayland-dev libxkbcommon-dev libdrm-dev \
-            libgbm-dev libdecor-0-dev
 
       - name: Cache SDL3 build (pinned tag, independent of this repo's commits)
         uses: actions/cache@v4

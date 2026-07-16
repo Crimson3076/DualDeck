@@ -5,16 +5,9 @@
 # .github/workflows/release.yml to publish a rolling "latest" GitHub
 # Release on every push, and safe to run locally the same way.
 #
-# Requires (Ubuntu 24.04 package names -- see host/melonds-patches/README.md
-# for melonDS's own list, and docs/building.md for the SDL3-from-source
-# recipe; both are mirrored here since neither is packaged for every distro):
-#   cmake extra-cmake-modules ninja-build build-essential git python3 \
-#   libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev libarchive-dev \
-#   libenet-dev libzstd-dev libfaad-dev \
-#   qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-svg-dev \
-#   libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev \
-#   libxi-dev libxss-dev libwayland-dev libxkbcommon-dev libdrm-dev \
-#   libgbm-dev libdecor-0-dev
+# Build-time dependencies are detected and installed automatically (apt/
+# dnf/pacman) -- see ensure_packages() below. No manual `apt install`
+# needed before running this.
 set -euo pipefail
 
 MELONDS_COMMIT="10a173b5536fc75cd93f8a3868349dad963542ef"
@@ -24,6 +17,15 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="${BUILD_RELEASE_WORKDIR:-$(mktemp -d)}"
 out_dir="${BUILD_RELEASE_OUTPUT_DIR:-${repo_root}/release-out}"
 mkdir -p "${work_dir}" "${out_dir}"
+
+# shellcheck source=scripts/lib/ensure-packages.sh
+source "${repo_root}/scripts/lib/ensure-packages.sh"
+
+echo "== [0/4] Checking build dependencies =="
+ensure_packages "build" \
+    "cmake extra-cmake-modules ninja-build build-essential git python3 libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev libarchive-dev libenet-dev libzstd-dev libfaad-dev qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-svg-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libdecor-0-dev" \
+    "cmake extra-cmake-modules ninja-build gcc-c++ git python3 libcurl-devel libpcap-devel SDL2-devel libarchive-devel enet-devel libzstd-devel faad2-devel qt6-qtbase-devel qt6-qtmultimedia-devel qt6-qtsvg-devel libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel" \
+    "cmake extra-cmake-modules ninja base-devel git python curl libpcap sdl2 libarchive enet zstd faad2 qt6-base qt6-multimedia qt6-svg libx11 libxext libxrandr libxcursor libxfixes libxi libxss wayland libxkbcommon libdrm mesa libdecor"
 
 sdl3_src="${work_dir}/sdl3-src"
 sdl3_install="${work_dir}/sdl3-install"
@@ -64,7 +66,7 @@ branch_name="$(cd "${repo_root}" && git rev-parse --abbrev-ref HEAD)"
 pkg_name="melonds-remote-${commit_short}-linux-x86_64"
 pkg_dir="${work_dir}/${pkg_name}"
 rm -rf "${pkg_dir}"
-mkdir -p "${pkg_dir}/host" "${pkg_dir}/client/lib" "${pkg_dir}/docs"
+mkdir -p "${pkg_dir}/host" "${pkg_dir}/client/lib" "${pkg_dir}/docs" "${pkg_dir}/scripts/lib"
 
 cp "${melonds_src}/build/melonDS" "${pkg_dir}/host/melonDS"
 chmod +x "${pkg_dir}/host/melonDS"
@@ -75,23 +77,55 @@ cp "${repo_build}/client/melonds-remote-client" "${pkg_dir}/client/melonds-remot
 chmod +x "${pkg_dir}/client/melonds-remote-client"
 cp -a "${sdl3_install}"/lib/libSDL3.so* "${pkg_dir}/client/lib/"
 
+# Shared dependency-check-and-install helper, bundled so the standalone
+# run-host.sh/run-client.sh below can source it on the *end user's*
+# machine (which won't have the rest of this repo checked out).
+cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/scripts/lib/ensure-packages.sh"
+
 cat > "${pkg_dir}/client/run-client.sh" <<'WRAP'
 #!/usr/bin/env bash
-# Runs melonds-remote-client with the bundled SDL3 shared library.
+# Runs melonds-remote-client with the bundled SDL3 shared library,
+# auto-installing any missing runtime system libraries first (X11/
+# Wayland etc. -- SDL3 itself is bundled in lib/, no install needed for
+# that part).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+
+# shellcheck source=scripts/lib/ensure-packages.sh
+source ../scripts/lib/ensure-packages.sh
+
+ensure_packages "client runtime" \
+    "libx11-6 libxext6 libxrandr2 libxcursor1 libxfixes3 libxi6 libxss1 libwayland-client0 libwayland-cursor0 libwayland-egl1 libxkbcommon0 libdrm2 libgbm1 libdecor-0-0" \
+    "libX11 libXext libXrandr libXcursor libXfixes libXi libXScrnSaver wayland-client wayland-cursor wayland-egl libxkbcommon libdrm mesa-libgbm libdecor" \
+    "libx11 libxext libxrandr libxcursor libxfixes libxi libxss wayland libxkbcommon libdrm mesa libdecor" \
+    || echo "warning: could not verify/install client runtime libraries automatically; continuing anyway in case they're already present" >&2
+
 LD_LIBRARY_PATH="$(pwd)/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" exec ./melonds-remote-client "$@"
 WRAP
 chmod +x "${pkg_dir}/client/run-client.sh"
 
 cat > "${pkg_dir}/host/run-host.sh" <<'WRAP'
 #!/usr/bin/env bash
-# Runs the patched melonDS binary with the remote server enabled.
+# Runs the patched melonDS binary with the remote server enabled,
+# auto-installing any missing runtime system libraries first (Qt6, SDL2,
+# libarchive, libenet, libfaad, etc. -- see
+# host-shared-library-dependencies.txt for the exact list this binary
+# was linked against).
 # Usage: ./run-host.sh --boot always /path/to/your/game.nds
 # Omit MELONDS_REMOTE_AUTH_TOKEN to use the 6-digit pairing-code flow
 # instead of a static shared secret.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+
+# shellcheck source=scripts/lib/ensure-packages.sh
+source ../scripts/lib/ensure-packages.sh
+
+ensure_packages "host runtime" \
+    "libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev libarchive-dev libenet-dev libzstd-dev libfaad-dev qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-svg-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libdecor-0-dev" \
+    "libcurl-devel libpcap-devel SDL2-devel libarchive-devel enet-devel libzstd-devel faad2-devel qt6-qtbase-devel qt6-qtmultimedia-devel qt6-qtsvg-devel libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel" \
+    "curl libpcap sdl2 libarchive enet zstd faad2 qt6-base qt6-multimedia qt6-svg libx11 libxext libxrandr libxcursor libxfixes libxi libxss wayland libxkbcommon libdrm mesa libdecor" \
+    || echo "warning: could not verify/install host runtime libraries automatically; see host-shared-library-dependencies.txt and docs/troubleshooting.md" >&2
+
 export MELONDS_REMOTE_ENABLE=1
 exec ./melonDS "$@"
 WRAP
@@ -123,6 +157,14 @@ verified and portability notes.
 
 ## Running it
 
+Both \`run-host.sh\` and \`run-client.sh\` check for missing runtime
+system libraries and try to install them automatically (apt/dnf/pacman)
+before launching -- you shouldn't need to install anything by hand on a
+normal desktop Linux distro. On an immutable-filesystem distro (Bazzite,
+SteamOS in Game Mode), they'll tell you that instead of guessing, since
+auto-installing onto those needs a reboot or a Distrobox -- see
+\`docs/bazzite-host-setup.md\` / \`docs/steam-deck-setup.md\`.
+
 Host (on your Linux HTPC):
 \`\`\`sh
 cd host
@@ -131,8 +173,7 @@ cd host
 No \`MELONDS_REMOTE_AUTH_TOKEN\` needed -- the host will show a 6-digit
 pairing code on first connection (spec section 13). Set
 \`MELONDS_REMOTE_AUTH_TOKEN\` instead if you'd rather use a static shared
-secret. See \`docs/bazzite-host-setup.md\` for Bazzite/immutable-distro
-dependency installation.
+secret.
 
 Client (on your Steam Deck, or any Linux x86_64 machine with a gamepad):
 \`\`\`sh

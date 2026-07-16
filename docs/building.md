@@ -137,8 +137,21 @@ local change before pushing:
 # writes ./release-out/melonds-remote-<commit>-linux-x86_64.tar.gz
 ```
 
-Requires the apt packages listed at the top of the script (melonDS's own
-Qt6/SDL2/OpenGL dependencies, plus the X11/Wayland headers SDL3 needs).
+Build-time dependencies (melonDS's own Qt6/SDL2/OpenGL requirements, plus
+the X11/Wayland headers SDL3 needs) are detected and installed
+automatically -- `scripts/lib/ensure-packages.sh` checks what's already
+present and only installs what's missing, via whichever of apt/dnf/pacman
+it finds (asking for `sudo` if needed). No manual `apt install` step
+required. On an immutable-filesystem distro (Bazzite, SteamOS in Game
+Mode) it won't guess at an unattended install -- it'll tell you to use a
+Distrobox instead (see `docs/bazzite-host-setup.md`/`docs/steam-deck-setup.md`)
+or disable read-only mode yourself first.
+
+The **packaged `run-host.sh`/`run-client.sh`** inside the resulting
+archive do the same check for *runtime* libraries when the end user runs
+them, so downloading a release and running it shouldn't require any
+manual dependency installation either, on a normal desktop Linux distro.
+
 Takes 15-20 minutes since both melonDS and SDL3 are built from source
 every time -- set `BUILD_RELEASE_WORKDIR` to a persistent directory to
 skip rebuilding SDL3 on a second run (it's cached by cmake-install-prefix

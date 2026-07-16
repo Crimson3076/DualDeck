@@ -15,7 +15,9 @@ binaries attached -- grab it from the repo's
 [**Releases**](../../releases/latest) page rather than building from
 source, unless you specifically want to modify the code. See
 `RELEASE_NOTES.md` inside the archive for exactly which commit it was
-built from.
+built from. `run-host.sh`/`run-client.sh` inside the archive check for
+and auto-install any missing runtime libraries (apt/dnf/pacman) before
+launching, so there's normally nothing to install by hand first.
 
 ## Status
 
