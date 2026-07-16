@@ -841,19 +841,57 @@ clear one-line message and exit 0 rather than failing loudly.
 **Issue #10's scope grew substantially after the above shipped**: the
 issue was rewritten (Goal/Scope/Acceptance-criteria/Design-constraint
 sections added) after `install-host-distrobox.sh` was already merged,
-adding requirements not yet addressed -- notably an explicit rollback
-path when an update fails (the current script deletes the old central
-install *before* copying the new one in, so a failure mid-copy currently
-leaves nothing usable, not "the previous version stays usable"), a
-dedicated host uninstaller (none exists yet -- only the client's Steam
-shortcut has one), and a design constraint that Distrobox/containerization
+adding requirements not addressed by that first pass -- notably an
+explicit rollback path when an update fails, a dedicated host
+uninstaller, and a design constraint that Distrobox/containerization
 must not be *mandatory* for ordinary users even though it's fine as a
-"supported development path" -- in tension with the current
-`install-host-distrobox.sh`-is-the-only-path-on-immutable-systems
-design, which a fully self-contained/bundled-runtime-libraries binary
-(closer to how `client/lib/` already bundles SDL3 for the client) would
-resolve more directly. Flagged to the user rather than guessed at
-further given the scale and direction change involved.
+"supported development path." Flagged to the user rather than guessed
+at given the scale and possible direction change (a fully
+self-contained/bundled-runtime-libraries binary, closer to how
+`client/lib/` already bundles SDL3 for the client, would sidestep
+needing Distrobox on Bazzite at all) -- the user's call: keep the
+already-working, already-automated Distrobox path rather than pursue a
+bundled-binary rebuild, since it's a real, working, zero-typing solution
+today and a bundled binary carries its own real risk (bundling the
+wrong things -- Mesa/GPU-driver libraries specifically must *not* be
+bundled, since they need to match the host's actual driver stack -- with
+no real Bazzite hardware in this project's sandbox to verify that
+distinction against).
+
+Addressed the concrete remaining gaps instead:
+
+- **Rollback on failed updates**: `install-host-distrobox.sh` no longer
+  deletes the working central install before copying the new one in --
+  it now stages the new files and re-installs container packages in a
+  separate `install.new` location first, and only swaps it into place
+  (keeping the replaced version as a one-generation `install.previous`
+  backup) once *both* steps succeed. A failure partway through (copy
+  error, `dnf` failure, network drop) leaves the previous, still-working
+  install completely untouched. **Verified** with a fake `distrobox`
+  stub and fake `$HOME`: a successful install populates the central
+  directory correctly; a simulated `dnf` failure during a second
+  "update" leaves the original install's contents completely unchanged
+  (confirmed via a version marker file) with only a harmless leftover
+  staging directory (cleaned up automatically on the next attempt); a
+  subsequent successful update correctly swaps in the new version and
+  produces a `.previous` backup with the prior version's contents.
+- **Host uninstaller**: added `host/uninstall-host-distrobox.sh` --
+  removes the Distrobox container and the central install directory
+  (plus any `.new`/`.previous` leftovers), and is a no-op (not an error)
+  if nothing is installed. Never touches ROMs, saves, firmware, or other
+  melonDS data, since none of that lives in either of those locations --
+  it stays in the normal shared home directory throughout, regardless of
+  whether the container or central directory exist. **Verified** with
+  the same fake-stub technique: removes an existing container + both
+  central directories, and is idempotent on a second run and on a
+  never-installed system alike.
+- Still not addressed: launching the host itself from Steam Big
+  Picture/Gaming Mode (a new idea introduced by the rewritten issue, not
+  previously in scope for the host side -- the client already has this
+  via `install-steam-shortcut.sh`), and CI-tested install/upgrade
+  behavior (this project's CI has no rpm-ostree/Distrobox environment
+  to test against, same limitation as everything else Bazzite-specific
+  here).
 
 ## Latency instrumentation assumes synced clocks
 

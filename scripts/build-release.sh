@@ -300,7 +300,17 @@ cat > "${pkg_dir}/host/install-host-distrobox.sh" <<'WRAP'
 # is just "download the new release, run this again" -- no need to
 # recreate the container or redo any setup by hand. After the first run
 # you can also launch/update straight from that central directory
-# instead of keeping the original download around.
+# instead of keeping the original download around. See
+# uninstall-host-distrobox.sh to remove everything this creates.
+#
+# Update failures leave the previous install usable (GitHub issue #10):
+# the new files are staged in a separate directory first and only
+# swapped into place once staging AND the container package install both
+# succeed -- if either fails partway, the working install from before
+# this run is untouched, not deleted first and then possibly left
+# missing. The swapped-out previous install is kept as one backup
+# generation (*.previous) rather than deleted outright, in case you need
+# to manually go back to it.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -317,14 +327,17 @@ if ! command -v distrobox >/dev/null 2>&1; then
     exit 1
 fi
 
-# Keep in sync with docs/bazzite-host-setup.md's description of this path.
+# Keep in sync with the same paths in uninstall-host-distrobox.sh and
+# docs/bazzite-host-setup.md's description of this path.
 central_install_dir="${HOME}/.config/melonds-remote/install"
+staging_dir="${central_install_dir}.new"
+previous_dir="${central_install_dir}.previous"
 container_name="melonds-remote-host"
 
-echo "Syncing host files to ${central_install_dir} ..."
-rm -rf "${central_install_dir}"
-mkdir -p "${central_install_dir}"
-cp -a . "${central_install_dir}/"
+echo "Staging host files at ${staging_dir} ..."
+rm -rf "${staging_dir}"
+mkdir -p "${staging_dir}"
+cp -a . "${staging_dir}/"
 
 echo "Creating/reusing Distrobox container \"${container_name}\" (Fedora-based) ..."
 distrobox create --name "${container_name}" --image fedora:latest --yes
@@ -336,10 +349,62 @@ distrobox enter "${container_name}" -- sudo dnf install -y \
     libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel \
     wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel
 
+# Only reached if everything above succeeded (set -e) -- safe to swap in
+# the new install now. Keeps just one backup generation, not unbounded.
+echo "Activating the new install ..."
+rm -rf "${previous_dir}"
+if [[ -d "${central_install_dir}" ]]; then
+    mv "${central_install_dir}" "${previous_dir}"
+fi
+mv "${staging_dir}" "${central_install_dir}"
+
 echo "Launching the host inside the container ..."
 exec distrobox enter "${container_name}" -- env MELONDS_REMOTE_ENABLE=1 "${central_install_dir}/melonDS" "$@"
 WRAP
 chmod +x "${pkg_dir}/host/install-host-distrobox.sh"
+
+cat > "${pkg_dir}/host/uninstall-host-distrobox.sh" <<'WRAP'
+#!/usr/bin/env bash
+# Undoes install-host-distrobox.sh: removes the Distrobox container it
+# created and the central install directory it copied files into. Only
+# ever touches things this project itself created -- ROMs, saves,
+# firmware, and any other melonDS data all live in your normal shared
+# home directory (Distrobox mounts it into the container automatically),
+# never inside the container or the central install directory, so none
+# of that is affected either way (GitHub issue #10: "uninstall removes
+# only DualDeck-installed files... without deleting ROMs, saves,
+# firmware, or unrelated melonDS data").
+#
+# Safe to re-run -- does nothing (not an error) if already uninstalled,
+# or if install-host-distrobox.sh was never run at all.
+set -uo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+# Keep in sync with the same paths in install-host-distrobox.sh.
+central_install_dir="${HOME}/.config/melonds-remote/install"
+container_name="melonds-remote-host"
+
+removed_anything=0
+
+if command -v distrobox >/dev/null 2>&1 && distrobox list 2>/dev/null | grep -qw "${container_name}"; then
+    echo "Removing Distrobox container \"${container_name}\" ..."
+    distrobox rm "${container_name}" --force
+    removed_anything=1
+fi
+
+for dir in "${central_install_dir}" "${central_install_dir}.new" "${central_install_dir}.previous"; do
+    if [[ -d "${dir}" ]]; then
+        echo "Removing ${dir} ..."
+        rm -rf -- "${dir}"
+        removed_anything=1
+    fi
+done
+
+if [[ "${removed_anything}" -eq 0 ]]; then
+    echo "Nothing installed -- already uninstalled, or install-host-distrobox.sh was never run."
+fi
+WRAP
+chmod +x "${pkg_dir}/host/uninstall-host-distrobox.sh"
 
 cp "${repo_root}/docs/building.md" "${repo_root}/docs/steam-deck-setup.md" \
    "${repo_root}/docs/bazzite-host-setup.md" "${repo_root}/docs/troubleshooting.md" \
@@ -414,8 +479,10 @@ verified and portability notes.
 
 Every script here (\`run-host.sh\`, \`run-client.sh\`,
 \`install-steam-shortcut.sh\`, \`uninstall-steam-shortcut.sh\`,
-\`check-for-updates.sh\`) is directly double-click-runnable from a file
-manager -- no arguments or typing required for any of them. On
+\`check-for-updates.sh\`, and on immutable systems
+\`install-host-distrobox.sh\`/\`uninstall-host-distrobox.sh\`) is directly
+double-click-runnable from a file manager -- no arguments or typing
+required for any of them. On
 SteamOS Desktop Mode / Bazzite (both KDE Plasma/Dolphin), double-clicking
 an executable \`.sh\` file offers to run it directly, no terminal needed.
 (On a GNOME-based file manager instead, you may need to enable

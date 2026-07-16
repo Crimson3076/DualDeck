@@ -78,6 +78,24 @@ every release archive) automates the Distrobox path end to end:
    networking automatically, so the video output and LAN
    discovery/connections work the same as running natively.
 
+**A failed update can't break a working install**: step 2's copy and
+step 4's package install both happen in a separate staging location
+first (`~/.config/melonds-remote/install.new`) -- only once both
+succeed does the script swap it into place as the real
+`~/.config/melonds-remote/install/`, keeping the just-replaced version
+as a one-generation backup (`install.previous`) rather than deleting it.
+If the copy or the package install fails partway (no disk space,
+network drops mid-`dnf`, etc.), the previous, still-working install is
+left completely untouched, not deleted-then-maybe-not-replaced.
+
+**Uninstalling**: double-click `host/uninstall-host-distrobox.sh` --
+removes the Distrobox container and everything under
+`~/.config/melonds-remote/install*`. Never touches ROMs, saves,
+firmware, or any other melonDS data, since none of that lives in either
+of those places -- it all stays in your normal home directory the whole
+time (Distrobox shares it with the container automatically), regardless
+of the container or central install directory being removed.
+
 **Not verified on a real Bazzite install** (no rpm-ostree/Distrobox
 environment in this project's own sandbox -- see `docs/known-limitations.md`
 for the honest account of what is and isn't confirmed here, matching this
