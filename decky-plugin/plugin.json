@@ -1,0 +1,11 @@
+{
+  "name": "melonDS Remote",
+  "author": "melonDS Remote contributors",
+  "flags": ["debug"],
+  "api_version": 1,
+  "publish": {
+    "tags": ["emulation", "melonds"],
+    "description": "Start or stop melonDS's remote-streaming server on your HTPC from the Steam Deck's Quick Access Menu, without walking over to the host or restarting melonDS.",
+    "image": ""
+  }
+}

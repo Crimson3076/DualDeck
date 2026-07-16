@@ -285,6 +285,67 @@ installation) -- the cross-validation above is strong evidence the
 format is correct, but "Steam's Big Picture UI actually shows the
 shortcut and launches it" hasn't been observed directly.
 
+## Live-toggle: start/stop remote streaming without restarting melonDS, plus a Decky plugin
+
+Also filed as a GitHub issue ("Decky plugin to start/stop the host
+server"). Two readings of that request were possible: (a) toggle remote
+streaming inside an already-running melonDS, or (b) remote-launch/kill
+the whole melonDS process. (b) would need a new always-on daemon
+separate from melonDS itself (to receive "start" commands even when
+melonDS isn't running) with its own security/auth story -- given this
+project's sandbox can't test a Decky Loader runtime at all, (a) was the
+scope actually built, as the one that doesn't add a new persistent
+network service beyond what melonDS itself already runs.
+
+**Host side**: `remoteServer` (`EmuInstance`) used to be constructed
+once at process startup and never touched again. It's now start-/
+stoppable at any point in the process's life
+(`EmuInstance::startRemoteServer()`/`stopRemoteServer()`, both
+idempotent, both under a new `remoteServerMutex` that every reader of
+`remoteServer` -- `EmuThread.cpp`'s frame-push and
+`EmuInstanceInput.cpp`'s input-merge -- now holds for as long as they
+actually dereference it, not for the whole surrounding frame/function).
+A new `ManagementServer` class
+(`src/frontend/qt_sdl/remote_server/ManagementServer.{h,cpp}` in the
+patch) is a small, separate, always-on (once configured) TCP listener --
+independent of whether remote streaming itself is on -- that something
+else on the LAN can send `TOKEN ENABLE`/`DISABLE`/`STATUS` to. It only
+starts at all if `MelonDSRemote.ManagementToken` is set (empty by
+default -- opt-in, since it's a new network listener whenever melonDS is
+running); the token is compared with the same constant-time comparison
+`NetServer` already uses for its own auth token.
+
+**Verified end-to-end** against the real patched binary: with the
+remote server off and a management token configured, sent `STATUS` (got
+`DISABLED`), a wrong token (got `ERROR bad token`), `ENABLE` (got
+`OK ENABLED`, and the remote server actually started -- a real client
+connected and streamed normally), `DISABLE` while that client was
+actively connected (client's connection was refused immediately, and the
+existing screen-sizing-restore callback fired correctly:
+`melonds-remote: client disconnected -- restoring local
+ScreenSizing=0`, confirming the forced-shutdown path fires the same
+cleanup as a graceful disconnect), then a second `ENABLE`/idempotent
+re-`ENABLE`/`STATUS` cycle -- confirming the remote server can be
+stopped and restarted repeatedly within one melonDS process, not just
+once.
+
+**The Decky Loader plugin** (`decky-plugin/` at the repo root) is a thin
+client for that same management protocol. Its Python backend logic
+(`main.py`'s settings/status/enable/disable methods) and the wire
+protocol itself (`management_client.py`) were both exercised end-to-end
+against the real host above (using a minimal stand-in for the `decky`
+module, since this sandbox has no real Decky Loader runtime); the
+frontend (`src/index.tsx`) compiles cleanly against the real, current
+`@decky/ui`/`@decky/api`/`@decky/rollup` packages (`pnpm install && pnpm
+run build`), and `plugin.json`/`main.py`'s lifecycle hooks/`package.json`
+were all modeled directly on the official
+`SteamDeckHomebrew/decky-plugin-template`, fetched while writing this,
+not reconstructed from memory. **Not verified**: actually loading this
+plugin into a real Decky Loader instance, since none exists in this
+project's environment -- see `decky-plugin/README.md` for the precise
+boundary between what's tested and what's a best-effort match to the
+template.
+
 ## The SDL3 client: build- and run-verified, and now tested once on real Steam Deck hardware
 
 Earlier passes of this document said the client had never been compiled,

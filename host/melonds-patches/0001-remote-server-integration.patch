@@ -1,8 +1,8 @@
 diff --git a/src/frontend/qt_sdl/CMakeLists.txt b/src/frontend/qt_sdl/CMakeLists.txt
-index 31207f8..86c64ed 100644
+index 31207f8..3ed9866 100644
 --- a/src/frontend/qt_sdl/CMakeLists.txt
 +++ b/src/frontend/qt_sdl/CMakeLists.txt
-@@ -60,6 +60,17 @@ set(SOURCES_QT_SDL
+@@ -60,6 +60,18 @@ set(SOURCES_QT_SDL
  
      LANDialog.cpp
      NetplayDialog.cpp
@@ -17,10 +17,11 @@ index 31207f8..86c64ed 100644
 +    remote_server/MelonDSInputSink.cpp
 +    remote_server/RemoteServerBridge.cpp
 +    remote_server/GLBottomScreenCapture.cpp
++    remote_server/ManagementServer.cpp
  )
  
  option(USE_QT6 "Use Qt 6 instead of Qt 5" ON)
-@@ -185,6 +196,17 @@ target_include_directories(melonDS PUBLIC
+@@ -185,6 +197,17 @@ target_include_directories(melonDS PUBLIC
      "${CMAKE_CURRENT_SOURCE_DIR}"
      "${CMAKE_CURRENT_SOURCE_DIR}/..")
  
@@ -39,10 +40,10 @@ index 31207f8..86c64ed 100644
      target_include_directories(melonDS PUBLIC ${Qt6Gui_PRIVATE_INCLUDE_DIRS})
  else()
 diff --git a/src/frontend/qt_sdl/Config.cpp b/src/frontend/qt_sdl/Config.cpp
-index 0d48ee1..3a13d94 100644
+index 0d48ee1..95edebe 100644
 --- a/src/frontend/qt_sdl/Config.cpp
 +++ b/src/frontend/qt_sdl/Config.cpp
-@@ -72,6 +72,16 @@ DefaultList<int> DefaultInts =
+@@ -72,6 +72,17 @@ DefaultList<int> DefaultInts =
      {"Instance*.Gdb.ARM9.Port", 3333},
  #endif
      {"LAN.HostNumPlayers", 16},
@@ -56,10 +57,11 @@ index 0d48ee1..3a13d94 100644
 +    {"MelonDSRemote.InputPort", 8761},
 +    {"MelonDSRemote.VideoPort", 8762},
 +    {"MelonDSRemote.DiscoveryPort", 8763},
++    {"MelonDSRemote.ManagementPort", 8764},
  };
  
  RangeList IntRanges =
-@@ -112,13 +122,26 @@ DefaultList<bool> DefaultBools =
+@@ -112,13 +123,33 @@ DefaultList<bool> DefaultBools =
  #endif
      {"DSi.DSP.HLE", true},
      {"Instance*.RTC.SyncToHost", true},
@@ -84,11 +86,18 @@ index 0d48ee1..3a13d94 100644
 +    {"MelonDSRemote.AuthToken",  ""},
 +    {"MelonDSRemote.StateDir",   ""},
 +    {"MelonDSRemote.HostName",   ""},
++
++    // Shared secret for the management listener (ManagementServer.h) --
++    // empty (default) means that listener doesn't start at all, since
++    // it's a new always-on network listener whenever melonDS is running
++    // (independent of whether remote streaming itself is on), so it's
++    // opt-in only rather than defaulting to an unauthenticated one.
++    {"MelonDSRemote.ManagementToken", ""},
  };
  
  DefaultList<double> DefaultDoubles =
 diff --git a/src/frontend/qt_sdl/EmuInstance.cpp b/src/frontend/qt_sdl/EmuInstance.cpp
-index a8b1021..4cc746e 100755
+index a8b1021..95b1b67 100755
 --- a/src/frontend/qt_sdl/EmuInstance.cpp
 +++ b/src/frontend/qt_sdl/EmuInstance.cpp
 @@ -20,15 +20,24 @@
@@ -116,200 +125,258 @@ index a8b1021..4cc746e 100755
  
  #include <zstd.h>
  #ifdef ARCHIVE_SUPPORT_ENABLED
-@@ -50,6 +59,8 @@
+@@ -50,6 +59,9 @@
  
  #include "NDSCart/CartSD.h"
  
 +#include "remote_server/RemoteServerBridge.h"
++#include "remote_server/ManagementServer.h"
 +
  using std::make_unique;
  using std::pair;
  using std::string;
-@@ -131,6 +142,157 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
+@@ -131,6 +143,33 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
  
      net.RegisterInstance(instanceID);
  
 +    // melonds-remote integration: only one remote session is supported
-+    // (v0.1 scope), so only instance 0 starts it. Opted in either via
-+    // MELONDS_REMOTE_ENABLE (unchanged, still useful for scripting/CI)
-+    // or the persisted "Enable melonDS Remote" checkbox in Emu Settings
-+    // (Config key MelonDSRemote.Enable) -- the checkbox exists
-+    // specifically so this works when melonDS is launched directly
-+    // (a Steam/EmuDeck shortcut, no run-host.sh wrapper setting env
-+    // vars), which requiring only an env var made impossible before.
-+    // Every other setting below follows the same precedence: env var if
-+    // set, otherwise the matching Config key (which already carries the
-+    // right built-in default via Config.cpp's DefaultInts/DefaultBools/
-+    // DefaultStrings, so there's no separate fallback default here).
-+    bool remoteEnabled = getenv("MELONDS_REMOTE_ENABLE") != nullptr || globalCfg.GetBool("MelonDSRemote.Enable");
-+    if (inst == 0 && remoteEnabled)
++    // (v0.1 scope), so only instance 0 starts it/hosts the management
++    // listener. See startRemoteServer()'s comment for the enable
++    // precedence, and ManagementServer.h for what the management
++    // listener is for (letting something like a Decky Loader plugin
++    // toggle this live, e.g. GitHub issue "Decky plugin to start/stop
++    // the host server").
++    if (inst == 0)
 +    {
-+        auto envOr = [this](const char* name, const std::string& cfgKey) -> std::string
++        std::string managementToken = globalCfg.GetString("MelonDSRemote.ManagementToken");
++        if (!managementToken.empty())
 +        {
-+            const char* v = getenv(name);
-+            if (v) return std::string(v);
-+            return globalCfg.GetString(cfgKey);
-+        };
-+        auto envPortOr = [this](const char* name, const std::string& cfgKey) -> uint16_t
-+        {
-+            const char* v = getenv(name);
-+            if (v) return static_cast<uint16_t>(std::stoi(v));
-+            return static_cast<uint16_t>(globalCfg.GetInt(cfgKey));
-+        };
-+
-+        // Where approved device identities are remembered across restarts
-+        // (see host/device_approval_manager.h). Defaults under
-+        // $HOME/.config so a normal install just works with no extra
-+        // configuration; MELONDS_REMOTE_STATE_DIR/MelonDSRemote.StateDir
-+        // overrides it.
-+        std::string approvalStateFilePath;
-+        {
-+            std::string stateDir = envOr("MELONDS_REMOTE_STATE_DIR", "MelonDSRemote.StateDir");
-+            const char* home = getenv("HOME");
-+            if (!stateDir.empty())
-+                approvalStateFilePath = stateDir + "/approved_devices.txt";
-+            else if (home && *home)
-+                approvalStateFilePath = std::string(home) + "/.config/melonds-remote/approved_devices.txt";
++            managementServer = std::make_unique<melonds_remote_bridge::ManagementServer>(
++                globalCfg.GetString("MelonDSRemote.Bind"),
++                static_cast<uint16_t>(globalCfg.GetInt("MelonDSRemote.ManagementPort")), managementToken,
++                [this](bool enable) {
++                    if (enable) startRemoteServer(); else stopRemoteServer();
++                    return true;
++                },
++                [this]() { return remoteServerRunning(); });
++            managementServer->start();
 +        }
 +
-+        // Tracks which pending device ids a dialog has already been shown
-+        // for, so a client's automatic reconnect retries (every few
-+        // seconds while awaiting approval) don't keep reopening the
-+        // prompt. A denied device stays suppressed for the rest of this
-+        // process's lifetime (deliberately -- an operator who just
-+        // clicked Deny shouldn't be nagged again a second later by the
-+        // same client's next retry); restarting melonDS clears it. Held
-+        // by shared_ptr so the callback (which may outlive any single
-+        // invocation) keeps it alive.
-+        auto shownDeviceIds = std::make_shared<std::unordered_set<std::string>>();
-+
-+        remoteServer = std::make_unique<melonds_remote_bridge::RemoteServerBridge>(
-+            envOr("MELONDS_REMOTE_BIND", "MelonDSRemote.Bind"),
-+            envPortOr("MELONDS_REMOTE_CONTROL_PORT", "MelonDSRemote.ControlPort"),
-+            envPortOr("MELONDS_REMOTE_INPUT_PORT", "MelonDSRemote.InputPort"),
-+            envPortOr("MELONDS_REMOTE_VIDEO_PORT", "MelonDSRemote.VideoPort"),
-+            envOr("MELONDS_REMOTE_AUTH_TOKEN", "MelonDSRemote.AuthToken"),
-+            approvalStateFilePath,
-+            [this, shownDeviceIds](std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest> requests) {
-+                // Fired on NetServer's control thread (or its watchdog
-+                // thread, for stale evictions) -- marshal to the Qt UI
-+                // thread via qApp (always valid once Qt is up, unlike
-+                // mainWindow which isn't created until just below this
-+                // block) before touching any widget.
-+                QMetaObject::invokeMethod(qApp, [this, shownDeviceIds, requests]() {
-+                    if (!mainWindow) return;
-+
-+                    if (requests.empty()) {
-+                        mainWindow->statusBar()->clearMessage();
-+                    } else {
-+                        mainWindow->statusBar()->showMessage(
-+                            QString("melonDS Remote: %1 pending connection request(s)")
-+                                .arg(requests.size()));
-+                    }
-+
-+                    for (const auto& req : requests) {
-+                        if (shownDeviceIds->count(req.deviceId) > 0) continue;
-+                        shownDeviceIds->insert(req.deviceId);
-+
-+                        QMessageBox box(mainWindow);
-+                        box.setWindowTitle("melonDS Remote -- connection request");
-+                        box.setText(QString("Allow \"%1\" at %2 to connect?")
-+                                        .arg(QString::fromStdString(req.clientName))
-+                                        .arg(QString::fromStdString(req.address)));
-+                        QPushButton* approveButton = box.addButton("Approve", QMessageBox::YesRole);
-+                        box.addButton("Deny", QMessageBox::NoRole);
-+                        box.setDefaultButton(approveButton);
-+                        box.exec();
-+
-+                        if (box.clickedButton() == approveButton) {
-+                            remoteServer->approveDevice(req.deviceId);
-+                        } else {
-+                            remoteServer->denyDevice(req.deviceId);
-+                        }
-+                    }
-+                }, Qt::QueuedConnection);
-+            },
-+            getenv("MELONDS_REMOTE_NO_DISCOVERY") ? false : globalCfg.GetBool("MelonDSRemote.DiscoveryEnabled"),
-+            envPortOr("MELONDS_REMOTE_DISCOVERY_PORT", "MelonDSRemote.DiscoveryPort"),
-+            envOr("MELONDS_REMOTE_HOST_NAME", "MelonDSRemote.HostName"),
-+            [this, previousScreenSizing = std::make_shared<int>(-1)](bool connected) {
-+                // Fired on NetServer's control thread -- marshal to the Qt
-+                // UI thread the same way the other remote-server callbacks
-+                // above do, before touching mainWindow's config/layout.
-+                QMetaObject::invokeMethod(qApp, [this, previousScreenSizing, connected]() {
-+                    if (!mainWindow) return;
-+                    Config::Table& windowCfg = mainWindow->getWindowConfig();
-+
-+                    if (connected)
-+                    {
-+                        // Per SPEC.md's "Wii U GamePad" model: the bottom
-+                        // screen is going to the client, so showing it here
-+                        // too is redundant -- show only the top screen
-+                        // locally while someone is actively streaming.
-+                        // Remembers whatever was configured before (unless
-+                        // it was already TopOnly) so disconnecting restores
-+                        // it rather than always resetting to some fixed
-+                        // default.
-+                        int current = windowCfg.GetInt("ScreenSizing");
-+                        if (current != screenSizing_TopOnly)
-+                            *previousScreenSizing = current;
-+                        windowCfg.SetInt("ScreenSizing", screenSizing_TopOnly);
-+                        // stderr (not Platform::Log's stdout) to match
-+                        // NetServer's own per-connection-event logging
-+                        // convention -- stdout is fully buffered once
-+                        // redirected to a file/pipe, so a stdout message
-+                        // here could sit unflushed long after the event
-+                        // actually happened.
-+                        std::fprintf(stderr,
-+                                      "melonds-remote: client streaming -- showing top screen only "
-+                                      "locally (was ScreenSizing=%d)\n", current);
-+                    }
-+                    else if (*previousScreenSizing >= 0)
-+                    {
-+                        std::fprintf(stderr,
-+                                      "melonds-remote: client disconnected -- restoring local "
-+                                      "ScreenSizing=%d\n", *previousScreenSizing);
-+                        windowCfg.SetInt("ScreenSizing", *previousScreenSizing);
-+                        *previousScreenSizing = -1;
-+                    }
-+
-+                    emit mainWindow->screenLayoutChange();
-+                }, Qt::QueuedConnection);
-+            });
-+        remoteServer->start();
-+        Platform::Log(Platform::LogLevel::Info, "melonds-remote: remote server enabled\n");
++        bool remoteEnabled = getenv("MELONDS_REMOTE_ENABLE") != nullptr || globalCfg.GetBool("MelonDSRemote.Enable");
++        if (remoteEnabled) startRemoteServer();
 +    }
 +
      emuThread = new EmuThread(this);
  
      numWindows = 0;
-@@ -156,6 +318,12 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
+@@ -156,6 +195,17 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
  EmuInstance::~EmuInstance()
  {
      deleting = true;
 +
++    // Stop the management listener first -- it can call startRemoteServer()/
++    // stopRemoteServer() at any time from its own thread, so it needs to
++    // be shut down before anything it might touch becomes invalid.
++    managementServer.reset();
++
 +    // Stop and release the remote server (if enabled) before anything
 +    // else, so its network threads stop touching this instance's state
 +    // as early into teardown as possible.
-+    remoteServer.reset();
++    stopRemoteServer();
 +
      deleteAllWindows();
  
      emuThread->emuExit();
+@@ -175,6 +225,174 @@ EmuInstance::~EmuInstance()
+     }
+ }
+ 
++// Constructs/starts remoteServer if it isn't already running, using the
++// same env-var-or-Config precedence as always (env var wins if set, for
++// scripting/CI; otherwise the Config key, already carrying the right
++// built-in default via Config.cpp's DefaultInts/DefaultBools/
++// DefaultStrings). Idempotent -- a second call while already running is
++// a no-op. Callable at any point in the process's life, not just at
++// startup, which is what lets the management listener (see
++// ManagementServer.h) and the constructor share this one code path.
++void EmuInstance::startRemoteServer()
++{
++    std::lock_guard<std::mutex> lock(remoteServerMutex);
++    if (remoteServer) return;
++
++    auto envOr = [this](const char* name, const std::string& cfgKey) -> std::string
++    {
++        const char* v = getenv(name);
++        if (v) return std::string(v);
++        return globalCfg.GetString(cfgKey);
++    };
++    auto envPortOr = [this](const char* name, const std::string& cfgKey) -> uint16_t
++    {
++        const char* v = getenv(name);
++        if (v) return static_cast<uint16_t>(std::stoi(v));
++        return static_cast<uint16_t>(globalCfg.GetInt(cfgKey));
++    };
++
++    // Where approved device identities are remembered across restarts
++    // (see host/device_approval_manager.h). Defaults under $HOME/.config
++    // so a normal install just works with no extra configuration;
++    // MELONDS_REMOTE_STATE_DIR/MelonDSRemote.StateDir overrides it.
++    std::string approvalStateFilePath;
++    {
++        std::string stateDir = envOr("MELONDS_REMOTE_STATE_DIR", "MelonDSRemote.StateDir");
++        const char* home = getenv("HOME");
++        if (!stateDir.empty())
++            approvalStateFilePath = stateDir + "/approved_devices.txt";
++        else if (home && *home)
++            approvalStateFilePath = std::string(home) + "/.config/melonds-remote/approved_devices.txt";
++    }
++
++    // Tracks which pending device ids a dialog has already been shown
++    // for, so a client's automatic reconnect retries (every few seconds
++    // while awaiting approval) don't keep reopening the prompt. A denied
++    // device stays suppressed for the rest of this *remote-server*
++    // instance's lifetime (deliberately -- an operator who just clicked
++    // Deny shouldn't be nagged again a second later by the same client's
++    // next retry); stopping and starting the remote server again (or
++    // restarting melonDS) clears it. Held by shared_ptr so the callback
++    // (which may outlive any single invocation) keeps it alive.
++    auto shownDeviceIds = std::make_shared<std::unordered_set<std::string>>();
++
++    remoteServer = std::make_unique<melonds_remote_bridge::RemoteServerBridge>(
++        envOr("MELONDS_REMOTE_BIND", "MelonDSRemote.Bind"),
++        envPortOr("MELONDS_REMOTE_CONTROL_PORT", "MelonDSRemote.ControlPort"),
++        envPortOr("MELONDS_REMOTE_INPUT_PORT", "MelonDSRemote.InputPort"),
++        envPortOr("MELONDS_REMOTE_VIDEO_PORT", "MelonDSRemote.VideoPort"),
++        envOr("MELONDS_REMOTE_AUTH_TOKEN", "MelonDSRemote.AuthToken"),
++        approvalStateFilePath,
++        [this, shownDeviceIds](std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest> requests) {
++            // Fired on NetServer's control thread (or its watchdog
++            // thread, for stale evictions) -- marshal to the Qt UI
++            // thread via qApp (always valid once Qt is up, unlike
++            // mainWindow which isn't created until just below this
++            // block) before touching any widget.
++            QMetaObject::invokeMethod(qApp, [this, shownDeviceIds, requests]() {
++                if (!mainWindow) return;
++
++                if (requests.empty()) {
++                    mainWindow->statusBar()->clearMessage();
++                } else {
++                    mainWindow->statusBar()->showMessage(
++                        QString("melonDS Remote: %1 pending connection request(s)")
++                            .arg(requests.size()));
++                }
++
++                for (const auto& req : requests) {
++                    if (shownDeviceIds->count(req.deviceId) > 0) continue;
++                    shownDeviceIds->insert(req.deviceId);
++
++                    QMessageBox box(mainWindow);
++                    box.setWindowTitle("melonDS Remote -- connection request");
++                    box.setText(QString("Allow \"%1\" at %2 to connect?")
++                                    .arg(QString::fromStdString(req.clientName))
++                                    .arg(QString::fromStdString(req.address)));
++                    QPushButton* approveButton = box.addButton("Approve", QMessageBox::YesRole);
++                    box.addButton("Deny", QMessageBox::NoRole);
++                    box.setDefaultButton(approveButton);
++                    box.exec();
++
++                    // remoteServer may have been stopped (e.g. via the
++                    // management listener) while this dialog was open --
++                    // re-check under the lock rather than assuming it's
++                    // still there.
++                    std::lock_guard<std::mutex> innerLock(remoteServerMutex);
++                    if (!remoteServer) continue;
++                    if (box.clickedButton() == approveButton) {
++                        remoteServer->approveDevice(req.deviceId);
++                    } else {
++                        remoteServer->denyDevice(req.deviceId);
++                    }
++                }
++            }, Qt::QueuedConnection);
++        },
++        getenv("MELONDS_REMOTE_NO_DISCOVERY") ? false : globalCfg.GetBool("MelonDSRemote.DiscoveryEnabled"),
++        envPortOr("MELONDS_REMOTE_DISCOVERY_PORT", "MelonDSRemote.DiscoveryPort"),
++        envOr("MELONDS_REMOTE_HOST_NAME", "MelonDSRemote.HostName"),
++        [this, previousScreenSizing = std::make_shared<int>(-1)](bool connected) {
++            // Fired on NetServer's control thread -- marshal to the Qt
++            // UI thread the same way the other remote-server callbacks
++            // above do, before touching mainWindow's config/layout.
++            QMetaObject::invokeMethod(qApp, [this, previousScreenSizing, connected]() {
++                if (!mainWindow) return;
++                Config::Table& windowCfg = mainWindow->getWindowConfig();
++
++                if (connected)
++                {
++                    // Per SPEC.md's "Wii U GamePad" model: the bottom
++                    // screen is going to the client, so showing it here
++                    // too is redundant -- show only the top screen
++                    // locally while someone is actively streaming.
++                    // Remembers whatever was configured before (unless
++                    // it was already TopOnly) so disconnecting restores
++                    // it rather than always resetting to some fixed
++                    // default.
++                    int current = windowCfg.GetInt("ScreenSizing");
++                    if (current != screenSizing_TopOnly)
++                        *previousScreenSizing = current;
++                    windowCfg.SetInt("ScreenSizing", screenSizing_TopOnly);
++                    // stderr (not Platform::Log's stdout) to match
++                    // NetServer's own per-connection-event logging
++                    // convention -- stdout is fully buffered once
++                    // redirected to a file/pipe, so a stdout message
++                    // here could sit unflushed long after the event
++                    // actually happened.
++                    std::fprintf(stderr,
++                                  "melonds-remote: client streaming -- showing top screen only "
++                                  "locally (was ScreenSizing=%d)\n", current);
++                }
++                else if (*previousScreenSizing >= 0)
++                {
++                    std::fprintf(stderr,
++                                  "melonds-remote: client disconnected -- restoring local "
++                                  "ScreenSizing=%d\n", *previousScreenSizing);
++                    windowCfg.SetInt("ScreenSizing", *previousScreenSizing);
++                    *previousScreenSizing = -1;
++                }
++
++                emit mainWindow->screenLayoutChange();
++            }, Qt::QueuedConnection);
++        });
++    remoteServer->start();
++    Platform::Log(Platform::LogLevel::Info, "melonds-remote: remote server enabled\n");
++}
++
++void EmuInstance::stopRemoteServer()
++{
++    std::lock_guard<std::mutex> lock(remoteServerMutex);
++    if (!remoteServer) return;
++    remoteServer.reset();
++    Platform::Log(Platform::LogLevel::Info, "melonds-remote: remote server disabled\n");
++}
++
++bool EmuInstance::remoteServerRunning()
++{
++    std::lock_guard<std::mutex> lock(remoteServerMutex);
++    return remoteServer != nullptr;
++}
++
+ 
+ std::string EmuInstance::instanceFileSuffix()
+ {
 diff --git a/src/frontend/qt_sdl/EmuInstance.h b/src/frontend/qt_sdl/EmuInstance.h
-index a1eab0e..a4b1d15 100755
+index a1eab0e..eef7539 100755
 --- a/src/frontend/qt_sdl/EmuInstance.h
 +++ b/src/frontend/qt_sdl/EmuInstance.h
-@@ -21,6 +21,8 @@
+@@ -21,6 +21,9 @@
  
  #include <SDL2/SDL.h>
  
 +#include <memory>
++#include <mutex>
 +
  #include "Platform.h"
  #include "main.h"
  #include "NDS.h"
-@@ -29,6 +31,13 @@
+@@ -29,6 +32,13 @@
  #include "Config.h"
  #include "SaveManager.h"
  
@@ -318,21 +385,45 @@ index a1eab0e..a4b1d15 100755
 +// forward-declared here so EmuInstance.h doesn't need to pull in the
 +// networking headers; the full RemoteServerBridge type is only needed
 +// where EmuInstance.cpp/EmuInstanceInput.cpp construct or call into it.
-+namespace melonds_remote_bridge { class RemoteServerBridge; }
++namespace melonds_remote_bridge { class RemoteServerBridge; class ManagementServer; }
 +
  const int kMaxWindows = 4;
  
  enum
-@@ -378,6 +387,20 @@ private:
+@@ -378,6 +388,44 @@ private:
      bool isTouching;
      melonDS::u16 touchX, touchY;
  
 +    // melonds-remote integration: null unless enabled (instance 0 only,
-+    // see EmuInstance::EmuInstance()). inputProcess() (EmuInstanceInput.cpp)
++    // see startRemoteServer()). inputProcess() (EmuInstanceInput.cpp)
 +    // merges its latest remote state into inputMask/isTouching/touchX/touchY/
 +    // hotkeyMask each frame; EmuThread.cpp pushes the completed bottom
-+    // framebuffer into it after each RunFrame().
++    // framebuffer into it after each RunFrame(). Can be started/stopped
++    // live (not just at process startup) via the management server below,
++    // so every read/write of this pointer -- including the two call
++    // sites just described -- must hold remoteServerMutex first.
 +    std::unique_ptr<melonds_remote_bridge::RemoteServerBridge> remoteServer;
++    std::mutex remoteServerMutex;
++
++    // Constructs/starts (or destroys/stops) remoteServer under
++    // remoteServerMutex; safe to call from any thread, including the
++    // management server's own accept thread. startRemoteServer() is a
++    // no-op if already running (idempotent), reloading bind/ports/token/
++    // etc. from the same env-var-or-Config precedence used at process
++    // startup. See host/melonds-patches/README.md for why this exists
++    // (GitHub issue: "Decky plugin to start/stop the host server" --
++    // this is the toggle it calls, not a whole-process start/stop).
++    void startRemoteServer();
++    void stopRemoteServer();
++    bool remoteServerRunning();
++
++    // Unlike remoteServer, this is constructed unconditionally for
++    // instance 0 (whenever a management token is configured) and lives
++    // for the whole process, independent of whether remote streaming
++    // itself is currently on -- it's the thing a client (e.g. a Decky
++    // plugin on the Steam Deck) talks to in order to turn remote
++    // streaming on/off on a melonDS that's already running.
++    std::unique_ptr<melonds_remote_bridge::ManagementServer> managementServer;
 +
 +    // Tracks whether the *current* touch was caused by remote input, so
 +    // inputProcess() releases it when the remote client lifts its finger
@@ -345,7 +436,7 @@ index a1eab0e..a4b1d15 100755
      friend class MainWindow;
  };
 diff --git a/src/frontend/qt_sdl/EmuInstanceInput.cpp b/src/frontend/qt_sdl/EmuInstanceInput.cpp
-index a0bc623..a237b7a 100644
+index a0bc623..1d43501 100644
 --- a/src/frontend/qt_sdl/EmuInstanceInput.cpp
 +++ b/src/frontend/qt_sdl/EmuInstanceInput.cpp
 @@ -25,8 +25,37 @@
@@ -386,7 +477,7 @@ index a0bc623..a237b7a 100644
  const char* EmuInstance::buttonNames[12] =
  {
      "A",
-@@ -454,6 +483,59 @@ void EmuInstance::inputProcess()
+@@ -454,6 +483,72 @@ void EmuInstance::inputProcess()
      }
  
      hotkeyMask = keyHotkeyMask | joyHotkeyMask;
@@ -399,10 +490,23 @@ index a0bc623..a237b7a 100644
 +    // no-op and purely-local input behaves exactly as it did before this
 +    // patch (spec section 6.4's fail-safe release falls out of that for
 +    // free rather than needing special-casing here).
-+    if (remoteServer)
++    // remoteServer can be started/stopped live from another thread (see
++    // ManagementServer.h), so the null check and the call both need to
++    // hold remoteServerMutex -- but only for that one call, not the rest
++    // of the merge logic below, which only touches the local `remote`
++    // copy it returns.
++    melonds_remote::ControllerState remote{};
++    bool hasRemote = false;
 +    {
-+        melonds_remote::ControllerState remote = remoteServer->latestControllerState();
-+
++        std::lock_guard<std::mutex> lock(remoteServerMutex);
++        if (remoteServer)
++        {
++            remote = remoteServer->latestControllerState();
++            hasRemote = true;
++        }
++    }
++    if (hasRemote)
++    {
 +        for (int i = 0; i < 12; i++)
 +        {
 +            if (remote.dsButtons & (1 << kWireBitForLocalBit[i]))
@@ -505,7 +609,7 @@ index b078789..4254e75 100644
    <tabstop>txtBIOS9Path</tabstop>
    <tabstop>btnBIOS9Browse</tabstop>
 diff --git a/src/frontend/qt_sdl/EmuThread.cpp b/src/frontend/qt_sdl/EmuThread.cpp
-index c3fbdfe..5022fe5 100755
+index c3fbdfe..dd088af 100755
 --- a/src/frontend/qt_sdl/EmuThread.cpp
 +++ b/src/frontend/qt_sdl/EmuThread.cpp
 @@ -55,6 +55,9 @@
@@ -518,7 +622,7 @@ index c3fbdfe..5022fe5 100755
  using namespace melonDS;
  
  
-@@ -322,6 +325,76 @@ void EmuThread::run()
+@@ -322,6 +325,87 @@ void EmuThread::run()
  
              emuInstance->drawScreen();
  
@@ -538,55 +642,66 @@ index c3fbdfe..5022fe5 100755
 +            // (true => RAM framebuffer pointers; false => renderer-specific
 +            // value such as a GL texture handle, when the *3D renderer*
 +            // specifically is GL-based -- see analysis doc section 1.2).
-+            if (emuInstance->remoteServer)
++            // Scoped block, not just an if-statement: remoteServer can be
++            // started/stopped live from another thread (see
++            // ManagementServer.h), not just once at process startup, so
++            // every dereference of it needs to hold remoteServerMutex --
++            // but only for as long as it's actually being used, not for
++            // the rest of this loop iteration (frame limiting/audio sync
++            // below can sleep for a while, which would otherwise block
++            // an in-flight toggle for no reason).
 +            {
-+                void* topBuf = nullptr;
-+                void* botBuf = nullptr;
-+                if (emuInstance->nds->GPU.GetFramebuffers(&topBuf, &botBuf) && botBuf)
++                std::lock_guard<std::mutex> remoteServerLock(emuInstance->remoteServerMutex);
++                if (emuInstance->remoteServer)
 +                {
-+                    emuInstance->remoteServer->pushBottomFrame(
-+                        botBuf, melonds_remote::host::kFrameSizeBytes);
-+                }
-+                else
-+                {
-+                    // GetFramebuffers() returning false means the 3D
-+                    // renderer is OpenGL/OpenGLCompute rather than
-+                    // Software, and `topBuf` (when useOpenGL) points at
-+                    // the GLuint name of GLRenderer's FPOutputTex array
-+                    // texture (see GLBottomScreenCapture.h for the layer
-+                    // layout this relies on) -- read the bottom screen
-+                    // back from it directly rather than leaving the
-+                    // remote client with nothing.
-+                    static melonds_remote_bridge::GLBottomScreenCapture glCapture;
-+                    static std::vector<uint8_t> glFrame;
-+                    bool captured = false;
-+                    if (useOpenGL && topBuf)
++                    void* topBuf = nullptr;
++                    void* botBuf = nullptr;
++                    if (emuInstance->nds->GPU.GetFramebuffers(&topBuf, &botBuf) && botBuf)
 +                    {
-+                        GLuint texArray = *reinterpret_cast<GLuint*>(topBuf);
-+                        captured = glCapture.captureBottomScreen(texArray, glFrame);
-+                        if (captured)
-+                        {
-+                            emuInstance->remoteServer->pushBottomFrame(
-+                                glFrame.data(), melonds_remote::host::kFrameSizeBytes);
-+                        }
++                        emuInstance->remoteServer->pushBottomFrame(
++                            botBuf, melonds_remote::host::kFrameSizeBytes);
 +                    }
-+
-+                    if (!captured)
++                    else
 +                    {
-+                        // Either not actually the OpenGL path, or the GL
-+                        // readback itself failed for some other reason --
-+                        // printed once (not every frame) so it's visible
-+                        // without flooding the log.
-+                        static bool warnedNoRemoteFramebuffer = false;
-+                        if (!warnedNoRemoteFramebuffer)
++                        // GetFramebuffers() returning false means the 3D
++                        // renderer is OpenGL/OpenGLCompute rather than
++                        // Software, and `topBuf` (when useOpenGL) points at
++                        // the GLuint name of GLRenderer's FPOutputTex array
++                        // texture (see GLBottomScreenCapture.h for the layer
++                        // layout this relies on) -- read the bottom screen
++                        // back from it directly rather than leaving the
++                        // remote client with nothing.
++                        static melonds_remote_bridge::GLBottomScreenCapture glCapture;
++                        static std::vector<uint8_t> glFrame;
++                        bool captured = false;
++                        if (useOpenGL && topBuf)
 +                        {
-+                            warnedNoRemoteFramebuffer = true;
-+                            fprintf(stderr,
-+                                "melonds-remote: could not capture a bottom-screen frame for the "
-+                                "remote client (GPU::GetFramebuffers() returned no RAM pointer, and "
-+                                "the OpenGL readback fallback also didn't produce one) -- the "
-+                                "client will show a blank/test-pattern screen instead of real "
-+                                "video.\n");
++                            GLuint texArray = *reinterpret_cast<GLuint*>(topBuf);
++                            captured = glCapture.captureBottomScreen(texArray, glFrame);
++                            if (captured)
++                            {
++                                emuInstance->remoteServer->pushBottomFrame(
++                                    glFrame.data(), melonds_remote::host::kFrameSizeBytes);
++                            }
++                        }
++
++                        if (!captured)
++                        {
++                            // Either not actually the OpenGL path, or the GL
++                            // readback itself failed for some other reason --
++                            // printed once (not every frame) so it's visible
++                            // without flooding the log.
++                            static bool warnedNoRemoteFramebuffer = false;
++                            if (!warnedNoRemoteFramebuffer)
++                            {
++                                warnedNoRemoteFramebuffer = true;
++                                fprintf(stderr,
++                                    "melonds-remote: could not capture a bottom-screen frame for the "
++                                    "remote client (GPU::GetFramebuffers() returned no RAM pointer, and "
++                                    "the OpenGL readback fallback also didn't produce one) -- the "
++                                    "client will show a blank/test-pattern screen instead of real "
++                                    "video.\n");
++                            }
 +                        }
 +                    }
 +                }
@@ -787,6 +902,234 @@ index 0000000..963efac
 +    GLuint readFB_ = 0;
 +    GLuint downscaleFB_ = 0;
 +    GLuint downscaleTex_ = 0;
++};
++
++} // namespace melonds_remote_bridge
+diff --git a/src/frontend/qt_sdl/remote_server/ManagementServer.cpp b/src/frontend/qt_sdl/remote_server/ManagementServer.cpp
+new file mode 100644
+index 0000000..4ec55e2
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/ManagementServer.cpp
+@@ -0,0 +1,148 @@
++#include "ManagementServer.h"
++
++#include <arpa/inet.h>
++#include <netinet/in.h>
++#include <sys/socket.h>
++#include <unistd.h>
++
++#include <algorithm>
++#include <cstdio>
++#include <cstring>
++
++namespace melonds_remote_bridge {
++
++namespace {
++
++// Constant-time-ish comparison, matching the reasoning in net_server.cpp:
++// always walks the same number of bytes so a client can't use response
++// timing to learn how many leading bytes of the token it guessed right.
++bool constantTimeEquals(const std::string& a, const std::string& b) {
++    size_t maxLen = std::max(a.size(), b.size());
++    unsigned char diff = static_cast<unsigned char>(a.size() != b.size());
++    for (size_t i = 0; i < maxLen; ++i) {
++        unsigned char ca = i < a.size() ? static_cast<unsigned char>(a[i]) : 0;
++        unsigned char cb = i < b.size() ? static_cast<unsigned char>(b[i]) : 0;
++        diff = static_cast<unsigned char>(diff | (ca ^ cb));
++    }
++    return diff == 0;
++}
++
++} // namespace
++
++ManagementServer::ManagementServer(std::string bindAddress, uint16_t port, std::string token,
++                                    std::function<bool(bool)> onToggle, std::function<bool()> onStatus)
++    : bindAddress_(std::move(bindAddress)), port_(port), token_(std::move(token)),
++      onToggle_(std::move(onToggle)), onStatus_(std::move(onStatus)) {}
++
++ManagementServer::~ManagementServer() { stop(); }
++
++void ManagementServer::start() {
++    bool expected = false;
++    if (!running_.compare_exchange_strong(expected, true)) return;
++
++    listenFd_ = ::socket(AF_INET, SOCK_STREAM, 0);
++    if (listenFd_ < 0) {
++        std::perror("melonds-remote: management socket");
++        running_ = false;
++        return;
++    }
++
++    int reuse = 1;
++    ::setsockopt(listenFd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
++
++    sockaddr_in addr{};
++    addr.sin_family = AF_INET;
++    addr.sin_port = htons(port_);
++    if (::inet_pton(AF_INET, bindAddress_.c_str(), &addr.sin_addr) != 1) {
++        std::fprintf(stderr, "melonds-remote: invalid management bind address: %s\n", bindAddress_.c_str());
++        ::close(listenFd_);
++        listenFd_ = -1;
++        running_ = false;
++        return;
++    }
++
++    if (::bind(listenFd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
++        std::perror("melonds-remote: management bind");
++        ::close(listenFd_);
++        listenFd_ = -1;
++        running_ = false;
++        return;
++    }
++
++    if (::listen(listenFd_, 1) < 0) {
++        std::perror("melonds-remote: management listen");
++        ::close(listenFd_);
++        listenFd_ = -1;
++        running_ = false;
++        return;
++    }
++
++    std::fprintf(stderr, "melonds-remote: management listener on %s:%u\n", bindAddress_.c_str(), port_);
++    acceptThread_ = std::thread(&ManagementServer::acceptLoop, this);
++}
++
++void ManagementServer::stop() {
++    if (!running_.exchange(false)) return;
++    if (listenFd_ >= 0) ::shutdown(listenFd_, SHUT_RDWR);
++    if (acceptThread_.joinable()) acceptThread_.join();
++    if (listenFd_ >= 0) ::close(listenFd_);
++    listenFd_ = -1;
++}
++
++void ManagementServer::acceptLoop() {
++    while (running_.load()) {
++        sockaddr_in clientAddr{};
++        socklen_t clientLen = sizeof(clientAddr);
++        int clientFd = ::accept(listenFd_, reinterpret_cast<sockaddr*>(&clientAddr), &clientLen);
++        if (clientFd < 0) {
++            if (!running_.load()) break;
++            continue;
++        }
++        handleClient(clientFd);
++        ::close(clientFd);
++    }
++}
++
++void ManagementServer::handleClient(int clientFd) {
++    // One line in, one line out -- a management command is tiny and
++    // infrequent, so this reads byte-by-byte up to a generous cap rather
++    // than needing a real buffered reader.
++    std::string line;
++    char c = 0;
++    while (line.size() < 256) {
++        ssize_t n = ::recv(clientFd, &c, 1, 0);
++        if (n <= 0) return; // closed/error before a full line arrived
++        if (c == '\n') break;
++        line.push_back(c);
++    }
++
++    size_t space = line.find(' ');
++    if (space == std::string::npos) {
++        static const char kMsg[] = "ERROR malformed request\n";
++        ::send(clientFd, kMsg, sizeof(kMsg) - 1, 0);
++        return;
++    }
++    std::string givenToken = line.substr(0, space);
++    std::string command = line.substr(space + 1);
++    while (!command.empty() && (command.back() == '\r' || command.back() == '\n')) command.pop_back();
++
++    if (!constantTimeEquals(givenToken, token_)) {
++        static const char kMsg[] = "ERROR bad token\n";
++        ::send(clientFd, kMsg, sizeof(kMsg) - 1, 0);
++        return;
++    }
++
++    std::string response;
++    if (command == "ENABLE") {
++        response = onToggle_(true) ? "OK ENABLED\n" : "ERROR failed to enable\n";
++    } else if (command == "DISABLE") {
++        response = onToggle_(false) ? "OK DISABLED\n" : "ERROR failed to disable\n";
++    } else if (command == "STATUS") {
++        response = onStatus_() ? "OK ENABLED\n" : "OK DISABLED\n";
++    } else {
++        response = "ERROR unrecognized command\n";
++    }
++    ::send(clientFd, response.data(), response.size(), 0);
++}
++
++} // namespace melonds_remote_bridge
+diff --git a/src/frontend/qt_sdl/remote_server/ManagementServer.h b/src/frontend/qt_sdl/remote_server/ManagementServer.h
+new file mode 100644
+index 0000000..2aece35
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/ManagementServer.h
+@@ -0,0 +1,68 @@
++#pragma once
++
++// Small, always-on (once configured) TCP listener that lets something
++// else on the LAN -- e.g. a Decky Loader plugin running on a Steam Deck
++// -- turn melonDS's remote-streaming server on or off while melonDS is
++// already running, without needing to restart the process. Exists
++// independent of RemoteServerBridge's own lifecycle: it's constructed
++// whenever melonDS starts (instance 0 only) as long as a management
++// token is configured, and stays up regardless of whether remote
++// streaming itself is currently on.
++//
++// Deliberately a separate, much simpler channel than the main remote
++// protocol (NetServer/protocol.h): one command per connection, plain
++// newline-delimited ASCII, no persistent session, no device-approval
++// state machine -- this only flips a single on/off switch, so it doesn't
++// need any of that machinery. See host/melonds-patches/README.md for the
++// full rationale (GitHub issue: "Decky plugin to start/stop the host
++// server").
++//
++// Wire protocol: client connects, sends one line
++//   "<token> ENABLE\n" | "<token> DISABLE\n" | "<token> STATUS\n"
++// server sends one line back and closes the connection:
++//   "OK ENABLED\n" | "OK DISABLED\n" | "ERROR <reason>\n"
++
++#include <atomic>
++#include <cstdint>
++#include <functional>
++#include <string>
++#include <thread>
++
++namespace melonds_remote_bridge {
++
++class ManagementServer {
++public:
++    // onToggle(true) should start remote streaming (idempotent if
++    // already running) and onToggle(false) should stop it (idempotent if
++    // already stopped); both return true on success. onStatus() reports
++    // whether it's currently running. All three are called from this
++    // class's own accept thread, never concurrently with each other (one
++    // client handled at a time), but concurrently with whatever else the
++    // caller's process is doing -- callers are responsible for their own
++    // thread safety (see EmuInstance::remoteServerMutex).
++    ManagementServer(std::string bindAddress, uint16_t port, std::string token,
++                      std::function<bool(bool enable)> onToggle, std::function<bool()> onStatus);
++    ~ManagementServer();
++
++    ManagementServer(const ManagementServer&) = delete;
++    ManagementServer& operator=(const ManagementServer&) = delete;
++
++    void start();
++    void stop();
++
++private:
++    void acceptLoop();
++    void handleClient(int clientFd);
++
++    std::string bindAddress_;
++    uint16_t port_;
++    std::string token_;
++    std::function<bool(bool)> onToggle_;
++    std::function<bool()> onStatus_;
++
++    std::atomic<bool> running_{false};
++    int listenFd_ = -1;
++    std::thread acceptThread_;
 +};
 +
 +} // namespace melonds_remote_bridge

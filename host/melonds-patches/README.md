@@ -316,6 +316,37 @@ Qt6, SDL2, GCC 13) — not just written and assumed correct:
     real socket connection to port 8760 succeeding -- confirming the
     Config-only path genuinely starts the server with no env vars or
     wrapper script involved.
+17. **Live start/stop toggle + management listener** (GitHub issue
+    "Decky plugin to start/stop the host server"): `remoteServer` used
+    to be constructed once at process startup and never touched again;
+    it's now start-/stoppable at any point during the process's life via
+    `EmuInstance::startRemoteServer()`/`stopRemoteServer()` (idempotent),
+    both guarded by a new `remoteServerMutex` that `EmuThread.cpp`'s
+    frame-push and `EmuInstanceInput.cpp`'s input-merge now hold for as
+    long as they actually touch `remoteServer`, not the whole
+    surrounding frame/function (so an in-flight toggle never has to wait
+    for e.g. frame-rate-limiting sleeps elsewhere in the loop). A new
+    `ManagementServer` class
+    (`remote_server/ManagementServer.{h,cpp}`) is a small, separate,
+    always-on (once `MelonDSRemote.ManagementToken` is set -- empty by
+    default, opt-in only) TCP listener, independent of whether remote
+    streaming itself is on, accepting `TOKEN ENABLE`/`DISABLE`/`STATUS`
+    from anything on the LAN (e.g. the `decky-plugin/` at the repo root).
+    **Verified end-to-end** against this exact patched binary: `STATUS`
+    while off (`OK DISABLED`), a wrong token (`ERROR bad token`),
+    `ENABLE` (`OK ENABLED`, and a real client actually connected and
+    streamed), `DISABLE` while that client was connected (its connection
+    was refused immediately, and the existing
+    `onClientConnectionChanged` screen-sizing-restore callback fired
+    correctly -- confirming a forced shutdown via this channel hits the
+    same cleanup path as a graceful disconnect), then a second
+    `ENABLE`/idempotent-re-`ENABLE`/`STATUS` cycle, confirming the
+    remote server can be stopped and restarted repeatedly within one
+    process. See `docs/known-limitations.md`'s "Live-toggle" section and
+    `decky-plugin/README.md` for the Decky plugin side, including the
+    boundary between what's verified there and what's an unverified
+    best-effort match to the official plugin template (no real Decky
+    Loader runtime exists in this project's environment).
 
 **A stdout-buffering gotcha surfaced while verifying item 12**: an early
 attempt to observe the `onClientConnectionChanged` log lines above via
@@ -368,8 +399,8 @@ scripting/CI use -- see `EmuInstance.cpp`):
    be reset" prompt. This is the fix for the "only works via a wrapper
    script setting env vars" gap (there previously was no Config/UI
    toggle at all -- see the melonds-integration-analysis.md history
-   below) -- it takes effect on melonDS's *next launch*, not live,
-   since the remote server is constructed once at `EmuInstance` startup.
+   below) -- it takes effect on melonDS's *next launch* specifically
+   (see option 3 below for turning it on/off live, without a restart).
    Bind address/ports/auth-token/state-dir/discovery all have matching
    `MelonDSRemote.*` Config keys (see `Config.cpp`) if you need to
    change them from their defaults without env vars either -- there's no
@@ -407,6 +438,24 @@ approved devices are remembered (default
 Only instance 0 (melonDS supports multiple emulator instances for local
 multiplayer testing) starts the remote server, matching this project's
 one-client-at-a-time v0.1 scope.
+
+3. **Management listener** (turn it on/off live, without restarting
+   melonDS -- e.g. from `decky-plugin/`'s Quick Access Menu panel): set
+   `MelonDSRemote.ManagementToken` in `melonDS.toml`'s `[MelonDSRemote]`
+   section to any shared secret and restart melonDS once. From then on,
+   whenever melonDS is running (regardless of whether remote streaming
+   itself is currently on), it listens on `MelonDSRemote.ManagementPort`
+   (`8764` by default) for one-line commands:
+   ```
+   echo "your-token ENABLE" | nc 127.0.0.1 8764   # -> OK ENABLED
+   echo "your-token DISABLE" | nc 127.0.0.1 8764  # -> OK DISABLED
+   echo "your-token STATUS" | nc 127.0.0.1 8764   # -> OK ENABLED / OK DISABLED
+   ```
+   This is a separate, much simpler channel than the main remote
+   protocol -- see `ManagementServer.h`'s header comment. Empty token
+   (the default) means this listener doesn't start at all, since it's a
+   new always-on network listener whenever melonDS is running -- opt-in
+   only.
 
 ## Known limitations of this patch specifically
 
