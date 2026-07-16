@@ -27,7 +27,9 @@ follows the patch boundary proposed in
    pairing-code-changed callback that marshals onto the Qt UI thread
    (`QMetaObject::invokeMethod(qApp, ..., Qt::QueuedConnection)`, since
    the callback fires on `NetServer`'s own thread) to show the code in
-   `mainWindow`'s status bar.
+   `mainWindow`'s status bar. LAN discovery (enabled/port/host name) is
+   also configured here, from `MELONDS_REMOTE_NO_DISCOVERY`/
+   `MELONDS_REMOTE_DISCOVERY_PORT`/`MELONDS_REMOTE_HOST_NAME` env vars.
 5. `src/frontend/qt_sdl/Window.cpp` — `pickROM()`'s "Open ROM" dialog
    defaults to EmuDeck's standard NDS ROM directory
    (`~/Emulation/roms/nds`) the first time it's opened, if that directory
@@ -156,6 +158,30 @@ Qt6, SDL2, GCC 13) — not just written and assumed correct:
    reconnected silently using that saved token. The melonDS-integrated
    host's status-bar display of the code was separately confirmed with a
    screenshot showing "melonDS Remote pairing code: ..." in the window.
+9. **Pairing code shown at launch, not just on a rejected handshake**:
+   fixed a bug where the code only ever appeared as a side effect of some
+   client's `Hello` being rejected, so launching the host and looking at
+   it with zero connection attempts made showed nothing. Confirmed fixed
+   against this exact patched binary via an Xvfb screenshot taken
+   immediately after launch, with no client ever having connected,
+   showing "melonDS Remote pairing code: ..." already present in the
+   status bar.
+10. **LAN discovery** (spec section 8.1): `RemoteServerBridge`/
+    `EmuInstance.cpp` wire `discoveryEnabled`/`discoveryPort`/`hostName`
+    through to `NetServer` (env var overrides:
+    `MELONDS_REMOTE_NO_DISCOVERY`, `MELONDS_REMOTE_DISCOVERY_PORT`,
+    `MELONDS_REMOTE_HOST_NAME`), sharing the same `NetServer`/
+    `PairingManager` code as the standalone prototype (vendored
+    byte-for-byte, per above) -- so the discovery responder logic itself
+    is the exact code end-to-end verified against a real host binary +
+    real `melonds-remote-client` (broadcast scan, single-host
+    auto-connect, and the gamepad-navigable multi-host list all
+    confirmed live; see `docs/protocol.md`'s "Discovery payload"
+    section). What's confirmed specifically for *this* patched binary is
+    a clean build with the new fields threaded through; the discovery
+    broadcast itself was exercised against the standalone
+    `host/remote-server` prototype rather than re-run against this exact
+    melonDS-integrated binary.
 
 Two real things were caught and fixed during this verification, not
 assumed correct from review:

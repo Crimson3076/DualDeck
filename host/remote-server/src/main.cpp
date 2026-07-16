@@ -48,11 +48,18 @@ int main(int argc, char** argv) {
             config.pairingCodeTtl = std::chrono::seconds(std::stoll(nextArg()));
         } else if (arg == "--stats-interval-ms") {
             config.statsLoggingIntervalUs = static_cast<uint64_t>(std::stoll(nextArg())) * 1000;
+        } else if (arg == "--discovery-port") {
+            config.discoveryPort = static_cast<uint16_t>(std::stoi(nextArg()));
+        } else if (arg == "--host-name") {
+            config.hostName = nextArg();
+        } else if (arg == "--no-discovery") {
+            config.discoveryEnabled = false;
         } else if (arg == "--help") {
             std::printf(
                 "Usage: melonds-remote-server [--bind ADDR] [--control-port N] "
                 "[--input-port N] [--video-port N] [--timeout-ms N] [--auth-token TOKEN] "
-                "[--state-dir PATH] [--pairing-code-ttl-s N] [--stats-interval-ms N]\n"
+                "[--state-dir PATH] [--pairing-code-ttl-s N] [--stats-interval-ms N] "
+                "[--discovery-port N] [--host-name NAME] [--no-discovery]\n"
                 "\n"
                 "Phase 1 prototype: serves a synthetic 256x192 test-pattern bottom\n"
                 "screen and logs received controller/touch state. Not yet wired to\n"
@@ -78,7 +85,14 @@ int main(int argc, char** argv) {
                 "\n"
                 "--stats-interval-ms controls how often aggregated diagnostics\n"
                 "(input packet rate, out-of-order/malformed counts, video frame\n"
-                "rate, dropped frames, latency) are logged (default 5000).\n");
+                "rate, dropped frames, latency) are logged (default 5000).\n"
+                "\n"
+                "LAN discovery is on by default (spec section 8.1): the client can\n"
+                "broadcast to find this host instead of needing --host on its side.\n"
+                "This only ever reveals a host name and port numbers, no auth\n"
+                "bypass -- --discovery-port sets the UDP port (default 8763),\n"
+                "--host-name sets the friendly name shown to clients (default: this\n"
+                "machine's hostname), --no-discovery turns it off entirely.\n");
             return 0;
         } else {
             std::fprintf(stderr, "unrecognized argument: %s\n", arg.c_str());

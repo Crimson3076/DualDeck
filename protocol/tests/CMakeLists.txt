@@ -6,6 +6,7 @@ add_executable(melonds_remote_protocol_tests
     test_input_state_tracker.cpp
     test_handshake.cpp
     test_rate_limiter.cpp
+    test_discovery.cpp
 )
 
 target_link_libraries(melonds_remote_protocol_tests PRIVATE melonds_remote_protocol)

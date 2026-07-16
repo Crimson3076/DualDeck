@@ -116,6 +116,14 @@ PairingManager::CheckResult PairingManager::check(const std::string& presented) 
     return CheckResult::NeedsCode;
 }
 
+void PairingManager::ensureCodeActive() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    expireIfNeededLocked();
+    if (!currentCode_) {
+        setCodeLocked(generateCode());
+    }
+}
+
 std::string PairingManager::lastIssuedToken() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return lastIssuedToken_;

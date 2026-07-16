@@ -182,10 +182,39 @@ void NetServer::start() {
                   config_.bindAddress.c_str(), config_.controlPort, config_.inputPort,
                   config_.videoPort);
 
+    // Show a pairing code immediately, rather than only the first time
+    // some client's Hello gets rejected -- otherwise launching the host
+    // and looking at it before any client has tried connecting shows
+    // nothing (see docs/known-limitations.md).
+    if (config_.authToken.empty()) {
+        pairingManager_.ensureCodeActive();
+    }
+
     controlThread_ = std::thread(&NetServer::controlLoop, this);
     inputThread_ = std::thread(&NetServer::inputLoop, this);
     videoThread_ = std::thread(&NetServer::videoLoop, this);
     watchdogThread_ = std::thread(&NetServer::watchdogLoop, this);
+
+    if (config_.discoveryEnabled) {
+        // Bound to "0.0.0.0", not config_.bindAddress -- see the comment
+        // on NetServerConfig::discoveryEnabled for why. A bind failure
+        // here (e.g. port already in use) is not fatal to the rest of
+        // the server -- discovery is a convenience, not load-bearing;
+        // clients can still be given a host address directly.
+        discoveryFd_ = makeUdpSocket("0.0.0.0", config_.discoveryPort);
+        if (discoveryFd_ < 0) {
+            std::fprintf(stderr,
+                          "NetServer: discovery disabled (failed to bind UDP port %u) -- "
+                          "clients must be given the host address directly\n",
+                          config_.discoveryPort);
+        } else {
+            int broadcast = 1;
+            ::setsockopt(discoveryFd_, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast));
+            std::fprintf(stderr, "NetServer: LAN discovery listening on 0.0.0.0:%u\n",
+                          config_.discoveryPort);
+            discoveryThread_ = std::thread(&NetServer::discoveryLoop, this);
+        }
+    }
 }
 
 void NetServer::stop() {
@@ -197,6 +226,7 @@ void NetServer::stop() {
     if (controlListenFd_ >= 0) ::shutdown(controlListenFd_, SHUT_RDWR);
     if (videoListenFd_ >= 0) ::shutdown(videoListenFd_, SHUT_RDWR);
     if (inputFd_ >= 0) ::shutdown(inputFd_, SHUT_RDWR);
+    if (discoveryFd_ >= 0) ::shutdown(discoveryFd_, SHUT_RDWR);
 
     int controlClient = controlClientFd_.exchange(-1);
     if (controlClient >= 0) ::shutdown(controlClient, SHUT_RDWR);
@@ -207,11 +237,13 @@ void NetServer::stop() {
     if (inputThread_.joinable()) inputThread_.join();
     if (videoThread_.joinable()) videoThread_.join();
     if (watchdogThread_.joinable()) watchdogThread_.join();
+    if (discoveryThread_.joinable()) discoveryThread_.join();
 
     if (controlListenFd_ >= 0) ::close(controlListenFd_);
     if (videoListenFd_ >= 0) ::close(videoListenFd_);
     if (inputFd_ >= 0) ::close(inputFd_);
-    controlListenFd_ = videoListenFd_ = inputFd_ = -1;
+    if (discoveryFd_ >= 0) ::close(discoveryFd_);
+    controlListenFd_ = videoListenFd_ = inputFd_ = discoveryFd_ = -1;
 }
 
 namespace {
@@ -458,9 +490,23 @@ void NetServer::inputLoop() {
 void NetServer::watchdogLoop() {
     uint64_t lastPruneUs = nowMicros();
     uint64_t lastStatsLogUs = nowMicros();
+    uint64_t lastPairingCheckUs = nowMicros();
+    constexpr uint64_t kPairingCheckIntervalUs = 5'000'000; // 5s
 
     while (running_.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+        // Keeps a pairing code visible even if it expires (default 5min
+        // TTL) with nobody having attempted to pair yet -- without this,
+        // an expired-and-never-replaced code would just sit there
+        // looking valid until the next connection attempt.
+        if (config_.authToken.empty()) {
+            uint64_t now = nowMicros();
+            if (now - lastPairingCheckUs >= kPairingCheckIntervalUs) {
+                pairingManager_.ensureCodeActive();
+                lastPairingCheckUs = now;
+            }
+        }
 
         bool timedOut;
         {
@@ -598,6 +644,50 @@ void NetServer::videoLoop() {
 
         ::close(clientFd);
         videoClientFd_ = -1;
+    }
+}
+
+void NetServer::discoveryLoop() {
+    std::string hostName = config_.hostName;
+    if (hostName.empty()) {
+        char hostnameBuf[256] = {0};
+        if (::gethostname(hostnameBuf, sizeof(hostnameBuf) - 1) == 0) {
+            hostName = hostnameBuf;
+        } else {
+            hostName = "melonds-remote-host";
+        }
+    }
+    if (hostName.size() > kMaxProtocolStringLength) {
+        hostName.resize(kMaxProtocolStringLength);
+    }
+
+    ByteBuffer buf(kPacketHeaderWireSize);
+
+    while (running_.load()) {
+        sockaddr_in fromAddr{};
+        socklen_t fromLen = sizeof(fromAddr);
+        ssize_t n = ::recvfrom(discoveryFd_, buf.data(), buf.size(), 0,
+                                reinterpret_cast<sockaddr*>(&fromAddr), &fromLen);
+        if (n <= 0) {
+            if (!running_.load()) break;
+            continue;
+        }
+
+        auto header = parseHeader(buf.data(), static_cast<size_t>(n));
+        if (!header || header->protocolVersion != kProtocolVersion ||
+            header->type != PacketType::DiscoveryRequest) {
+            continue; // not a well-formed DiscoveryRequest -- ignore silently
+        }
+
+        DiscoveryResponsePayload response;
+        response.hostName = hostName;
+        response.controlPort = config_.controlPort;
+        response.inputPort = config_.inputPort;
+        response.videoPort = config_.videoPort;
+        ByteBuffer packet = buildDiscoveryResponsePacket(response);
+        // Unicast back to the specific sender -- never a broadcast reply.
+        ::sendto(discoveryFd_, packet.data(), packet.size(), 0,
+                 reinterpret_cast<sockaddr*>(&fromAddr), fromLen);
     }
 }
 

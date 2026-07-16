@@ -35,6 +35,8 @@ enum class PacketType : uint16_t {
     Disconnect = 5,    // either direction, control channel, graceful teardown
     EmulatorAction = 6, // client -> host, control channel, one-shot emulator command
     VideoFrame = 7,    // host -> client, video channel, one bottom-screen frame
+    DiscoveryRequest = 8,  // client -> host, UDP discovery port, broadcast "who's out there"
+    DiscoveryResponse = 9, // host -> client, UDP discovery port, unicast reply to the sender
 };
 
 // DS button bitmask (wire format; independent from melonDS's internal
@@ -126,6 +128,24 @@ struct HelloAckPayload {
     std::string pairingToken;
 };
 
+// DiscoveryRequest (client -> host) has no payload: a bare packet header
+// broadcast to the LAN discovery port is the whole request. Any host
+// listening replies with a unicast DiscoveryResponse to the sender's
+// address. This is deliberately unauthenticated (it only ever reveals a
+// host name and port numbers, never anything sensitive) -- the actual
+// pairing/auth flow still gates the control/input/video ports themselves,
+// see docs/protocol.md's "Authentication and pairing" section. Discovery
+// existing at all doesn't weaken that; it's equivalent in spirit to
+// mDNS/SSDP advertising a service's presence without granting access to it.
+
+// DiscoveryResponse (host -> client) handshake-free "here I am" reply.
+struct DiscoveryResponsePayload {
+    std::string hostName;      // up to kMaxProtocolStringLength bytes, e.g. hostname
+    uint16_t controlPort = 8760;
+    uint16_t inputPort = 8761;
+    uint16_t videoPort = 8762;
+};
+
 // Full controller state, sent at a fixed rate (recommended 120 Hz) rather
 // than only on button transitions, so a lost packet cannot leave a button
 // stuck (spec section 6.3).
@@ -215,5 +235,12 @@ ByteBuffer buildHelloPacket(const HelloPayload& hello);
 void serializeHelloAckPayload(ByteBuffer& out, const HelloAckPayload& ack);
 std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t size);
 ByteBuffer buildHelloAckPacket(const HelloAckPayload& ack);
+
+// Builds a complete DiscoveryRequest packet (header only, empty payload).
+ByteBuffer buildDiscoveryRequestPacket();
+
+void serializeDiscoveryResponsePayload(ByteBuffer& out, const DiscoveryResponsePayload& response);
+std::optional<DiscoveryResponsePayload> parseDiscoveryResponsePayload(const uint8_t* data, size_t size);
+ByteBuffer buildDiscoveryResponsePacket(const DiscoveryResponsePayload& response);
 
 } // namespace melonds_remote

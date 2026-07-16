@@ -197,13 +197,26 @@ the transport). There is also no UI to list or revoke individual paired
 devices -- only deleting the whole paired-device state file (forgetting
 every previously-paired client at once).
 
-## No discovery, no multi-client, no IPv6
+## LAN discovery implemented; still no multi-client, no IPv6
 
-- No mDNS/host discovery -- the client must be given a host address
-  directly (`SPEC.md` section 8.1 lists these as "future versions").
+- **LAN discovery** (`SPEC.md` section 8.1's "future versions" item, now
+  implemented, end-to-end verified with a real host binary + real SDL3
+  client -- see `docs/protocol.md`'s "Discovery payload" section): the
+  host broadcasts availability over a separate UDP port (`8763` by
+  default) and the client scans for it on launch instead of requiring
+  `--host`. If exactly one host answers, or a previously-picked host
+  answers again, the client connects without prompting; if more than one
+  answers (e.g. more than one HTPC on the household LAN), a
+  gamepad/keyboard-navigable list is shown (bitmap-font rendered, so it
+  works in Steam Deck Gaming Mode where there's no visible terminal --
+  see `client/src/bitmap_font.h`). Not implemented: mDNS/SSDP/any
+  standard discovery protocol -- this is a small custom broadcast
+  request/response instead, with no external dependency. `--host`/a
+  positional host address still works exactly as before and skips
+  discovery entirely (scripting/CI use, `tests/smoke_test.py`).
 - Only one client at a time, by design (`SPEC.md` section 7.1's initial
   scope, and an explicit non-goal in section 21).
-- IPv4 only.
+- IPv4 only (including discovery).
 
 ## Latency instrumentation assumes synced clocks
 

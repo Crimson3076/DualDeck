@@ -30,6 +30,9 @@
 #include <thread>
 #include <vector>
 
+#include "bitmap_font.h"
+#include "discovery_client.h"
+#include "discovery_store.h"
 #include "melonds_remote/protocol.h"
 #include "melonds_remote/touch_mapping.h"
 #include "net_client.h"
@@ -44,6 +47,14 @@ constexpr int kWindowWidth = 1280;
 constexpr int kWindowHeight = 800;
 constexpr int kDSWidth = 256;
 constexpr int kDSHeight = 192;
+
+// Matches host::NetServerConfig::discoveryPort's default (net_server.h).
+constexpr uint16_t kDefaultDiscoveryPort = 8763;
+// Each discoverHosts() call blocks for this long; while no host has
+// answered yet, the discovery screen loops calling it again rather than
+// giving up, so this is "how often does the searching screen get a
+// chance to notice SDL_EVENT_QUIT", not a total search timeout.
+constexpr int kDiscoveryScanMs = 1200;
 
 // DS button bit <- SDL gamepad button, per SPEC.md section 7.3.
 struct ButtonMapping {
@@ -133,11 +144,156 @@ void renderPairingCodeEntry(SDL_Renderer* renderer, size_t digitsEntered) {
     SDL_RenderPresent(renderer);
 }
 
+void renderCenteredBitmapText(SDL_Renderer* renderer, const std::string& text, float y,
+                               int pixelSize, SDL_Color color) {
+    int width = measureBitmapText(text, pixelSize);
+    float x = (static_cast<float>(kWindowWidth) - static_cast<float>(width)) / 2.0f;
+    renderBitmapText(renderer, text, x, y, pixelSize, color);
+}
+
+void renderDiscoverySearching(SDL_Renderer* renderer) {
+    SDL_SetRenderDrawColor(renderer, 20, 20, 24, 255);
+    SDL_RenderClear(renderer);
+    renderCenteredBitmapText(renderer, "SEARCHING FOR HOST...",
+                              static_cast<float>(kWindowHeight) / 2.0f - 20.0f, 4,
+                              SDL_Color{200, 200, 200, 255});
+    renderCenteredBitmapText(renderer, "MAKE SURE A MELONDS REMOTE HOST IS RUNNING ON THIS NETWORK",
+                              static_cast<float>(kWindowHeight) / 2.0f + 40.0f, 2,
+                              SDL_Color{140, 140, 140, 255});
+    SDL_RenderPresent(renderer);
+}
+
+void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHost>& hosts,
+                          int selectedIndex) {
+    SDL_SetRenderDrawColor(renderer, 20, 20, 24, 255);
+    SDL_RenderClear(renderer);
+    renderCenteredBitmapText(renderer, "SELECT A HOST", 60.0f, 4, SDL_Color{220, 220, 220, 255});
+
+    constexpr float kRowHeight = 60.0f;
+    constexpr int kPixelSize = 3;
+    constexpr float kStartY = 180.0f;
+
+    for (size_t i = 0; i < hosts.size(); ++i) {
+        float rowY = kStartY + static_cast<float>(i) * kRowHeight;
+        std::string label = hosts[i].hostName.empty()
+                                 ? hosts[i].address
+                                 : hosts[i].hostName + "  (" + hosts[i].address + ")";
+        bool selected = static_cast<int>(i) == selectedIndex;
+        SDL_Color color = selected ? SDL_Color{90, 200, 120, 255} : SDL_Color{200, 200, 200, 255};
+
+        if (selected) {
+            int width = measureBitmapText(label, kPixelSize);
+            float x = (static_cast<float>(kWindowWidth) - static_cast<float>(width)) / 2.0f;
+            SDL_FRect highlight{x - 20.0f, rowY - 8.0f, static_cast<float>(width) + 40.0f,
+                                 static_cast<float>(kFontGlyphHeight * kPixelSize) + 16.0f};
+            SDL_SetRenderDrawColor(renderer, 50, 70, 55, 255);
+            SDL_RenderFillRect(renderer, &highlight);
+        }
+        renderCenteredBitmapText(renderer, label, rowY, kPixelSize, color);
+    }
+
+    renderCenteredBitmapText(renderer, "D-PAD TO MOVE, A TO SELECT",
+                              static_cast<float>(kWindowHeight) - 80.0f, 2,
+                              SDL_Color{140, 140, 140, 255});
+    SDL_RenderPresent(renderer);
+}
+
+// Runs when no --host was given on the command line: scans the LAN for
+// melonds-remote hosts and, if more than one answers, lets the user pick
+// via gamepad D-pad/South or keyboard arrows/Enter. Auto-selects without
+// prompting when exactly one host answers, or when a previously-picked
+// host (see discovery_store.h) is among the ones that answered this time
+// -- the list is only shown when there's a genuine choice to make (spec
+// request: "user selectable in the event there is more than 1 IP in the
+// household running a server").
+//
+// Returns std::nullopt if the user closed the window before a host was
+// chosen (SDL_EVENT_QUIT); main() treats that as "cancel the whole run",
+// not "connect anyway."
+std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_Gamepad*& gamepad,
+                                                     uint16_t discoveryPort,
+                                                     const std::string& lastHostAddress) {
+    std::vector<DiscoveredHost> hosts;
+    int selectedIndex = 0;
+    bool listActive = false;
+
+    while (true) {
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            switch (event.type) {
+                case SDL_EVENT_QUIT:
+                    return std::nullopt;
+                case SDL_EVENT_GAMEPAD_ADDED:
+                    if (!gamepad) {
+                        gamepad = SDL_OpenGamepad(event.gdevice.which);
+                    }
+                    break;
+                case SDL_EVENT_GAMEPAD_REMOVED:
+                    if (gamepad && SDL_GetGamepadID(gamepad) == event.gdevice.which) {
+                        SDL_CloseGamepad(gamepad);
+                        gamepad = nullptr;
+                    }
+                    break;
+                case SDL_EVENT_KEY_DOWN:
+                    if (listActive && !hosts.empty()) {
+                        int count = static_cast<int>(hosts.size());
+                        if (event.key.key == SDLK_UP) {
+                            selectedIndex = (selectedIndex + count - 1) % count;
+                        } else if (event.key.key == SDLK_DOWN) {
+                            selectedIndex = (selectedIndex + 1) % count;
+                        } else if (event.key.key == SDLK_RETURN) {
+                            return hosts[static_cast<size_t>(selectedIndex)];
+                        }
+                    }
+                    break;
+                case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+                    if (listActive && !hosts.empty()) {
+                        int count = static_cast<int>(hosts.size());
+                        if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP) {
+                            selectedIndex = (selectedIndex + count - 1) % count;
+                        } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_DOWN) {
+                            selectedIndex = (selectedIndex + 1) % count;
+                        } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH) {
+                            return hosts[static_cast<size_t>(selectedIndex)];
+                        }
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        if (!listActive) {
+            renderDiscoverySearching(renderer);
+            hosts = discoverHosts(discoveryPort, kDiscoveryScanMs);
+            if (!hosts.empty()) {
+                if (hosts.size() == 1) {
+                    return hosts.front();
+                }
+                if (!lastHostAddress.empty()) {
+                    auto it = std::find_if(hosts.begin(), hosts.end(), [&](const DiscoveredHost& h) {
+                        return h.address == lastHostAddress;
+                    });
+                    if (it != hosts.end()) {
+                        return *it;
+                    }
+                }
+                listActive = true;
+                selectedIndex = 0;
+            }
+        } else {
+            renderDiscoveryList(renderer, hosts, selectedIndex);
+        }
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     NetClientConfig netConfig;
     bool authTokenExplicit = false; // --auth-token given: skip pairing entirely (CI/scripting use)
+    bool hostExplicit = false;      // --host/positional given: skip LAN discovery entirely
+    uint16_t discoveryPort = kDefaultDiscoveryPort;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -151,32 +307,27 @@ int main(int argc, char** argv) {
 
         if (arg == "--host") {
             netConfig.hostAddress = nextArg();
+            hostExplicit = true;
         } else if (arg == "--auth-token") {
             netConfig.authToken = nextArg();
             authTokenExplicit = true;
         } else if (arg == "--client-name") {
             netConfig.clientName = nextArg();
+        } else if (arg == "--discovery-port") {
+            discoveryPort = static_cast<uint16_t>(std::stoi(nextArg()));
         } else if (!arg.empty() && arg[0] != '-') {
             // Positional host address, for scripts/run-client.sh's
             // `melonds-remote-client 127.0.0.1` convenience form.
             netConfig.hostAddress = arg;
+            hostExplicit = true;
         } else {
             std::fprintf(stderr, "unrecognized argument: %s\n", arg.c_str());
             return 1;
         }
     }
 
-    // Pairing mode (spec section 13): unless the caller gave an explicit
-    // static --auth-token, use whatever pairing token we've previously
-    // been issued for this host, if any -- silent reconnect instead of
-    // prompting for a 6-digit code again.
     const std::string pairingStorePath = defaultPairingStorePath();
-    if (!authTokenExplicit) {
-        if (auto stored = loadPairingToken(pairingStorePath, netConfig.hostAddress)) {
-            netConfig.authToken = *stored;
-            std::printf("[pairing] using previously-paired token for %s\n", netConfig.hostAddress.c_str());
-        }
-    }
+    const std::string discoveryStorePath = defaultLastHostStorePath();
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
@@ -220,6 +371,42 @@ int main(int argc, char** argv) {
         std::printf("[input] opened gamepad: %s\n", gamepad ? SDL_GetGamepadName(gamepad) : "?");
     }
     if (gamepadIds) SDL_free(gamepadIds);
+
+    // LAN discovery (spec section 8.1): no --host means the user wants us
+    // to find one rather than type an IP into a Steam Deck. Skipped
+    // entirely when --host/a positional address was given, matching the
+    // existing scripted/CI use (run-client.sh, --auth-token flows).
+    if (!hostExplicit) {
+        std::string lastHost = loadLastHost(discoveryStorePath).value_or("");
+        auto selected = discoverAndSelectHost(renderer, gamepad, discoveryPort, lastHost);
+        if (!selected) {
+            std::printf("[discovery] cancelled before a host was chosen -- exiting\n");
+            if (gamepad) SDL_CloseGamepad(gamepad);
+            SDL_DestroyTexture(texture);
+            SDL_DestroyRenderer(renderer);
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+            return 0;
+        }
+        netConfig.hostAddress = selected->address;
+        netConfig.controlPort = selected->controlPort;
+        netConfig.inputPort = selected->inputPort;
+        netConfig.videoPort = selected->videoPort;
+        saveLastHost(discoveryStorePath, netConfig.hostAddress);
+        std::printf("[discovery] selected host \"%s\" at %s\n", selected->hostName.c_str(),
+                    netConfig.hostAddress.c_str());
+    }
+
+    // Pairing mode (spec section 13): unless the caller gave an explicit
+    // static --auth-token, use whatever pairing token we've previously
+    // been issued for this host, if any -- silent reconnect instead of
+    // prompting for a 6-digit code again.
+    if (!authTokenExplicit) {
+        if (auto stored = loadPairingToken(pairingStorePath, netConfig.hostAddress)) {
+            netConfig.authToken = *stored;
+            std::printf("[pairing] using previously-paired token for %s\n", netConfig.hostAddress.c_str());
+        }
+    }
 
     // Set once a handshake comes back PairingRequired: the reconnect
     // thread below stops retrying (a stale/missing token won't magically

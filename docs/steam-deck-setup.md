@@ -28,10 +28,30 @@ See `docs/building.md` for the actual CMake invocation either way.
 1. Switch the Deck to Desktop Mode (Steam button → Power → Switch to
    Desktop).
 2. Open a terminal (Konsole).
-3. Run the client directly:
+3. Run the client. If you know your host's LAN address already, you can
+   still pass it directly:
    ```sh
    ./melonds-remote-client --host <htpc-ip-address>
    ```
+   but as of the LAN discovery feature, this is optional -- run it with no
+   arguments and it scans the LAN for a running `melonds-remote-server`
+   host instead:
+   ```sh
+   ./melonds-remote-client
+   ```
+   You'll see a "SEARCHING FOR HOST..." screen while it scans. If exactly
+   one host answers, it connects automatically -- no address to type or
+   remember. If more than one HTPC on your network is running a host
+   (e.g. one in the living room, one in a bedroom), you'll instead see a
+   list of them by name; use the D-pad (or arrow keys in Desktop Mode) to
+   move and South/A (or Enter) to confirm. Whichever one you pick is
+   remembered (`~/.config/melonds-remote-client/last_host.txt`), so if
+   that same host answers again next time it's chosen automatically
+   without asking again. Discovery only works if the host has it enabled
+   (the default -- see `--no-discovery`/`--discovery-port` in the host's
+   `--help`) and both machines are on the same LAN/subnet (it relies on
+   UDP broadcast, which routers don't forward across subnets or over the
+   internet).
 4. **First connection to a given host**: the host has no idea who you are
    yet, so it rejects the handshake and generates a 6-digit pairing code
    (spec section 13) -- printed in the host's log/terminal, and also
@@ -63,11 +83,17 @@ Mode, applied to this client:
 2. **Games → Add a Non-Steam Game to My Shortcuts...**
 3. **Browse...** to the built `melonds-remote-client` binary.
 4. After adding, right-click it in your library → **Properties**:
-   - **Launch Options**: add your host address, e.g. `--host 192.168.1.50`
-     (add `--auth-token your-token` too only if the host was started with
-     a static token instead of pairing mode). The first launch will need
-     the on-screen keyboard for the pairing code (see "Desktop Mode" step
-     4 above); every launch after that reconnects silently.
+   - **Launch Options**: leave blank to let the client discover a host on
+     the LAN automatically (see "Desktop Mode" step 3 above -- if more
+     than one answers, the resulting selection screen is fully
+     controller-navigable, D-pad + South/A, matching Gaming Mode's
+     controller-only input model). Add `--host 192.168.1.50` here only if
+     you'd rather skip discovery and always connect to one specific
+     address (add `--auth-token your-token` too only if the host was
+     started with a static token instead of pairing mode). The first
+     launch will need the on-screen keyboard for the pairing code (see
+     "Desktop Mode" step 4 above); every launch after that reconnects
+     silently.
    - **Compatibility**: a Proton layer is not needed since this is a
      native Linux binary; leave "Force the use of a specific Steam Play
      compatibility tool" unchecked.

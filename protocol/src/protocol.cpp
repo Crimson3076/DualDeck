@@ -261,4 +261,46 @@ ByteBuffer buildHelloAckPacket(const HelloAckPayload& ack) {
     return buildPacket(PacketType::HelloAck, payload);
 }
 
+ByteBuffer buildDiscoveryRequestPacket() {
+    return buildPacket(PacketType::DiscoveryRequest, {});
+}
+
+void serializeDiscoveryResponsePayload(ByteBuffer& out, const DiscoveryResponsePayload& response) {
+    appendString(out, response.hostName);
+    appendU16(out, response.controlPort);
+    appendU16(out, response.inputPort);
+    appendU16(out, response.videoPort);
+}
+
+std::optional<DiscoveryResponsePayload> parseDiscoveryResponsePayload(const uint8_t* data, size_t size) {
+    if (data == nullptr) {
+        return std::nullopt;
+    }
+
+    size_t offset = 0;
+    DiscoveryResponsePayload response;
+
+    auto hostName = readString(data, size, offset);
+    if (!hostName) return std::nullopt;
+    response.hostName = std::move(*hostName);
+
+    if (offset + 6 > size) return std::nullopt;
+    response.controlPort = readU16(data, offset); offset += 2;
+    response.inputPort = readU16(data, offset); offset += 2;
+    response.videoPort = readU16(data, offset); offset += 2;
+
+    if (offset != size) {
+        // trailing garbage: reject rather than silently ignore
+        return std::nullopt;
+    }
+
+    return response;
+}
+
+ByteBuffer buildDiscoveryResponsePacket(const DiscoveryResponsePayload& response) {
+    ByteBuffer payload;
+    serializeDiscoveryResponsePayload(payload, response);
+    return buildPacket(PacketType::DiscoveryResponse, payload);
+}
+
 } // namespace melonds_remote

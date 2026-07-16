@@ -53,6 +53,18 @@ public:
     // is currently active (see the onCodeChanged callback).
     CheckResult check(const std::string& presented);
 
+    // Generates a fresh code if none is currently active (including if
+    // the previous one just expired), without needing any client to
+    // actually attempt a connection first. Call this once right after
+    // the host starts listening, and periodically afterward (e.g. from a
+    // watchdog loop), so a code is always visible to whoever is at the
+    // host -- otherwise the code only ever appears reactively, the first
+    // time some client's Hello gets rejected, which means someone who
+    // launches the host and looks at it before any client has tried
+    // connecting sees nothing. A no-op if a code is already active and
+    // unexpired.
+    void ensureCodeActive();
+
     // Only meaningful immediately after check() returns ValidCode.
     std::string lastIssuedToken() const;
 

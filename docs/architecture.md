@@ -36,6 +36,14 @@ host/melonds-patches/ 0001-remote-server-integration.patch: implements the
                       host/melonds-patches/README.md.
 
 client/               Steam Deck client (SDL3). Depends on protocol/ only.
+                      - net_client.h/.cpp      control/input/video sockets
+                      - pairing_store.h/.cpp   persisted per-host pairing tokens
+                      - discovery_client.h/.cpp  one-shot LAN host scan (UDP broadcast)
+                      - discovery_store.h/.cpp   persisted last-picked host
+                      - bitmap_font.h/.cpp     self-contained 5x7 pixel font,
+                                               no font/text-rendering dependency
+                                               (needed for the host-selection list --
+                                               Gaming Mode has no visible terminal)
 
 docs/                 This directory.
 scripts/              Convenience launch scripts for local development.
@@ -180,10 +188,15 @@ cross-thread communication goes through the small, mutex-protected
   "six-digit pairing code" option) -- see `docs/protocol.md`'s
   "Authentication and pairing". No QR code or certificate-based pairing
   yet, and no UI to list/revoke individual paired devices.
-- No mDNS discovery or capability negotiation (pixel formats/codecs,
-  controller/touch/microphone capability flags) yet -- `clientName`/
-  `clientPlatform`/display size are on the wire but unused by the host
-  beyond logging.
+- LAN discovery is implemented (custom UDP broadcast request/response,
+  not mDNS/SSDP -- see `docs/protocol.md`'s "Discovery payload" section):
+  the host advertises itself and the client scans for it instead of
+  needing `--host`, with a gamepad/keyboard-navigable selection screen
+  (`client/src/bitmap_font.h`'s self-contained bitmap-font renderer, since
+  Steam Deck Gaming Mode has no visible terminal for host names to be
+  printed to) when more than one host answers. No capability negotiation
+  yet, though -- `clientName`/`clientPlatform`/display size are on the
+  wire but unused by the host beyond logging.
 - Video transport is raw BGRA8888 over TCP (Stage 1 per spec section 8.4);
   no compression yet.
 - The SDL3 client (`client/`) is now build- and run-verified: SDL3 3.2.16

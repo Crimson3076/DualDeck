@@ -28,6 +28,8 @@ same fixed-size header.
 | 5     | `Disconnect`      | either           | TCP control | none |
 | 6     | `EmulatorAction`  | client -> host  | TCP control | not yet implemented; emulator actions currently ride inside `ControllerState.emulatorActions` |
 | 7     | `VideoFrame`      | host -> client  | TCP video | raw pixel buffer, see "Video payload" below |
+| 8     | `DiscoveryRequest`  | client -> host (UDP broadcast) | discovery | none |
+| 9     | `DiscoveryResponse` | host -> client (UDP unicast)   | discovery | see "Discovery payload" below |
 
 ## ControllerState payload (29 bytes)
 
@@ -103,6 +105,41 @@ client-side decode path is exercised end-to-end today. This byte order
 was empirically confirmed (not just assumed) against a real patched
 melonDS binary delivering live frames from a running program -- see
 `tests/homebrew-test-rom/README.md`.
+
+## Discovery payload
+
+Implements spec section 8.1's "future versions" LAN-discovery item. A
+separate UDP socket from the control/input/video channels above, bound to
+port `8763` by default (`--discovery-port` on the host, matching client
+flag on the client), so it can be turned off (`--no-discovery`) without
+touching the real ports at all.
+
+`DiscoveryRequest` has no payload -- the client broadcasts a bare packet
+with this type to `255.255.255.255:<discoveryPort>` and collects whatever
+`DiscoveryResponse` replies arrive within a short window (see
+`client/src/discovery_client.h`).
+
+`DiscoveryResponse` payload (6 fixed bytes + a length-prefixed string):
+
+| Offset | Size | Field          | Notes |
+|-------:|-----:|----------------|-------|
+| 0      | var. | `hostName`     | length-prefixed string, same encoding as Hello's strings. Defaults to `gethostname()` if the host wasn't given `--host-name`. |
+| var.   | 2    | `controlPort`  | |
+| var.   | 2    | `inputPort`    | |
+| var.   | 2    | `videoPort`    | |
+
+Deliberately unauthenticated: discovery only reveals a host name and three
+port numbers, never bypasses the pairing/token check on the actual control
+connection (see "Authentication and pairing" below), so there is no
+security benefit to gating it. This is also why the host's discovery
+listener is the one socket in this project that binds `0.0.0.0` rather
+than a specific configured address -- see the doc comment on
+`NetServerConfig::discoveryEnabled` in `host/remote-server/include/host/net_server.h`.
+
+If more than one host answers within the scan window, the client shows a
+selectable list (see `docs/architecture.md` "Client" section); if exactly
+one answers, or a previously-picked host answers again, it connects
+without prompting.
 
 ## Hello payload (variable length)
 

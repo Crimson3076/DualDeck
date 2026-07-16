@@ -82,6 +82,24 @@ struct NetServerConfig {
     // frame rate, dropped frames, input packet rate, out-of-order
     // packets, and latency instrumentation).
     uint64_t statsLoggingIntervalUs = 5'000'000; // 5s
+
+    // LAN discovery (spec section 8.1's deferred "future versions" item,
+    // now implemented): a client that doesn't already know a host address
+    // can broadcast a DiscoveryRequest and get a unicast DiscoveryResponse
+    // back from every host listening, without any auth -- it only ever
+    // reveals a host name and port numbers, never anything sensitive; the
+    // actual control/input/video ports still require the full
+    // pairing/token handshake regardless. Deliberately bound to
+    // "0.0.0.0" (not `bindAddress`) since receiving a broadcast requires
+    // it -- this is the one socket in this class that doesn't obey
+    // `bindAddress`, and is the reason discovery can be disabled
+    // (`discoveryEnabled = false`) for anyone who'd rather not have this
+    // host answer broadcasts at all.
+    bool discoveryEnabled = true;
+    uint16_t discoveryPort = 8763;
+    // Friendly name returned in DiscoveryResponse; empty means "ask the
+    // OS for the hostname at start() time" (see NetServer::discoveryLoop).
+    std::string hostName;
 };
 
 // Aggregated counters reset each time they're logged. Guarded by
@@ -126,6 +144,7 @@ private:
     void inputLoop();
     void videoLoop();
     void watchdogLoop();
+    void discoveryLoop();
 
     NetServerConfig config_;
     IEmulatorInputSink& inputSink_;
@@ -137,6 +156,7 @@ private:
     std::thread inputThread_;
     std::thread videoThread_;
     std::thread watchdogThread_;
+    std::thread discoveryThread_;
 
     InputStateTracker inputTracker_;
     std::mutex trackerMutex_;
@@ -150,6 +170,7 @@ private:
     int controlListenFd_ = -1;
     int videoListenFd_ = -1;
     int inputFd_ = -1;
+    int discoveryFd_ = -1;
 
     std::atomic<int> controlClientFd_{-1};
     std::atomic<int> videoClientFd_{-1};
