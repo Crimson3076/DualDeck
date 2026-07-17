@@ -223,8 +223,8 @@ cross-thread communication goes through the small, mutex-protected
   before once the client disconnects -- `NetServerConfig::onClientConnectionChanged`,
   wired to melonDS's existing `ScreenSizing` config in `EmuInstance.cpp`.
 - The client has an in-app menu (Resume/Change Host/Exit), opened by
-  holding Start+Select together (or Escape in Desktop Mode) -- see
-  `docs/steam-deck-setup.md`. "Change Host" re-enters the discovery/
+  holding both stick clicks (L3+R3) together (or Escape in Desktop
+  Mode) -- see `docs/steam-deck-setup.md`. "Change Host" re-enters the discovery/
   selection screen without exiting the process, via an outer loop in
   `main()` around the per-host connect/render/reconnect-thread logic.
 - The SDL3 client (`client/`) is now build- and run-verified: SDL3 3.2.16

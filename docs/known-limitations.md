@@ -1294,6 +1294,143 @@ Still not addressed: CI-tested install/upgrade behavior, and real Steam
 Deck/Bazzite hardware verification. Given these, GitHub issue #10
 remains open.
 
+## Client menu chord changed from Start+Select to L3+R3 (Steam Deck system-chord conflict)
+
+**User report**: the in-app menu's Start+Select chord "causes conflicts
+with the Steam Deck's built-in 'action set gamepad/desktop' function."
+Steam Deck's Steam Input layer reserves Start+Select (held together) by
+default as the chord that switches a game's active controller "action
+set" (e.g. from a "Gamepad" set to a "Desktop" set), so on real hardware
+that hold could get intercepted by Steam Input itself before this app's
+own polling loop ever saw a sustained two-button press -- consistent
+with, and a plausible explanation for, the intermittent single-button-
+opens-the-menu reports from earlier real-hardware testing (see "Real-usage
+bug fixes, round 2" above), which were worked around at the time but
+never fully explained.
+
+Fixed by moving the chord to **L3+R3** (both analog stick clicks held
+together) in `client/src/main.cpp` -- both chord-check sites
+(`discoverAndSelectHost()`'s screen and `main()`'s inner loop), the
+`kMenuComboHint` on-screen text, and the pause menu's own "...TO CLOSE"
+hint. L3/R3 were chosen because they're the only standard gamepad
+buttons not already mapped to a DS button in `kButtonMappings` (the DS
+has no analog sticks, so nothing gameplay-relevant is lost), and because
+they're not a Steam Deck system-reserved chord the way Start+Select is.
+The same ~350ms deliberate-hold requirement (`kMenuChordHoldUs`) was kept
+unchanged.
+
+A `host/install-steam-shortcut.sh`-style compatibility shim isn't
+applicable here -- this is client-side input-handling logic inside the
+binary itself, not a file path an old installed script hardcodes, so a
+normal client update (see the auto-update work directly below) is
+sufficient for existing installs to pick this up.
+
+**Verified**: client rebuilds cleanly against the sandbox's built SDL3
+(`/tmp/sdl3-install`); `grep` confirms no remaining functional references
+to `SDL_GAMEPAD_BUTTON_START`/`SDL_GAMEPAD_BUTTON_BACK` in either chord
+check, and both now check `SDL_GAMEPAD_BUTTON_LEFT_STICK`/
+`SDL_GAMEPAD_BUTTON_RIGHT_STICK`. **Not verified**: real Steam Deck
+hardware -- specifically, whether L3+R3 is itself free of any other
+Steam Input default reservation. This project has no access to real
+Steam Deck hardware to confirm directly; if a future report finds L3+R3
+also conflicts with something, the fix is the same shape (pick another
+unmapped combination and update this section).
+
+## Client auto-update on launch (no manual step required)
+
+User follow-up, same message as the chord change above: "I would also
+like for the client to be able to update via the menu, or better yet,
+check for an update on launch and automatically apply it when there's
+an update detected." The "Check for updates" menu choice already existed
+(see "'Check for updates' now actually offers to update" above, which
+added it for the host and, in the same pass, for the client's menu) --
+what was missing was the "better yet": checking automatically on launch,
+with no menu interaction and no confirmation prompt.
+
+Added directly to `client/internal/run-client.sh`, not just the menu,
+specifically because that script -- not `melonds-remote-client.sh` -- is
+what `install-steam-shortcut.sh` points the Steam shortcut's `Exe` at, so
+it's the one launch path that's genuinely unavoidable regardless of how
+the client is started (Steam Gaming Mode, "Launch now" from the menu, or
+running it directly). On launch, it calls the existing
+`check-for-updates.sh` (unmodified -- still read-only, still capped at a
+5s network timeout, still never exits non-zero on failure) and, only if
+its report contains "update available:", immediately hands off to
+`apply-update.sh` with no confirmation -- reusing the exact same
+download-and-install path the menu's "Check for updates" already used
+and had verified. On success it `exec`s the freshly-installed copy of
+`run-client.sh` so the rest of the launch (library check, the binary
+itself) runs the new version; on any failure at any step (missing
+`check-for-updates.sh` on an old install, offline, GitHub down, a failed
+download) it logs a line to stderr and falls through to launching
+whatever's already installed, exactly like a normal launch with no
+update available -- consistent with `check-for-updates.sh`'s own
+existing "never blocks or fails a real launch" principle, just now
+applied one layer up.
+
+**A second real gap was found and fixed while wiring this up**: unlike
+the host's installers, the client's `install-steam-shortcut.sh` was
+never copying `check-for-updates.sh`/`VERSION` into the central install
+directory as siblings of `install/` -- the exact bug already fixed for
+the host in "'Check for updates' now actually offers to update" above,
+just never carried over to the client side at the time. That meant both
+the pre-existing client "Check for updates" menu choice *and* this new
+launch-time check would have failed with a file-not-found the first time
+either ran from inside the central directory (e.g. after deleting the
+original downloaded archive) rather than from a fresh extraction. Fixed
+the same way as the host: both files are now copied as siblings of
+`install/` by `install-steam-shortcut.sh`, and removed by
+`uninstall-steam-shortcut.sh`.
+
+**Known tradeoff, stated honestly**: `apply-update.sh`'s download is
+capped at `curl --max-time 180`, and that full 3 minutes is now
+reachable from a completely ordinary launch (not just an explicit,
+opted-in "Check for updates" click) whenever an update genuinely exists
+and the connection is slow. There is currently no progress indication
+during this beyond the stderr lines above, which Steam Gaming Mode has
+no visible terminal for -- the screen just doesn't render anything until
+the relaunch happens. A future pass could show this on the client's own
+window (it already has a bitmap-font renderer for the discovery/
+connecting screens) rather than only on stderr.
+
+**Also inherited from the "Check for updates" menu choice, and not
+new to this change**: `apply-update.sh` hands off to
+`install-steam-shortcut.sh --force`, which unconditionally adds/updates
+a Steam shortcut entry as a side effect of installing the new files
+(that script's only job is "make the Steam shortcut point at current
+files", so there's no separate "just update the files" mode). For
+someone who launched via the Steam shortcut in the first place this is
+a harmless no-op refresh of an entry that already existed. For someone
+who runs `run-client.sh` directly and had never used "Add to Steam" at
+all, an auto-update happening to also silently create one is a genuine,
+if minor, surprising side effect -- the same tradeoff the host already
+carries for its own auto-update, just reachable now without an explicit
+click.
+
+**Verified**: `bash -n` on every generated script in a full local
+packaging run (fake melonDS/client binaries, real `ldd`/`tar`, real
+`steam_shortcut.py` against a fake Steam userdata directory) confirms
+no syntax errors; a real install run against that fake `$HOME` confirms
+`check-for-updates.sh`/`VERSION` now land as central-directory siblings
+and a real `shortcuts.vdf` entry is created. The launch-time logic
+itself was exercised directly with stub `check-for-updates.sh`/
+`apply-update.sh` scripts covering all four reachable paths: no update
+available (binary launches normally, `apply-update.sh` never invoked);
+update available and applied successfully (re-execs into a freshly
+"installed" `run-client.sh`, confirmed by that script announcing itself
+distinctly, with the original arguments preserved across the re-exec);
+update available but `apply-update.sh` fails (falls through and still
+launches the current version rather than exiting); and
+`check-for-updates.sh` missing entirely, simulating an old install from
+before this fix (launches normally, no error). The uninstaller was
+separately confirmed to remove the two new sibling files. **Not
+verified**: an actual launch-time update against the real, currently
+published GitHub release triggering a real ~180s download (the stub
+tests above cover the branching logic; a real end-to-end run is left to
+whenever the next real release supersedes this one, same as the host
+auto-update's own "not verified" note above), and real Steam Deck/Gaming
+Mode hardware.
+
 ## Latency instrumentation assumes synced clocks
 
 The host's periodic latency stat (`docs/protocol.md`'s note on

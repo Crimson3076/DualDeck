@@ -70,7 +70,7 @@ constexpr uint16_t kDefaultDiscoveryPort = 8763;
 // chance to notice SDL_EVENT_QUIT", not a total search timeout.
 constexpr int kDiscoveryScanMs = 1200;
 
-// Deliberate-hold duration for the Start+Select "open menu" chord, shared
+// Deliberate-hold duration for the L3+R3 "open menu" chord, shared
 // by discoverAndSelectHost() and main()'s inner loop so every screen uses
 // the same chord (GitHub issues #8, #9: the discovery/host-selection
 // screen previously had no exit control at all, despite already showing
@@ -83,6 +83,14 @@ constexpr int kDiscoveryScanMs = 1200;
 // gating on !gamepad in the KEY_DOWN handlers below); requiring a
 // sustained two-button hold is defense in depth against any single
 // spurious button/synthesized-input report on top of that fix.
+//
+// Originally Start+Select, changed to the left/right stick clicks (L3+R3)
+// because Start+Select is also Steam Input's own default chord for
+// switching between the "gamepad" and "desktop" action sets on Steam
+// Deck -- holding it was being intercepted before this app ever saw a
+// sustained press, rather than opening this menu. L3/R3 aren't mapped to
+// any DS button (the DS has no analog sticks), so they're free, and
+// unlike Start+Select they're not a Steam Deck system chord.
 constexpr uint64_t kMenuChordHoldUs = 350'000; // 350ms deliberate hold
 
 // DS button bit <- SDL gamepad button, per SPEC.md section 7.3.
@@ -110,9 +118,9 @@ constexpr int16_t kStickDeadzone = 8000;
 
 // Shown on the discovery and connecting screens (spec request: tell the
 // user how to open the menu up front, not only once it's already open --
-// the pause menu's own "START+SELECT TO CLOSE" hint doesn't help someone
+// the pause menu's own "L3+R3 TO CLOSE" hint doesn't help someone
 // who doesn't know to open it in the first place).
-constexpr const char* kMenuComboHint = "HOLD START + SELECT TO OPEN THE MENU";
+constexpr const char* kMenuComboHint = "HOLD BOTH STICKS IN (L3+R3) TO OPEN THE MENU";
 
 // Wall-clock (epoch) microseconds, for the wire ControllerState.clientTimestampUs
 // field specifically. Deliberately not SDL_GetTicksNS() (which is time since
@@ -232,7 +240,7 @@ void renderPauseMenu(SDL_Renderer* renderer, const std::vector<std::string>& ite
         renderCenteredBitmapText(renderer, items[i], rowY, kPixelSize, color);
     }
 
-    renderCenteredBitmapText(renderer, "D-PAD TO MOVE, A TO SELECT, START+SELECT TO CLOSE",
+    renderCenteredBitmapText(renderer, "D-PAD TO MOVE, A TO SELECT, L3+R3 TO CLOSE",
                               static_cast<float>(kWindowHeight) - 80.0f, 2,
                               SDL_Color{140, 140, 140, 255});
     SDL_RenderPresent(renderer);
@@ -255,7 +263,7 @@ void renderPauseMenu(SDL_Renderer* renderer, const std::vector<std::string>& ite
 // itself doesn't guarantee reply order is consistent scan to scan).
 //
 // Returns std::nullopt if the user closed the window before a host was
-// chosen (SDL_EVENT_QUIT), or chose EXIT from the Start+Select menu below;
+// chosen (SDL_EVENT_QUIT), or chose EXIT from the L3+R3 menu below;
 // main() treats either as "cancel the whole run", not "connect anyway."
 std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_Gamepad*& gamepad,
                                                      uint16_t discoveryPort,
@@ -263,9 +271,9 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
     std::vector<DiscoveredHost> hosts;
     int selectedIndex = 0;
 
-    // Start+Select "open menu" chord, offering an EXIT control -- this
+    // L3+R3 "open menu" chord, offering an EXIT control -- this
     // screen previously had none at all (GitHub issues #8, #9), despite
-    // already showing the "HOLD START + SELECT" hint via kMenuComboHint.
+    // already showing the menu-combo hint via kMenuComboHint.
     // Same deliberate-hold pattern and menu-navigation conventions as
     // main()'s inner loop (see kMenuChordHoldUs's declaration for why).
     // No "CHANGE HOST"/"RESUME SEARCH" distinction is needed here beyond
@@ -350,10 +358,11 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
             }
         }
 
-        // Held Start+Select toggles the menu -- see kMenuChordHoldUs's
-        // declaration for why a deliberate hold is required.
-        bool menuChordHeld = gamepad && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_START) &&
-                             SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_BACK);
+        // Held L3+R3 toggles the menu -- see kMenuChordHoldUs's
+        // declaration for why a deliberate hold is required (and why L3+R3
+        // rather than Start+Select).
+        bool menuChordHeld = gamepad && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_LEFT_STICK) &&
+                             SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_RIGHT_STICK);
         uint64_t nowForChordUs = SDL_GetTicksNS() / 1000;
         if (menuChordHeld) {
             if (menuChordSinceUs == 0) menuChordSinceUs = nowForChordUs;
@@ -1203,7 +1212,7 @@ int main(int argc, char** argv) {
     const std::string wizardStatePath = defaultWizardStatePath();
     bool runWizardNow = !hostExplicit && !isSetupComplete(wizardStatePath);
 
-    // Start+Select "open menu" chord state -- see kMenuChordHoldUs's
+    // L3+R3 "open menu" chord state -- see kMenuChordHoldUs's
     // declaration above for why a deliberate hold is required.
     // menuChordSinceUs == 0 means "not currently held"; menuChordFired
     // prevents re-triggering on every frame for as long as the hold
@@ -1313,7 +1322,7 @@ int main(int argc, char** argv) {
         uint64_t lastInputSendUs = SDL_GetTicksNS() / 1000;
 
         // In-app menu (spec request: "no sort of menu to configure settings
-        // or exit"): held Start+Select toggles it. "Change Host" is only
+        // or exit"): held L3+R3 toggles it. "Change Host" is only
         // offered when discovery is in play at all -- an explicit --host
         // has no host list to go back to.
         std::vector<std::string> menuItems = {"RESUME"};
@@ -1384,7 +1393,7 @@ int main(int argc, char** argv) {
                         // real hardware even though neither is bound to it
                         // alone in the gamepad chord below) -- gating this
                         // on !gamepad means those synthesized keys are
-                        // ignored and only the real Start+Select gamepad
+                        // ignored and only the real L3+R3 gamepad
                         // chord can open the menu.
                         if (!gamepad && event.key.key == SDLK_ESCAPE) {
                             menuActive = !menuActive;
@@ -1441,14 +1450,14 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // Held Start+Select toggles the menu -- polled once per frame
+            // Held L3+R3 toggles the menu -- polled once per frame
             // (not event-driven) since it's a simultaneous-hold chord, not
             // a single button press. Must be held continuously for
             // kMenuChordHoldUs before it fires (see menuChordSinceUs's
             // declaration above for why), and won't fire again until both
             // buttons are released and re-pressed.
-            bool menuChordHeld = gamepad && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_START) &&
-                                 SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_BACK);
+            bool menuChordHeld = gamepad && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_LEFT_STICK) &&
+                                 SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_RIGHT_STICK);
             uint64_t nowForChordUs = SDL_GetTicksNS() / 1000;
             if (menuChordHeld) {
                 if (menuChordSinceUs == 0) menuChordSinceUs = nowForChordUs;

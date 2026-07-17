@@ -190,22 +190,33 @@ bug, not a separate touch/input problem.
 
 ### The in-app menu pops open by itself when I press a single button (Start, or B) on the real Deck controller
 
-The menu is supposed to require a deliberate Start+Select hold, not a
-single button. If a single button opens it on real hardware but not in
-any keyboard-driven testing, the most likely cause is Steam Input's
-default controller-binding template for a freshly-added non-Steam
-shortcut synthesizing a keyboard `Escape` press for individual buttons
-(commonly done so keyboard-only UI still works via a controller) --
-the client's `Escape` shortcut is Desktop-Mode/no-gamepad testing
-convenience only and is ignored whenever a real gamepad is connected, and
-the actual Start+Select chord additionally requires a ~350ms continuous
-hold before it fires, specifically to guard against this. If you still
-see it after updating to a build with both of those fixes, open Steam's
-overlay for that non-Steam shortcut (while it's running, or via **Manage
-Game > Controller Layout** in Desktop Mode) and check what's bound to
-Start/View/B -- setting the layout to a plain "Gamepad" template (rather
-than whatever Steam auto-picked) makes buttons pass straight through
-rather than also firing keyboard shortcuts.
+The menu is supposed to require a deliberate L3+R3 hold (both stick
+clicks together), not a single button. If a single button opens it on
+real hardware but not in any keyboard-driven testing, the most likely
+cause is Steam Input's default controller-binding template for a
+freshly-added non-Steam shortcut synthesizing a keyboard `Escape` press
+for individual buttons (commonly done so keyboard-only UI still works
+via a controller) -- the client's `Escape` shortcut is Desktop-Mode/
+no-gamepad testing convenience only and is ignored whenever a real
+gamepad is connected, and the actual L3+R3 chord additionally requires a
+~350ms continuous hold before it fires, specifically to guard against
+this. If you still see it after updating to a build with both of those
+fixes, open Steam's overlay for that non-Steam shortcut (while it's
+running, or via **Manage Game > Controller Layout** in Desktop Mode) and
+check what's bound to Start/View/B -- setting the layout to a plain
+"Gamepad" template (rather than whatever Steam auto-picked) makes
+buttons pass straight through rather than also firing keyboard
+shortcuts.
+
+### Holding Start+Select doesn't open the menu / it switches to Desktop instead
+
+Builds before the menu chord was changed to L3+R3 used Start+Select to
+open the in-app menu. On Steam Deck, Start+Select held together is also
+Steam Input's own default chord for switching a game's active "action
+set" (e.g. from "Gamepad" to "Desktop"), so it could get intercepted
+before this app ever saw a sustained press -- update to a current build,
+which uses L3+R3 (hold both stick clicks in together) instead, a
+combination the DS has no button for and Steam doesn't reserve.
 
 ### install-steam-shortcut.sh / uninstall-steam-shortcut.sh failed, or Steam's shortcuts.vdf looks wrong
 

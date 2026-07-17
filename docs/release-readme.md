@@ -19,7 +19,11 @@ and shows a pick-a-host list), "Add to Steam" registers a Gaming Mode
 shortcut.
 
 Both menus also have "Check for updates" -- if a newer release exists,
-it offers to download and install it right there, no manual steps.
+it offers to download and install it right there, no manual steps. The
+client additionally checks automatically every time it launches
+(including via its Steam shortcut) and installs a newer version
+silently, with no prompt -- so it's always worth a moment on a slow
+connection the first time it finds one.
 
 On SteamOS Desktop Mode or Bazzite (both KDE Plasma/Dolphin),
 double-clicking an executable `.sh` file just runs it directly -- no

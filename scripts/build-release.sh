@@ -107,10 +107,42 @@ cat > "${pkg_dir}/client/internal/run-client.sh" <<'WRAP'
 # auto-installing any missing runtime system libraries first (X11/
 # Wayland etc. -- SDL3 itself is bundled in ../lib/, no install needed
 # for that part). Normally launched via ../../melonds-remote-client.sh's
-# "Launch now" menu choice, not directly.
+# "Launch now" menu choice, or directly as the Steam shortcut's Exe
+# (install-steam-shortcut.sh points --exe straight here, bypassing the
+# menu entirely) -- so the auto-update check below has to live here, not
+# only in the menu's own "Check for updates" choice, to actually catch
+# every launch path.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 client_root="$(cd .. && pwd)"
+
+# Auto-update (user request: "check for an update on launch and
+# automatically apply it when there's an update detected" -- no
+# confirmation prompt, unlike the menu's "Check for updates" choice,
+# since the whole point here is not needing a manual step). Deliberately
+# fails open: check-for-updates.sh itself caps its network call at 5s and
+# never exits non-zero on a reachability/parse failure (see its own
+# header comment), and apply-update.sh's ~180s download is only reached
+# at all when an update was actually found -- so a normal launch with no
+# update available never waits on the network beyond that 5s check, and
+# any failure at any step here (offline, GitHub down, download failure)
+# just falls through to launching the current version rather than
+# blocking or erroring. Re-execs the freshly installed copy on success
+# so the rest of this launch (library check, the binary itself) runs the
+# new version, not whatever was already loaded into this process image.
+update_script="$(dirname "${client_root}")/check-for-updates.sh"
+if [[ -x "${update_script}" ]]; then
+    if update_report="$("${update_script}" 2>/dev/null)" && \
+       echo "${update_report}" | grep -q "update available:"; then
+        echo "melonDS Remote: update available, installing automatically..." >&2
+        if "${client_root}/internal/apply-update.sh" >&2; then
+            echo "melonDS Remote: updated, relaunching..." >&2
+            exec "${HOME}/.config/melonds-remote-client/install/internal/run-client.sh" "$@"
+        else
+            echo "melonDS Remote: auto-update failed, continuing with the current version" >&2
+        fi
+    fi
+fi
 
 # shellcheck source=scripts/lib/ensure-packages.sh
 source ./ensure-packages.sh
@@ -207,6 +239,14 @@ if [[ "${dry_run}" -eq 0 ]]; then
         mv "${central_install_dir}" "${previous_dir}"
     fi
     mv "${staging_dir}" "${central_install_dir}"
+
+    # Same reasoning as the host equivalent in install-host-distrobox.sh:
+    # keeps "../check-for-updates.sh" (the menu's "Check for updates")
+    # and run-client.sh's own auto-update check both resolvable from a
+    # copy of this install later run from inside the central directory
+    # itself, after the original downloaded archive is gone.
+    cp "$(dirname "${client_root}")/check-for-updates.sh" "$(dirname "${central_install_dir}")/check-for-updates.sh" 2>/dev/null || true
+    cp "$(dirname "${client_root}")/VERSION" "$(dirname "${central_install_dir}")/VERSION" 2>/dev/null || true
 fi
 
 python3 ./steam_shortcut.py \
@@ -309,6 +349,12 @@ if [[ "${dry_run}" -eq 0 ]]; then
             rm -rf -- "${dir}"
         fi
     done
+
+    # check-for-updates.sh/VERSION are staged as siblings of install/
+    # (see install-steam-shortcut.sh), not inside any of the three
+    # directories just removed above.
+    rm -f -- "$(dirname "${central_install_dir}")/check-for-updates.sh" \
+             "$(dirname "${central_install_dir}")/VERSION"
 fi
 WRAP
 chmod +x "${pkg_dir}/client/internal/uninstall-steam-shortcut.sh"
@@ -1227,11 +1273,13 @@ cat > "${pkg_dir}/check-for-updates.sh" <<'WRAP'
 # read-only, no download or install of anything happens here. Both
 # melonds-remote-host.sh and melonds-remote-client.sh's "Check for
 # updates" menu choice call this first and only offer to actually
-# install if it reports one available. Never blocks or fails a real
-# host/client launch on this -- run-host.sh/run-client.sh don't call
-# this automatically, precisely so a slow/unreachable network never
-# adds delay to actually starting the app; run this yourself (or use
-# a menu) whenever you want to check.
+# install if it reports one available. Capped at 5s network time and
+# never exits non-zero on a reachability/parse failure, specifically so
+# nothing that calls this automatically -- run-client.sh does, on every
+# launch, applying an update silently if one's found -- ever blocks or
+# fails a launch waiting on it. run-host.sh does not call this
+# automatically (the host has no equivalent auto-update yet); run this
+# yourself (or use the host menu) to check there.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 

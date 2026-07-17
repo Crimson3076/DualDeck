@@ -27,7 +27,9 @@ Check for updates (which offers to install one automatically if it
 finds one) -- so there's nothing else in either `host/` or `client/`
 you need to open directly; the rest of what's in there (under each
 directory's `internal/` subfolder) is what the menu calls on your
-behalf. On SteamOS Desktop Mode or Bazzite (both KDE Plasma/Dolphin),
+behalf. The client additionally checks for and installs updates
+automatically on every launch (Steam shortcut included), no menu or
+confirmation needed. On SteamOS Desktop Mode or Bazzite (both KDE Plasma/Dolphin),
 double-clicking an executable `.sh` file offers to run it directly --
 see `docs/steam-deck-setup.md`/`docs/bazzite-host-setup.md` for the
 quick-start section at the top of each, and the archive's own bundled

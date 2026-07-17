@@ -20,7 +20,7 @@ gameplay performance. If video still doesn't show up, see
 picking a host (or entering its address manually), connecting, and
 testing video/controller/touch, entirely with the D-pad and face
 buttons -- no typing needed unless you choose manual entry. It only runs
-automatically once; pick "SETUP WIZARD" from the Start+Select pause menu
+automatically once; pick "SETUP WIZARD" from the L3+R3 pause menu
 to run it again later (e.g. after switching to a different host). See
 `docs/known-limitations.md`'s "First-run setup wizard" entry for what it
 does and doesn't cover -- in particular, it has not yet been run on real
@@ -119,9 +119,9 @@ See `docs/building.md` for the actual CMake invocation either way.
    stream renders letterboxed at 4:3, the Deck's built-in controller
    moves the game/logs show button state, and the touchscreen registers
    only inside the rendered DS rectangle (spec section 7.4).
-6. Hold **Start+Select together for about a third of a second** (or press
-   Escape in Desktop Mode with no gamepad connected) to open the in-app
-   menu -- fully controller-navigable (D-pad to move, South/A to select),
+6. Hold **both stick clicks in together (L3+R3) for about a third of a
+   second** (or press Escape in Desktop Mode with no gamepad connected)
+   to open the in-app menu -- fully controller-navigable (D-pad to move, South/A to select),
    with **Resume**, **Change Host** (jump back to the host-selection
    screen from step 3 without restarting the client), and **Exit**. This
    is the controller-navigable in-app exit action `SPEC.md` lists as
@@ -194,7 +194,12 @@ was invoked from.
 **Checking for updates**: pick "Check for updates / update" from the
 menu -- reports whether a newer release exists and, if so, offers to
 download and install it automatically (same stage-then-swap safety as
-the install path above).
+the install path above). The client also checks automatically every
+time it launches -- including from the Steam shortcut itself -- and
+installs a newer version silently if one's found, no confirmation
+needed; see `docs/known-limitations.md`'s "Client auto-update on
+launch" entry for the tradeoff (a slow connection can add up to about
+three minutes the first time it finds one).
 
 Or, the standard manual way any non-Steam Linux binary gets added to
 Gaming Mode:
