@@ -177,6 +177,20 @@ void renderDiscoverySearching(SDL_Renderer* renderer) {
     SDL_RenderPresent(renderer);
 }
 
+void renderConnecting(SDL_Renderer* renderer, const std::string& hostAddress) {
+    SDL_SetRenderDrawColor(renderer, 20, 20, 24, 255);
+    SDL_RenderClear(renderer);
+    renderCenteredBitmapText(renderer, "CONNECTING TO " + hostAddress + "...",
+                              static_cast<float>(kWindowHeight) / 2.0f - 20.0f, 4,
+                              SDL_Color{220, 200, 80, 255});
+    renderCenteredBitmapText(renderer, "PLEASE WAIT WHILE THE HOST RESPONDS",
+                              static_cast<float>(kWindowHeight) / 2.0f + 40.0f, 2,
+                              SDL_Color{140, 140, 140, 255});
+    renderCenteredBitmapText(renderer, kMenuComboHint, static_cast<float>(kWindowHeight) - 80.0f, 2,
+                              SDL_Color{140, 140, 140, 255});
+    SDL_RenderPresent(renderer);
+}
+
 void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHost>& hosts,
                           int selectedIndex) {
     SDL_SetRenderDrawColor(renderer, 20, 20, 24, 255);
@@ -1278,24 +1292,22 @@ int main(int argc, char** argv) {
             netConfig.controlPort = selected->controlPort;
             netConfig.inputPort = selected->inputPort;
             netConfig.videoPort = selected->videoPort;
+            // Acknowledge the button press before saving the selection or
+            // starting any socket work. The previous synchronous connect
+            // left the picker frozen until the host responded, making a
+            // successful selection look ignored in Gaming Mode (GitHub
+            // issue #21).
+            renderConnecting(renderer, netConfig.hostAddress);
             saveLastHost(discoveryStorePath, netConfig.hostAddress);
             std::fprintf(stderr, "[discovery] selected host \"%s\" at %s\n", selected->hostName.c_str(),
                         netConfig.hostAddress.c_str());
+        } else {
+            // Explicit-host/scripted launches skip the picker but should
+            // still expose the same connection state once the window opens.
+            renderConnecting(renderer, netConfig.hostAddress);
         }
 
         NetClient net(netConfig);
-        if (net.connect()) {
-            std::fprintf(stderr, "[net] connected to %s (session %u)\n", netConfig.hostAddress.c_str(),
-                         net.sessionId());
-        } else if (net.lastRejectReason() == HelloRejectReason::ApprovalRequired) {
-            std::fprintf(stderr, "[net] awaiting approval on the host -- a human there needs to approve "
-                        "this device once; will keep retrying automatically\n");
-        } else {
-            std::fprintf(stderr,
-                          "[net] failed to connect to %s -- will keep retrying in the "
-                          "background, showing a local test pattern meanwhile\n",
-                          netConfig.hostAddress.c_str());
-        }
 
         // Auto-reconnect (spec section 7.2): connect() does several blocking
         // socket calls, so retries run on their own thread rather than
@@ -1305,7 +1317,11 @@ int main(int argc, char** argv) {
         // pause these retries waiting on client-side user action -- approval
         // happens entirely on the host, so the same reconnect loop that
         // handles a temporarily-down host also naturally handles "not
-        // approved yet" (it'll just start succeeding once approved).
+        // approved yet" (it'll just start succeeding once approved). This
+        // thread owns every attempt, including the initial one; previously
+        // main() made a synchronous attempt first and then immediately
+        // handed the same disconnected client to this thread, causing a
+        // duplicate attempt after an initial failure (GitHub issue #21).
         std::atomic<bool> shuttingDown{false};
         std::thread reconnectThread([&]() {
             uint32_t backoffMs = 1000;
@@ -1315,7 +1331,7 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr, "[net] attempting to (re)connect to %s...\n",
                                 netConfig.hostAddress.c_str());
                     if (net.connect()) {
-                        std::fprintf(stderr, "[net] reconnected (session %u)\n", net.sessionId());
+                        std::fprintf(stderr, "[net] connected (session %u)\n", net.sessionId());
                         backoffMs = 1000;
                     } else {
                         backoffMs = std::min(backoffMs * 2, kMaxBackoffMs);
