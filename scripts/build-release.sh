@@ -1372,3 +1372,21 @@ NOTES
 archive_name="melonds-remote-linux-x86_64.tar.gz"
 tar czf "${out_dir}/${archive_name}" -C "${work_dir}" "${pkg_name}"
 echo "Wrote ${out_dir}/${archive_name} (contains ${pkg_name}/)"
+
+# GitHub issue #26: lets DualDeck-Installer.sh (and anyone else) verify
+# the archive's integrity before extracting/installing anything from
+# it, rather than trusting a plain HTTPS download unconditionally. A
+# constant filename for the same reason the archive itself has one --
+# re-publishing to the same release asset name replaces it instead of
+# accumulating stale duplicates.
+(cd "${out_dir}" && sha256sum "${archive_name}" > SHA256SUMS)
+echo "Wrote ${out_dir}/SHA256SUMS"
+
+# DualDeck-Installer.sh needs no build-time-computed values (it always
+# fetches "latest" dynamically, same as check-for-updates.sh/
+# apply-update.sh above), so it's a plain static repo file rather than
+# a heredoc here -- this just publishes it as its own downloadable
+# release asset alongside the archive it knows how to fetch/verify/
+# install.
+cp "${repo_root}/scripts/DualDeck-Installer.sh" "${out_dir}/DualDeck-Installer.sh"
+echo "Wrote ${out_dir}/DualDeck-Installer.sh"

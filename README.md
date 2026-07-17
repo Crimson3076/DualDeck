@@ -18,6 +18,14 @@ rather than overwriting a shared one, so older builds stay downloadable
 if a newer one turns out to be broken. See `RELEASE_NOTES.md` inside the
 archive for exactly which commit a given release was built from.
 
+The easiest way to install: download **`DualDeck-Installer.sh`** from
+that same Releases page and run it -- it downloads and verifies (via
+`SHA256SUMS`) the rest for you and offers Install Client / Install Host
+/ Install Both / Repair / Uninstall, so you never need to manually
+extract an archive yourself. See `docs/known-limitations.md`'s
+installer section for exactly what it does and doesn't cover yet (it's
+Phase 1 of GitHub issue #26's larger installer/auto-update rework).
+
 Everything you need to run is one script per side, no typing required:
 double-click `host/melonds-remote-host.sh` on the machine running
 melonDS, and `client/melonds-remote-client.sh` on your Steam Deck (or

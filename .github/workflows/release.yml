@@ -73,4 +73,7 @@ jobs:
             `RELEASE_NOTES.md` inside the archive for the exact commit it was
             built from, and `docs/known-limitations.md` (also bundled) for what
             is and isn't verified.
-          files: release-out/*.tar.gz
+          files: |
+            release-out/*.tar.gz
+            release-out/SHA256SUMS
+            release-out/DualDeck-Installer.sh
