@@ -1752,6 +1752,61 @@ enough in this environment to complete that exact trace -- the
 window-close reproduction above exercises the identical blocked-event-
 loop code path, which is what makes it a faithful stand-in).
 
+## Mouse-click touch (GitHub issue #23)
+
+User request: "Allow the client to click on the screen using mouse
+inputs to register touchscreen taps, such as using the touchpads on the
+steamdeck, so users have the option of using both touchscreen and
+touchpad." Steam Input's default "Trackpad" binding template maps a
+Deck trackpad to mouse motion/clicks, not touch/finger events, so
+without this the client's existing touch handling (finger events only)
+had no way to receive that input at all.
+
+Added `SDL_EVENT_MOUSE_BUTTON_DOWN`/`_MOTION`/`_UP` handling in both
+`client/src/main.cpp`'s main connected loop and the setup wizard's touch
+test, mirroring the existing finger-event handling exactly: left
+click/drag maps through the same `mapPointToDSCoords`/
+`computeAspectFitRect` used for real touch, ignores clicks/drags outside
+the rendered DS rectangle, and a plain mouse-motion event with no button
+held is *not* treated as touch movement (unlike finger motion, which a
+touchscreen only ever generates while actually being touched -- a mouse
+generates motion events continuously regardless of button state, so
+this needed an explicit gate a finger-only implementation didn't). Touch
+and mouse inputs are tracked as independent sources (a new
+`mouseTouchDown`/`mouseDown` flag alongside the existing
+`activeFingerId`), so releasing one doesn't clear a touch still held by
+the other, and mouse events synthesized *from* a real touch
+(`which == SDL_TOUCH_MOUSEID`, a platform convenience some backends
+provide so mouse-only UI still works via touch) are filtered out to
+avoid double-handling the same physical touch as two separate input
+sources.
+
+**Verified**: full build with
+`-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror`, clean;
+`ctest` passes (unaffected -- no protocol/wire changes, this is
+client-local input handling only). End-to-end, driven for real: a
+minimal Python fake host (handshake + a UDP listener decoding real
+`ControllerState` packets) plus the actual client binary running under
+Xvfb, with `xdotool`-injected mouse events (this needed
+`SDL_MOUSE_FOCUS_CLICKTHROUGH=1` and un-windowed/global click injection
+to actually reach the app in this window-manager-less sandbox -- notably,
+this succeeded here where an earlier attempt at synthetic keyboard/mouse
+input for the issue #21 investigation above did not, so that gap may be
+more about the specific injection technique used there than a hard
+sandbox limitation). Confirmed all three cases: a click inside the DS
+rectangle registers `touchActive=1` at the exact expected DS coordinate
+(clicking the window's center produced `touchX=128, touchY=96`, the
+precise center of the 256x192 DS touch range) and a subsequent drag
+updates position before release clears it; mouse motion with no button
+held produces no touch events at all; a click outside the DS rectangle
+is ignored, matching out-of-bounds finger-touch behavior. **Not
+verified**: real Steam Deck hardware, and specifically a real trackpad
+configured via Steam Input's "Trackpad" binding template (this sandbox
+has no Steam Input to exercise -- the verification above used a real X11
+mouse device, which is the same SDL event path a Steam Input-emulated
+mouse would produce, but the actual trackpad-to-mouse mapping step
+itself is unverified).
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

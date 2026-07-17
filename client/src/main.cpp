@@ -12,9 +12,12 @@
 //    the window
 //  - Reads the first connected gamepad and maps it to DS buttons per
 //    SPEC.md section 7.3
-//  - Reads touchscreen (finger) events, maps them through
+//  - Reads touchscreen (finger) events, and left-click/drag mouse events
+//    (GitHub issue #23 -- e.g. a Steam Deck trackpad configured as a
+//    mouse via Steam Input's "Trackpad" binding, an alternative to an
+//    actual touchscreen), maps both through
 //    melonds_remote::computeAspectFitRect / mapPointToDSCoords, and
-//    ignores touches outside the rendered DS rectangle
+//    ignores touches/clicks outside the rendered DS rectangle
 //  - Sends a full ControllerState packet at a fixed ~120Hz rate
 //    regardless of whether anything changed (spec section 6.3)
 //  - Logs connection/controller/touch/frame events to stderr as the
@@ -974,9 +977,23 @@ WizardSimpleResult wizardTouchTest(SDL_Renderer* renderer, SDL_Gamepad*& gamepad
     };
     constexpr double kHitRadius = 40.0;
     uint64_t allHitSinceUs = 0;
+    // Left-button drag state for mouse-click touch (GitHub issue #23) --
+    // see the identical pattern's comment in main()'s connected loop.
+    bool mouseDown = false;
 
     while (true) {
         RenderRect dsRect = computeAspectFitRect(kWindowWidth, kWindowHeight);
+
+        auto checkHit = [&](double px, double py) {
+            if (!mapPointToDSCoords(px, py, dsRect)) return;
+            for (auto& target : targets) {
+                double tx = dsRect.x + target.fx * dsRect.width;
+                double ty = dsRect.y + target.fy * dsRect.height;
+                if (std::hypot(px - tx, py - ty) <= kHitRadius) {
+                    target.hit = true;
+                }
+            }
+        };
 
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
@@ -999,20 +1016,24 @@ WizardSimpleResult wizardTouchTest(SDL_Renderer* renderer, SDL_Gamepad*& gamepad
                     if (event.gbutton.button == SDL_GAMEPAD_BUTTON_EAST) return WizardSimpleResult::Back;
                     break;
                 case SDL_EVENT_FINGER_DOWN:
-                case SDL_EVENT_FINGER_MOTION: {
-                    double px = static_cast<double>(event.tfinger.x) * kWindowWidth;
-                    double py = static_cast<double>(event.tfinger.y) * kWindowHeight;
-                    if (mapPointToDSCoords(px, py, dsRect)) {
-                        for (auto& target : targets) {
-                            double tx = dsRect.x + target.fx * dsRect.width;
-                            double ty = dsRect.y + target.fy * dsRect.height;
-                            if (std::hypot(px - tx, py - ty) <= kHitRadius) {
-                                target.hit = true;
-                            }
-                        }
-                    }
+                case SDL_EVENT_FINGER_MOTION:
+                    checkHit(static_cast<double>(event.tfinger.x) * kWindowWidth,
+                             static_cast<double>(event.tfinger.y) * kWindowHeight);
                     break;
-                }
+                case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                    if (event.button.which == SDL_TOUCH_MOUSEID || event.button.button != SDL_BUTTON_LEFT) {
+                        break;
+                    }
+                    mouseDown = true;
+                    checkHit(event.button.x, event.button.y);
+                    break;
+                case SDL_EVENT_MOUSE_MOTION:
+                    if (!mouseDown || event.motion.which == SDL_TOUCH_MOUSEID) break;
+                    checkHit(event.motion.x, event.motion.y);
+                    break;
+                case SDL_EVENT_MOUSE_BUTTON_UP:
+                    if (event.button.button == SDL_BUTTON_LEFT) mouseDown = false;
+                    break;
                 default:
                     break;
             }
@@ -1401,6 +1422,14 @@ int main(int argc, char** argv) {
         uint16_t touchX = 0;
         uint16_t touchY = 0;
         std::optional<int64_t> activeFingerId;
+        // Mouse-click touch (GitHub issue #23): left click/drag maps to a
+        // touch the same way a finger does, so a Steam Deck trackpad
+        // configured as a mouse (Steam Input's default "Trackpad" binding,
+        // or a real mouse in Desktop Mode) works as an alternative to an
+        // actual touchscreen. Tracked separately from activeFingerId so
+        // releasing one input source doesn't clear a touch still being
+        // held by the other -- touchActive is the OR of both below.
+        bool mouseTouchDown = false;
 
         std::vector<uint8_t> frame;
         std::vector<uint8_t> testPattern(static_cast<size_t>(kDSWidth) * kDSHeight * 4, 0x40);
@@ -1464,8 +1493,57 @@ int main(int argc, char** argv) {
                     case SDL_EVENT_FINGER_UP:
                         if (activeFingerId &&
                             *activeFingerId == static_cast<int64_t>(event.tfinger.fingerID)) {
-                            touchActive = false;
+                            // Only clears touchActive if a mouse-driven touch
+                            // isn't also currently in progress -- see
+                            // mouseTouchDown's declaration above.
+                            touchActive = mouseTouchDown;
                             activeFingerId.reset();
+                        }
+                        break;
+                    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                        // which == SDL_TOUCH_MOUSEID means this button event
+                        // was synthesized from a real touch SDL already
+                        // delivered as SDL_EVENT_FINGER_DOWN above -- skip it
+                        // here to avoid double-handling the same physical
+                        // touch as two separate input sources.
+                        if (menuActive || event.button.which == SDL_TOUCH_MOUSEID ||
+                            event.button.button != SDL_BUTTON_LEFT) {
+                            break;
+                        }
+                        if (auto mapped = mapPointToDSCoords(event.button.x, event.button.y, dsRect)) {
+                            touchActive = true;
+                            touchX = mapped->first;
+                            touchY = mapped->second;
+                            mouseTouchDown = true;
+                        }
+                        // else: click started outside the DS rectangle, same
+                        // as an out-of-bounds finger touch above -- ignored.
+                        break;
+                    case SDL_EVENT_MOUSE_MOTION:
+                        // Only a drag (button already down) counts as touch
+                        // movement -- plain cursor motion with no button
+                        // held isn't a touch, unlike SDL_EVENT_FINGER_MOTION
+                        // (a touchscreen has no "hover" state to generate
+                        // motion events for in the first place).
+                        if (menuActive || !mouseTouchDown || event.motion.which == SDL_TOUCH_MOUSEID) {
+                            break;
+                        }
+                        if (auto mapped = mapPointToDSCoords(event.motion.x, event.motion.y, dsRect)) {
+                            touchX = mapped->first;
+                            touchY = mapped->second;
+                        }
+                        // else: dragged outside the DS rectangle -- keeps the
+                        // last in-bounds position, same as finger motion.
+                        break;
+                    case SDL_EVENT_MOUSE_BUTTON_UP:
+                        if (event.button.which == SDL_TOUCH_MOUSEID || event.button.button != SDL_BUTTON_LEFT) {
+                            break;
+                        }
+                        if (mouseTouchDown) {
+                            // Only clears touchActive if a finger touch isn't
+                            // also currently in progress.
+                            touchActive = activeFingerId.has_value();
+                            mouseTouchDown = false;
                         }
                         break;
                     case SDL_EVENT_KEY_DOWN: {

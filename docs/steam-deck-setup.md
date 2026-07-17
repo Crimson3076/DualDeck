@@ -118,7 +118,11 @@ See `docs/building.md` for the actual CMake invocation either way.
 5. Confirm: window opens fullscreen at 1280x800, the host's bottom-screen
    stream renders letterboxed at 4:3, the Deck's built-in controller
    moves the game/logs show button state, and the touchscreen registers
-   only inside the rendered DS rectangle (spec section 7.4).
+   only inside the rendered DS rectangle (spec section 7.4). A left
+   click/drag works the same way as a touch (GitHub issue #23) -- on a
+   real Deck this means either of the trackpads works as an alternative
+   to an actual touchscreen once configured as a mouse in Steam Input
+   (the default "Trackpad" binding), no touchscreen hardware required.
 6. Hold **both stick clicks in together (L3+R3) for about a third of a
    second** (or press Escape in Desktop Mode with no gamepad connected)
    to open the in-app menu -- fully controller-navigable (D-pad to move, South/A to select),
@@ -243,13 +247,22 @@ Gaming Mode:
 Once launched, the physical Deck controls should behave per `SPEC.md`
 section 7.3's table (D-pad → DS D-pad, A/B/X/Y → DS A/B/X/Y, L1/R1 → DS
 L/R, Start/View → DS Start/Select, touchscreen → DS touchscreen, left
-stick as an optional alternate D-pad). Start and View are dual-purpose:
-pressed individually they still go to the DS as Start/Select; **held
-together** they instead open the in-app menu (see step 6 above) and stop
-being forwarded to the DS for as long as the menu is open. These are
-currently a fixed mapping in `client/src/main.cpp` (`kButtonMappings`),
-not yet exposed through Steam Input action sets -- that remapping-via-Steam-Input work is
-Phase 3 (`SPEC.md`) and not implemented yet.
+stick as an optional alternate D-pad). Start and View always go straight
+to the DS as Start/Select with no dual-purpose behavior -- **holding
+both stick clicks in together (L3+R3)** opens the in-app menu instead
+(see step 6 above) and stops controller input from being forwarded to
+the DS for as long as the menu is open. This used to be the Start+Select
+chord, changed to L3+R3 because Start+Select held together is also Steam
+Input's own default chord for switching a game's active action set on
+Steam Deck, which could intercept the hold before this app ever saw it
+(see `docs/known-limitations.md`). A
+trackpad configured as a mouse (or an actual touchscreen, or a real
+mouse in Desktop Mode) also works as an alternative way to touch the
+bottom screen -- left click/drag maps the same way a finger touch does
+(GitHub issue #23). These are currently a fixed mapping in
+`client/src/main.cpp` (`kButtonMappings`), not yet exposed through Steam
+Input action sets -- that remapping-via-Steam-Input work is Phase 3
+(`SPEC.md`) and not implemented yet.
 
 ## If something doesn't work
 
