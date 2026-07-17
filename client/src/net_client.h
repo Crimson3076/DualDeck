@@ -114,8 +114,11 @@ private:
 
     // Serializes connect()/disconnect() against each other -- callers may
     // run reconnect-on-a-background-thread while the main thread can
-    // still call disconnect() at shutdown.
+    // still call disconnect() at shutdown. connectionAttemptInProgress_
+    // prevents a second caller from queueing another connect behind the
+    // first one while the handshake is still blocking.
     std::mutex connectMutex_;
+    std::atomic<bool> connectionAttemptInProgress_{false};
 
     std::atomic<bool> connected_{false};
     std::thread videoThread_;
