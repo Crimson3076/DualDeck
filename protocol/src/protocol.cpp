@@ -221,6 +221,7 @@ void serializeHelloAckPayload(ByteBuffer& out, const HelloAckPayload& ack) {
     appendU16(out, ack.nativeWidth);
     appendU16(out, ack.nativeHeight);
     appendString(out, ack.appVersion);
+    out.push_back(ack.micSupported ? 1 : 0);
 }
 
 std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t size) {
@@ -252,10 +253,16 @@ std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t 
     if (!version) return std::nullopt;
     ack.appVersion = std::move(*version);
 
-    if (offset != size) {
-        // trailing garbage: reject rather than silently ignore
+    if (offset + 1 != size) {
+        // trailing garbage, or micSupported missing entirely: reject
+        // rather than silently ignore
         return std::nullopt;
     }
+    uint8_t micSupported = data[offset]; offset += 1;
+    if (micSupported != 0 && micSupported != 1) {
+        return std::nullopt;
+    }
+    ack.micSupported = micSupported;
 
     return ack;
 }
@@ -275,6 +282,7 @@ void serializeDiscoveryResponsePayload(ByteBuffer& out, const DiscoveryResponseP
     appendU16(out, response.controlPort);
     appendU16(out, response.inputPort);
     appendU16(out, response.videoPort);
+    appendU16(out, response.audioPort);
 }
 
 std::optional<DiscoveryResponsePayload> parseDiscoveryResponsePayload(const uint8_t* data, size_t size) {
@@ -289,10 +297,11 @@ std::optional<DiscoveryResponsePayload> parseDiscoveryResponsePayload(const uint
     if (!hostName) return std::nullopt;
     response.hostName = std::move(*hostName);
 
-    if (offset + 6 > size) return std::nullopt;
+    if (offset + 8 > size) return std::nullopt;
     response.controlPort = readU16(data, offset); offset += 2;
     response.inputPort = readU16(data, offset); offset += 2;
     response.videoPort = readU16(data, offset); offset += 2;
+    response.audioPort = readU16(data, offset); offset += 2;
 
     if (offset != size) {
         // trailing garbage: reject rather than silently ignore
@@ -306,6 +315,52 @@ ByteBuffer buildDiscoveryResponsePacket(const DiscoveryResponsePayload& response
     ByteBuffer payload;
     serializeDiscoveryResponsePayload(payload, response);
     return buildPacket(PacketType::DiscoveryResponse, payload);
+}
+
+void serializeMicAudioFramePayload(ByteBuffer& out, const MicAudioFramePayload& frame) {
+    appendU32(out, frame.sequence);
+    appendU64(out, frame.clientTimestampUs);
+    appendU16(out, frame.numSamples);
+    for (size_t i = 0; i < frame.numSamples && i < frame.samples.size(); ++i) {
+        appendI16(out, frame.samples[i]);
+    }
+}
+
+std::optional<MicAudioFramePayload> parseMicAudioFramePayload(const uint8_t* data, size_t size) {
+    constexpr size_t kFixedWireSize = 4 + 8 + 2;
+    if (data == nullptr || size < kFixedWireSize) {
+        return std::nullopt;
+    }
+
+    MicAudioFramePayload frame;
+    size_t offset = 0;
+
+    frame.sequence = readU32(data, offset); offset += 4;
+    frame.clientTimestampUs = readU64(data, offset); offset += 8;
+    frame.numSamples = readU16(data, offset); offset += 2;
+
+    if (frame.numSamples > kMicAudioSamplesPerPacket) {
+        return std::nullopt;
+    }
+    if (offset + static_cast<size_t>(frame.numSamples) * 2 != size) {
+        // wrong sample count for the buffer we actually received:
+        // reject rather than silently truncate/pad
+        return std::nullopt;
+    }
+
+    frame.samples.resize(frame.numSamples);
+    for (uint16_t i = 0; i < frame.numSamples; ++i) {
+        frame.samples[i] = readI16(data, offset);
+        offset += 2;
+    }
+
+    return frame;
+}
+
+ByteBuffer buildMicAudioFramePacket(const MicAudioFramePayload& frame) {
+    ByteBuffer payload;
+    serializeMicAudioFramePayload(payload, frame);
+    return buildPacket(PacketType::MicAudioFrame, payload);
 }
 
 } // namespace melonds_remote

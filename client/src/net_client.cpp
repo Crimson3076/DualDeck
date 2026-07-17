@@ -56,7 +56,9 @@ void NetClient::closePartialConnection() {
     if (controlFd_ >= 0) { ::close(controlFd_); controlFd_ = -1; }
     if (videoFd_ >= 0) { ::close(videoFd_); videoFd_ = -1; }
     if (udpFd_ >= 0) { ::close(udpFd_); udpFd_ = -1; }
+    if (udpAudioFd_ >= 0) { ::close(udpAudioFd_); udpAudioFd_ = -1; }
     sessionId_ = 0;
+    hostMicSupported_ = false;
 
     if (videoThread_.joinable()) videoThread_.join();
     if (heartbeatThread_.joinable()) heartbeatThread_.join();
@@ -185,6 +187,7 @@ bool NetClient::connect() {
         return false;
     }
     sessionId_ = ack->sessionId;
+    hostMicSupported_ = ack->micSupported != 0;
 
     // Video channel: a second TCP connection dedicated to frame streaming
     // (see docs/protocol.md -- Stage 1 keeps control and video separate
@@ -211,6 +214,20 @@ bool NetClient::connect() {
         // send() calls; failure here means the address family/setup is
         // wrong, not an actual network condition.
         std::perror("connect (udp input)");
+        closePartialConnection();
+        return false;
+    }
+
+    udpAudioFd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
+    if (udpAudioFd_ < 0) {
+        std::perror("socket (udp audio)");
+        closePartialConnection();
+        return false;
+    }
+    sockaddr_in audioAddr = addr;
+    audioAddr.sin_port = htons(config_.audioPort);
+    if (::connect(udpAudioFd_, reinterpret_cast<sockaddr*>(&audioAddr), sizeof(audioAddr)) < 0) {
+        std::perror("connect (udp audio)");
         closePartialConnection();
         return false;
     }
@@ -259,6 +276,12 @@ void NetClient::sendControllerState(const ControllerState& state) {
     if (!connected_.load() || udpFd_ < 0) return;
     ByteBuffer packet = buildControllerStatePacket(state);
     ::send(udpFd_, packet.data(), packet.size(), MSG_NOSIGNAL);
+}
+
+void NetClient::sendMicAudioFrame(const MicAudioFramePayload& frame) {
+    if (!connected_.load() || udpAudioFd_ < 0 || !hostMicSupported_.load()) return;
+    ByteBuffer packet = buildMicAudioFramePacket(frame);
+    ::send(udpAudioFd_, packet.data(), packet.size(), MSG_NOSIGNAL);
 }
 
 HelloRejectReason NetClient::lastRejectReason() const {

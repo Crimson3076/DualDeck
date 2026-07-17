@@ -9,6 +9,7 @@
 #include <thread>
 
 #include "host/logging_input_sink.h"
+#include "host/logging_mic_audio_sink.h"
 #include "host/net_server.h"
 #include "host/synthetic_frame_source.h"
 
@@ -101,6 +102,10 @@ int main(int argc, char** argv) {
             config.hostName = nextArg();
         } else if (arg == "--no-discovery") {
             config.discoveryEnabled = false;
+        } else if (arg == "--audio-port") {
+            config.audioPort = static_cast<uint16_t>(std::stoi(nextArg()));
+        } else if (arg == "--no-mic") {
+            config.micSupported = false;
         } else if (arg == "--app-version") {
             config.appVersion = nextArg();
         } else if (arg == "--help") {
@@ -109,7 +114,7 @@ int main(int argc, char** argv) {
                 "[--input-port N] [--video-port N] [--timeout-ms N] [--auth-token TOKEN] "
                 "[--state-dir PATH] [--pending-request-ttl-s N] [--stats-interval-ms N] "
                 "[--discovery-port N] [--host-name NAME] [--no-discovery] "
-                "[--app-version STRING]\n"
+                "[--audio-port N] [--no-mic] [--app-version STRING]\n"
                 "\n"
                 "Phase 1 prototype: serves a synthetic 256x192 test-pattern bottom\n"
                 "screen and logs received controller/touch state. Not yet wired to\n"
@@ -158,7 +163,15 @@ int main(int argc, char** argv) {
                 "different non-empty version of its own, the handshake is rejected\n"
                 "with AppVersionMismatch before authentication is even checked.\n"
                 "Omitted by default (no version-mismatch check at all) -- the\n"
-                "packaged release wires this from the archive's VERSION file.\n");
+                "packaged release wires this from the archive's VERSION file.\n"
+                "\n"
+                "Microphone support (spec/GitHub issue #2) is on by default: the\n"
+                "client can capture its own microphone and stream it here over UDP\n"
+                "on --audio-port (default 8765). This build only logs received\n"
+                "audio's level -- it has no real destination to inject it into\n"
+                "(see docs/melonds-integration-analysis.md); the melonDS integration\n"
+                "feeds it into melonDS's own microphone input. --no-mic turns the\n"
+                "feature off entirely (reported to the client as unsupported).\n");
             return 0;
         } else {
             std::fprintf(stderr, "unrecognized argument: %s\n", arg.c_str());
@@ -172,8 +185,9 @@ int main(int argc, char** argv) {
     melonds_remote::host::LoggingInputSink inputSink;
     melonds_remote::host::SyntheticFrameSource frameSource(60);
     frameSource.start();
+    melonds_remote::host::LoggingMicAudioSink micSink;
 
-    melonds_remote::host::NetServer server(config, inputSink, frameSource);
+    melonds_remote::host::NetServer server(config, inputSink, frameSource, micSink);
     server.start();
 
     if (config.authToken.empty()) {

@@ -41,6 +41,35 @@ MDR_TEST(client_settings_round_trip_auto_update_toggle) {
     std::filesystem::remove_all(path.parent_path(), ec);
 }
 
+MDR_TEST(client_settings_missing_file_uses_system_default_mic) {
+    auto path = temporarySettingsPath("missing-mic");
+    ClientSettings settings = loadClientSettings(path.string());
+    MDR_CHECK(settings.micDeviceName.empty());
+    MDR_CHECK(!settings.micMuted);
+}
+
+MDR_TEST(client_settings_round_trip_mic_device_and_mute) {
+    auto path = temporarySettingsPath("mic-round-trip");
+    ClientSettings settings;
+    settings.micDeviceName = "USB Microphone (Blue Yeti)";
+    settings.micMuted = true;
+
+    MDR_CHECK(saveClientSettings(path.string(), settings));
+    ClientSettings loaded = loadClientSettings(path.string());
+    MDR_CHECK(loaded.micDeviceName == "USB Microphone (Blue Yeti)");
+    MDR_CHECK(loaded.micMuted);
+
+    settings.micDeviceName = "";
+    settings.micMuted = false;
+    MDR_CHECK(saveClientSettings(path.string(), settings));
+    loaded = loadClientSettings(path.string());
+    MDR_CHECK(loaded.micDeviceName.empty());
+    MDR_CHECK(!loaded.micMuted);
+
+    std::error_code ec;
+    std::filesystem::remove_all(path.parent_path(), ec);
+}
+
 MDR_TEST(client_settings_ignores_unknown_and_invalid_values) {
     auto path = temporarySettingsPath("invalid");
     std::filesystem::create_directories(path.parent_path());

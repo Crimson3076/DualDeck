@@ -21,6 +21,7 @@ struct NetClientConfig {
     uint16_t controlPort = 8760;
     uint16_t inputPort = 8761;
     uint16_t videoPort = 8762;
+    uint16_t audioPort = 8765; // MicAudioFrame packets, GitHub issue #2
 
     std::string clientName = "SteamDeck";
     std::string clientPlatform = "linux";
@@ -69,6 +70,19 @@ public:
     // the caller is expected to call this at ~120Hz.
     void sendControllerState(const ControllerState& state);
 
+    // Sends one MicAudioFrame packet over its own UDP socket (issue #2),
+    // fire-and-forget like sendControllerState() above. No-op if not
+    // connected or the host didn't advertise micSupported in its
+    // HelloAck -- callers should check hostMicSupported() before ever
+    // opening a capture device in the first place, but this is a safe
+    // no-op regardless.
+    void sendMicAudioFrame(const MicAudioFramePayload& frame);
+
+    // Whether the host's most recent HelloAck reported it can accept and
+    // inject microphone audio. Only meaningful once connected (false
+    // otherwise, same convention as sessionId()/hostAppVersion()).
+    bool hostMicSupported() const { return hostMicSupported_.load(); }
+
     // Copies the most recently received video frame (BGRA8888,
     // host::kFrameSizeBytes long) into `outFrame` and returns true, or
     // returns false if no frame has arrived yet. Never blocks.
@@ -110,7 +124,9 @@ private:
     std::atomic<int> controlFd_{-1};
     std::atomic<int> videoFd_{-1};
     std::atomic<int> udpFd_{-1};
+    std::atomic<int> udpAudioFd_{-1};
     std::atomic<uint32_t> sessionId_{0};
+    std::atomic<bool> hostMicSupported_{false};
 
     // Serializes connect()/disconnect() against each other -- callers may
     // run reconnect-on-a-background-thread while the main thread can

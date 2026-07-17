@@ -84,6 +84,7 @@ MDR_TEST(hello_ack_payload_round_trip_accepted) {
     ack.nativeWidth = 256;
     ack.nativeHeight = 192;
     ack.appVersion = "v0.1.24";
+    ack.micSupported = 1;
 
     ByteBuffer buf;
     serializeHelloAckPayload(buf, ack);
@@ -95,6 +96,28 @@ MDR_TEST(hello_ack_payload_round_trip_accepted) {
     MDR_CHECK_EQ(parsed->nativeWidth, 256);
     MDR_CHECK_EQ(parsed->nativeHeight, 192);
     MDR_CHECK(parsed->appVersion == ack.appVersion);
+    MDR_CHECK_EQ(parsed->micSupported, 1);
+}
+
+MDR_TEST(hello_ack_payload_mic_unsupported_by_default) {
+    HelloAckPayload ack;
+    ack.accepted = 1;
+
+    ByteBuffer buf;
+    serializeHelloAckPayload(buf, ack);
+    auto parsed = parseHelloAckPayload(buf.data(), buf.size());
+    MDR_CHECK(parsed.has_value());
+    MDR_CHECK_EQ(parsed->micSupported, 0);
+}
+
+MDR_TEST(hello_ack_payload_rejects_invalid_mic_supported_flag) {
+    HelloAckPayload ack;
+    ack.accepted = 1;
+    ByteBuffer buf;
+    serializeHelloAckPayload(buf, ack);
+    buf.back() = 2; // invalid: micSupported is the last byte
+
+    MDR_CHECK(!parseHelloAckPayload(buf.data(), buf.size()).has_value());
 }
 
 MDR_TEST(hello_ack_payload_round_trip_app_version_mismatch) {

@@ -52,6 +52,7 @@
 #include "device_identity.h"
 #include "discovery_client.h"
 #include "discovery_store.h"
+#include "mic_capture.h"
 #include "melonds_remote/protocol.h"
 #include "melonds_remote/touch_mapping.h"
 #include "net_client.h"
@@ -247,7 +248,8 @@ void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHos
 }
 
 void renderPauseMenu(SDL_Renderer* renderer, const std::vector<std::string>& items, int selectedIndex,
-                     const std::string& title = "MENU", const std::string& statusLine = "") {
+                     const std::string& title = "MENU", const std::string& statusLine = "",
+                     float micLevel = -1.0f) {
     SDL_SetRenderDrawColor(renderer, 20, 20, 24, 220);
     SDL_RenderClear(renderer);
     renderCenteredBitmapText(renderer, title, 100.0f, 4, SDL_Color{220, 220, 220, 255});
@@ -271,6 +273,34 @@ void renderPauseMenu(SDL_Renderer* renderer, const std::vector<std::string>& ite
             SDL_RenderFillRect(renderer, &highlight);
         }
         renderCenteredBitmapText(renderer, items[i], rowY, kPixelSize, color);
+    }
+
+    // Live microphone input-level meter (GitHub issue #2), shown only on
+    // screens that pass a real level (>= 0) -- the settings screen while
+    // the host supports mic input. Drawn below the menu rows regardless
+    // of mute state, so muting is visibly distinct from "no signal at
+    // all" (the bar keeps moving with real input; only the host stops
+    // receiving it).
+    if (micLevel >= 0.0f) {
+        float meterY = startY + static_cast<float>(items.size()) * kRowHeight + 30.0f;
+        constexpr float kMeterWidth = 420.0f;
+        constexpr float kMeterHeight = 28.0f;
+        float meterX = (static_cast<float>(kWindowWidth) - kMeterWidth) / 2.0f;
+
+        renderCenteredBitmapText(renderer, "MIC LEVEL", meterY - 34.0f, 2, SDL_Color{140, 140, 140, 255});
+
+        SDL_FRect meterBg{meterX, meterY, kMeterWidth, kMeterHeight};
+        SDL_SetRenderDrawColor(renderer, 45, 45, 50, 255);
+        SDL_RenderFillRect(renderer, &meterBg);
+
+        float clampedLevel = std::clamp(micLevel, 0.0f, 1.0f);
+        SDL_FRect meterFill{meterX, meterY, kMeterWidth * clampedLevel, kMeterHeight};
+        SDL_Color fillColor = clampedLevel > 0.9f ? SDL_Color{220, 90, 90, 255} : SDL_Color{90, 200, 120, 255};
+        SDL_SetRenderDrawColor(renderer, fillColor.r, fillColor.g, fillColor.b, fillColor.a);
+        SDL_RenderFillRect(renderer, &meterFill);
+
+        SDL_SetRenderDrawColor(renderer, 140, 140, 140, 255);
+        SDL_RenderRect(renderer, &meterBg);
     }
 
     if (!statusLine.empty()) {
@@ -1252,7 +1282,12 @@ int main(int argc, char** argv) {
 
     const std::string discoveryStorePath = defaultLastHostStorePath();
 
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
+    // SDL_INIT_AUDIO is required for MicCapture's SDL_OpenAudioDeviceStream
+    // calls (GitHub issue #2) to succeed at all -- without it every open()
+    // just fails silently, so the client would connect fine but never
+    // actually stream microphone audio no matter what the user picks in
+    // Settings.
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return 1;
     }
@@ -1467,14 +1502,59 @@ int main(int argc, char** argv) {
         bool settingsActive = false;
         int settingsSelectedIndex = 0;
         bool settingsSaveFailed = false;
+
+        // Microphone capture (GitHub issue #2). Opened once the host's
+        // HelloAck reports micSupported; reopened only when the user
+        // picks a different device in Settings. Muting doesn't close it
+        // -- see MicCapture::open()'s comment -- so the level meter
+        // keeps reflecting real input while muted, distinct from "no
+        // signal." Closed on disconnect (below) so a stale device isn't
+        // left open across host switches. Declared before
+        // settingsMenuItems/cycleMicDevice below since their `[&]`
+        // lambdas can only capture names already in scope.
+        melonds_remote::client::MicCapture micCapture;
+        std::vector<int16_t> micPendingSamples;
+        uint32_t micSequence = 0;
+        float micLevel = 0.0f;
+
         auto settingsMenuItems = [&]() {
             std::vector<std::string> items{
                 std::string("AUTO UPDATE ON LAUNCH: ") +
                     (clientSettings.autoUpdateOnLaunch ? "ON" : "OFF"),
             };
             if (!hostExplicit) items.push_back("RUN SETUP WIZARD");
+            if (net.hostMicSupported()) {
+                std::string micLabel =
+                    clientSettings.micDeviceName.empty() ? "SYSTEM DEFAULT" : clientSettings.micDeviceName;
+                items.push_back(std::string("MICROPHONE: ") + micLabel);
+                items.push_back(std::string("MIC: ") + (clientSettings.micMuted ? "MUTED" : "ON"));
+            }
             items.push_back("BACK");
             return items;
+        };
+        // Cycles clientSettings.micDeviceName to the next enumerated
+        // recording device (wrapping back to "SYSTEM DEFAULT"), saves,
+        // and reopens capture on the new device. Shared by the keyboard
+        // and gamepad settings handlers below, same as the inline
+        // AUTO UPDATE ON LAUNCH toggle they already duplicate.
+        auto cycleMicDevice = [&]() {
+            auto devices = melonds_remote::client::listMicDevices();
+            size_t currentIndex = 0;
+            for (size_t i = 0; i < devices.size(); ++i) {
+                if (devices[i].name == clientSettings.micDeviceName) {
+                    currentIndex = i;
+                    break;
+                }
+            }
+            size_t nextIndex = (currentIndex + 1) % devices.size();
+            // "SYSTEM DEFAULT" is stored as an empty name (see
+            // ClientSettings::micDeviceName's comment), never the literal
+            // label -- so a later SDL enumeration change can't strand a
+            // saved setting that no longer matches anything.
+            clientSettings.micDeviceName =
+                devices[nextIndex].id == SDL_AUDIO_DEVICE_DEFAULT_RECORDING ? "" : devices[nextIndex].name;
+            settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
+            micCapture.open(clientSettings.micDeviceName);
         };
         bool exitEmulationConfirm = false;
         int exitEmulationSelectedIndex = 0;
@@ -1627,6 +1707,11 @@ int main(int argc, char** argv) {
                             } else if (picked == "RUN SETUP WIZARD") {
                                 setupWizardRequested = true;
                                 runningInner = false;
+                            } else if (picked.rfind("MICROPHONE:", 0) == 0) {
+                                cycleMicDevice();
+                            } else if (picked.rfind("MIC:", 0) == 0) {
+                                clientSettings.micMuted = !clientSettings.micMuted;
+                                settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                             } else if (picked == "BACK") {
                                 settingsActive = false;
                                 menuActive = true;
@@ -1695,6 +1780,11 @@ int main(int argc, char** argv) {
                                 } else if (picked == "RUN SETUP WIZARD") {
                                     setupWizardRequested = true;
                                     runningInner = false;
+                                } else if (picked.rfind("MICROPHONE:", 0) == 0) {
+                                    cycleMicDevice();
+                                } else if (picked.rfind("MIC:", 0) == 0) {
+                                    clientSettings.micMuted = !clientSettings.micMuted;
+                                    settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                                 } else if (picked == "BACK") {
                                     settingsActive = false;
                                     menuActive = true;
@@ -1787,9 +1877,51 @@ int main(int argc, char** argv) {
                 menuChordFired = false;
             }
 
+            // Microphone capture/send (GitHub issue #2): runs every frame
+            // regardless of which screen is showing -- the host keeps the
+            // session running while this client-local menu overlay is up,
+            // so audio shouldn't pause just because the settings screen
+            // does. Opens lazily once the host's HelloAck confirms
+            // support; closes immediately on disconnect so a stale device
+            // isn't left open across a host switch or timeout, matching
+            // issue #2's "stop capture ... when the session disconnects."
+            if (net.isConnected() && net.hostMicSupported() && !micCapture.isOpen()) {
+                if (!micCapture.open(clientSettings.micDeviceName)) {
+                    std::fprintf(stderr, "[mic] failed to open capture device \"%s\": %s\n",
+                                clientSettings.micDeviceName.c_str(), SDL_GetError());
+                }
+            }
+            if (!net.isConnected() && micCapture.isOpen()) {
+                micCapture.close();
+                micPendingSamples.clear();
+                micLevel = 0.0f;
+            }
+            if (micCapture.isOpen()) {
+                micLevel = micCapture.pollSamples(micPendingSamples);
+                while (micPendingSamples.size() >= kMicAudioSamplesPerPacket) {
+                    // Muting still polls/levels above (the meter should
+                    // reflect real input while muted, not read as "no
+                    // signal") -- only the actual send to the host is
+                    // skipped, per issue #2's "muting prevents microphone
+                    // samples from reaching melonDS."
+                    if (!clientSettings.micMuted) {
+                        MicAudioFramePayload micFrame;
+                        micFrame.sequence = micSequence++;
+                        micFrame.clientTimestampUs = wallClockNowUs();
+                        micFrame.numSamples = kMicAudioSamplesPerPacket;
+                        micFrame.samples.assign(micPendingSamples.begin(),
+                                                 micPendingSamples.begin() + kMicAudioSamplesPerPacket);
+                        net.sendMicAudioFrame(micFrame);
+                    }
+                    micPendingSamples.erase(micPendingSamples.begin(),
+                                             micPendingSamples.begin() + kMicAudioSamplesPerPacket);
+                }
+            }
+
             if (settingsActive) {
                 renderPauseMenu(renderer, settingsMenuItems(), settingsSelectedIndex, "SETTINGS",
-                                settingsSaveFailed ? "COULD NOT SAVE SETTINGS" : "");
+                                settingsSaveFailed ? "COULD NOT SAVE SETTINGS" : "",
+                                net.hostMicSupported() ? micLevel : -1.0f);
                 continue;
             }
 

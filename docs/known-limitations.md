@@ -1652,9 +1652,11 @@ separate work**:
   chord holds, etc.) already validated on real hardware for the rest of
   this client in earlier work, but the wizard's own screens have only
   been exercised via Xvfb + `xdotool` and manual code review here.
-- **No audio/microphone test step.** This project has no audio feature
-  at all yet (Stage 1 is video-only, see "Video transport is Stage 1
-  only" above) -- there is nothing for such a step to test.
+- **No audio/microphone test step.** The setup wizard (issue #19) has no
+  "test your microphone" screen -- picking a device and confirming it
+  works happens later, in the in-app Settings menu's own level meter
+  (see the microphone section below, GitHub issue #2), not during first
+  setup.
 - **No host-side changes** (approve/deny dialog improvements, a
   server-state display, or a test-pattern mode) -- issue #19 asks for
   these too, but they require patching real melonDS Qt source, which is
@@ -1875,12 +1877,117 @@ correct C++ by inspection and compilation, not by observing melonDS's
 actual UI react to it in this sandbox, which has no way to load a ROM
 and drive a full Qt GUI end-to-end).
 
+## Microphone support (GitHub issue #2)
+
+User request: "Add optional Nintendo DS microphone support by capturing
+audio from a microphone connected to the client device and forwarding it
+to the host's native melonDS microphone input," with device selection
+and a live input-level meter under client Settings.
+
+**Protocol** (bumped to v5, a wire-layout change): `HelloAckPayload`
+gained `micSupported` (host capability, checked before the client ever
+opens a capture device or sends anything); `DiscoveryResponsePayload`
+gained `audioPort` (default 8765 -- distinct from the pre-existing
+`ManagementPort` default of 8764 from the Decky-plugin work, an actual
+port collision caught and fixed before this ever shipped). A new
+`MicAudioFrame` packet type carries a fixed-format payload: mono 16-bit
+PCM at a fixed `kMicAudioSampleRate` (48 kHz, matching melonDS's own
+local-mic capture rate), `kMicAudioSamplesPerPacket` (480, i.e. 10ms)
+samples per packet -- raw, uncompressed, no forward-error-correction, so
+a lost UDP packet is an audible ~10ms gap rather than a corrupted
+decode. Capability negotiation and the packet itself are entirely
+independent: a host can advertise `micSupported=false` (e.g.
+`--no-mic`), and a client with no microphone at all still connects and
+works exactly as before -- silence in either direction is the same as
+"no client/feature."
+
+**Host** (`host/remote-server`): a new `IMicAudioSink` interface (mirrors
+`IEmulatorInputSink`) is fed by a dedicated `audioLoop()` UDP receive
+loop, gated by the same authenticated-source-address check as
+`ControllerState`. `LoggingMicAudioSink` (used by the standalone
+synthetic host) tracks an RMS level and logs it periodically, useful for
+this session's own end-to-end verification without needing melonDS
+built at all.
+
+**Client** (`client/src/mic_capture.{h,cpp}`): SDL3's audio-capture API
+(`SDL_GetAudioRecordingDevices`/`SDL_OpenAudioDeviceStream`), enumerated
+fresh each time the user cycles the device in Settings so a
+newly-plugged-in mic shows up without restarting. "SYSTEM DEFAULT" is
+always the first, default-selected entry (stored as an empty
+`micDeviceName`, not the literal label, so a later SDL enumeration
+change can't strand a saved setting). Capture runs continuously for the
+whole connected session once the host advertises support -- not just
+while the Settings screen happens to be open, since the host keeps the
+game running regardless of which screen this client-local menu is
+showing. Muting stops packets from being *sent* but leaves capture (and
+the level meter) running, so the meter still shows real input while
+muted rather than reading as "no signal" -- matching the issue's
+distinct "mute" vs. "no microphone" states.
+
+**melonDS integration**: reuses melonDS's own existing local-mic
+pipeline (`EmuInstance::micCallback()`/`micResample()`/`micExtBuffer`,
+originally built for a physical mic in "External" input mode) rather
+than building a parallel one -- remote audio is just another producer
+for that same buffer, so it gets melonDS's own time-stretch-to-DS-rate
+handling for free. `micReadInput()` overrides the host's local
+`Mic.InputType`/push-to-talk configuration only while
+`RemoteServerBridge::hasActiveMicAudio()` is true (a client has sent
+audio within the last 500ms) -- a liveness check, not just "the
+remote-server feature is enabled," so a host operator's own local
+Noise/Wav test setup isn't silently replaced by silence just because
+the feature exists with no client ever sending audio. The one
+documented tradeoff of this reuse: if a host operator *also* manually
+enables local External-mode capture from a real device at the same time
+a remote client is streaming, both sources share `micExtBuffer` and
+interleave -- an unsupported combination this patch doesn't try to
+arbitrate between, not a crash or data race (both writers hold the same
+`micLock`).
+
+**Verified**: protocol, host, and client all build clean with
+`-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror`; `ctest`
+passes, including new protocol tests for `MicAudioFrame` round-trip/
+validation and `client_settings` round-trip for the new
+`micDeviceName`/`micMuted` fields. `tests/smoke_test.py` sends a
+real `MicAudioFrame` over UDP to a real standalone host process and
+confirms the decoded RMS level matches the sent samples exactly
+(computed by hand: four samples of ±1000/±2000 give RMS ≈0.048,
+logged by the host as `level=0.05`), plus a malformed one (declared
+sample count not matching the actual payload) that's rejected without
+crashing the server. The regenerated melonDS patch applies cleanly to a
+fresh pristine clone of the pinned upstream commit and a full Release
+build succeeds. End-to-end client verification (real client binary
+under Xvfb, `SDL_AUDIO_DRIVER=dummy`, driven via `xdotool` against a
+fake host advertising `micSupported=1`): confirmed the Settings screen
+renders "MICROPHONE: <device>" and "MIC: ON/MUTED" entries with a live
+level meter; cycling the device via the same entry re-opens capture on
+the new device without dropping the connection (4693+ packets received
+across the switch); muting stops packets arriving at the fake host
+within the same session, observed directly. **A real bug was caught by
+this verification and fixed**: the client's `SDL_Init()` call was
+missing `SDL_INIT_AUDIO` entirely, so every `MicCapture::open()` call
+failed silently and no audio was ever captured, despite the rest of the
+pipeline (settings UI, protocol, host) working -- this shipped fixed,
+not discovered after the fact.
+
+**Not verified**: real Steam Deck hardware, a real physical microphone
+(the dummy-driver verification above proves the whole pipeline moves
+real-shaped silence correctly end-to-end, including RMS math on the
+host side against real non-zero synthetic packets, but never a live
+non-silent capture device end-to-end in one run), Steam Input's
+trackpad-configured-as-microphone edge cases (not applicable here --
+this is about real audio input devices, not touch), and the
+local-External-mode-plus-remote-audio interleaving edge case mentioned
+above (understood by code inspection, not exercised).
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
 internet play, multiple simultaneous clients, user accounts, remote
-desktop/filesystem browsing, Android/Windows/iOS clients, microphone
-streaming, camera emulation, rumble, voice chat, spectator mode, artwork
-scraping, cheat databases, a custom emulator core, or replacing melonDS's
-rendering. These are not bugs or gaps in this implementation -- they are
+desktop/filesystem browsing, Android/Windows/iOS clients, camera
+emulation, rumble, voice chat, spectator mode, artwork scraping, cheat
+databases, a custom emulator core, or replacing melonDS's rendering.
+Voice chat *between users* and streaming the host's own game audio back
+to the client remain out of scope (GitHub issue #2's own "Out of scope"
+section) even though DS-microphone-to-host input is now implemented.
+These are not bugs or gaps in this implementation -- they are
 deliberately not attempted yet.

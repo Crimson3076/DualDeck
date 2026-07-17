@@ -19,6 +19,7 @@ MDR_TEST(discovery_response_payload_round_trip) {
     response.controlPort = 8760;
     response.inputPort = 8761;
     response.videoPort = 8762;
+    response.audioPort = 8765;
 
     ByteBuffer buf;
     serializeDiscoveryResponsePayload(buf, response);
@@ -28,6 +29,7 @@ MDR_TEST(discovery_response_payload_round_trip) {
     MDR_CHECK_EQ(parsed->controlPort, response.controlPort);
     MDR_CHECK_EQ(parsed->inputPort, response.inputPort);
     MDR_CHECK_EQ(parsed->videoPort, response.videoPort);
+    MDR_CHECK_EQ(parsed->audioPort, response.audioPort);
 }
 
 MDR_TEST(discovery_response_payload_empty_hostname_round_trip) {

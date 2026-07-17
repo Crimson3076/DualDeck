@@ -1,8 +1,8 @@
 diff --git a/src/frontend/qt_sdl/CMakeLists.txt b/src/frontend/qt_sdl/CMakeLists.txt
-index 31207f8..3ed9866 100644
+index 31207f8..98b5277 100644
 --- a/src/frontend/qt_sdl/CMakeLists.txt
 +++ b/src/frontend/qt_sdl/CMakeLists.txt
-@@ -60,6 +60,18 @@ set(SOURCES_QT_SDL
+@@ -60,6 +60,19 @@ set(SOURCES_QT_SDL
  
      LANDialog.cpp
      NetplayDialog.cpp
@@ -15,13 +15,14 @@ index 31207f8..3ed9866 100644
 +    remote_server/host/device_approval_manager.cpp
 +    remote_server/MelonDSFrameSource.cpp
 +    remote_server/MelonDSInputSink.cpp
++    remote_server/MelonDSMicAudioSink.cpp
 +    remote_server/RemoteServerBridge.cpp
 +    remote_server/GLBottomScreenCapture.cpp
 +    remote_server/ManagementServer.cpp
  )
  
  option(USE_QT6 "Use Qt 6 instead of Qt 5" ON)
-@@ -185,6 +197,17 @@ target_include_directories(melonDS PUBLIC
+@@ -185,6 +198,17 @@ target_include_directories(melonDS PUBLIC
      "${CMAKE_CURRENT_SOURCE_DIR}"
      "${CMAKE_CURRENT_SOURCE_DIR}/..")
  
@@ -40,10 +41,10 @@ index 31207f8..3ed9866 100644
      target_include_directories(melonDS PUBLIC ${Qt6Gui_PRIVATE_INCLUDE_DIRS})
  else()
 diff --git a/src/frontend/qt_sdl/Config.cpp b/src/frontend/qt_sdl/Config.cpp
-index 0d48ee1..90c91c3 100644
+index 0d48ee1..05610f5 100644
 --- a/src/frontend/qt_sdl/Config.cpp
 +++ b/src/frontend/qt_sdl/Config.cpp
-@@ -72,6 +72,17 @@ DefaultList<int> DefaultInts =
+@@ -72,6 +72,21 @@ DefaultList<int> DefaultInts =
      {"Instance*.Gdb.ARM9.Port", 3333},
  #endif
      {"LAN.HostNumPlayers", 16},
@@ -58,10 +59,14 @@ index 0d48ee1..90c91c3 100644
 +    {"MelonDSRemote.VideoPort", 8762},
 +    {"MelonDSRemote.DiscoveryPort", 8763},
 +    {"MelonDSRemote.ManagementPort", 8764},
++    // Microphone audio (GitHub issue #2 in the melonds-remote repo) --
++    // 8765, distinct from ManagementPort above (8764), which is an
++    // unrelated pre-existing feature.
++    {"MelonDSRemote.AudioPort", 8765},
  };
  
  RangeList IntRanges =
-@@ -112,13 +123,42 @@ DefaultList<bool> DefaultBools =
+@@ -112,13 +127,42 @@ DefaultList<bool> DefaultBools =
  #endif
      {"DSi.DSP.HLE", true},
      {"Instance*.RTC.SyncToHost", true},
@@ -106,7 +111,7 @@ index 0d48ee1..90c91c3 100644
  
  DefaultList<double> DefaultDoubles =
 diff --git a/src/frontend/qt_sdl/EmuInstance.cpp b/src/frontend/qt_sdl/EmuInstance.cpp
-index a8b1021..7f7c7b2 100755
+index a8b1021..7f6a73d 100755
 --- a/src/frontend/qt_sdl/EmuInstance.cpp
 +++ b/src/frontend/qt_sdl/EmuInstance.cpp
 @@ -20,15 +20,24 @@
@@ -196,7 +201,7 @@ index a8b1021..7f7c7b2 100755
      deleteAllWindows();
  
      emuThread->emuExit();
-@@ -175,6 +225,175 @@ EmuInstance::~EmuInstance()
+@@ -175,6 +225,176 @@ EmuInstance::~EmuInstance()
      }
  }
  
@@ -350,7 +355,8 @@ index a8b1021..7f7c7b2 100755
 +                emit mainWindow->screenLayoutChange();
 +            }, Qt::QueuedConnection);
 +        },
-+        envOr("MELONDS_REMOTE_VERSION", "MelonDSRemote.Version"));
++        envOr("MELONDS_REMOTE_VERSION", "MelonDSRemote.Version"),
++        envPortOr("MELONDS_REMOTE_AUDIO_PORT", "MelonDSRemote.AudioPort"));
 +    remoteServer->start();
 +    Platform::Log(Platform::LogLevel::Info, "melonds-remote: remote server enabled\n");
 +}
@@ -373,7 +379,7 @@ index a8b1021..7f7c7b2 100755
  std::string EmuInstance::instanceFileSuffix()
  {
 diff --git a/src/frontend/qt_sdl/EmuInstance.h b/src/frontend/qt_sdl/EmuInstance.h
-index a1eab0e..c2c7721 100755
+index a1eab0e..2c30617 100755
 --- a/src/frontend/qt_sdl/EmuInstance.h
 +++ b/src/frontend/qt_sdl/EmuInstance.h
 @@ -21,6 +21,9 @@
@@ -400,7 +406,28 @@ index a1eab0e..c2c7721 100755
  const int kMaxWindows = 4;
  
  enum
-@@ -378,6 +388,55 @@ private:
+@@ -242,6 +252,20 @@ private:
+     void micResample(melonDS::s16* inbuf, int inlen);
+     static void micCallback(void* data, Uint8* stream, int len);
+ 
++    // GitHub issue #2: feeds samples received from a remote client into
++    // the exact same micExtBuffer/micResample() pipeline local
++    // External-mode capture already uses (see micCallback() above) --
++    // remote audio is just another producer for that one pipeline, not a
++    // separate one, so it gets melonDS's existing time-stretch-to-
++    // DS-mic-rate handling for free. Called from inputProcess() on the
++    // emulation thread once per frame with whatever RemoteServerBridge
++    // has queued since the last call (see docs/known-limitations.md for
++    // the one tradeoff this reuse creates: local External-mode capture
++    // and remote audio would interleave in this same buffer if both were
++    // active at once, an unsupported combination this patch doesn't try
++    // to arbitrate between).
++    void remoteMicFeed(const melonDS::s16* samples, int numSamples);
++
+     void onKeyPress(QKeyEvent* event);
+     void onKeyRelease(QKeyEvent* event);
+     void keyReleaseAll();
+@@ -378,6 +402,55 @@ private:
      bool isTouching;
      melonDS::u16 touchX, touchY;
  
@@ -456,8 +483,147 @@ index a1eab0e..c2c7721 100755
      friend class EmuThread;
      friend class MainWindow;
  };
+diff --git a/src/frontend/qt_sdl/EmuInstanceAudio.cpp b/src/frontend/qt_sdl/EmuInstanceAudio.cpp
+index 7df4d9f..d27911f 100644
+--- a/src/frontend/qt_sdl/EmuInstanceAudio.cpp
++++ b/src/frontend/qt_sdl/EmuInstanceAudio.cpp
+@@ -16,6 +16,9 @@
+     with melonDS. If not, see http://www.gnu.org/licenses/.
+ */
+ 
++#include <mutex>
++#include <vector>
++
+ #include "Config.h"
+ #include "NDS.h"
+ #include "SPU.h"
+@@ -23,6 +26,7 @@
+ #include "main.h"
+ 
+ #include "mic_blow.h"
++#include "remote_server/RemoteServerBridge.h"
+ 
+ using namespace melonDS;
+ 
+@@ -76,6 +80,20 @@ void EmuInstance::audioInit()
+ 
+     micLock = SDL_CreateMutex();
+ 
++    // GitHub issue #2: micResample()'s rate math (micGetNumSamplesIn())
++    // divides by micFreq. Previously this was only ever set inside
++    // micOpen()'s External-mode branch, right before opening a local
++    // capture device -- so it stayed default-initialized (indeterminate)
++    // for any host whose local Mic.InputType wasn't External. That was
++    // harmless before this patch (micResample()/micCallback() were only
++    // reachable via that same External-mode local-capture path), but
++    // remoteMicFeed() below now calls micResample() too, independent of
++    // the local Mic.InputType setting -- so this must always be valid
++    // regardless of local mic configuration. 48000 matches micOpen()'s
++    // own request rate, and is what a remote client's MicAudioFrame
++    // stream is fixed at (melonds_remote::kMicAudioSampleRate).
++    micFreq = 48000;
++
+     setupMicInputData();
+ }
+ 
+@@ -373,13 +391,41 @@ void EmuInstance::setupMicInputData()
+ 
+ int EmuInstance::micReadInput(s16* data, int maxlength)
+ {
+-    int type = micInputType;
++    // GitHub issue #2: a remote client's captured audio is resampled
++    // into micExtBuffer as it arrives (see remoteMicFeed() below),
++    // exactly like local External-mode capture already is via
++    // micCallback()/micResample() above -- so it's served through that
++    // same External-mode path here, overriding whatever the host's own
++    // local Mic.InputType/HK_Mic configuration says whenever a remote
++    // client has sent audio recently (remoteServer->hasActiveMicAudio(),
++    // a liveness check, not just "is the remote-server feature
++    // enabled" -- see MelonDSMicAudioSink::isActive()'s comment for why
++    // that distinction matters: without it, merely having the
++    // remote-server feature on, with no client ever sending audio,
++    // would silently replace a host operator's local Noise/Wav test
++    // setup with silence). If a host operator has *also* manually
++    // enabled local External-mode capture from a real device at the
++    // same time, both sources share micExtBuffer and interleave -- an
++    // unsupported combination documented in docs/known-limitations.md,
++    // not something this patch tries to arbitrate between.
++    bool remoteActive;
++    {
++        std::lock_guard<std::mutex> lock(remoteServerMutex);
++        remoteActive = remoteServer && remoteServer->hasActiveMicAudio();
++    }
++
++    int type = remoteActive ? micInputType_External : micInputType;
++    s16* buf = (type == micInputType_External) ? micExtBuffer : micBuffer;
++    int bufLen = (type == micInputType_External)
++                     ? static_cast<int>(sizeof(micExtBuffer) / sizeof(s16))
++                     : static_cast<int>(micBufferLength);
++
+     if ((type == micInputType_External) && (micExtBufferCount == 0))
+         return 0;
+ 
+     bool cmd = hotkeyDown(HK_Mic);
+ 
+-    if ((!micBuffer) ||
++    if ((!buf) ||
+         ((type != micInputType_External) && (!cmd)))
+     {
+         type = micInputType_Silence;
+@@ -399,8 +445,8 @@ int EmuInstance::micReadInput(s16* data, int maxlength)
+     while (readlength < maxlength)
+     {
+         int thislen = maxlength - readlength;
+-        if ((micBufferReadPos + thislen) > micBufferLength)
+-            thislen = micBufferLength - micBufferReadPos;
++        if ((micBufferReadPos + thislen) > bufLen)
++            thislen = bufLen - micBufferReadPos;
+ 
+         if (type == micInputType_External)
+         {
+@@ -413,11 +459,11 @@ int EmuInstance::micReadInput(s16* data, int maxlength)
+         if (!thislen)
+             break;
+ 
+-        memcpy(data, &micBuffer[micBufferReadPos], thislen * sizeof(s16));
++        memcpy(data, &buf[micBufferReadPos], thislen * sizeof(s16));
+         data += thislen;
+         micBufferReadPos += thislen;
+-        if (micBufferReadPos >= micBufferLength)
+-            micBufferReadPos -= micBufferLength;
++        if (micBufferReadPos >= bufLen)
++            micBufferReadPos -= bufLen;
+ 
+         readlength += thislen;
+     }
+@@ -428,6 +474,25 @@ int EmuInstance::micReadInput(s16* data, int maxlength)
+     return readlength;
+ }
+ 
++void EmuInstance::remoteMicFeed(const s16* samples, int numSamples)
++{
++    if (numSamples <= 0) return;
++
++    // micResample()'s linear interpolation reads one sample past the
++    // last one it consumes (inbuf[res_pos + 1]) -- harmless for
++    // micCallback()'s SDL audio-callback buffer above (which has slack
++    // beyond its nominal length), but `samples` here points at a
++    // tightly-sized buffer with no such slack, so copy into a local
++    // buffer with one extra padding sample (repeating the last real
++    // sample) to keep that read in-bounds.
++    std::vector<s16> padded(samples, samples + numSamples);
++    padded.push_back(samples[numSamples - 1]);
++
++    SDL_LockMutex(micLock);
++    micResample(padded.data(), numSamples);
++    SDL_UnlockMutex(micLock);
++}
++
+ int EmuInstance::micGetNumSamplesIn(int inlen)
+ {
+     float f_len_out = (inlen * 47743.4659091 * (curFPS/60.0)) / (float)micFreq;
 diff --git a/src/frontend/qt_sdl/EmuInstanceInput.cpp b/src/frontend/qt_sdl/EmuInstanceInput.cpp
-index a0bc623..bf8133d 100644
+index a0bc623..0373ce7 100644
 --- a/src/frontend/qt_sdl/EmuInstanceInput.cpp
 +++ b/src/frontend/qt_sdl/EmuInstanceInput.cpp
 @@ -25,8 +25,37 @@
@@ -498,7 +664,7 @@ index a0bc623..bf8133d 100644
  const char* EmuInstance::buttonNames[12] =
  {
      "A",
-@@ -454,6 +483,106 @@ void EmuInstance::inputProcess()
+@@ -454,6 +483,126 @@ void EmuInstance::inputProcess()
      }
  
      hotkeyMask = keyHotkeyMask | joyHotkeyMask;
@@ -600,6 +766,26 @@ index a0bc623..bf8133d 100644
 +            QMetaObject::invokeMethod(mainWindow, "onQuit", Qt::QueuedConnection);
 +        }
 +        lastRemoteEmulatorActions = remote.emulatorActions;
++    }
++
++    // GitHub issue #2: drains whatever mic audio RemoteServerBridge has
++    // queued since the last frame and feeds it into melonDS's native mic
++    // pipeline (see remoteMicFeed()'s comment in EmuInstanceAudio.cpp).
++    // A separate narrow lock from the ControllerState one above, same
++    // reasoning -- remoteServer can be started/stopped live from another
++    // thread, so only the pointer check + call itself need the lock, not
++    // the resample work remoteMicFeed() does afterward.
++    std::vector<melonDS::s16> remoteMicSamples;
++    {
++        std::lock_guard<std::mutex> lock(remoteServerMutex);
++        if (remoteServer)
++        {
++            remoteServer->drainMicAudio(remoteMicSamples);
++        }
++    }
++    if (!remoteMicSamples.empty())
++    {
++        remoteMicFeed(remoteMicSamples.data(), static_cast<int>(remoteMicSamples.size()));
 +    }
 +
      hotkeyPress = hotkeyMask & ~lastHotkeyMask;
@@ -1326,15 +1512,138 @@ index 0000000..05308c9
 +};
 +
 +} // namespace melonds_remote_bridge
-diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
+diff --git a/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.cpp b/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.cpp
 new file mode 100644
-index 0000000..001d54f
+index 0000000..b5d8d9b
 --- /dev/null
-+++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
-@@ -0,0 +1,56 @@
-+#include "RemoteServerBridge.h"
++++ b/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.cpp
+@@ -0,0 +1,44 @@
++#include "MelonDSMicAudioSink.h"
++
++#include <algorithm>
++#include <chrono>
 +
 +namespace melonds_remote_bridge {
++
++namespace {
++uint64_t nowMicros() {
++    using namespace std::chrono;
++    return static_cast<uint64_t>(
++        duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count());
++}
++} // namespace
++
++void MelonDSMicAudioSink::applyMicAudio(const melonds_remote::MicAudioFramePayload& frame) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    pending_.insert(pending_.end(), frame.samples.begin(), frame.samples.end());
++    if (pending_.size() > kMaxPendingSamples) {
++        pending_.erase(pending_.begin(),
++                        pending_.begin() + static_cast<long>(pending_.size() - kMaxPendingSamples));
++    }
++    lastPacketTimeUs_ = nowMicros();
++}
++
++void MelonDSMicAudioSink::releaseAudio() {
++    std::lock_guard<std::mutex> lock(mutex_);
++    pending_.clear();
++    lastPacketTimeUs_ = 0;
++}
++
++void MelonDSMicAudioSink::drainSamples(std::vector<int16_t>& out) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    out.insert(out.end(), pending_.begin(), pending_.end());
++    pending_.clear();
++}
++
++bool MelonDSMicAudioSink::isActive(uint64_t nowUs, uint64_t timeoutUs) const {
++    std::lock_guard<std::mutex> lock(mutex_);
++    if (lastPacketTimeUs_ == 0) return false;
++    return (nowUs - lastPacketTimeUs_) < timeoutUs;
++}
++
++} // namespace melonds_remote_bridge
+diff --git a/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.h b/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.h
+new file mode 100644
+index 0000000..a00f345
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.h
+@@ -0,0 +1,57 @@
++#pragma once
++
++// Queues microphone samples received from the network for
++// RemoteServerBridge to drain once per frame and feed into melonDS's
++// native mic pipeline (see EmuInstance::remoteMicFeed()), mirroring
++// MelonDSInputSink's role for ControllerState. Unlike ControllerState (a
++// "latest snapshot" the emulation thread polls and treats as the current
++// value), mic audio is a continuous sample stream -- losing track of
++// which samples were already delivered would drop or duplicate audio --
++// so this queues everything received rather than overwriting.
++
++#include <cstdint>
++#include <mutex>
++#include <vector>
++
++#include "host/mic_audio_sink.h"
++
++namespace melonds_remote_bridge {
++
++class MelonDSMicAudioSink : public melonds_remote::host::IMicAudioSink {
++public:
++    void applyMicAudio(const melonds_remote::MicAudioFramePayload& frame) override;
++    void releaseAudio() override;
++
++    // Drains all samples queued since the last call, appending them to
++    // `out`. Called once per emulated frame from
++    // EmuInstance::inputProcess() on the emulation thread -- never from
++    // the network thread that applyMicAudio() runs on.
++    void drainSamples(std::vector<int16_t>& out);
++
++    // True if a MicAudioFrame arrived within the last `timeoutUs`
++    // microseconds -- distinguishes "a client is actively streaming
++    // audio right now" from "the remote-server feature merely exists,"
++    // which matters because EmuInstance::micReadInput() uses this to
++    // decide whether to override the host's own local Mic.InputType
++    // configuration (see its comment for why "remote server object
++    // exists" alone would be the wrong signal -- it would silently
++    // replace a host operator's local Noise/Wav test setup with silence
++    // whenever the remote-server feature is merely enabled, even with no
++    // client sending audio).
++    bool isActive(uint64_t nowUs, uint64_t timeoutUs) const;
++
++private:
++    // Bounds unbounded growth if drainSamples() stops being called (e.g.
++    // emulation paused) while packets keep arriving -- oldest samples are
++    // dropped first, same tradeoff as melonDS's own local-mic
++    // micExtBuffer ring buffer already makes implicitly by being a fixed
++    // size. 1 second at kMicAudioSampleRate is generous headroom for any
++    // normal frame-pump stall.
++    static constexpr size_t kMaxPendingSamples = 48000;
++
++    mutable std::mutex mutex_;
++    std::vector<int16_t> pending_;
++    uint64_t lastPacketTimeUs_ = 0; // 0 means "never received a packet"
++};
++
++} // namespace melonds_remote_bridge
+diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
+new file mode 100644
+index 0000000..283be82
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
+@@ -0,0 +1,77 @@
++#include "RemoteServerBridge.h"
++
++#include <chrono>
++
++namespace melonds_remote_bridge {
++
++namespace {
++uint64_t nowMicros() {
++    using namespace std::chrono;
++    return static_cast<uint64_t>(
++        duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count());
++}
++} // namespace
 +
 +RemoteServerBridge::RemoteServerBridge(
 +    std::string bindAddress, uint16_t controlPort, uint16_t inputPort, uint16_t videoPort,
@@ -1342,7 +1651,7 @@ index 0000000..001d54f
 +    std::function<void(std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest>)>
 +        onPendingRequestsChanged,
 +    bool discoveryEnabled, uint16_t discoveryPort, std::string hostName,
-+    std::function<void(bool)> onClientConnectionChanged, std::string appVersion) {
++    std::function<void(bool)> onClientConnectionChanged, std::string appVersion, uint16_t audioPort) {
 +    melonds_remote::host::NetServerConfig config;
 +    config.bindAddress = std::move(bindAddress);
 +    config.controlPort = controlPort;
@@ -1356,7 +1665,9 @@ index 0000000..001d54f
 +    config.hostName = std::move(hostName);
 +    config.onClientConnectionChanged = std::move(onClientConnectionChanged);
 +    config.appVersion = std::move(appVersion);
-+    server_ = std::make_unique<melonds_remote::host::NetServer>(config, inputSink_, frameSource_);
++    config.audioPort = audioPort;
++    config.micSupported = true;
++    server_ = std::make_unique<melonds_remote::host::NetServer>(config, inputSink_, frameSource_, micSink_);
 +}
 +
 +RemoteServerBridge::~RemoteServerBridge() {
@@ -1379,6 +1690,15 @@ index 0000000..001d54f
 +    return inputSink_.latestState();
 +}
 +
++void RemoteServerBridge::drainMicAudio(std::vector<int16_t>& out) {
++    micSink_.drainSamples(out);
++}
++
++bool RemoteServerBridge::hasActiveMicAudio() const {
++    constexpr uint64_t kMicActiveTimeoutUs = 500'000; // 500ms, matches NetServerConfig::inputTimeoutUs
++    return micSink_.isActive(nowMicros(), kMicActiveTimeoutUs);
++}
++
 +bool RemoteServerBridge::approveDevice(const std::string& deviceIdOrPrefix) {
 +    return server_->approveDevice(deviceIdOrPrefix);
 +}
@@ -1390,10 +1710,10 @@ index 0000000..001d54f
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
 new file mode 100644
-index 0000000..49e29a4
+index 0000000..8d3f77f
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,105 @@
 +#pragma once
 +
 +// Ties the standalone melonds-remote protocol/host networking code
@@ -1416,6 +1736,7 @@ index 0000000..49e29a4
 +
 +#include "MelonDSFrameSource.h"
 +#include "MelonDSInputSink.h"
++#include "MelonDSMicAudioSink.h"
 +#include "host/net_server.h"
 +
 +namespace melonds_remote_bridge {
@@ -1443,13 +1764,20 @@ index 0000000..49e29a4
 +    // `appVersion` forwards NetServerConfig::appVersion -- see its comment
 +    // in host/net_server.h for the AppVersionMismatch rejection this
 +    // enables.
++    //
++    // `audioPort` forwards NetServerConfig::audioPort (GitHub issue #2).
++    // Microphone support itself is always advertised as available (the
++    // sink always exists here, unlike the standalone host's optional
++    // --no-mic) -- there is no separate on/off switch beyond the whole
++    // remote-server feature's own enable toggle.
 +    RemoteServerBridge(
 +        std::string bindAddress, uint16_t controlPort, uint16_t inputPort, uint16_t videoPort,
 +        std::string authToken, std::string approvalStateFilePath = {},
 +        std::function<void(std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest>)>
 +            onPendingRequestsChanged = {},
 +        bool discoveryEnabled = true, uint16_t discoveryPort = 8763, std::string hostName = {},
-+        std::function<void(bool)> onClientConnectionChanged = {}, std::string appVersion = {});
++        std::function<void(bool)> onClientConnectionChanged = {}, std::string appVersion = {},
++        uint16_t audioPort = 8765);
 +    ~RemoteServerBridge();
 +
 +    RemoteServerBridge(const RemoteServerBridge&) = delete;
@@ -1466,6 +1794,18 @@ index 0000000..49e29a4
 +    // latest remote controller/touch/action state to merge in.
 +    melonds_remote::ControllerState latestControllerState() const;
 +
++    // Called by EmuInstance::inputProcess() once per frame (GitHub issue
++    // #2): drains whatever mic samples have arrived since the last call,
++    // appending them to `out` for remoteMicFeed() to resample into
++    // melonDS's native mic pipeline.
++    void drainMicAudio(std::vector<int16_t>& out);
++
++    // True if a client has sent mic audio within the last 500ms -- see
++    // MelonDSMicAudioSink::isActive()'s comment for why this liveness
++    // check (not just "is the remote server running") is what
++    // EmuInstance::micReadInput() needs.
++    bool hasActiveMicAudio() const;
++
 +    // Forwarded to NetServer -- see host/net_server.h. Safe to call from
 +    // the Qt UI thread (e.g. a dialog's button-click slot).
 +    bool approveDevice(const std::string& deviceIdOrPrefix);
@@ -1474,6 +1814,7 @@ index 0000000..49e29a4
 +private:
 +    MelonDSInputSink inputSink_;
 +    MelonDSFrameSource frameSource_;
++    MelonDSMicAudioSink micSink_;
 +    std::unique_ptr<melonds_remote::host::NetServer> server_;
 +};
 +
@@ -1874,12 +2215,53 @@ index 0000000..903d848
 +};
 +
 +} // namespace melonds_remote::host
+diff --git a/src/frontend/qt_sdl/remote_server/host/mic_audio_sink.h b/src/frontend/qt_sdl/remote_server/host/mic_audio_sink.h
+new file mode 100644
+index 0000000..34cb8a5
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/host/mic_audio_sink.h
+@@ -0,0 +1,35 @@
++#pragma once
++
++// Seam between the network layer and wherever received microphone audio
++// actually goes (GitHub issue #2). Mirrors IEmulatorInputSink's shape and
++// threading contract exactly: LoggingMicAudioSink is the Phase-1
++// implementation used by the standalone synthetic host; once wired into
++// melonDS (see host/melonds-patches/README.md), a MelonDSMicAudioSink
++// implements this same interface and feeds EmuInstance::remoteMicFeed()
++// on the emulation thread, never directly from the network thread.
++
++#include "melonds_remote/protocol.h"
++
++namespace melonds_remote::host {
++
++class IMicAudioSink {
++public:
++    virtual ~IMicAudioSink() = default;
++
++    // Called whenever the network layer has a new accepted MicAudioFrame.
++    // Implementations must not block (no I/O, no locking that could stall
++    // the emulation thread) -- store/forward the samples and let whatever
++    // consumes them (e.g. melonDS's own Mic::Advance-driven pull) do so on
++    // its own schedule, matching how applyControllerState() is handled.
++    virtual void applyMicAudio(const MicAudioFramePayload& frame) = 0;
++
++    // Called on client disconnect, capability loss, or mic-input timeout.
++    // Unlike releaseAll() for controller state, there is no "audio held
++    // down" to force-release -- absence of further applyMicAudio() calls
++    // already reads as silence to any consumer pulling from a ring buffer
++    // that simply runs dry. This exists for implementations that want an
++    // explicit signal anyway (e.g. to clear a level-meter display).
++    virtual void releaseAudio() = 0;
++};
++
++} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.cpp b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
 new file mode 100644
-index 0000000..8d95d79
+index 0000000..1621497
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
-@@ -0,0 +1,715 @@
+@@ -0,0 +1,803 @@
 +#include "host/net_server.h"
 +
 +#include <arpa/inet.h>
@@ -2010,8 +2392,9 @@ index 0000000..8d95d79
 +
 +} // namespace
 +
-+NetServer::NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource)
-+    : config_(std::move(config)), inputSink_(inputSink), frameSource_(frameSource),
++NetServer::NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource,
++                     IMicAudioSink& micSink)
++    : config_(std::move(config)), inputSink_(inputSink), frameSource_(frameSource), micSink_(micSink),
 +      deviceApproval_(config_.approvalStateFilePath, config_.pendingRequestTtl),
 +      rateLimiter_(config_.maxConnectionAttemptsPerWindow, config_.connectionAttemptWindowUs) {
 +    if (!config_.authToken.empty()) {
@@ -2092,6 +2475,22 @@ index 0000000..8d95d79
 +    videoThread_ = std::thread(&NetServer::videoLoop, this);
 +    watchdogThread_ = std::thread(&NetServer::watchdogLoop, this);
 +
++    if (config_.micSupported) {
++        // Failure to bind here is not fatal to the rest of the server,
++        // same treatment as a discovery bind failure -- mic is an
++        // optional feature, not load-bearing for the core session.
++        audioFd_ = makeUdpSocket(config_.bindAddress, config_.audioPort);
++        if (audioFd_ < 0) {
++            std::fprintf(stderr,
++                          "NetServer: microphone support disabled (failed to bind UDP port %u)\n",
++                          config_.audioPort);
++        } else {
++            std::fprintf(stderr, "NetServer: microphone audio listening on %s:%u\n",
++                          config_.bindAddress.c_str(), config_.audioPort);
++            audioThread_ = std::thread(&NetServer::audioLoop, this);
++        }
++    }
++
 +    if (config_.discoveryEnabled) {
 +        // Bound to "0.0.0.0", not config_.bindAddress -- see the comment
 +        // on NetServerConfig::discoveryEnabled for why. A bind failure
@@ -2124,6 +2523,7 @@ index 0000000..8d95d79
 +    if (videoListenFd_ >= 0) ::shutdown(videoListenFd_, SHUT_RDWR);
 +    if (inputFd_ >= 0) ::shutdown(inputFd_, SHUT_RDWR);
 +    if (discoveryFd_ >= 0) ::shutdown(discoveryFd_, SHUT_RDWR);
++    if (audioFd_ >= 0) ::shutdown(audioFd_, SHUT_RDWR);
 +
 +    int controlClient = controlClientFd_.exchange(-1);
 +    if (controlClient >= 0) ::shutdown(controlClient, SHUT_RDWR);
@@ -2135,12 +2535,14 @@ index 0000000..8d95d79
 +    if (videoThread_.joinable()) videoThread_.join();
 +    if (watchdogThread_.joinable()) watchdogThread_.join();
 +    if (discoveryThread_.joinable()) discoveryThread_.join();
++    if (audioThread_.joinable()) audioThread_.join();
 +
 +    if (controlListenFd_ >= 0) ::close(controlListenFd_);
 +    if (videoListenFd_ >= 0) ::close(videoListenFd_);
 +    if (inputFd_ >= 0) ::close(inputFd_);
 +    if (discoveryFd_ >= 0) ::close(discoveryFd_);
-+    controlListenFd_ = videoListenFd_ = inputFd_ = discoveryFd_ = -1;
++    if (audioFd_ >= 0) ::close(audioFd_);
++    controlListenFd_ = videoListenFd_ = inputFd_ = discoveryFd_ = audioFd_ = -1;
 +}
 +
 +namespace {
@@ -2261,6 +2663,11 @@ index 0000000..8d95d79
 +        ack.rejectReason = handshakeOk ? HelloRejectReason::None : rejectReason;
 +        ack.sessionId = handshakeOk ? static_cast<uint32_t>(nowMicros()) : 0;
 +        ack.appVersion = config_.appVersion;
++        // Reflects whether the audio socket actually bound at start() --
++        // not just config_.micSupported, so a bind failure (e.g. the port
++        // was already in use) is honestly reported rather than promising
++        // a feature that silently won't work.
++        ack.micSupported = audioFd_ >= 0 ? 1 : 0;
 +        ByteBuffer ackPacket = buildHelloAckPacket(ack);
 +        sendAll(clientFd, ackPacket.data(), ackPacket.size());
 +
@@ -2311,6 +2718,7 @@ index 0000000..8d95d79
 +            inputTracker_.reset();
 +        }
 +        inputSink_.releaseAll();
++        micSink_.releaseAudio();
 +    }
 +}
 +
@@ -2391,6 +2799,58 @@ index 0000000..8d95d79
 +    }
 +}
 +
++void NetServer::audioLoop() {
++    // Fixed header + MicAudioFramePayload's fixed prefix + the largest
++    // possible sample payload (kMicAudioSamplesPerPacket samples).
++    ByteBuffer buf(kPacketHeaderWireSize + 4 + 8 + 2 +
++                   static_cast<size_t>(kMicAudioSamplesPerPacket) * 2);
++
++    while (running_.load()) {
++        sockaddr_in fromAddr{};
++        socklen_t fromLen = sizeof(fromAddr);
++        ssize_t n = ::recvfrom(audioFd_, buf.data(), buf.size(), 0,
++                                reinterpret_cast<sockaddr*>(&fromAddr), &fromLen);
++        if (n <= 0) {
++            if (!running_.load()) break;
++            continue;
++        }
++
++        if (!clientAuthenticated_.load() ||
++            fromAddr.sin_addr.s_addr != authenticatedClientAddr_.load()) {
++            continue; // no authenticated session, or packet from an unrelated address
++        }
++
++        auto header = parseHeader(buf.data(), static_cast<size_t>(n));
++        if (!header || header->protocolVersion != kProtocolVersion ||
++            header->type != PacketType::MicAudioFrame) {
++            std::lock_guard<std::mutex> lock(statsMutex_);
++            ++stats_.micPacketsMalformed;
++            continue; // reject malformed / mismatched packet, stay up
++        }
++
++        size_t payloadOffset = kPacketHeaderWireSize;
++        size_t payloadSize = static_cast<size_t>(n) - payloadOffset;
++        if (payloadSize != header->payloadSize) {
++            std::lock_guard<std::mutex> lock(statsMutex_);
++            ++stats_.micPacketsMalformed;
++            continue;
++        }
++
++        auto frame = parseMicAudioFramePayload(buf.data() + payloadOffset, payloadSize);
++        if (!frame) {
++            std::lock_guard<std::mutex> lock(statsMutex_);
++            ++stats_.micPacketsMalformed;
++            continue;
++        }
++
++        {
++            std::lock_guard<std::mutex> lock(statsMutex_);
++            ++stats_.micPacketsAccepted;
++        }
++        micSink_.applyMicAudio(*frame);
++    }
++}
++
 +void NetServer::watchdogLoop() {
 +    uint64_t lastPruneUs = nowMicros();
 +    uint64_t lastStatsLogUs = nowMicros();
@@ -2442,34 +2902,43 @@ index 0000000..8d95d79
 +            lastStatsLogUs = now;
 +
 +            if (snapshot.inputPacketsAccepted || snapshot.inputPacketsOutOfOrder ||
-+                snapshot.inputPacketsMalformed || snapshot.framesSent || snapshot.framesDropped) {
++                snapshot.inputPacketsMalformed || snapshot.framesSent || snapshot.framesDropped ||
++                snapshot.micPacketsAccepted || snapshot.micPacketsMalformed) {
 +                double inputRate = windowSec > 0 ? static_cast<double>(snapshot.inputPacketsAccepted) / windowSec : 0.0;
 +                double frameRate = windowSec > 0 ? static_cast<double>(snapshot.framesSent) / windowSec : 0.0;
++                double micRate = windowSec > 0 ? static_cast<double>(snapshot.micPacketsAccepted) / windowSec : 0.0;
 +
 +                if (snapshot.latencySampleCount > 0) {
 +                    double avgLatencyMs =
 +                        static_cast<double>(snapshot.latencySumUs) / static_cast<double>(snapshot.latencySampleCount) / 1000.0;
 +                    std::fprintf(stderr,
 +                                  "NetServer: stats -- input: accepted=%llu outOfOrder=%llu malformed=%llu "
-+                                  "(%.1f/s) | video: sent=%llu (%.1f fps) dropped=%llu | latency: avg=%.1fms "
++                                  "(%.1f/s) | video: sent=%llu (%.1f fps) dropped=%llu | mic: accepted=%llu "
++                                  "malformed=%llu (%.1f/s) | latency: avg=%.1fms "
 +                                  "min=%.1fms max=%.1fms (n=%llu)\n",
 +                                  static_cast<unsigned long long>(snapshot.inputPacketsAccepted),
 +                                  static_cast<unsigned long long>(snapshot.inputPacketsOutOfOrder),
 +                                  static_cast<unsigned long long>(snapshot.inputPacketsMalformed), inputRate,
 +                                  static_cast<unsigned long long>(snapshot.framesSent), frameRate,
-+                                  static_cast<unsigned long long>(snapshot.framesDropped), avgLatencyMs,
++                                  static_cast<unsigned long long>(snapshot.framesDropped),
++                                  static_cast<unsigned long long>(snapshot.micPacketsAccepted),
++                                  static_cast<unsigned long long>(snapshot.micPacketsMalformed), micRate,
++                                  avgLatencyMs,
 +                                  static_cast<double>(snapshot.latencyMinUs) / 1000.0,
 +                                  static_cast<double>(snapshot.latencyMaxUs) / 1000.0,
 +                                  static_cast<unsigned long long>(snapshot.latencySampleCount));
 +                } else {
 +                    std::fprintf(stderr,
 +                                  "NetServer: stats -- input: accepted=%llu outOfOrder=%llu malformed=%llu "
-+                                  "(%.1f/s) | video: sent=%llu (%.1f fps) dropped=%llu\n",
++                                  "(%.1f/s) | video: sent=%llu (%.1f fps) dropped=%llu | mic: accepted=%llu "
++                                  "malformed=%llu (%.1f/s)\n",
 +                                  static_cast<unsigned long long>(snapshot.inputPacketsAccepted),
 +                                  static_cast<unsigned long long>(snapshot.inputPacketsOutOfOrder),
 +                                  static_cast<unsigned long long>(snapshot.inputPacketsMalformed), inputRate,
 +                                  static_cast<unsigned long long>(snapshot.framesSent), frameRate,
-+                                  static_cast<unsigned long long>(snapshot.framesDropped));
++                                  static_cast<unsigned long long>(snapshot.framesDropped),
++                                  static_cast<unsigned long long>(snapshot.micPacketsAccepted),
++                                  static_cast<unsigned long long>(snapshot.micPacketsMalformed), micRate);
 +                }
 +            }
 +        }
@@ -2587,6 +3056,7 @@ index 0000000..8d95d79
 +        response.controlPort = config_.controlPort;
 +        response.inputPort = config_.inputPort;
 +        response.videoPort = config_.videoPort;
++        response.audioPort = config_.audioPort;
 +        ByteBuffer packet = buildDiscoveryResponsePacket(response);
 +        // Unicast back to the specific sender -- never a broadcast reply.
 +        ::sendto(discoveryFd_, packet.data(), packet.size(), 0,
@@ -2597,10 +3067,10 @@ index 0000000..8d95d79
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.h b/src/frontend/qt_sdl/remote_server/host/net_server.h
 new file mode 100644
-index 0000000..65493af
+index 0000000..3dbe9d6
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.h
-@@ -0,0 +1,255 @@
+@@ -0,0 +1,277 @@
 +#pragma once
 +
 +// Minimal standalone host server: one TCP control connection (handshake +
@@ -2641,6 +3111,7 @@ index 0000000..65493af
 +#include "host/device_approval_manager.h"
 +#include "host/emulator_input_sink.h"
 +#include "host/frame_source.h"
++#include "host/mic_audio_sink.h"
 +#include "melonds_remote/input_state_tracker.h"
 +#include "melonds_remote/rate_limiter.h"
 +
@@ -2656,6 +3127,17 @@ index 0000000..65493af
 +    uint16_t videoPort = 8762;
 +    uint64_t inputTimeoutUs = 500'000; // 500ms, spec section 6.4 / 7.1
 +    int videoSendFps = 60;
++
++    // Whether this host accepts MicAudioFrame packets at all (GitHub
++    // issue #2) -- an explicit host-side on/off switch (like
++    // discoveryEnabled below), not just "does a sink object happen to
++    // exist," since injecting audio into a running session is a
++    // meaningfully different privacy posture than video/input and some
++    // hosts may want it off entirely. Reported to the client as
++    // HelloAckPayload::micSupported; when false, audioLoop() isn't even
++    // started (see start()).
++    bool micSupported = true;
++    uint16_t audioPort = 8764;
 +
 +    // Empty means authentication is disabled -- spec section 13 requires
 +    // this to be a conscious, warned-about choice, not a silent default.
@@ -2767,6 +3249,8 @@ index 0000000..65493af
 +    uint64_t inputPacketsMalformed = 0;
 +    uint64_t framesSent = 0;
 +    uint64_t framesDropped = 0;
++    uint64_t micPacketsAccepted = 0;
++    uint64_t micPacketsMalformed = 0;
 +    uint64_t latencySampleCount = 0;
 +    uint64_t latencySumUs = 0;
 +    uint64_t latencyMinUs = UINT64_MAX;
@@ -2782,7 +3266,11 @@ index 0000000..65493af
 +
 +class NetServer {
 +public:
-+    NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource);
++    // `micSink` receives MicAudioFrame packets (GitHub issue #2). Pass a
++    // LoggingMicAudioSink when no real audio destination exists yet, same
++    // as `inputSink` before a real melonDS integration existed.
++    NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource,
++               IMicAudioSink& micSink);
 +    ~NetServer();
 +
 +    NetServer(const NetServer&) = delete;
@@ -2811,10 +3299,12 @@ index 0000000..65493af
 +    void videoLoop();
 +    void watchdogLoop();
 +    void discoveryLoop();
++    void audioLoop();
 +
 +    NetServerConfig config_;
 +    IEmulatorInputSink& inputSink_;
 +    IFrameSource& frameSource_;
++    IMicAudioSink& micSink_;
 +    DeviceApprovalManager deviceApproval_;
 +    // Only ever touched from inside the onPendingRequestsChanged callback
 +    // above (see the comment there for why that's safe without its own lock).
@@ -2826,6 +3316,7 @@ index 0000000..65493af
 +    std::thread videoThread_;
 +    std::thread watchdogThread_;
 +    std::thread discoveryThread_;
++    std::thread audioThread_;
 +
 +    InputStateTracker inputTracker_;
 +    std::mutex trackerMutex_;
@@ -2840,6 +3331,7 @@ index 0000000..65493af
 +    int videoListenFd_ = -1;
 +    int inputFd_ = -1;
 +    int discoveryFd_ = -1;
++    int audioFd_ = -1;
 +
 +    std::atomic<int> controlClientFd_{-1};
 +    std::atomic<int> videoClientFd_{-1};
@@ -2928,10 +3420,10 @@ index 0000000..48014b9
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
 new file mode 100644
-index 0000000..0f0e7eb
+index 0000000..eba1a6a
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
-@@ -0,0 +1,278 @@
+@@ -0,0 +1,349 @@
 +#pragma once
 +
 +// melonDS Remote wire protocol definitions.
@@ -2955,7 +3447,7 @@ index 0000000..0f0e7eb
 +namespace melonds_remote {
 +
 +// Bumped whenever the wire format changes incompatibly.
-+inline constexpr uint16_t kProtocolVersion = 4;
++inline constexpr uint16_t kProtocolVersion = 5;
 +
 +// Sentinel at the start of every packet so malformed/foreign traffic on the
 +// same port can be rejected cheaply before any further parsing.
@@ -2971,6 +3463,12 @@ index 0000000..0f0e7eb
 +    VideoFrame = 7,    // host -> client, video channel, one bottom-screen frame
 +    DiscoveryRequest = 8,  // client -> host, UDP discovery port, broadcast "who's out there"
 +    DiscoveryResponse = 9, // host -> client, UDP discovery port, unicast reply to the sender
++    // client -> host, UDP audio port, one chunk of captured microphone PCM
++    // (GitHub issue #2). Only sent when HelloAckPayload::micSupported was
++    // true and the user hasn't muted -- absence of packets is the "no
++    // audio" state, matching how melonDS's own Mic input already treats
++    // silence (see docs/known-limitations.md's microphone section).
++    MicAudioFrame = 10,
 +};
 +
 +// DS button bitmask (wire format; independent from melonDS's internal
@@ -3092,6 +3590,16 @@ index 0000000..0f0e7eb
 +    // vX.Y, you're on vA.B" even on an AppVersionMismatch rejection. Empty
 +    // if the host doesn't know its own version (see HelloPayload::appVersion).
 +    std::string appVersion;
++    // Whether this host build/config can accept and inject microphone
++    // audio (GitHub issue #2) -- false for a synthetic/standalone host
++    // that never wires a mic sink, or when the patched melonDS host has
++    // no working mic feed path available. A host predating this field
++    // is simply a different kProtocolVersion (see above) and gets
++    // rejected before either side's payload is parsed, so no separate
++    // "field absent" case exists to handle here. The client should not
++    // bother opening a capture device or sending MicAudioFrame packets
++    // unless this is true.
++    uint8_t micSupported = 0; // 0 or 1
 +};
 +
 +// DiscoveryRequest (client -> host) has no payload: a bare packet header
@@ -3110,6 +3618,14 @@ index 0000000..0f0e7eb
 +    uint16_t controlPort = 8760;
 +    uint16_t inputPort = 8761;
 +    uint16_t videoPort = 8762;
++    // UDP port for MicAudioFrame packets (GitHub issue #2). Advertised
++    // here (rather than only in HelloAck) so a client that already knows
++    // a host's address (--host/last-used, bypassing discovery) still
++    // needs the control-channel handshake's HelloAckPayload::micSupported
++    // to decide whether to use it -- this field alone doesn't imply the
++    // host actually accepts audio, only which port it would listen on if
++    // it does.
++    uint16_t audioPort = 8764;
 +};
 +
 +// Full controller state, sent at a fixed rate (recommended 120 Hz) rather
@@ -3133,6 +3649,41 @@ index 0000000..0f0e7eb
 +// common PacketHeader). Kept explicit so tests can catch accidental growth.
 +inline constexpr size_t kControllerStateWireSize =
 +    4 + 8 + 2 + 2 + 2 + 2 + 2 + 2 + 1 + 2 + 2;
++
++// Fixed sample format for MicAudioFrame (GitHub issue #2): mono, 16-bit
++// signed PCM, little-endian on the wire (like every other multi-byte
++// field here), at a single fixed rate rather than negotiated per-client.
++// 48 kHz matches melonDS's own default local-mic capture rate
++// (EmuInstanceAudio.cpp's micFreq), so host-side resampling into the DS's
++// actual ~47.6 kHz mic-buffer consumption rate reuses the exact same
++// Mic::Advance-driven resample path melonDS already runs for a physical
++// microphone -- remote audio is just another producer for that same
++// pipeline (see host/melonds-patches/README.md for the injection point).
++inline constexpr uint32_t kMicAudioSampleRate = 48000;
++
++// One packet's worth of audio at 10ms per packet (480 samples @ 48kHz) --
++// small enough to keep mic latency low and stay well under typical LAN
++// MTU (480 * 2 bytes = 960 bytes payload, plus the 12-byte PacketHeader
++// and 18-byte MicAudioFramePayload fixed prefix below, is nowhere near
++// the ~1400-byte practical UDP payload ceiling). Also the hard cap
++// `parseMicAudioFramePayload` enforces on `numSamples` (spec section 13:
++// validate declared sizes before trusting them) -- a well-behaved client
++// always sends exactly this many samples per packet except possibly a
++// shorter final packet right before muting.
++inline constexpr uint16_t kMicAudioSamplesPerPacket = 480;
++
++// MicAudioFrame (client -> host) payload: a fixed-rate mono PCM chunk.
++// `sequence`/`clientTimestampUs` mirror ControllerState's fields (same
++// purpose: host-side ordering/staleness checks), even though, unlike
++// controller input, losing one audio packet is not silently self-healing
++// -- see docs/known-limitations.md for the resulting audible-gap
++// tradeoff of sending raw PCM over UDP with no forward-error-correction.
++struct MicAudioFramePayload {
++    uint32_t sequence = 0;
++    uint64_t clientTimestampUs = 0;
++    uint16_t numSamples = 0; // <= kMicAudioSamplesPerPacket
++    std::vector<int16_t> samples;
++};
 +
 +struct PacketHeader {
 +    uint32_t magic = kPacketMagic;
@@ -3208,6 +3759,18 @@ index 0000000..0f0e7eb
 +void serializeDiscoveryResponsePayload(ByteBuffer& out, const DiscoveryResponsePayload& response);
 +std::optional<DiscoveryResponsePayload> parseDiscoveryResponsePayload(const uint8_t* data, size_t size);
 +ByteBuffer buildDiscoveryResponsePacket(const DiscoveryResponsePayload& response);
++
++// Serializes a MicAudioFramePayload (header not included).
++void serializeMicAudioFramePayload(ByteBuffer& out, const MicAudioFramePayload& frame);
++
++// Parses a MicAudioFramePayload. Returns std::nullopt if the buffer is
++// too short for its own declared numSamples, numSamples exceeds
++// kMicAudioSamplesPerPacket, or there's trailing garbage past the last
++// sample.
++std::optional<MicAudioFramePayload> parseMicAudioFramePayload(const uint8_t* data, size_t size);
++
++// Builds a complete MicAudioFrame packet (header + serialized body).
++ByteBuffer buildMicAudioFramePacket(const MicAudioFramePayload& frame);
 +
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/rate_limiter.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/rate_limiter.h
@@ -3361,10 +3924,10 @@ index 0000000..a1aff53
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
 new file mode 100644
-index 0000000..a147ea8
+index 0000000..bb054b8
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
-@@ -0,0 +1,311 @@
+@@ -0,0 +1,366 @@
 +#include "melonds_remote/protocol.h"
 +
 +#include <cstring>
@@ -3588,6 +4151,7 @@ index 0000000..a147ea8
 +    appendU16(out, ack.nativeWidth);
 +    appendU16(out, ack.nativeHeight);
 +    appendString(out, ack.appVersion);
++    out.push_back(ack.micSupported ? 1 : 0);
 +}
 +
 +std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t size) {
@@ -3619,10 +4183,16 @@ index 0000000..a147ea8
 +    if (!version) return std::nullopt;
 +    ack.appVersion = std::move(*version);
 +
-+    if (offset != size) {
-+        // trailing garbage: reject rather than silently ignore
++    if (offset + 1 != size) {
++        // trailing garbage, or micSupported missing entirely: reject
++        // rather than silently ignore
 +        return std::nullopt;
 +    }
++    uint8_t micSupported = data[offset]; offset += 1;
++    if (micSupported != 0 && micSupported != 1) {
++        return std::nullopt;
++    }
++    ack.micSupported = micSupported;
 +
 +    return ack;
 +}
@@ -3642,6 +4212,7 @@ index 0000000..a147ea8
 +    appendU16(out, response.controlPort);
 +    appendU16(out, response.inputPort);
 +    appendU16(out, response.videoPort);
++    appendU16(out, response.audioPort);
 +}
 +
 +std::optional<DiscoveryResponsePayload> parseDiscoveryResponsePayload(const uint8_t* data, size_t size) {
@@ -3656,10 +4227,11 @@ index 0000000..a147ea8
 +    if (!hostName) return std::nullopt;
 +    response.hostName = std::move(*hostName);
 +
-+    if (offset + 6 > size) return std::nullopt;
++    if (offset + 8 > size) return std::nullopt;
 +    response.controlPort = readU16(data, offset); offset += 2;
 +    response.inputPort = readU16(data, offset); offset += 2;
 +    response.videoPort = readU16(data, offset); offset += 2;
++    response.audioPort = readU16(data, offset); offset += 2;
 +
 +    if (offset != size) {
 +        // trailing garbage: reject rather than silently ignore
@@ -3673,6 +4245,52 @@ index 0000000..a147ea8
 +    ByteBuffer payload;
 +    serializeDiscoveryResponsePayload(payload, response);
 +    return buildPacket(PacketType::DiscoveryResponse, payload);
++}
++
++void serializeMicAudioFramePayload(ByteBuffer& out, const MicAudioFramePayload& frame) {
++    appendU32(out, frame.sequence);
++    appendU64(out, frame.clientTimestampUs);
++    appendU16(out, frame.numSamples);
++    for (size_t i = 0; i < frame.numSamples && i < frame.samples.size(); ++i) {
++        appendI16(out, frame.samples[i]);
++    }
++}
++
++std::optional<MicAudioFramePayload> parseMicAudioFramePayload(const uint8_t* data, size_t size) {
++    constexpr size_t kFixedWireSize = 4 + 8 + 2;
++    if (data == nullptr || size < kFixedWireSize) {
++        return std::nullopt;
++    }
++
++    MicAudioFramePayload frame;
++    size_t offset = 0;
++
++    frame.sequence = readU32(data, offset); offset += 4;
++    frame.clientTimestampUs = readU64(data, offset); offset += 8;
++    frame.numSamples = readU16(data, offset); offset += 2;
++
++    if (frame.numSamples > kMicAudioSamplesPerPacket) {
++        return std::nullopt;
++    }
++    if (offset + static_cast<size_t>(frame.numSamples) * 2 != size) {
++        // wrong sample count for the buffer we actually received:
++        // reject rather than silently truncate/pad
++        return std::nullopt;
++    }
++
++    frame.samples.resize(frame.numSamples);
++    for (uint16_t i = 0; i < frame.numSamples; ++i) {
++        frame.samples[i] = readI16(data, offset);
++        offset += 2;
++    }
++
++    return frame;
++}
++
++ByteBuffer buildMicAudioFramePacket(const MicAudioFramePayload& frame) {
++    ByteBuffer payload;
++    serializeMicAudioFramePayload(payload, frame);
++    return buildPacket(PacketType::MicAudioFrame, payload);
 +}
 +
 +} // namespace melonds_remote

@@ -38,6 +38,7 @@
 #include "host/device_approval_manager.h"
 #include "host/emulator_input_sink.h"
 #include "host/frame_source.h"
+#include "host/mic_audio_sink.h"
 #include "melonds_remote/input_state_tracker.h"
 #include "melonds_remote/rate_limiter.h"
 
@@ -53,6 +54,17 @@ struct NetServerConfig {
     uint16_t videoPort = 8762;
     uint64_t inputTimeoutUs = 500'000; // 500ms, spec section 6.4 / 7.1
     int videoSendFps = 60;
+
+    // Whether this host accepts MicAudioFrame packets at all (GitHub
+    // issue #2) -- an explicit host-side on/off switch (like
+    // discoveryEnabled below), not just "does a sink object happen to
+    // exist," since injecting audio into a running session is a
+    // meaningfully different privacy posture than video/input and some
+    // hosts may want it off entirely. Reported to the client as
+    // HelloAckPayload::micSupported; when false, audioLoop() isn't even
+    // started (see start()).
+    bool micSupported = true;
+    uint16_t audioPort = 8765;
 
     // Empty means authentication is disabled -- spec section 13 requires
     // this to be a conscious, warned-about choice, not a silent default.
@@ -164,6 +176,8 @@ struct NetServerStats {
     uint64_t inputPacketsMalformed = 0;
     uint64_t framesSent = 0;
     uint64_t framesDropped = 0;
+    uint64_t micPacketsAccepted = 0;
+    uint64_t micPacketsMalformed = 0;
     uint64_t latencySampleCount = 0;
     uint64_t latencySumUs = 0;
     uint64_t latencyMinUs = UINT64_MAX;
@@ -179,7 +193,11 @@ struct NetServerStats {
 
 class NetServer {
 public:
-    NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource);
+    // `micSink` receives MicAudioFrame packets (GitHub issue #2). Pass a
+    // LoggingMicAudioSink when no real audio destination exists yet, same
+    // as `inputSink` before a real melonDS integration existed.
+    NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource,
+               IMicAudioSink& micSink);
     ~NetServer();
 
     NetServer(const NetServer&) = delete;
@@ -208,10 +226,12 @@ private:
     void videoLoop();
     void watchdogLoop();
     void discoveryLoop();
+    void audioLoop();
 
     NetServerConfig config_;
     IEmulatorInputSink& inputSink_;
     IFrameSource& frameSource_;
+    IMicAudioSink& micSink_;
     DeviceApprovalManager deviceApproval_;
     // Only ever touched from inside the onPendingRequestsChanged callback
     // above (see the comment there for why that's safe without its own lock).
@@ -223,6 +243,7 @@ private:
     std::thread videoThread_;
     std::thread watchdogThread_;
     std::thread discoveryThread_;
+    std::thread audioThread_;
 
     InputStateTracker inputTracker_;
     std::mutex trackerMutex_;
@@ -237,6 +258,7 @@ private:
     int videoListenFd_ = -1;
     int inputFd_ = -1;
     int discoveryFd_ = -1;
+    int audioFd_ = -1;
 
     std::atomic<int> controlClientFd_{-1};
     std::atomic<int> videoClientFd_{-1};

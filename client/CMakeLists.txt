@@ -9,6 +9,7 @@ add_executable(melonds-remote-client
     src/client_settings.cpp
     src/wizard_state.cpp
     src/bitmap_font.cpp
+    src/mic_capture.cpp
 )
 
 target_link_libraries(melonds-remote-client PRIVATE

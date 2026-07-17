@@ -128,8 +128,9 @@ bool sendAll(int fd, const uint8_t* data, size_t size) {
 
 } // namespace
 
-NetServer::NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource)
-    : config_(std::move(config)), inputSink_(inputSink), frameSource_(frameSource),
+NetServer::NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource,
+                     IMicAudioSink& micSink)
+    : config_(std::move(config)), inputSink_(inputSink), frameSource_(frameSource), micSink_(micSink),
       deviceApproval_(config_.approvalStateFilePath, config_.pendingRequestTtl),
       rateLimiter_(config_.maxConnectionAttemptsPerWindow, config_.connectionAttemptWindowUs) {
     if (!config_.authToken.empty()) {
@@ -210,6 +211,22 @@ void NetServer::start() {
     videoThread_ = std::thread(&NetServer::videoLoop, this);
     watchdogThread_ = std::thread(&NetServer::watchdogLoop, this);
 
+    if (config_.micSupported) {
+        // Failure to bind here is not fatal to the rest of the server,
+        // same treatment as a discovery bind failure -- mic is an
+        // optional feature, not load-bearing for the core session.
+        audioFd_ = makeUdpSocket(config_.bindAddress, config_.audioPort);
+        if (audioFd_ < 0) {
+            std::fprintf(stderr,
+                          "NetServer: microphone support disabled (failed to bind UDP port %u)\n",
+                          config_.audioPort);
+        } else {
+            std::fprintf(stderr, "NetServer: microphone audio listening on %s:%u\n",
+                          config_.bindAddress.c_str(), config_.audioPort);
+            audioThread_ = std::thread(&NetServer::audioLoop, this);
+        }
+    }
+
     if (config_.discoveryEnabled) {
         // Bound to "0.0.0.0", not config_.bindAddress -- see the comment
         // on NetServerConfig::discoveryEnabled for why. A bind failure
@@ -242,6 +259,7 @@ void NetServer::stop() {
     if (videoListenFd_ >= 0) ::shutdown(videoListenFd_, SHUT_RDWR);
     if (inputFd_ >= 0) ::shutdown(inputFd_, SHUT_RDWR);
     if (discoveryFd_ >= 0) ::shutdown(discoveryFd_, SHUT_RDWR);
+    if (audioFd_ >= 0) ::shutdown(audioFd_, SHUT_RDWR);
 
     int controlClient = controlClientFd_.exchange(-1);
     if (controlClient >= 0) ::shutdown(controlClient, SHUT_RDWR);
@@ -253,12 +271,14 @@ void NetServer::stop() {
     if (videoThread_.joinable()) videoThread_.join();
     if (watchdogThread_.joinable()) watchdogThread_.join();
     if (discoveryThread_.joinable()) discoveryThread_.join();
+    if (audioThread_.joinable()) audioThread_.join();
 
     if (controlListenFd_ >= 0) ::close(controlListenFd_);
     if (videoListenFd_ >= 0) ::close(videoListenFd_);
     if (inputFd_ >= 0) ::close(inputFd_);
     if (discoveryFd_ >= 0) ::close(discoveryFd_);
-    controlListenFd_ = videoListenFd_ = inputFd_ = discoveryFd_ = -1;
+    if (audioFd_ >= 0) ::close(audioFd_);
+    controlListenFd_ = videoListenFd_ = inputFd_ = discoveryFd_ = audioFd_ = -1;
 }
 
 namespace {
@@ -379,6 +399,11 @@ void NetServer::controlLoop() {
         ack.rejectReason = handshakeOk ? HelloRejectReason::None : rejectReason;
         ack.sessionId = handshakeOk ? static_cast<uint32_t>(nowMicros()) : 0;
         ack.appVersion = config_.appVersion;
+        // Reflects whether the audio socket actually bound at start() --
+        // not just config_.micSupported, so a bind failure (e.g. the port
+        // was already in use) is honestly reported rather than promising
+        // a feature that silently won't work.
+        ack.micSupported = audioFd_ >= 0 ? 1 : 0;
         ByteBuffer ackPacket = buildHelloAckPacket(ack);
         sendAll(clientFd, ackPacket.data(), ackPacket.size());
 
@@ -429,6 +454,7 @@ void NetServer::controlLoop() {
             inputTracker_.reset();
         }
         inputSink_.releaseAll();
+        micSink_.releaseAudio();
     }
 }
 
@@ -509,6 +535,58 @@ void NetServer::inputLoop() {
     }
 }
 
+void NetServer::audioLoop() {
+    // Fixed header + MicAudioFramePayload's fixed prefix + the largest
+    // possible sample payload (kMicAudioSamplesPerPacket samples).
+    ByteBuffer buf(kPacketHeaderWireSize + 4 + 8 + 2 +
+                   static_cast<size_t>(kMicAudioSamplesPerPacket) * 2);
+
+    while (running_.load()) {
+        sockaddr_in fromAddr{};
+        socklen_t fromLen = sizeof(fromAddr);
+        ssize_t n = ::recvfrom(audioFd_, buf.data(), buf.size(), 0,
+                                reinterpret_cast<sockaddr*>(&fromAddr), &fromLen);
+        if (n <= 0) {
+            if (!running_.load()) break;
+            continue;
+        }
+
+        if (!clientAuthenticated_.load() ||
+            fromAddr.sin_addr.s_addr != authenticatedClientAddr_.load()) {
+            continue; // no authenticated session, or packet from an unrelated address
+        }
+
+        auto header = parseHeader(buf.data(), static_cast<size_t>(n));
+        if (!header || header->protocolVersion != kProtocolVersion ||
+            header->type != PacketType::MicAudioFrame) {
+            std::lock_guard<std::mutex> lock(statsMutex_);
+            ++stats_.micPacketsMalformed;
+            continue; // reject malformed / mismatched packet, stay up
+        }
+
+        size_t payloadOffset = kPacketHeaderWireSize;
+        size_t payloadSize = static_cast<size_t>(n) - payloadOffset;
+        if (payloadSize != header->payloadSize) {
+            std::lock_guard<std::mutex> lock(statsMutex_);
+            ++stats_.micPacketsMalformed;
+            continue;
+        }
+
+        auto frame = parseMicAudioFramePayload(buf.data() + payloadOffset, payloadSize);
+        if (!frame) {
+            std::lock_guard<std::mutex> lock(statsMutex_);
+            ++stats_.micPacketsMalformed;
+            continue;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(statsMutex_);
+            ++stats_.micPacketsAccepted;
+        }
+        micSink_.applyMicAudio(*frame);
+    }
+}
+
 void NetServer::watchdogLoop() {
     uint64_t lastPruneUs = nowMicros();
     uint64_t lastStatsLogUs = nowMicros();
@@ -560,34 +638,43 @@ void NetServer::watchdogLoop() {
             lastStatsLogUs = now;
 
             if (snapshot.inputPacketsAccepted || snapshot.inputPacketsOutOfOrder ||
-                snapshot.inputPacketsMalformed || snapshot.framesSent || snapshot.framesDropped) {
+                snapshot.inputPacketsMalformed || snapshot.framesSent || snapshot.framesDropped ||
+                snapshot.micPacketsAccepted || snapshot.micPacketsMalformed) {
                 double inputRate = windowSec > 0 ? static_cast<double>(snapshot.inputPacketsAccepted) / windowSec : 0.0;
                 double frameRate = windowSec > 0 ? static_cast<double>(snapshot.framesSent) / windowSec : 0.0;
+                double micRate = windowSec > 0 ? static_cast<double>(snapshot.micPacketsAccepted) / windowSec : 0.0;
 
                 if (snapshot.latencySampleCount > 0) {
                     double avgLatencyMs =
                         static_cast<double>(snapshot.latencySumUs) / static_cast<double>(snapshot.latencySampleCount) / 1000.0;
                     std::fprintf(stderr,
                                   "NetServer: stats -- input: accepted=%llu outOfOrder=%llu malformed=%llu "
-                                  "(%.1f/s) | video: sent=%llu (%.1f fps) dropped=%llu | latency: avg=%.1fms "
+                                  "(%.1f/s) | video: sent=%llu (%.1f fps) dropped=%llu | mic: accepted=%llu "
+                                  "malformed=%llu (%.1f/s) | latency: avg=%.1fms "
                                   "min=%.1fms max=%.1fms (n=%llu)\n",
                                   static_cast<unsigned long long>(snapshot.inputPacketsAccepted),
                                   static_cast<unsigned long long>(snapshot.inputPacketsOutOfOrder),
                                   static_cast<unsigned long long>(snapshot.inputPacketsMalformed), inputRate,
                                   static_cast<unsigned long long>(snapshot.framesSent), frameRate,
-                                  static_cast<unsigned long long>(snapshot.framesDropped), avgLatencyMs,
+                                  static_cast<unsigned long long>(snapshot.framesDropped),
+                                  static_cast<unsigned long long>(snapshot.micPacketsAccepted),
+                                  static_cast<unsigned long long>(snapshot.micPacketsMalformed), micRate,
+                                  avgLatencyMs,
                                   static_cast<double>(snapshot.latencyMinUs) / 1000.0,
                                   static_cast<double>(snapshot.latencyMaxUs) / 1000.0,
                                   static_cast<unsigned long long>(snapshot.latencySampleCount));
                 } else {
                     std::fprintf(stderr,
                                   "NetServer: stats -- input: accepted=%llu outOfOrder=%llu malformed=%llu "
-                                  "(%.1f/s) | video: sent=%llu (%.1f fps) dropped=%llu\n",
+                                  "(%.1f/s) | video: sent=%llu (%.1f fps) dropped=%llu | mic: accepted=%llu "
+                                  "malformed=%llu (%.1f/s)\n",
                                   static_cast<unsigned long long>(snapshot.inputPacketsAccepted),
                                   static_cast<unsigned long long>(snapshot.inputPacketsOutOfOrder),
                                   static_cast<unsigned long long>(snapshot.inputPacketsMalformed), inputRate,
                                   static_cast<unsigned long long>(snapshot.framesSent), frameRate,
-                                  static_cast<unsigned long long>(snapshot.framesDropped));
+                                  static_cast<unsigned long long>(snapshot.framesDropped),
+                                  static_cast<unsigned long long>(snapshot.micPacketsAccepted),
+                                  static_cast<unsigned long long>(snapshot.micPacketsMalformed), micRate);
                 }
             }
         }
@@ -705,6 +792,7 @@ void NetServer::discoveryLoop() {
         response.controlPort = config_.controlPort;
         response.inputPort = config_.inputPort;
         response.videoPort = config_.videoPort;
+        response.audioPort = config_.audioPort;
         ByteBuffer packet = buildDiscoveryResponsePacket(response);
         // Unicast back to the specific sender -- never a broadcast reply.
         ::sendto(discoveryFd_, packet.data(), packet.size(), 0,

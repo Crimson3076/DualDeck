@@ -3,6 +3,7 @@ add_library(melonds_remote_host STATIC
     src/synthetic_frame_source.cpp
     src/net_server.cpp
     src/device_approval_manager.cpp
+    src/logging_mic_audio_sink.cpp
 )
 
 target_include_directories(melonds_remote_host PUBLIC

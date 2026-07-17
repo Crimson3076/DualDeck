@@ -21,7 +21,7 @@
 namespace melonds_remote {
 
 // Bumped whenever the wire format changes incompatibly.
-inline constexpr uint16_t kProtocolVersion = 4;
+inline constexpr uint16_t kProtocolVersion = 5;
 
 // Sentinel at the start of every packet so malformed/foreign traffic on the
 // same port can be rejected cheaply before any further parsing.
@@ -37,6 +37,12 @@ enum class PacketType : uint16_t {
     VideoFrame = 7,    // host -> client, video channel, one bottom-screen frame
     DiscoveryRequest = 8,  // client -> host, UDP discovery port, broadcast "who's out there"
     DiscoveryResponse = 9, // host -> client, UDP discovery port, unicast reply to the sender
+    // client -> host, UDP audio port, one chunk of captured microphone PCM
+    // (GitHub issue #2). Only sent when HelloAckPayload::micSupported was
+    // true and the user hasn't muted -- absence of packets is the "no
+    // audio" state, matching how melonDS's own Mic input already treats
+    // silence (see docs/known-limitations.md's microphone section).
+    MicAudioFrame = 10,
 };
 
 // DS button bitmask (wire format; independent from melonDS's internal
@@ -158,6 +164,16 @@ struct HelloAckPayload {
     // vX.Y, you're on vA.B" even on an AppVersionMismatch rejection. Empty
     // if the host doesn't know its own version (see HelloPayload::appVersion).
     std::string appVersion;
+    // Whether this host build/config can accept and inject microphone
+    // audio (GitHub issue #2) -- false for a synthetic/standalone host
+    // that never wires a mic sink, or when the patched melonDS host has
+    // no working mic feed path available. A host predating this field
+    // is simply a different kProtocolVersion (see above) and gets
+    // rejected before either side's payload is parsed, so no separate
+    // "field absent" case exists to handle here. The client should not
+    // bother opening a capture device or sending MicAudioFrame packets
+    // unless this is true.
+    uint8_t micSupported = 0; // 0 or 1
 };
 
 // DiscoveryRequest (client -> host) has no payload: a bare packet header
@@ -176,6 +192,14 @@ struct DiscoveryResponsePayload {
     uint16_t controlPort = 8760;
     uint16_t inputPort = 8761;
     uint16_t videoPort = 8762;
+    // UDP port for MicAudioFrame packets (GitHub issue #2). Advertised
+    // here (rather than only in HelloAck) so a client that already knows
+    // a host's address (--host/last-used, bypassing discovery) still
+    // needs the control-channel handshake's HelloAckPayload::micSupported
+    // to decide whether to use it -- this field alone doesn't imply the
+    // host actually accepts audio, only which port it would listen on if
+    // it does.
+    uint16_t audioPort = 8765;
 };
 
 // Full controller state, sent at a fixed rate (recommended 120 Hz) rather
@@ -199,6 +223,41 @@ struct ControllerState {
 // common PacketHeader). Kept explicit so tests can catch accidental growth.
 inline constexpr size_t kControllerStateWireSize =
     4 + 8 + 2 + 2 + 2 + 2 + 2 + 2 + 1 + 2 + 2;
+
+// Fixed sample format for MicAudioFrame (GitHub issue #2): mono, 16-bit
+// signed PCM, little-endian on the wire (like every other multi-byte
+// field here), at a single fixed rate rather than negotiated per-client.
+// 48 kHz matches melonDS's own default local-mic capture rate
+// (EmuInstanceAudio.cpp's micFreq), so host-side resampling into the DS's
+// actual ~47.6 kHz mic-buffer consumption rate reuses the exact same
+// Mic::Advance-driven resample path melonDS already runs for a physical
+// microphone -- remote audio is just another producer for that same
+// pipeline (see host/melonds-patches/README.md for the injection point).
+inline constexpr uint32_t kMicAudioSampleRate = 48000;
+
+// One packet's worth of audio at 10ms per packet (480 samples @ 48kHz) --
+// small enough to keep mic latency low and stay well under typical LAN
+// MTU (480 * 2 bytes = 960 bytes payload, plus the 12-byte PacketHeader
+// and 18-byte MicAudioFramePayload fixed prefix below, is nowhere near
+// the ~1400-byte practical UDP payload ceiling). Also the hard cap
+// `parseMicAudioFramePayload` enforces on `numSamples` (spec section 13:
+// validate declared sizes before trusting them) -- a well-behaved client
+// always sends exactly this many samples per packet except possibly a
+// shorter final packet right before muting.
+inline constexpr uint16_t kMicAudioSamplesPerPacket = 480;
+
+// MicAudioFrame (client -> host) payload: a fixed-rate mono PCM chunk.
+// `sequence`/`clientTimestampUs` mirror ControllerState's fields (same
+// purpose: host-side ordering/staleness checks), even though, unlike
+// controller input, losing one audio packet is not silently self-healing
+// -- see docs/known-limitations.md for the resulting audible-gap
+// tradeoff of sending raw PCM over UDP with no forward-error-correction.
+struct MicAudioFramePayload {
+    uint32_t sequence = 0;
+    uint64_t clientTimestampUs = 0;
+    uint16_t numSamples = 0; // <= kMicAudioSamplesPerPacket
+    std::vector<int16_t> samples;
+};
 
 struct PacketHeader {
     uint32_t magic = kPacketMagic;
@@ -274,5 +333,17 @@ ByteBuffer buildDiscoveryRequestPacket();
 void serializeDiscoveryResponsePayload(ByteBuffer& out, const DiscoveryResponsePayload& response);
 std::optional<DiscoveryResponsePayload> parseDiscoveryResponsePayload(const uint8_t* data, size_t size);
 ByteBuffer buildDiscoveryResponsePacket(const DiscoveryResponsePayload& response);
+
+// Serializes a MicAudioFramePayload (header not included).
+void serializeMicAudioFramePayload(ByteBuffer& out, const MicAudioFramePayload& frame);
+
+// Parses a MicAudioFramePayload. Returns std::nullopt if the buffer is
+// too short for its own declared numSamples, numSamples exceeds
+// kMicAudioSamplesPerPacket, or there's trailing garbage past the last
+// sample.
+std::optional<MicAudioFramePayload> parseMicAudioFramePayload(const uint8_t* data, size_t size);
+
+// Builds a complete MicAudioFrame packet (header + serialized body).
+ByteBuffer buildMicAudioFramePacket(const MicAudioFramePayload& frame);
 
 } // namespace melonds_remote

@@ -13,7 +13,7 @@ same fixed-size header.
 | Offset | Size | Field            | Notes                                   |
 |-------:|-----:|------------------|------------------------------------------|
 | 0      | 4    | `magic`          | Always `0x444D5231` ("DMR1"). Packets with any other value are rejected before further parsing. |
-| 4      | 2    | `protocolVersion`| Currently `4` (bumped from `3` when `HelloPayload.appVersion`/`HelloAckPayload.appVersion` were added and `HelloRejectReason::AppVersionMismatch` was introduced -- see "App version mismatch" below; `3` itself had bumped from `2` when `HelloAckPayload.pairingToken` was removed and `HelloRejectReason::PairingRequired` was renamed to `ApprovalRequired`, moving from a typed-code pairing flow to device-approval; `2` itself had bumped from `1` when those pairing-code fields were first added). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
+| 4      | 2    | `protocolVersion`| Currently `5` (bumped from `4` when `HelloAckPayload.micSupported` and `DiscoveryResponsePayload.audioPort` were added for microphone support, GitHub issue #2 -- see "MicAudioFrame payload" below; `4` itself had bumped from `3` when `HelloPayload.appVersion`/`HelloAckPayload.appVersion` were added and `HelloRejectReason::AppVersionMismatch` was introduced -- see "App version mismatch" below; `3` itself had bumped from `2` when `HelloAckPayload.pairingToken` was removed and `HelloRejectReason::PairingRequired` was renamed to `ApprovalRequired`, moving from a typed-code pairing flow to device-approval; `2` itself had bumped from `1` when those pairing-code fields were first added). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
 | 6      | 2    | `packetType`     | See table below.                        |
 | 8      | 4    | `payloadSize`    | Size of the payload that follows, in bytes. Receivers must verify this matches the number of bytes actually available before parsing the payload. |
 
@@ -30,6 +30,7 @@ same fixed-size header.
 | 7     | `VideoFrame`      | host -> client  | TCP video | raw pixel buffer, see "Video payload" below |
 | 8     | `DiscoveryRequest`  | client -> host (UDP broadcast) | discovery | none |
 | 9     | `DiscoveryResponse` | host -> client (UDP unicast)   | discovery | see "Discovery payload" below |
+| 10    | `MicAudioFrame`   | client -> host  | UDP audio | see "MicAudioFrame payload" below |
 
 ## ControllerState payload (29 bytes)
 
@@ -91,7 +92,8 @@ table, not part of the wire format.
 | 4   | Swap screens     |
 | 5   | Open client menu |
 | 6   | Disconnect       |
-| 7   | Quit session     |
+| 7   | Quit session (eject ROM) |
+| 8   | Quit application (close melonDS entirely, GitHub issue #25) |
 
 ## Video payload
 
@@ -136,7 +138,7 @@ with this type to `255.255.255.255:<discoveryPort>` and collects whatever
 `DiscoveryResponse` replies arrive within a short window (see
 `client/src/discovery_client.h`).
 
-`DiscoveryResponse` payload (6 fixed bytes + a length-prefixed string):
+`DiscoveryResponse` payload (8 fixed bytes + a length-prefixed string):
 
 | Offset | Size | Field          | Notes |
 |-------:|-----:|----------------|-------|
@@ -144,6 +146,7 @@ with this type to `255.255.255.255:<discoveryPort>` and collects whatever
 | var.   | 2    | `controlPort`  | |
 | var.   | 2    | `inputPort`    | |
 | var.   | 2    | `videoPort`    | |
+| var.   | 2    | `audioPort`    | UDP port for `MicAudioFrame` packets (default 8765), added in protocol v5. Advertised here regardless of whether the host actually accepts audio -- see `HelloAckPayload.micSupported` below for that. |
 
 Deliberately unauthenticated: discovery only reveals a host name and three
 port numbers, never bypasses the device-approval/token check on the
@@ -161,6 +164,40 @@ HTPC is always available. The previously-picked host is pre-highlighted
 as the default selection for a quick one-button reconnect, and the list
 keeps rescanning live while shown so a host that finishes booting a few
 seconds late still appears.
+
+## MicAudioFrame payload
+
+Implements GitHub issue #2 (microphone support): the client captures
+audio locally and streams it to the host over its own UDP socket
+(`audioPort`, see "Discovery payload" above), separate from the
+`ControllerState` input socket, so a burst of larger audio payloads
+never delays input packets or vice versa. Only sent once the host's
+`HelloAck` reported `micSupported == 1` and the user hasn't muted --
+absence of packets is the "no audio" state, the same convention
+`ControllerState`'s own timeout-based release already uses.
+
+Fixed format: mono, 16-bit signed PCM, little-endian, at a single fixed
+rate (`kMicAudioSampleRate` = 48000 Hz) rather than negotiated per
+client -- this matches melonDS's own default local-microphone capture
+rate, so the host side can resample it into the DS's actual mic
+consumption rate using melonDS's existing local-mic pipeline, not a
+separate one (see `docs/known-limitations.md`'s microphone section for
+why). `kMicAudioSamplesPerPacket` (480, i.e. 10ms per packet) bounds how
+many samples one packet may declare -- a well-behaved client always
+sends exactly this many except possibly a shorter final packet right
+before muting.
+
+| Offset | Size | Field         | Notes |
+|-------:|-----:|---------------|-------|
+| 0      | 4    | `sequence`    | Monotonically increasing per client session; informational (ordering isn't enforced the way `ControllerState`'s is -- losing an audio packet is an audible gap, not something to discard as "stale"). |
+| 4      | 8    | `clientTimestampUs` | Same wall-clock convention as `ControllerState.clientTimestampUs`. |
+| 12     | 2    | `numSamples`  | Number of `int16_t` samples that follow. Must not exceed `kMicAudioSamplesPerPacket`; the declared value must exactly match the number of sample bytes actually present in the packet, or it's rejected as malformed. |
+| 14     | `numSamples * 2` | `samples` | Raw PCM, no compression, no forward-error-correction -- a lost UDP packet is an audible ~10ms gap in the DS's mic input, not a corrupted decode. |
+
+Raw/uncompressed audio over lossy UDP with no FEC is a deliberate
+Stage-1 tradeoff (same spirit as the video transport's own Stage-1
+raw-pixel-buffer choice above) -- revisiting it (compression, jitter
+buffering, loss concealment) is future work, not attempted here.
 
 ## Hello payload (variable length)
 
@@ -184,11 +221,13 @@ the host read/allocate an unbounded amount of data.
 
 **Not yet implemented** (present in `SPEC.md` section 9 as a suggestion,
 not a current requirement): supported pixel formats/codecs, controller/
-touch/microphone capability flags. `clientName`/`clientPlatform`/display
-size exist on the wire today but the host does not yet act on them beyond
-logging.
+touch capability flags. `clientName`/`clientPlatform`/display size exist
+on the wire today but the host does not yet act on them beyond logging.
+Microphone capability negotiation *is* now implemented, but travels the
+other direction -- `HelloAckPayload.micSupported` below, not a client-side
+Hello flag, since it's the host's own capability being negotiated.
 
-## HelloAck payload (10 fixed bytes, plus a trailing length-prefixed string)
+## HelloAck payload (10 fixed bytes, a trailing length-prefixed string, then 1 more fixed byte)
 
 | Offset | Size | Field          | Notes |
 |-------:|-----:|----------------|-------|
@@ -198,13 +237,15 @@ logging.
 | 6      | 2    | `nativeWidth`  | Always 256. |
 | 8      | 2    | `nativeHeight` | Always 192. |
 | 10     | length-prefixed string | `appVersion` | The host's own release version, sent regardless of `accepted`/`rejectReason` -- lets the client show e.g. "host is on vX, you're on vY" even on a rejection. Empty if the host doesn't know its own version. |
+| var.   | 1    | `micSupported` | 0 or 1, added in protocol v5. Whether this host build/config can accept and inject microphone audio (GitHub issue #2) -- the client should not bother opening a capture device or sending `MicAudioFrame` packets unless this is 1. Sent regardless of `accepted`/`rejectReason`, same as `appVersion`. |
 
 (Protocol v2 added a trailing length-prefixed `pairingToken` string here,
 for the 6-digit-pairing-code flow described below under "History: the
 6-digit pairing code". Protocol v3 removed it again along with that flow,
 making `HelloAckPayload` a fixed 10 bytes for one version. Protocol v4
 added the trailing `appVersion` string described above, making it
-variable-length again.)
+variable-length again. Protocol v5 appended the single `micSupported`
+byte described above, after `appVersion`.)
 
 `HelloRejectReason`: `0` = none (accepted), `1` = protocol version
 mismatch, `2` = authentication failed, `3` = host busy (reserved, not
@@ -217,7 +258,7 @@ protocol v4).
 
 ## App version mismatch
 
-`kProtocolVersion` (currently 4) only guards *wire-format* compatibility
+`kProtocolVersion` (currently 5) only guards *wire-format* compatibility
 -- two builds can share a wire format while being different releases
 with different features/fixes. `appVersion` (both payloads above) is a
 separate, exact-string check for that: if the host was started with a
@@ -348,8 +389,9 @@ reference.
 
 **Not yet implemented** (present in `SPEC.md` section 9 as a suggestion,
 not a current requirement): supported pixel formats/codecs, controller/
-touch/microphone capability negotiation, session IDs being carried on any
-packet after `HelloAck` (so a stale/replayed session can't yet be
+touch capability negotiation (microphone capability *is* now negotiated,
+see `HelloAckPayload.micSupported` above), session IDs being carried on
+any packet after `HelloAck` (so a stale/replayed session can't yet be
 distinguished from a current one at the protocol level -- today this is
 handled at the transport level via one-active-client-plus-source-IP-match
 instead).

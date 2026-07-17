@@ -20,14 +20,26 @@ ClientSettings loadClientSettings(const std::string& settingsPath) {
     std::ifstream in(settingsPath);
     std::string line;
     while (std::getline(in, line)) {
-        constexpr const char* kPrefix = "auto_update_on_launch=";
-        if (line.rfind(kPrefix, 0) != 0) continue;
+        constexpr const char* kAutoUpdatePrefix = "auto_update_on_launch=";
+        constexpr const char* kMicDevicePrefix = "mic_device_name=";
+        constexpr const char* kMicMutedPrefix = "mic_muted=";
 
-        std::string value = line.substr(std::char_traits<char>::length(kPrefix));
-        if (value == "1" || value == "true" || value == "on") {
-            settings.autoUpdateOnLaunch = true;
-        } else if (value == "0" || value == "false" || value == "off") {
-            settings.autoUpdateOnLaunch = false;
+        if (line.rfind(kAutoUpdatePrefix, 0) == 0) {
+            std::string value = line.substr(std::char_traits<char>::length(kAutoUpdatePrefix));
+            if (value == "1" || value == "true" || value == "on") {
+                settings.autoUpdateOnLaunch = true;
+            } else if (value == "0" || value == "false" || value == "off") {
+                settings.autoUpdateOnLaunch = false;
+            }
+        } else if (line.rfind(kMicDevicePrefix, 0) == 0) {
+            settings.micDeviceName = line.substr(std::char_traits<char>::length(kMicDevicePrefix));
+        } else if (line.rfind(kMicMutedPrefix, 0) == 0) {
+            std::string value = line.substr(std::char_traits<char>::length(kMicMutedPrefix));
+            if (value == "1" || value == "true" || value == "on") {
+                settings.micMuted = true;
+            } else if (value == "0" || value == "false" || value == "off") {
+                settings.micMuted = false;
+            }
         }
     }
     return settings;
@@ -49,6 +61,8 @@ bool saveClientSettings(const std::string& settingsPath, const ClientSettings& s
         std::ofstream out(temporaryPath, std::ios::trunc);
         if (!out.is_open()) return false;
         out << "auto_update_on_launch=" << (settings.autoUpdateOnLaunch ? "1" : "0") << '\n';
+        out << "mic_device_name=" << settings.micDeviceName << '\n';
+        out << "mic_muted=" << (settings.micMuted ? "1" : "0") << '\n';
         if (!out.good()) {
             out.close();
             std::error_code cleanupError;
