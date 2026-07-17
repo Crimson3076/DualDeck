@@ -111,6 +111,14 @@ public:
     // report a version.
     std::string hostAppVersion() const;
 
+    // Which emulated system / adapter the host reported in its most
+    // recent HelloAck (GitHub issue #28), regardless of whether that
+    // handshake was accepted -- same availability convention as
+    // hostAppVersion() above. Default-constructed (empty strings) if no
+    // HelloAck has been received yet.
+    SystemIdentity hostSystemIdentity() const;
+    AdapterIdentity hostAdapterIdentity() const;
+
 private:
     void videoReceiveLoop();
     void heartbeatLoop();
@@ -152,6 +160,8 @@ private:
     mutable std::mutex handshakeResultMutex_;
     HelloRejectReason lastRejectReason_ = HelloRejectReason::None;
     std::string hostAppVersion_;
+    SystemIdentity hostSystemIdentity_;
+    AdapterIdentity hostAdapterIdentity_;
 };
 
 } // namespace melonds_remote::client

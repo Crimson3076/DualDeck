@@ -163,6 +163,49 @@ std::optional<std::string> readString(const uint8_t* data, size_t size, size_t& 
     return s;
 }
 
+void appendSystemIdentity(ByteBuffer& out, const SystemIdentity& id) {
+    appendString(out, id.systemId);
+    appendString(out, id.systemName);
+}
+
+std::optional<SystemIdentity> readSystemIdentity(const uint8_t* data, size_t size, size_t& offset) {
+    SystemIdentity id;
+
+    auto systemId = readString(data, size, offset);
+    if (!systemId) return std::nullopt;
+    id.systemId = std::move(*systemId);
+
+    auto systemName = readString(data, size, offset);
+    if (!systemName) return std::nullopt;
+    id.systemName = std::move(*systemName);
+
+    return id;
+}
+
+void appendAdapterIdentity(ByteBuffer& out, const AdapterIdentity& id) {
+    appendString(out, id.adapterId);
+    appendString(out, id.adapterName);
+    appendString(out, id.adapterVersion);
+}
+
+std::optional<AdapterIdentity> readAdapterIdentity(const uint8_t* data, size_t size, size_t& offset) {
+    AdapterIdentity id;
+
+    auto adapterId = readString(data, size, offset);
+    if (!adapterId) return std::nullopt;
+    id.adapterId = std::move(*adapterId);
+
+    auto adapterName = readString(data, size, offset);
+    if (!adapterName) return std::nullopt;
+    id.adapterName = std::move(*adapterName);
+
+    auto adapterVersion = readString(data, size, offset);
+    if (!adapterVersion) return std::nullopt;
+    id.adapterVersion = std::move(*adapterVersion);
+
+    return id;
+}
+
 void serializeHelloPayload(ByteBuffer& out, const HelloPayload& hello) {
     appendString(out, hello.clientName);
     appendString(out, hello.clientPlatform);
@@ -222,6 +265,8 @@ void serializeHelloAckPayload(ByteBuffer& out, const HelloAckPayload& ack) {
     appendU16(out, ack.nativeHeight);
     appendString(out, ack.appVersion);
     out.push_back(ack.micSupported ? 1 : 0);
+    appendSystemIdentity(out, ack.system);
+    appendAdapterIdentity(out, ack.adapter);
 }
 
 std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t size) {
@@ -253,9 +298,8 @@ std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t 
     if (!version) return std::nullopt;
     ack.appVersion = std::move(*version);
 
-    if (offset + 1 != size) {
-        // trailing garbage, or micSupported missing entirely: reject
-        // rather than silently ignore
+    if (offset + 1 > size) {
+        // micSupported missing entirely: reject rather than silently ignore
         return std::nullopt;
     }
     uint8_t micSupported = data[offset]; offset += 1;
@@ -263,6 +307,19 @@ std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t 
         return std::nullopt;
     }
     ack.micSupported = micSupported;
+
+    auto system = readSystemIdentity(data, size, offset);
+    if (!system) return std::nullopt;
+    ack.system = std::move(*system);
+
+    auto adapter = readAdapterIdentity(data, size, offset);
+    if (!adapter) return std::nullopt;
+    ack.adapter = std::move(*adapter);
+
+    if (offset != size) {
+        // trailing garbage: reject rather than silently ignore
+        return std::nullopt;
+    }
 
     return ack;
 }
@@ -283,6 +340,8 @@ void serializeDiscoveryResponsePayload(ByteBuffer& out, const DiscoveryResponseP
     appendU16(out, response.inputPort);
     appendU16(out, response.videoPort);
     appendU16(out, response.audioPort);
+    appendSystemIdentity(out, response.system);
+    appendAdapterIdentity(out, response.adapter);
 }
 
 std::optional<DiscoveryResponsePayload> parseDiscoveryResponsePayload(const uint8_t* data, size_t size) {
@@ -302,6 +361,14 @@ std::optional<DiscoveryResponsePayload> parseDiscoveryResponsePayload(const uint
     response.inputPort = readU16(data, offset); offset += 2;
     response.videoPort = readU16(data, offset); offset += 2;
     response.audioPort = readU16(data, offset); offset += 2;
+
+    auto system = readSystemIdentity(data, size, offset);
+    if (!system) return std::nullopt;
+    response.system = std::move(*system);
+
+    auto adapter = readAdapterIdentity(data, size, offset);
+    if (!adapter) return std::nullopt;
+    response.adapter = std::move(*adapter);
 
     if (offset != size) {
         // trailing garbage: reject rather than silently ignore

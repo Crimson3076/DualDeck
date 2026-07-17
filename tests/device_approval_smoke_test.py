@@ -43,7 +43,7 @@ import tempfile
 import time
 
 MAGIC = 0x444D5231
-VERSION = 5
+VERSION = 6
 
 PT_HELLO = 1
 PT_HELLO_ACK = 2

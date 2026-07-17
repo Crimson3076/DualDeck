@@ -2057,6 +2057,78 @@ practical to trigger against a real upload) -- the next real release
 publish is itself the first genuine end-to-end run against the real
 GitHub Releases URL.
 
+## Emulator identity model (GitHub issue #28, architecture foundation milestone)
+
+GitHub issue #28 tracks a large architecture change: evolving DualDeck
+from a melonDS-specific tool into an emulator-independent platform with
+future Nintendo 3DS and Wii U adapters. This entry covers only the first
+foundation slice explicitly scoped for this milestone -- shared identity
+types and their surfacing in discovery/handshake/UI -- not the full
+6-phase plan in the issue.
+
+**What this milestone implements**: `melonds_remote::SystemIdentity`
+(`systemId`/`systemName`, e.g. `"nds"`/`"Nintendo DS"`) and
+`AdapterIdentity` (`adapterId`/`adapterName`/`adapterVersion`, e.g.
+`"melonds"`/`"melonDS"`/melonDS's own version), added to
+`DiscoveryResponsePayload` and `HelloAckPayload` (`kProtocolVersion`
+5→6). `host::NetServerConfig` carries both with clearly-labeled
+synthetic defaults (`"synthetic"`/`"Synthetic Test System"`,
+`"synthetic-test"`/`"Synthetic Test Adapter"`), overridable on the
+standalone host via `--system-id`/`--system-name`/`--adapter-id`/
+`--adapter-name`/`--adapter-version` for testing/fixture purposes. The
+melonDS integration (`RemoteServerBridge`'s constructor) hardcodes the
+real `"nds"`/`"Nintendo DS"` and `"melonds"`/`"melonDS"`/`MELONDS_VERSION`
+identity. Client-side: the host-selection/discovery list now shows a
+second line per host (e.g. `NINTENDO DS - MELONDS`, using `-` in place
+of a middle dot since the client's self-contained bitmap font has no
+glyph for one -- see `client/src/bitmap_font.cpp`'s supported character
+set); the connected-session in-app menu shows the same line as a
+subtitle under "MENU"; the disconnected/reconnecting overlay shows the
+last known identity (primed from discovery, refreshed from a live
+HelloAck, deliberately never cleared on disconnect). See
+`docs/architecture.md`'s "Emulator identity model" section for the full
+design rationale and `docs/protocol.md`'s section of the same name for
+the exact wire layout.
+
+**Verified**: protocol-level round-trip/rejection tests for both
+identity structs independently and embedded in each payload
+(`protocol/tests/test_identity.cpp`, plus extended
+`test_handshake.cpp`/`test_discovery.cpp` cases), including a
+deliberately non-melonDS synthetic-identity round trip proving the wire
+format doesn't special-case any particular string (issue #28: "keep the
+identity model reusable for future adapters"). `tests/smoke_test.py`
+extended to start the standalone host with fake `"3ds"`/`"Fake 3DS
+Adapter"` identity flags and assert those exact values come back in
+both an accepted and a rejected handshake (identity is sent regardless
+of `accepted`, same convention as `appVersion`). The melonDS patch was
+regenerated, applied cleanly to a **fresh** pristine `git worktree` at
+the pinned upstream commit, and built completely from scratch
+(`RemoteServerBridge.cpp` now reports `"nds"`/`"melonDS"` real
+identity) -- no build errors, no regressions in the surrounding
+melonDS-specific files (`EmuInstance*.cpp` etc. are untouched by this
+change; only `protocol.h/.cpp`, `net_server.h/.cpp`, and
+`RemoteServerBridge.cpp` differ from the previous patch). Both the
+client and host binaries build cleanly with strict warnings
+(`-Wall -Wextra -Wpedantic -Wconversion -Wshadow`) enabled. `ctest`
+passes for both the protocol and client test suites.
+
+**Not verified**: real Steam Deck hardware for the new two-line
+discovery list layout (reviewed on the same Xvfb+dummy-driver setup
+used throughout this project, not real hardware); no real 3DS or Wii U
+adapter exists yet -- the `"3ds"`/`"Fake 3DS Adapter"` identity used in
+testing is exactly that, a fake fixture identity proving the plumbing
+is generic, not a step toward a real 3DS integration.
+
+**Deliberately not attempted in this milestone** (explicitly out of
+scope per the task that produced this change, tracked as later phases
+on issue #28 itself): extracting a standalone Host Service decoupled
+from the melonDS patch; a full versioned emulator-adapter contract
+(session lifecycle, local IPC to an out-of-process adapter); replacing
+the single fixed 256x192 DS framebuffer with a list of described video
+surfaces; replacing `ControllerState.dsButtons` with a generic input
+model; real 3DS/Wii U adapters; and installer/manifest support for
+selecting adapters independently (coordinate with GitHub issue #26).
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

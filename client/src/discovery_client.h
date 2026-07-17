@@ -18,6 +18,8 @@
 #include <string>
 #include <vector>
 
+#include "melonds_remote/protocol.h"
+
 namespace melonds_remote::client {
 
 struct DiscoveredHost {
@@ -26,6 +28,15 @@ struct DiscoveredHost {
     uint16_t controlPort = 8760;
     uint16_t inputPort = 8761;
     uint16_t videoPort = 8762;
+    uint16_t audioPort = 8765;
+    // Which emulated system / adapter this host is currently running
+    // (GitHub issue #28), straight from its DiscoveryResponse -- lets
+    // the host-selection list show e.g. "Nintendo DS · melonDS" before a
+    // connection is ever attempted. May be empty/default-constructed if
+    // somehow unset; callers should treat that as "unknown", not assume
+    // any particular system.
+    SystemIdentity system;
+    AdapterIdentity adapter;
 };
 
 // Broadcasts a DiscoveryRequest on `discoveryPort` and collects replies

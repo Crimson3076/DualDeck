@@ -96,6 +96,15 @@ bool NetClient::connect() {
         std::lock_guard<std::mutex> resultLock(handshakeResultMutex_);
         lastRejectReason_ = HelloRejectReason::None;
         hostAppVersion_.clear();
+        // Deliberately NOT reset here (GitHub issue #28: "preserve [the
+        // active emulator] on reconnect/error screens where practical")
+        // -- hostSystemIdentity_/hostAdapterIdentity_ keep whatever was
+        // last learned from a real HelloAck across a failed reconnect
+        // attempt, so a caller's "reconnecting to <last known
+        // system/adapter>" status text doesn't blank out just because
+        // this one attempt hasn't gotten far enough to receive a fresh
+        // one yet. They're only ever overwritten below, once an actual
+        // HelloAck is parsed.
     }
 
     // A previous connect() attempt may have failed partway through (or a
@@ -168,6 +177,8 @@ bool NetClient::connect() {
         std::lock_guard<std::mutex> resultLock(handshakeResultMutex_);
         lastRejectReason_ = ack->rejectReason;
         hostAppVersion_ = ack->appVersion;
+        hostSystemIdentity_ = ack->system;
+        hostAdapterIdentity_ = ack->adapter;
     }
     if (!ack->accepted) {
         if (ack->rejectReason == HelloRejectReason::ApprovalRequired) {
@@ -292,6 +303,16 @@ HelloRejectReason NetClient::lastRejectReason() const {
 std::string NetClient::hostAppVersion() const {
     std::lock_guard<std::mutex> lock(handshakeResultMutex_);
     return hostAppVersion_;
+}
+
+SystemIdentity NetClient::hostSystemIdentity() const {
+    std::lock_guard<std::mutex> lock(handshakeResultMutex_);
+    return hostSystemIdentity_;
+}
+
+AdapterIdentity NetClient::hostAdapterIdentity() const {
+    std::lock_guard<std::mutex> lock(handshakeResultMutex_);
+    return hostAdapterIdentity_;
 }
 
 bool NetClient::getLatestFrame(std::vector<uint8_t>& outFrame) {

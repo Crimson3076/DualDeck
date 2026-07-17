@@ -189,6 +189,120 @@ cross-thread communication goes through the small, mutex-protected
   on user text input; see git history if that coordination pattern is
   ever needed again for something else.
 
+## Emulator identity model (GitHub issue #28 foundation milestone)
+
+GitHub issue #28 tracks evolving DualDeck from a melonDS-specific tool
+into an emulator-independent platform (future Nintendo 3DS and Wii U
+adapters alongside the existing melonDS/DS integration). This section
+covers the first foundation slice of that issue: shared identity types so
+a host can say what it is, without any of that work requiring the full
+Host Service extraction, generic input/video-surface model, or 3DS/Wii U
+adapters the rest of the issue describes -- those remain future work (see
+"What issue #28 still needs" below).
+
+**The types** (`melonds_remote::SystemIdentity`/`AdapterIdentity` in
+`protocol/include/melonds_remote/protocol.h`):
+
+```cpp
+struct SystemIdentity {
+    std::string systemId;    // e.g. "nds", "3ds", "wiiu" -- stable, code may switch on it
+    std::string systemName;  // e.g. "Nintendo DS" -- human-readable, for UI only
+};
+
+struct AdapterIdentity {
+    std::string adapterId;       // e.g. "melonds", "synthetic-test" -- stable
+    std::string adapterName;     // e.g. "melonDS" -- human-readable, for UI only
+    std::string adapterVersion;  // the adapter's own version string, may be empty
+};
+```
+
+They're deliberately two separate structs, not one merged blob:
+`SystemIdentity` is a fact about *what's being emulated*; `AdapterIdentity`
+is a fact about *which integration is driving it*. A future second
+DS-capable adapter would share `{"nds", "Nintendo DS"}` but report a
+different `AdapterIdentity` -- and the client must never assume otherwise.
+This is also why `adapterVersion` is distinct from both
+`HelloPayload`/`HelloAckPayload::appVersion` (DualDeck's own release
+string) and `kProtocolVersion` (the wire format version): three
+independent axes of "what version is this," each answering a different
+question.
+
+**Where they travel**: both structs are embedded in `DiscoveryResponsePayload`
+(so the host-selection list can show identity before any connection is
+attempted) and in `HelloAckPayload` (so a client that already knows a
+host's address, bypassing discovery, still learns it, and so the identity
+is visible even on a *rejected* handshake -- same convention as
+`appVersion`). See `docs/protocol.md`'s "Emulator identity model" section
+for the exact wire layout and the `kProtocolVersion` 5→6 bump this
+required.
+
+**Who sets them, and how "no hardcoded emulator comparisons" is kept**:
+`host::NetServerConfig` carries `systemIdentity`/`adapterIdentity` fields
+with clearly-labeled synthetic defaults
+(`{"synthetic", "Synthetic Test System"}` / `{"synthetic-test", "Synthetic
+Test Adapter", ""}`) -- so the standalone `host/remote-server` binary (and
+any test harness constructing `NetServerConfig` directly) is never
+mistaken in client UI for a real DS/melonDS session. It can also be
+overridden per-instance via `--system-id`/`--system-name`/`--adapter-id`/
+`--adapter-name`/`--adapter-version`, letting the standalone binary stand
+in as a fake fixture for a future adapter's client-UI tests without that
+real adapter existing yet (see `tests/smoke_test.py`'s use of a fake
+`"3ds"`/`"Fake 3DS Adapter"` identity to prove the plumbing is generic).
+The melonDS integration (`RemoteServerBridge`'s constructor, in
+`host/melonds-patches/`) hardcodes the real identity --
+`{"nds", "Nintendo DS"}` / `{"melonds", "melonDS", MELONDS_VERSION}` --
+directly in its own constructor rather than threading it through as more
+constructor parameters, since that class specifically *is* the melonDS
+adapter; there's no scenario where a caller would want it to claim to be
+anything else. A future 3DS/Wii U adapter's own bridge class would do the
+same one-line override in its own constructor with its own values.
+
+Client-side, nothing compares `adapterId`/`systemId` against a hardcoded
+string to decide what to render (issue #28: "Do not scatter hardcoded
+emulator-name comparisons throughout the Client") -- `client/src/main.cpp`
+only ever displays `systemName`/`adapterName` as opaque strings reported
+by the host (host-selection list, the connected-session in-app menu's
+subtitle line, and the disconnected/reconnecting overlay's "last known"
+identity line, which is deliberately never cleared on disconnect so a
+dropped connection's status screen still shows what it was connected to).
+The one client-side string literal referencing identity content
+(`" - "` as a separator, in place of the middle-dot the GitHub issue's
+own example text uses) is a rendering-only concession to the client's
+self-contained bitmap font having no glyph for that character
+(`client/src/bitmap_font.cpp` only has space, `0-9`, `A-Z`, `.`, `-`,
+`:`) -- not a comparison against the identity's content.
+
+**Compatibility decision**: adding these fields to `HelloAckPayload`/
+`DiscoveryResponsePayload` changed their wire layout, so `kProtocolVersion`
+moved 5→6, same policy as every previous wire-layout change in this
+project (see `protocol.h`'s version-history comment on
+`kProtocolVersion`). A v5 client/host talking to a v6 peer is rejected
+outright by the existing whole-packet version check (both
+`net_server.cpp` and `discovery_client.cpp` already reject on any
+`protocolVersion` mismatch, unchanged by this work) -- there is no partial
+compatibility mode where an old peer gets a default/empty identity while
+everything else still works. This mirrors every prior bump in this
+project's history (v2→v3 pairing removal, v3→v4 app-version fields, v4→v5
+microphone support) and keeps the "a release must never silently connect
+incompatible Host and Client versions" requirement from issue #28 trivially
+true: incompatible versions never complete a handshake at all, so there is
+no window where a mismatched pair could produce an incorrect mapping.
+
+**What issue #28 still needs** (explicitly out of scope for this
+milestone; tracked as follow-up phases on the issue itself, not attempted
+here): extracting a standalone `dualdeck-host-service` decoupled from the
+melonDS patch (today's `NetServer` still gets vendored directly into the
+melonDS build, unchanged by this work); a versioned emulator-adapter
+contract beyond the identity types here (session lifecycle, capability
+negotiation, local IPC to an out-of-process adapter); replacing the
+single fixed 256x192 DS framebuffer with a list of described video
+surfaces; replacing `ControllerState.dsButtons` with a generic input
+model that adapters translate into native emulator input; a real 3DS or
+Wii U adapter (a *fake* one exists only as a test fixture identity, e.g.
+`tests/smoke_test.py`'s `"3ds"`/`"Fake 3DS Adapter"`, not an actual
+emulator integration); and installer/manifest support for selecting
+adapters independently (coordinated with issue #26).
+
 ## Known gaps vs. the full spec
 
 - Authentication offers both a static pre-shared token (compared with a

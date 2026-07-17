@@ -85,6 +85,8 @@ MDR_TEST(hello_ack_payload_round_trip_accepted) {
     ack.nativeHeight = 192;
     ack.appVersion = "v0.1.24";
     ack.micSupported = 1;
+    ack.system = {"nds", "Nintendo DS"};
+    ack.adapter = {"melonds", "melonDS", "1.0"};
 
     ByteBuffer buf;
     serializeHelloAckPayload(buf, ack);
@@ -97,6 +99,38 @@ MDR_TEST(hello_ack_payload_round_trip_accepted) {
     MDR_CHECK_EQ(parsed->nativeHeight, 192);
     MDR_CHECK(parsed->appVersion == ack.appVersion);
     MDR_CHECK_EQ(parsed->micSupported, 1);
+    MDR_CHECK(parsed->system.systemId == "nds");
+    MDR_CHECK(parsed->system.systemName == "Nintendo DS");
+    MDR_CHECK(parsed->adapter.adapterId == "melonds");
+    MDR_CHECK(parsed->adapter.adapterName == "melonDS");
+    MDR_CHECK(parsed->adapter.adapterVersion == "1.0");
+}
+
+MDR_TEST(hello_ack_payload_identity_defaults_to_empty) {
+    HelloAckPayload ack;
+    ack.accepted = 1;
+
+    ByteBuffer buf;
+    serializeHelloAckPayload(buf, ack);
+    auto parsed = parseHelloAckPayload(buf.data(), buf.size());
+    MDR_CHECK(parsed.has_value());
+    MDR_CHECK(parsed->system.systemId.empty());
+    MDR_CHECK(parsed->system.systemName.empty());
+    MDR_CHECK(parsed->adapter.adapterId.empty());
+    MDR_CHECK(parsed->adapter.adapterName.empty());
+    MDR_CHECK(parsed->adapter.adapterVersion.empty());
+}
+
+MDR_TEST(hello_ack_payload_rejects_truncated_identity) {
+    HelloAckPayload ack;
+    ack.accepted = 1;
+    ack.system = {"nds", "Nintendo DS"};
+    ack.adapter = {"melonds", "melonDS", "1.0"};
+
+    ByteBuffer buf;
+    serializeHelloAckPayload(buf, ack);
+    buf.resize(buf.size() - 1); // chop off the last byte of adapterVersion
+    MDR_CHECK(!parseHelloAckPayload(buf.data(), buf.size()).has_value());
 }
 
 MDR_TEST(hello_ack_payload_mic_unsupported_by_default) {
@@ -115,7 +149,12 @@ MDR_TEST(hello_ack_payload_rejects_invalid_mic_supported_flag) {
     ack.accepted = 1;
     ByteBuffer buf;
     serializeHelloAckPayload(buf, ack);
-    buf.back() = 2; // invalid: micSupported is the last byte
+    // micSupported sits right after the fixed prefix (10 bytes) and the
+    // (here empty, 2-byte-length-prefix-only) appVersion string -- no
+    // longer the buffer's last byte now that system/adapter identity
+    // follows it.
+    constexpr size_t kMicSupportedOffset = 10 + 2;
+    buf[kMicSupportedOffset] = 2; // invalid
 
     MDR_CHECK(!parseHelloAckPayload(buf.data(), buf.size()).has_value());
 }

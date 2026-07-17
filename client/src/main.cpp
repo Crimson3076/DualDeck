@@ -215,8 +215,18 @@ void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHos
     SDL_RenderClear(renderer);
     renderCenteredBitmapText(renderer, "SELECT A HOST", 60.0f, 4, SDL_Color{220, 220, 220, 255});
 
-    constexpr float kRowHeight = 60.0f;
+    // Two lines per host (GitHub issue #28: "Update the Client
+    // host-selection UI to display the host, emulated system, and
+    // actual emulator"): the host name/address as before, plus a second
+    // line naming the emulated system and adapter reported in its
+    // DiscoveryResponse, e.g. "NINTENDO DS - MELONDS" -- the bitmap font
+    // has no glyph for the middle-dot separator used in issue #28's own
+    // example text (see bitmap_font.cpp's supported character set), so
+    // "-" stands in for it here, matching the connected-session menu's
+    // identity line (see identityLine() in main()).
+    constexpr float kRowHeight = 84.0f;
     constexpr int kPixelSize = 3;
+    constexpr int kIdentityPixelSize = 2;
     constexpr float kStartY = 180.0f;
 
     for (size_t i = 0; i < hosts.size(); ++i) {
@@ -225,18 +235,29 @@ void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHos
         std::string label = hosts[i].hostName.empty()
                                  ? addressAndPort
                                  : hosts[i].hostName + "  (" + addressAndPort + ")";
+        std::string identity = hosts[i].system.systemName;
+        if (!hosts[i].adapter.adapterName.empty()) {
+            identity += (identity.empty() ? "" : " - ") + hosts[i].adapter.adapterName;
+        }
         bool selected = static_cast<int>(i) == selectedIndex;
         SDL_Color color = selected ? SDL_Color{90, 200, 120, 255} : SDL_Color{200, 200, 200, 255};
+        SDL_Color identityColor = selected ? SDL_Color{150, 210, 170, 255} : SDL_Color{140, 140, 140, 255};
 
         if (selected) {
-            int width = measureBitmapText(label, kPixelSize);
+            int width = std::max(measureBitmapText(label, kPixelSize),
+                                  measureBitmapText(identity, kIdentityPixelSize));
             float x = (static_cast<float>(kWindowWidth) - static_cast<float>(width)) / 2.0f;
             SDL_FRect highlight{x - 20.0f, rowY - 8.0f, static_cast<float>(width) + 40.0f,
-                                 static_cast<float>(kFontGlyphHeight * kPixelSize) + 16.0f};
+                                 static_cast<float>(kFontGlyphHeight * kPixelSize) +
+                                     static_cast<float>(kFontGlyphHeight * kIdentityPixelSize) + 26.0f};
             SDL_SetRenderDrawColor(renderer, 50, 70, 55, 255);
             SDL_RenderFillRect(renderer, &highlight);
         }
         renderCenteredBitmapText(renderer, label, rowY, kPixelSize, color);
+        if (!identity.empty()) {
+            renderCenteredBitmapText(renderer, identity, rowY + static_cast<float>(kFontGlyphHeight * kPixelSize) + 10.0f,
+                                      kIdentityPixelSize, identityColor);
+        }
     }
 
     renderCenteredBitmapText(renderer, "D-PAD TO MOVE, A TO SELECT",
@@ -249,10 +270,17 @@ void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHos
 
 void renderPauseMenu(SDL_Renderer* renderer, const std::vector<std::string>& items, int selectedIndex,
                      const std::string& title = "MENU", const std::string& statusLine = "",
-                     float micLevel = -1.0f) {
+                     float micLevel = -1.0f, const std::string& subtitle = "") {
     SDL_SetRenderDrawColor(renderer, 20, 20, 24, 220);
     SDL_RenderClear(renderer);
     renderCenteredBitmapText(renderer, title, 100.0f, 4, SDL_Color{220, 220, 220, 255});
+    // Active emulated system/adapter (GitHub issue #28), e.g.
+    // "NINTENDO DS - MELONDS" -- shown right under the title in a
+    // neutral color, distinct from statusLine below (which is reserved
+    // for error/warning text in red).
+    if (!subtitle.empty()) {
+        renderCenteredBitmapText(renderer, subtitle, 148.0f, 2, SDL_Color{150, 170, 210, 255});
+    }
 
     constexpr float kRowHeight = 70.0f;
     constexpr int kPixelSize = 4;
@@ -1369,6 +1397,29 @@ int main(int argc, char** argv) {
     uint64_t menuChordSinceUs = 0;
     bool menuChordFired = false;
 
+    // Last known emulated-system/adapter identity (GitHub issue #28),
+    // shown in the connected-session menu and on the disconnected/
+    // reconnecting overlay. Primed from the discovery selection (so it's
+    // available even before the first successful handshake) and kept
+    // up to date from net.hostSystemIdentity()/hostAdapterIdentity()
+    // once connected; deliberately never cleared on disconnect, so a
+    // dropped connection's reconnect/error screen still shows "what was
+    // I connected to" rather than going blank (issue #28: "preserve it
+    // on reconnect/error screens where practical"). Reset naturally on
+    // "Change Host" since a fresh discovery selection overwrites it.
+    std::string sessionSystemName;
+    std::string sessionAdapterName;
+    auto identityLine = [&]() -> std::string {
+        if (sessionSystemName.empty() && sessionAdapterName.empty()) return "";
+        if (sessionAdapterName.empty()) return sessionSystemName;
+        if (sessionSystemName.empty()) return sessionAdapterName;
+        // The bitmap font (client/src/bitmap_font.cpp) only has glyphs
+        // for space, 0-9, A-Z, '.', '-', ':' -- no multi-byte UTF-8
+        // separator like the middle dot in issue #28's own example text,
+        // so "-" stands in for it on this screen.
+        return sessionSystemName + " - " + sessionAdapterName;
+    };
+
     // Outer loop lets "Change Host" (from the in-app menu below) return to
     // the discovery/selection screen without exiting the whole process --
     // everything from discovery through the connected render loop reruns
@@ -1409,6 +1460,14 @@ int main(int argc, char** argv) {
             netConfig.controlPort = selected->controlPort;
             netConfig.inputPort = selected->inputPort;
             netConfig.videoPort = selected->videoPort;
+            netConfig.audioPort = selected->audioPort;
+            // Primed from discovery so the identity line has something to
+            // show during "CONNECTING..." -- refreshed from the real
+            // HelloAck once connected (see the render loop below), which
+            // is authoritative if it ever disagrees with what discovery
+            // last reported.
+            sessionSystemName = selected->system.systemName;
+            sessionAdapterName = selected->adapter.adapterName;
             // Acknowledge the button press before saving the selection or
             // starting any socket work. The previous synchronous connect
             // left the picker frozen until the host responded, making a
@@ -1461,6 +1520,10 @@ int main(int argc, char** argv) {
         });
 
         uint32_t sequence = 0;
+        // See the identity-refresh block below (GitHub issue #28) for
+        // why this exists: detects the disconnected->connected edge
+        // rather than re-reading net.host*Identity() every frame.
+        bool wasConnected = false;
         bool touchActive = false;
         uint16_t touchX = 0;
         uint16_t touchY = 0;
@@ -1877,6 +1940,24 @@ int main(int argc, char** argv) {
                 menuChordFired = false;
             }
 
+            // Refresh the identity line from the real HelloAck the moment
+            // a (re)connect completes (GitHub issue #28) -- authoritative
+            // over whatever discovery guessed beforehand, in the rare
+            // case a host's active adapter changed between the discovery
+            // scan and this connection. Only on the disconnected->connected
+            // edge, not every frame, since hostSystemIdentity()/
+            // hostAdapterIdentity() each take a mutex; sessionSystemName/
+            // sessionAdapterName are deliberately left alone otherwise
+            // (see their declaration above for why they survive a drop).
+            bool nowConnected = net.isConnected();
+            if (nowConnected && !wasConnected) {
+                SystemIdentity hostSystem = net.hostSystemIdentity();
+                AdapterIdentity hostAdapter = net.hostAdapterIdentity();
+                if (!hostSystem.systemName.empty()) sessionSystemName = hostSystem.systemName;
+                if (!hostAdapter.adapterName.empty()) sessionAdapterName = hostAdapter.adapterName;
+            }
+            wasConnected = nowConnected;
+
             // Microphone capture/send (GitHub issue #2): runs every frame
             // regardless of which screen is showing -- the host keeps the
             // session running while this client-local menu overlay is up,
@@ -1929,7 +2010,7 @@ int main(int argc, char** argv) {
                 if (exitEmulationConfirm) {
                     renderPauseMenu(renderer, exitEmulationItems, exitEmulationSelectedIndex, "EXIT EMULATION");
                 } else {
-                    renderPauseMenu(renderer, menuItems, menuSelectedIndex);
+                    renderPauseMenu(renderer, menuItems, menuSelectedIndex, "MENU", "", -1.0f, identityLine());
                 }
                 continue;
             }
@@ -1996,7 +2077,15 @@ int main(int argc, char** argv) {
                         break;
                 }
                 renderCenteredBitmapText(renderer, status, 24.0f, 2, SDL_Color{220, 200, 80, 255});
-                renderCenteredBitmapText(renderer, kMenuComboHint, 54.0f, 2, SDL_Color{140, 140, 140, 255});
+                // Last known emulated system/adapter (GitHub issue #28),
+                // if any is known yet -- lets the user confirm which
+                // session they're waiting to get back to while
+                // reconnecting, without waiting for a fresh handshake.
+                std::string lastIdentity = identityLine();
+                if (!lastIdentity.empty()) {
+                    renderCenteredBitmapText(renderer, lastIdentity, 44.0f, 2, SDL_Color{150, 170, 210, 255});
+                }
+                renderCenteredBitmapText(renderer, kMenuComboHint, 64.0f, 2, SDL_Color{140, 140, 140, 255});
             }
 
             SDL_RenderPresent(renderer);

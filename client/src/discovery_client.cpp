@@ -118,6 +118,9 @@ std::vector<DiscoveredHost> discoverHosts(uint16_t discoveryPort, int timeoutMs,
         host.controlPort = response->controlPort;
         host.inputPort = response->inputPort;
         host.videoPort = response->videoPort;
+        host.audioPort = response->audioPort;
+        host.system = response->system;
+        host.adapter = response->adapter;
         found[host.address] = host; // last reply from a given address wins
     }
 

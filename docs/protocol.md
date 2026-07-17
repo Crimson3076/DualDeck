@@ -13,7 +13,7 @@ same fixed-size header.
 | Offset | Size | Field            | Notes                                   |
 |-------:|-----:|------------------|------------------------------------------|
 | 0      | 4    | `magic`          | Always `0x444D5231` ("DMR1"). Packets with any other value are rejected before further parsing. |
-| 4      | 2    | `protocolVersion`| Currently `5` (bumped from `4` when `HelloAckPayload.micSupported` and `DiscoveryResponsePayload.audioPort` were added for microphone support, GitHub issue #2 -- see "MicAudioFrame payload" below; `4` itself had bumped from `3` when `HelloPayload.appVersion`/`HelloAckPayload.appVersion` were added and `HelloRejectReason::AppVersionMismatch` was introduced -- see "App version mismatch" below; `3` itself had bumped from `2` when `HelloAckPayload.pairingToken` was removed and `HelloRejectReason::PairingRequired` was renamed to `ApprovalRequired`, moving from a typed-code pairing flow to device-approval; `2` itself had bumped from `1` when those pairing-code fields were first added). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
+| 4      | 2    | `protocolVersion`| Currently `6` (bumped from `5` when `HelloAckPayload.system`/`.adapter` and `DiscoveryResponsePayload.system`/`.adapter` were added for the emulator identity model, GitHub issue #28 -- see "Emulator identity model" below; `5` itself had bumped from `4` when `HelloAckPayload.micSupported` and `DiscoveryResponsePayload.audioPort` were added for microphone support, GitHub issue #2 -- see "MicAudioFrame payload" below; `4` itself had bumped from `3` when `HelloPayload.appVersion`/`HelloAckPayload.appVersion` were added and `HelloRejectReason::AppVersionMismatch` was introduced -- see "App version mismatch" below; `3` itself had bumped from `2` when `HelloAckPayload.pairingToken` was removed and `HelloRejectReason::PairingRequired` was renamed to `ApprovalRequired`, moving from a typed-code pairing flow to device-approval; `2` itself had bumped from `1` when those pairing-code fields were first added). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
 | 6      | 2    | `packetType`     | See table below.                        |
 | 8      | 4    | `payloadSize`    | Size of the payload that follows, in bytes. Receivers must verify this matches the number of bytes actually available before parsing the payload. |
 
@@ -138,7 +138,7 @@ with this type to `255.255.255.255:<discoveryPort>` and collects whatever
 `DiscoveryResponse` replies arrive within a short window (see
 `client/src/discovery_client.h`).
 
-`DiscoveryResponse` payload (8 fixed bytes + a length-prefixed string):
+`DiscoveryResponse` payload (8 fixed bytes + `hostName` plus 5 more length-prefixed strings for identity):
 
 | Offset | Size | Field          | Notes |
 |-------:|-----:|----------------|-------|
@@ -147,6 +147,7 @@ with this type to `255.255.255.255:<discoveryPort>` and collects whatever
 | var.   | 2    | `inputPort`    | |
 | var.   | 2    | `videoPort`    | |
 | var.   | 2    | `audioPort`    | UDP port for `MicAudioFrame` packets (default 8765), added in protocol v5. Advertised here regardless of whether the host actually accepts audio -- see `HelloAckPayload.micSupported` below for that. |
+| var.   | var. | `system.systemId`, `system.systemName`, `adapter.adapterId`, `adapter.adapterName`, `adapter.adapterVersion` | Five length-prefixed strings, added in protocol v6 (GitHub issue #28) -- see "Emulator identity model" below. |
 
 Deliberately unauthenticated: discovery only reveals a host name and three
 port numbers, never bypasses the device-approval/token check on the
@@ -199,6 +200,55 @@ Stage-1 tradeoff (same spirit as the video transport's own Stage-1
 raw-pixel-buffer choice above) -- revisiting it (compression, jitter
 buffering, loss concealment) is future work, not attempted here.
 
+## Emulator identity model
+
+Implements the first foundation milestone of GitHub issue #28 (evolving
+DualDeck from melonDS-specific into an emulator-independent platform):
+every host advertises which emulated system and which specific adapter/
+emulator is actually running it, so client UI never has to guess or
+hardcode assumptions -- see `docs/architecture.md`'s "Emulator identity
+model" section for the full design rationale (why two separate structs,
+who sets them, and what issue #28 still needs beyond this milestone).
+
+Two small structs, `melonds_remote::SystemIdentity`/`AdapterIdentity`
+(`protocol/include/melonds_remote/protocol.h`), each serialized as a
+fixed sequence of length-prefixed strings (same encoding as every other
+string field in this document -- a `u16` byte count followed by that many
+bytes, capped at `kMaxProtocolStringLength` like everything else):
+
+**SystemIdentity** (2 length-prefixed strings):
+
+| Field        | Notes |
+|--------------|-------|
+| `systemId`   | Short, stable, machine-comparable identifier for the emulated system, e.g. `"nds"`, `"3ds"`, `"wiiu"`. Not free text -- future code may switch on this value, so it must never change meaning once shipped. |
+| `systemName` | Human-readable name for UI, e.g. `"Nintendo DS"`. |
+
+**AdapterIdentity** (3 length-prefixed strings):
+
+| Field            | Notes |
+|------------------|-------|
+| `adapterId`      | Short, stable, machine-comparable identifier for the specific emulator/adapter, e.g. `"melonds"`, `"synthetic-test"`. Distinct from `systemId` -- more than one adapter could eventually target the same emulated system. |
+| `adapterName`    | Human-readable emulator name for UI, e.g. `"melonDS"`. |
+| `adapterVersion` | The adapter's own version string (e.g. melonDS's own release version for the melonDS adapter), distinct from `HelloPayload`/`HelloAckPayload.appVersion` (DualDeck's own release) and `protocolVersion` (wire format version) above. May be empty. |
+
+Both structs are embedded, one after another (`system` then `adapter`),
+in `DiscoveryResponsePayload` and `HelloAckPayload` -- see those payloads'
+tables above for exactly where. There is no separate packet type for
+identity; it always rides along with a payload a client already needs to
+parse for another reason (discovery, or the handshake response), rather
+than requiring a third round trip.
+
+**Defaults**: a host that never explicitly sets these
+(`host::NetServerConfig::systemIdentity`/`adapterIdentity`, e.g. the
+standalone `host/remote-server` binary run with no `--system-id`/
+`--adapter-id` flags, or a test harness constructing `NetServerConfig`
+directly) reports `{"synthetic", "Synthetic Test System"}` /
+`{"synthetic-test", "Synthetic Test Adapter", ""}` rather than empty
+strings, so it's never mistaken in client UI for a real DS/melonDS
+session. The melonDS integration always reports
+`{"nds", "Nintendo DS"}` / `{"melonds", "melonDS", <melonDS's own
+version>}` instead.
+
 ## Hello payload (variable length)
 
 Each string field is length-prefixed: a `u16` byte count followed by that
@@ -226,8 +276,12 @@ on the wire today but the host does not yet act on them beyond logging.
 Microphone capability negotiation *is* now implemented, but travels the
 other direction -- `HelloAckPayload.micSupported` below, not a client-side
 Hello flag, since it's the host's own capability being negotiated.
+Emulated-system/adapter identity *is* now negotiated too (GitHub issue
+#28, see "Emulator identity model" below), also host->client only, for
+the same reason -- there is nothing for the client to negotiate here, it
+only ever consumes what the host reports.
 
-## HelloAck payload (10 fixed bytes, a trailing length-prefixed string, then 1 more fixed byte)
+## HelloAck payload (10 fixed bytes, a trailing length-prefixed string, 1 more fixed byte, then 5 more length-prefixed strings)
 
 | Offset | Size | Field          | Notes |
 |-------:|-----:|----------------|-------|
@@ -238,6 +292,7 @@ Hello flag, since it's the host's own capability being negotiated.
 | 8      | 2    | `nativeHeight` | Always 192. |
 | 10     | length-prefixed string | `appVersion` | The host's own release version, sent regardless of `accepted`/`rejectReason` -- lets the client show e.g. "host is on vX, you're on vY" even on a rejection. Empty if the host doesn't know its own version. |
 | var.   | 1    | `micSupported` | 0 or 1, added in protocol v5. Whether this host build/config can accept and inject microphone audio (GitHub issue #2) -- the client should not bother opening a capture device or sending `MicAudioFrame` packets unless this is 1. Sent regardless of `accepted`/`rejectReason`, same as `appVersion`. |
+| var.   | var. | `system.systemId`, `system.systemName`, `adapter.adapterId`, `adapter.adapterName`, `adapter.adapterVersion` | Five length-prefixed strings, added in protocol v6 (GitHub issue #28) -- see "Emulator identity model" below. Sent regardless of `accepted`/`rejectReason`, same as `appVersion`/`micSupported`. |
 
 (Protocol v2 added a trailing length-prefixed `pairingToken` string here,
 for the 6-digit-pairing-code flow described below under "History: the
@@ -245,7 +300,8 @@ for the 6-digit-pairing-code flow described below under "History: the
 making `HelloAckPayload` a fixed 10 bytes for one version. Protocol v4
 added the trailing `appVersion` string described above, making it
 variable-length again. Protocol v5 appended the single `micSupported`
-byte described above, after `appVersion`.)
+byte described above, after `appVersion`. Protocol v6 appended the five
+identity strings described above, after `micSupported`.)
 
 `HelloRejectReason`: `0` = none (accepted), `1` = protocol version
 mismatch, `2` = authentication failed, `3` = host busy (reserved, not
@@ -390,7 +446,9 @@ reference.
 **Not yet implemented** (present in `SPEC.md` section 9 as a suggestion,
 not a current requirement): supported pixel formats/codecs, controller/
 touch capability negotiation (microphone capability *is* now negotiated,
-see `HelloAckPayload.micSupported` above), session IDs being carried on
+see `HelloAckPayload.micSupported` above; emulated-system/adapter identity
+*is* now negotiated too, see "Emulator identity model" above -- GitHub
+issue #28), session IDs being carried on
 any packet after `HelloAck` (so a stale/replayed session can't yet be
 distinguished from a current one at the protocol level -- today this is
 handled at the transport level via one-active-client-plus-source-IP-match

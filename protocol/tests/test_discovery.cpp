@@ -20,6 +20,8 @@ MDR_TEST(discovery_response_payload_round_trip) {
     response.inputPort = 8761;
     response.videoPort = 8762;
     response.audioPort = 8765;
+    response.system = {"nds", "Nintendo DS"};
+    response.adapter = {"melonds", "melonDS", "1.0"};
 
     ByteBuffer buf;
     serializeDiscoveryResponsePayload(buf, response);
@@ -30,6 +32,35 @@ MDR_TEST(discovery_response_payload_round_trip) {
     MDR_CHECK_EQ(parsed->inputPort, response.inputPort);
     MDR_CHECK_EQ(parsed->videoPort, response.videoPort);
     MDR_CHECK_EQ(parsed->audioPort, response.audioPort);
+    MDR_CHECK(parsed->system.systemId == "nds");
+    MDR_CHECK(parsed->system.systemName == "Nintendo DS");
+    MDR_CHECK(parsed->adapter.adapterId == "melonds");
+    MDR_CHECK(parsed->adapter.adapterName == "melonDS");
+    MDR_CHECK(parsed->adapter.adapterVersion == "1.0");
+}
+
+MDR_TEST(discovery_response_payload_synthetic_identity_round_trip) {
+    // Mirrors the standalone host's default identity (see
+    // host/remote-server/include/host/net_server.h's
+    // NetServerConfig::systemIdentity/adapterIdentity) -- a UI-support
+    // check that arbitrary, non-melonDS identity strings survive the
+    // wire round trip untouched, not just the one real adapter that
+    // exists today (GitHub issue #28: keep the identity model reusable
+    // for future adapters).
+    DiscoveryResponsePayload response;
+    response.hostName = "test-rig";
+    response.system = {"synthetic", "Synthetic Test System"};
+    response.adapter = {"synthetic-test", "Synthetic Test Adapter", "dev-build"};
+
+    ByteBuffer buf;
+    serializeDiscoveryResponsePayload(buf, response);
+    auto parsed = parseDiscoveryResponsePayload(buf.data(), buf.size());
+    MDR_CHECK(parsed.has_value());
+    MDR_CHECK(parsed->system.systemId == "synthetic");
+    MDR_CHECK(parsed->system.systemName == "Synthetic Test System");
+    MDR_CHECK(parsed->adapter.adapterId == "synthetic-test");
+    MDR_CHECK(parsed->adapter.adapterName == "Synthetic Test Adapter");
+    MDR_CHECK(parsed->adapter.adapterVersion == "dev-build");
 }
 
 MDR_TEST(discovery_response_payload_empty_hostname_round_trip) {

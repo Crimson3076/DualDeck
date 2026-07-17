@@ -1627,13 +1627,22 @@ index 0000000..a00f345
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
 new file mode 100644
-index 0000000..283be82
+index 0000000..72d6722
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,98 @@
 +#include "RemoteServerBridge.h"
 +
 +#include <chrono>
++
++// For MELONDS_VERSION, reported as this adapter's own version (GitHub
++// issue #28's identity model -- distinct from NetServerConfig::appVersion,
++// which is melonds-remote's/DualDeck's own release string, not melonDS's).
++// Generated at configure time into the build directory; already on the
++// include path here the same way main.cpp/EmuThread.cpp include it (see
++// CMakeLists.txt's `target_include_directories(melonDS PUBLIC
++// "${CMAKE_CURRENT_SOURCE_DIR}")`).
++#include "version.h"
 +
 +namespace melonds_remote_bridge {
 +
@@ -1667,6 +1676,18 @@ index 0000000..283be82
 +    config.appVersion = std::move(appVersion);
 +    config.audioPort = audioPort;
 +    config.micSupported = true;
++    // The melonDS adapter's own identity (GitHub issue #28) -- hardcoded
++    // here rather than threaded through as more constructor parameters,
++    // since this class *is* specifically the melonDS/Nintendo DS adapter;
++    // there is no scenario where a caller would construct a
++    // RemoteServerBridge and want it to claim to be anything else. A
++    // future 3DS/Wii U adapter's own bridge class would do the same
++    // one-line override in its own constructor with its own values,
++    // rather than this becoming a widely-threaded parameter (see
++    // docs/architecture.md's "Emulator identity model" section).
++    config.systemIdentity = melonds_remote::SystemIdentity{"nds", "Nintendo DS"};
++    config.adapterIdentity =
++        melonds_remote::AdapterIdentity{"melonds", "melonDS", MELONDS_VERSION};
 +    server_ = std::make_unique<melonds_remote::host::NetServer>(config, inputSink_, frameSource_, micSink_);
 +}
 +
@@ -2258,10 +2279,10 @@ index 0000000..34cb8a5
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.cpp b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
 new file mode 100644
-index 0000000..1621497
+index 0000000..cd68e02
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
-@@ -0,0 +1,803 @@
+@@ -0,0 +1,807 @@
 +#include "host/net_server.h"
 +
 +#include <arpa/inet.h>
@@ -2668,6 +2689,8 @@ index 0000000..1621497
 +        // was already in use) is honestly reported rather than promising
 +        // a feature that silently won't work.
 +        ack.micSupported = audioFd_ >= 0 ? 1 : 0;
++        ack.system = config_.systemIdentity;
++        ack.adapter = config_.adapterIdentity;
 +        ByteBuffer ackPacket = buildHelloAckPacket(ack);
 +        sendAll(clientFd, ackPacket.data(), ackPacket.size());
 +
@@ -3057,6 +3080,8 @@ index 0000000..1621497
 +        response.inputPort = config_.inputPort;
 +        response.videoPort = config_.videoPort;
 +        response.audioPort = config_.audioPort;
++        response.system = config_.systemIdentity;
++        response.adapter = config_.adapterIdentity;
 +        ByteBuffer packet = buildDiscoveryResponsePacket(response);
 +        // Unicast back to the specific sender -- never a broadcast reply.
 +        ::sendto(discoveryFd_, packet.data(), packet.size(), 0,
@@ -3067,10 +3092,10 @@ index 0000000..1621497
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.h b/src/frontend/qt_sdl/remote_server/host/net_server.h
 new file mode 100644
-index 0000000..3dbe9d6
+index 0000000..e966218
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.h
-@@ -0,0 +1,277 @@
+@@ -0,0 +1,294 @@
 +#pragma once
 +
 +// Minimal standalone host server: one TCP control connection (handshake +
@@ -3137,7 +3162,7 @@ index 0000000..3dbe9d6
 +    // HelloAckPayload::micSupported; when false, audioLoop() isn't even
 +    // started (see start()).
 +    bool micSupported = true;
-+    uint16_t audioPort = 8764;
++    uint16_t audioPort = 8765;
 +
 +    // Empty means authentication is disabled -- spec section 13 requires
 +    // this to be a conscious, warned-about choice, not a silent default.
@@ -3236,6 +3261,23 @@ index 0000000..3dbe9d6
 +    // build with no meaningful version string -- run-host.sh/main.cpp set
 +    // this from the packaged archive's VERSION file.
 +    std::string appVersion;
++
++    // Emulator-independent identity (GitHub issue #28's architecture
++    // foundation milestone: decouple DualDeck from melonDS), sent back
++    // in every HelloAck and DiscoveryResponse -- see
++    // melonds_remote::SystemIdentity/AdapterIdentity in protocol.h for
++    // the field-by-field meaning. Defaults to a clearly-labeled
++    // synthetic/test identity rather than empty strings, so a host that
++    // never overrides this (the standalone host/remote-server binary
++    // itself, or a test harness constructing NetServerConfig directly)
++    // is never mistaken in client UI for a real DS/melonDS session. The
++    // melonDS integration (RemoteServerBridge) overrides both to the
++    // real "nds"/"Nintendo DS" and "melonds"/"melonDS" identity in its
++    // own constructor -- see docs/architecture.md's "Emulator identity
++    // model" section for why that override lives there rather than as a
++    // NetServer constructor parameter.
++    SystemIdentity systemIdentity{"synthetic", "Synthetic Test System"};
++    AdapterIdentity adapterIdentity{"synthetic-test", "Synthetic Test Adapter", ""};
 +};
 +
 +// Aggregated counters reset each time they're logged. Guarded by
@@ -3420,10 +3462,10 @@ index 0000000..48014b9
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
 new file mode 100644
-index 0000000..eba1a6a
+index 0000000..519be63
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
-@@ -0,0 +1,349 @@
+@@ -0,0 +1,431 @@
 +#pragma once
 +
 +// melonDS Remote wire protocol definitions.
@@ -3447,7 +3489,7 @@ index 0000000..eba1a6a
 +namespace melonds_remote {
 +
 +// Bumped whenever the wire format changes incompatibly.
-+inline constexpr uint16_t kProtocolVersion = 5;
++inline constexpr uint16_t kProtocolVersion = 6;
 +
 +// Sentinel at the start of every packet so malformed/foreign traffic on the
 +// same port can be rejected cheaply before any further parsing.
@@ -3521,6 +3563,52 @@ index 0000000..eba1a6a
 +// obviously-hostile declared length before ever allocating for it (spec
 +// section 13: validate packet sizes and values).
 +inline constexpr size_t kMaxProtocolStringLength = 64;
++
++// Emulator-independent identity (GitHub issue #28's architecture
++// foundation milestone: decouple DualDeck from melonDS so 3DS/Wii U
++// adapters can be added later without rewriting the protocol or client).
++//
++// Deliberately two separate structs, not one merged "identity" blob:
++// SystemIdentity describes *what is being emulated* (a fact about the
++// game/console, e.g. "nds"/"Nintendo DS"), while AdapterIdentity
++// describes *which specific integration is driving it*
++// (e.g. "melonds"/"melonDS" today; a hypothetical second DS-capable
++// adapter down the line would share the same SystemIdentity but report
++// a different AdapterIdentity). The client must never infer one from the
++// other -- always use both fields as reported by the host, never a
++// hardcoded table keyed by e.g. adapterId (issue #28: "Never infer the
++// emulator from the system alone; use the identity reported by the
++// negotiated adapter").
++struct SystemIdentity {
++    // Short, stable, machine-comparable identifier for the emulated
++    // system, e.g. "nds", "3ds", "wiiu" -- future code (controller
++    // profile selection, layout selection) may switch on this, so a
++    // value must never change meaning once shipped. Up to
++    // kMaxProtocolStringLength bytes. Not free text.
++    std::string systemId;
++    // Human-readable name for UI, e.g. "Nintendo DS". Up to
++    // kMaxProtocolStringLength bytes.
++    std::string systemName;
++};
++
++struct AdapterIdentity {
++    // Short, stable, machine-comparable identifier for the specific
++    // emulator/adapter driving the session, e.g. "melonds",
++    // "synthetic-test". Up to kMaxProtocolStringLength bytes. Not free
++    // text -- distinct from SystemIdentity::systemId since more than one
++    // adapter could eventually target the same emulated system.
++    std::string adapterId;
++    // Human-readable emulator name for UI, e.g. "melonDS". Up to
++    // kMaxProtocolStringLength bytes.
++    std::string adapterName;
++    // The adapter's own version string (e.g. melonDS's own release
++    // version for the melonDS adapter, or this repository's release
++    // version for the synthetic test adapter) -- distinct from
++    // HelloPayload/HelloAckPayload::appVersion (DualDeck's own release)
++    // and kProtocolVersion (wire format version) above. May be empty if
++    // unknown. Up to kMaxProtocolStringLength bytes.
++    std::string adapterVersion;
++};
 +
 +// Hello (client -> host) handshake payload. See docs/protocol.md
 +// "Handshake" for the full negotiation description; this is the minimal
@@ -3600,6 +3688,21 @@ index 0000000..eba1a6a
 +    // bother opening a capture device or sending MicAudioFrame packets
 +    // unless this is true.
 +    uint8_t micSupported = 0; // 0 or 1
++    // Which emulated system and which adapter/emulator is actually
++    // running it (GitHub issue #28), sent regardless of accepted/
++    // rejectReason -- same convention as appVersion above, so the client
++    // can show "you tried to connect to a Nintendo DS / melonDS host"
++    // even on a rejected handshake. Also advertised in
++    // DiscoveryResponsePayload below so the host-selection list can show
++    // it before a handshake is ever attempted; present here too so a
++    // client that already knows a host's address (bypassing discovery)
++    // still learns it. A host predating this field is simply a different
++    // kProtocolVersion (see above) and gets rejected before either side's
++    // payload is parsed, so there is no separate "field absent" case to
++    // handle -- see docs/protocol.md's "Emulator identity model" section
++    // for the full compatibility decision.
++    SystemIdentity system;
++    AdapterIdentity adapter;
 +};
 +
 +// DiscoveryRequest (client -> host) has no payload: a bare packet header
@@ -3625,7 +3728,15 @@ index 0000000..eba1a6a
 +    // to decide whether to use it -- this field alone doesn't imply the
 +    // host actually accepts audio, only which port it would listen on if
 +    // it does.
-+    uint16_t audioPort = 8764;
++    uint16_t audioPort = 8765;
++    // Which emulated system and which adapter/emulator this host is
++    // currently running (GitHub issue #28) -- lets the host-selection
++    // list show e.g. "Nintendo DS · melonDS" before a connection is ever
++    // attempted. See HelloAckPayload::system/adapter above for the
++    // matching handshake-time fields and the shared compatibility
++    // decision (docs/protocol.md's "Emulator identity model").
++    SystemIdentity system;
++    AdapterIdentity adapter;
 +};
 +
 +// Full controller state, sent at a fixed rate (recommended 120 Hz) rather
@@ -3744,6 +3855,19 @@ index 0000000..eba1a6a
 +// declared length or the declared length exceeds
 +// kMaxProtocolStringLength (spec section 13: validate every field).
 +std::optional<std::string> readString(const uint8_t* data, size_t size, size_t& offset);
++
++// Appends/reads a SystemIdentity/AdapterIdentity as a pair of
++// length-prefixed strings (systemId+systemName, adapterId+adapterName+
++// adapterVersion respectively). Shared by HelloAckPayload and
++// DiscoveryResponsePayload's (de)serialization so the two payloads can
++// never drift apart on how this is encoded. `readX` advances `offset`
++// past what it consumed and returns std::nullopt on the same failure
++// conditions as readString() (declared-length overrun or over
++// kMaxProtocolStringLength).
++void appendSystemIdentity(ByteBuffer& out, const SystemIdentity& id);
++std::optional<SystemIdentity> readSystemIdentity(const uint8_t* data, size_t size, size_t& offset);
++void appendAdapterIdentity(ByteBuffer& out, const AdapterIdentity& id);
++std::optional<AdapterIdentity> readAdapterIdentity(const uint8_t* data, size_t size, size_t& offset);
 +
 +void serializeHelloPayload(ByteBuffer& out, const HelloPayload& hello);
 +std::optional<HelloPayload> parseHelloPayload(const uint8_t* data, size_t size);
@@ -3924,10 +4048,10 @@ index 0000000..a1aff53
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
 new file mode 100644
-index 0000000..bb054b8
+index 0000000..b959afe
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
-@@ -0,0 +1,366 @@
+@@ -0,0 +1,433 @@
 +#include "melonds_remote/protocol.h"
 +
 +#include <cstring>
@@ -4093,6 +4217,49 @@ index 0000000..bb054b8
 +    return s;
 +}
 +
++void appendSystemIdentity(ByteBuffer& out, const SystemIdentity& id) {
++    appendString(out, id.systemId);
++    appendString(out, id.systemName);
++}
++
++std::optional<SystemIdentity> readSystemIdentity(const uint8_t* data, size_t size, size_t& offset) {
++    SystemIdentity id;
++
++    auto systemId = readString(data, size, offset);
++    if (!systemId) return std::nullopt;
++    id.systemId = std::move(*systemId);
++
++    auto systemName = readString(data, size, offset);
++    if (!systemName) return std::nullopt;
++    id.systemName = std::move(*systemName);
++
++    return id;
++}
++
++void appendAdapterIdentity(ByteBuffer& out, const AdapterIdentity& id) {
++    appendString(out, id.adapterId);
++    appendString(out, id.adapterName);
++    appendString(out, id.adapterVersion);
++}
++
++std::optional<AdapterIdentity> readAdapterIdentity(const uint8_t* data, size_t size, size_t& offset) {
++    AdapterIdentity id;
++
++    auto adapterId = readString(data, size, offset);
++    if (!adapterId) return std::nullopt;
++    id.adapterId = std::move(*adapterId);
++
++    auto adapterName = readString(data, size, offset);
++    if (!adapterName) return std::nullopt;
++    id.adapterName = std::move(*adapterName);
++
++    auto adapterVersion = readString(data, size, offset);
++    if (!adapterVersion) return std::nullopt;
++    id.adapterVersion = std::move(*adapterVersion);
++
++    return id;
++}
++
 +void serializeHelloPayload(ByteBuffer& out, const HelloPayload& hello) {
 +    appendString(out, hello.clientName);
 +    appendString(out, hello.clientPlatform);
@@ -4152,6 +4319,8 @@ index 0000000..bb054b8
 +    appendU16(out, ack.nativeHeight);
 +    appendString(out, ack.appVersion);
 +    out.push_back(ack.micSupported ? 1 : 0);
++    appendSystemIdentity(out, ack.system);
++    appendAdapterIdentity(out, ack.adapter);
 +}
 +
 +std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t size) {
@@ -4183,9 +4352,8 @@ index 0000000..bb054b8
 +    if (!version) return std::nullopt;
 +    ack.appVersion = std::move(*version);
 +
-+    if (offset + 1 != size) {
-+        // trailing garbage, or micSupported missing entirely: reject
-+        // rather than silently ignore
++    if (offset + 1 > size) {
++        // micSupported missing entirely: reject rather than silently ignore
 +        return std::nullopt;
 +    }
 +    uint8_t micSupported = data[offset]; offset += 1;
@@ -4193,6 +4361,19 @@ index 0000000..bb054b8
 +        return std::nullopt;
 +    }
 +    ack.micSupported = micSupported;
++
++    auto system = readSystemIdentity(data, size, offset);
++    if (!system) return std::nullopt;
++    ack.system = std::move(*system);
++
++    auto adapter = readAdapterIdentity(data, size, offset);
++    if (!adapter) return std::nullopt;
++    ack.adapter = std::move(*adapter);
++
++    if (offset != size) {
++        // trailing garbage: reject rather than silently ignore
++        return std::nullopt;
++    }
 +
 +    return ack;
 +}
@@ -4213,6 +4394,8 @@ index 0000000..bb054b8
 +    appendU16(out, response.inputPort);
 +    appendU16(out, response.videoPort);
 +    appendU16(out, response.audioPort);
++    appendSystemIdentity(out, response.system);
++    appendAdapterIdentity(out, response.adapter);
 +}
 +
 +std::optional<DiscoveryResponsePayload> parseDiscoveryResponsePayload(const uint8_t* data, size_t size) {
@@ -4232,6 +4415,14 @@ index 0000000..bb054b8
 +    response.inputPort = readU16(data, offset); offset += 2;
 +    response.videoPort = readU16(data, offset); offset += 2;
 +    response.audioPort = readU16(data, offset); offset += 2;
++
++    auto system = readSystemIdentity(data, size, offset);
++    if (!system) return std::nullopt;
++    response.system = std::move(*system);
++
++    auto adapter = readAdapterIdentity(data, size, offset);
++    if (!adapter) return std::nullopt;
++    response.adapter = std::move(*adapter);
 +
 +    if (offset != size) {
 +        // trailing garbage: reject rather than silently ignore

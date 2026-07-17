@@ -404,6 +404,8 @@ void NetServer::controlLoop() {
         // was already in use) is honestly reported rather than promising
         // a feature that silently won't work.
         ack.micSupported = audioFd_ >= 0 ? 1 : 0;
+        ack.system = config_.systemIdentity;
+        ack.adapter = config_.adapterIdentity;
         ByteBuffer ackPacket = buildHelloAckPacket(ack);
         sendAll(clientFd, ackPacket.data(), ackPacket.size());
 
@@ -793,6 +795,8 @@ void NetServer::discoveryLoop() {
         response.inputPort = config_.inputPort;
         response.videoPort = config_.videoPort;
         response.audioPort = config_.audioPort;
+        response.system = config_.systemIdentity;
+        response.adapter = config_.adapterIdentity;
         ByteBuffer packet = buildDiscoveryResponsePacket(response);
         // Unicast back to the specific sender -- never a broadcast reply.
         ::sendto(discoveryFd_, packet.data(), packet.size(), 0,

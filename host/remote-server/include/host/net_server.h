@@ -163,6 +163,23 @@ struct NetServerConfig {
     // build with no meaningful version string -- run-host.sh/main.cpp set
     // this from the packaged archive's VERSION file.
     std::string appVersion;
+
+    // Emulator-independent identity (GitHub issue #28's architecture
+    // foundation milestone: decouple DualDeck from melonDS), sent back
+    // in every HelloAck and DiscoveryResponse -- see
+    // melonds_remote::SystemIdentity/AdapterIdentity in protocol.h for
+    // the field-by-field meaning. Defaults to a clearly-labeled
+    // synthetic/test identity rather than empty strings, so a host that
+    // never overrides this (the standalone host/remote-server binary
+    // itself, or a test harness constructing NetServerConfig directly)
+    // is never mistaken in client UI for a real DS/melonDS session. The
+    // melonDS integration (RemoteServerBridge) overrides both to the
+    // real "nds"/"Nintendo DS" and "melonds"/"melonDS" identity in its
+    // own constructor -- see docs/architecture.md's "Emulator identity
+    // model" section for why that override lives there rather than as a
+    // NetServer constructor parameter.
+    SystemIdentity systemIdentity{"synthetic", "Synthetic Test System"};
+    AdapterIdentity adapterIdentity{"synthetic-test", "Synthetic Test Adapter", ""};
 };
 
 // Aggregated counters reset each time they're logged. Guarded by

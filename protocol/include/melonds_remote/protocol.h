@@ -21,7 +21,7 @@
 namespace melonds_remote {
 
 // Bumped whenever the wire format changes incompatibly.
-inline constexpr uint16_t kProtocolVersion = 5;
+inline constexpr uint16_t kProtocolVersion = 6;
 
 // Sentinel at the start of every packet so malformed/foreign traffic on the
 // same port can be rejected cheaply before any further parsing.
@@ -95,6 +95,52 @@ inline constexpr uint16_t kTouchMaxY = 191;
 // obviously-hostile declared length before ever allocating for it (spec
 // section 13: validate packet sizes and values).
 inline constexpr size_t kMaxProtocolStringLength = 64;
+
+// Emulator-independent identity (GitHub issue #28's architecture
+// foundation milestone: decouple DualDeck from melonDS so 3DS/Wii U
+// adapters can be added later without rewriting the protocol or client).
+//
+// Deliberately two separate structs, not one merged "identity" blob:
+// SystemIdentity describes *what is being emulated* (a fact about the
+// game/console, e.g. "nds"/"Nintendo DS"), while AdapterIdentity
+// describes *which specific integration is driving it*
+// (e.g. "melonds"/"melonDS" today; a hypothetical second DS-capable
+// adapter down the line would share the same SystemIdentity but report
+// a different AdapterIdentity). The client must never infer one from the
+// other -- always use both fields as reported by the host, never a
+// hardcoded table keyed by e.g. adapterId (issue #28: "Never infer the
+// emulator from the system alone; use the identity reported by the
+// negotiated adapter").
+struct SystemIdentity {
+    // Short, stable, machine-comparable identifier for the emulated
+    // system, e.g. "nds", "3ds", "wiiu" -- future code (controller
+    // profile selection, layout selection) may switch on this, so a
+    // value must never change meaning once shipped. Up to
+    // kMaxProtocolStringLength bytes. Not free text.
+    std::string systemId;
+    // Human-readable name for UI, e.g. "Nintendo DS". Up to
+    // kMaxProtocolStringLength bytes.
+    std::string systemName;
+};
+
+struct AdapterIdentity {
+    // Short, stable, machine-comparable identifier for the specific
+    // emulator/adapter driving the session, e.g. "melonds",
+    // "synthetic-test". Up to kMaxProtocolStringLength bytes. Not free
+    // text -- distinct from SystemIdentity::systemId since more than one
+    // adapter could eventually target the same emulated system.
+    std::string adapterId;
+    // Human-readable emulator name for UI, e.g. "melonDS". Up to
+    // kMaxProtocolStringLength bytes.
+    std::string adapterName;
+    // The adapter's own version string (e.g. melonDS's own release
+    // version for the melonDS adapter, or this repository's release
+    // version for the synthetic test adapter) -- distinct from
+    // HelloPayload/HelloAckPayload::appVersion (DualDeck's own release)
+    // and kProtocolVersion (wire format version) above. May be empty if
+    // unknown. Up to kMaxProtocolStringLength bytes.
+    std::string adapterVersion;
+};
 
 // Hello (client -> host) handshake payload. See docs/protocol.md
 // "Handshake" for the full negotiation description; this is the minimal
@@ -174,6 +220,21 @@ struct HelloAckPayload {
     // bother opening a capture device or sending MicAudioFrame packets
     // unless this is true.
     uint8_t micSupported = 0; // 0 or 1
+    // Which emulated system and which adapter/emulator is actually
+    // running it (GitHub issue #28), sent regardless of accepted/
+    // rejectReason -- same convention as appVersion above, so the client
+    // can show "you tried to connect to a Nintendo DS / melonDS host"
+    // even on a rejected handshake. Also advertised in
+    // DiscoveryResponsePayload below so the host-selection list can show
+    // it before a handshake is ever attempted; present here too so a
+    // client that already knows a host's address (bypassing discovery)
+    // still learns it. A host predating this field is simply a different
+    // kProtocolVersion (see above) and gets rejected before either side's
+    // payload is parsed, so there is no separate "field absent" case to
+    // handle -- see docs/protocol.md's "Emulator identity model" section
+    // for the full compatibility decision.
+    SystemIdentity system;
+    AdapterIdentity adapter;
 };
 
 // DiscoveryRequest (client -> host) has no payload: a bare packet header
@@ -200,6 +261,14 @@ struct DiscoveryResponsePayload {
     // host actually accepts audio, only which port it would listen on if
     // it does.
     uint16_t audioPort = 8765;
+    // Which emulated system and which adapter/emulator this host is
+    // currently running (GitHub issue #28) -- lets the host-selection
+    // list show e.g. "Nintendo DS · melonDS" before a connection is ever
+    // attempted. See HelloAckPayload::system/adapter above for the
+    // matching handshake-time fields and the shared compatibility
+    // decision (docs/protocol.md's "Emulator identity model").
+    SystemIdentity system;
+    AdapterIdentity adapter;
 };
 
 // Full controller state, sent at a fixed rate (recommended 120 Hz) rather
@@ -318,6 +387,19 @@ void appendString(ByteBuffer& out, const std::string& s);
 // declared length or the declared length exceeds
 // kMaxProtocolStringLength (spec section 13: validate every field).
 std::optional<std::string> readString(const uint8_t* data, size_t size, size_t& offset);
+
+// Appends/reads a SystemIdentity/AdapterIdentity as a pair of
+// length-prefixed strings (systemId+systemName, adapterId+adapterName+
+// adapterVersion respectively). Shared by HelloAckPayload and
+// DiscoveryResponsePayload's (de)serialization so the two payloads can
+// never drift apart on how this is encoded. `readX` advances `offset`
+// past what it consumed and returns std::nullopt on the same failure
+// conditions as readString() (declared-length overrun or over
+// kMaxProtocolStringLength).
+void appendSystemIdentity(ByteBuffer& out, const SystemIdentity& id);
+std::optional<SystemIdentity> readSystemIdentity(const uint8_t* data, size_t size, size_t& offset);
+void appendAdapterIdentity(ByteBuffer& out, const AdapterIdentity& id);
+std::optional<AdapterIdentity> readAdapterIdentity(const uint8_t* data, size_t size, size_t& offset);
 
 void serializeHelloPayload(ByteBuffer& out, const HelloPayload& hello);
 std::optional<HelloPayload> parseHelloPayload(const uint8_t* data, size_t size);

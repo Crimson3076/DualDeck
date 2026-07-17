@@ -108,13 +108,25 @@ int main(int argc, char** argv) {
             config.micSupported = false;
         } else if (arg == "--app-version") {
             config.appVersion = nextArg();
+        } else if (arg == "--system-id") {
+            config.systemIdentity.systemId = nextArg();
+        } else if (arg == "--system-name") {
+            config.systemIdentity.systemName = nextArg();
+        } else if (arg == "--adapter-id") {
+            config.adapterIdentity.adapterId = nextArg();
+        } else if (arg == "--adapter-name") {
+            config.adapterIdentity.adapterName = nextArg();
+        } else if (arg == "--adapter-version") {
+            config.adapterIdentity.adapterVersion = nextArg();
         } else if (arg == "--help") {
             std::printf(
                 "Usage: melonds-remote-server [--bind ADDR] [--control-port N] "
                 "[--input-port N] [--video-port N] [--timeout-ms N] [--auth-token TOKEN] "
                 "[--state-dir PATH] [--pending-request-ttl-s N] [--stats-interval-ms N] "
                 "[--discovery-port N] [--host-name NAME] [--no-discovery] "
-                "[--audio-port N] [--no-mic] [--app-version STRING]\n"
+                "[--audio-port N] [--no-mic] [--app-version STRING] "
+                "[--system-id ID] [--system-name NAME] [--adapter-id ID] "
+                "[--adapter-name NAME] [--adapter-version STRING]\n"
                 "\n"
                 "Phase 1 prototype: serves a synthetic 256x192 test-pattern bottom\n"
                 "screen and logs received controller/touch state. Not yet wired to\n"
@@ -171,7 +183,23 @@ int main(int argc, char** argv) {
                 "audio's level -- it has no real destination to inject it into\n"
                 "(see docs/melonds-integration-analysis.md); the melonDS integration\n"
                 "feeds it into melonDS's own microphone input. --no-mic turns the\n"
-                "feature off entirely (reported to the client as unsupported).\n");
+                "feature off entirely (reported to the client as unsupported).\n"
+                "\n"
+                "GitHub issue #28 (decoupling DualDeck from melonDS): this host\n"
+                "advertises which emulated system and which adapter/emulator is\n"
+                "running it, in both LAN discovery and the Hello handshake, so client\n"
+                "UI never has to guess. Defaults to a clearly-labeled synthetic/test\n"
+                "identity ('synthetic'/'Synthetic Test System',\n"
+                "'synthetic-test'/'Synthetic Test Adapter') since this binary never\n"
+                "drives a real emulator -- override with --system-id/--system-name/\n"
+                "--adapter-id/--adapter-name/--adapter-version, e.g. to stand this\n"
+                "binary in as a fake fixture for a future 3DS/Wii U adapter's client\n"
+                "UI tests without needing that real adapter built yet. The real\n"
+                "melonDS integration always reports 'nds'/'Nintendo DS' and\n"
+                "'melonds'/'melonDS' instead of these flags (hardcoded in\n"
+                "RemoteServerBridge's constructor, see docs/architecture.md's\n"
+                "'Emulator identity model' section) -- these only apply to this\n"
+                "standalone binary.\n");
             return 0;
         } else {
             std::fprintf(stderr, "unrecognized argument: %s\n", arg.c_str());

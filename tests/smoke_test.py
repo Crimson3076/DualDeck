@@ -27,7 +27,7 @@ import sys
 import time
 
 MAGIC = 0x444D5231
-VERSION = 5
+VERSION = 6
 
 PT_HELLO = 1
 PT_HELLO_ACK = 2
@@ -85,9 +85,21 @@ def recv_exact(sock: socket.socket, size: int) -> bytes:
     return buf
 
 
+def read_lp_string(buf: bytes, offset: int):
+    """Reads one length-prefixed string (matching protocol::readString) and
+    returns (value, offset_after)."""
+    (length,) = struct.unpack_from("<H", buf, offset)
+    start = offset + 2
+    end = start + length
+    return buf[start:end].decode("utf-8"), end
+
+
 def do_handshake(control_port: int, token: str, app_version: str = ""):
-    """Connects, sends Hello with `token`, and returns
-    (socket, accepted, reject_reason, host_app_version, mic_supported)."""
+    """Connects, sends Hello with `token`, and returns a dict with keys:
+    ctrl, accepted, reject_reason, host_app_version, mic_supported,
+    system_id, system_name, adapter_id, adapter_name, adapter_version
+    (GitHub issue #28's identity fields, appended to HelloAckPayload after
+    micSupported -- see docs/protocol.md's "Emulator identity model")."""
     ctrl = socket.create_connection(("127.0.0.1", control_port), timeout=3)
     payload = hello_payload("smoke-test-client", "linux", 1280, 800, token, app_version)
     ctrl.sendall(header(PT_HELLO, len(payload)) + payload)
@@ -99,11 +111,27 @@ def do_handshake(control_port: int, token: str, app_version: str = ""):
 
     ack_payload = recv_exact(ctrl, psize)
     accepted, reject_reason, session_id, native_w, native_h = struct.unpack_from("<BBIHH", ack_payload, 0)
-    (version_len,) = struct.unpack_from("<H", ack_payload, 10)
-    version_end = 12 + version_len
-    host_app_version = ack_payload[12:version_end].decode("utf-8")
-    (mic_supported,) = struct.unpack_from("<B", ack_payload, version_end)
-    return ctrl, accepted, reject_reason, host_app_version, mic_supported
+    host_app_version, offset = read_lp_string(ack_payload, 10)
+    (mic_supported,) = struct.unpack_from("<B", ack_payload, offset)
+    offset += 1
+    system_id, offset = read_lp_string(ack_payload, offset)
+    system_name, offset = read_lp_string(ack_payload, offset)
+    adapter_id, offset = read_lp_string(ack_payload, offset)
+    adapter_name, offset = read_lp_string(ack_payload, offset)
+    adapter_version, offset = read_lp_string(ack_payload, offset)
+    assert offset == len(ack_payload), "trailing bytes left unparsed in HelloAck payload"
+    return {
+        "ctrl": ctrl,
+        "accepted": accepted,
+        "reject_reason": reject_reason,
+        "host_app_version": host_app_version,
+        "mic_supported": mic_supported,
+        "system_id": system_id,
+        "system_name": system_name,
+        "adapter_id": adapter_id,
+        "adapter_name": adapter_name,
+        "adapter_version": adapter_version,
+    }
 
 
 def mic_audio_frame_payload(seq: int, samples) -> bytes:
@@ -114,6 +142,12 @@ def run(server_path: str) -> int:
     control_port, input_port, video_port, audio_port = 28760, 28761, 28762, 28765
     token = "smoke-test-secret"
     host_app_version = "v0.1.99-smoketest"
+    # GitHub issue #28: override the standalone host's default synthetic
+    # identity with something distinguishable, so this test proves the
+    # values actually round-trip end to end rather than just happening to
+    # match the (also synthetic-labeled) default.
+    system_id, system_name = "3ds", "Nintendo 3DS"
+    adapter_id, adapter_name, adapter_version = "fake-3ds", "Fake 3DS Adapter (smoke test)", "0.0.1"
     proc = subprocess.Popen(
         [
             server_path,
@@ -125,6 +159,11 @@ def run(server_path: str) -> int:
             "--timeout-ms", "500",
             "--auth-token", token,
             "--app-version", host_app_version,
+            "--system-id", system_id,
+            "--system-name", system_name,
+            "--adapter-id", adapter_id,
+            "--adapter-name", adapter_name,
+            "--adapter-version", adapter_version,
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -135,10 +174,16 @@ def run(server_path: str) -> int:
         time.sleep(0.3)  # let the listeners bind
 
         # --- Wrong token must be rejected, and must not be able to inject input ---
-        bad_ctrl, accepted, reason, _, _ = do_handshake(control_port, "wrong-token")
-        assert accepted == 0, "expected wrong token to be rejected"
-        assert reason == REJECT_AUTH_FAILED, f"expected AuthenticationFailed, got {reason}"
-        print("[ok] wrong auth token rejected")
+        bad = do_handshake(control_port, "wrong-token")
+        bad_ctrl = bad["ctrl"]
+        assert bad["accepted"] == 0, "expected wrong token to be rejected"
+        assert bad["reject_reason"] == REJECT_AUTH_FAILED, f"expected AuthenticationFailed, got {bad['reject_reason']}"
+        # Identity is sent regardless of accepted/rejectReason (same
+        # convention as host_app_version) -- GitHub issue #28.
+        assert bad["system_id"] == system_id and bad["adapter_id"] == adapter_id, (
+            "expected identity to be reported even on a rejected handshake"
+        )
+        print("[ok] wrong auth token rejected, identity still reported")
 
         # --- Mismatched app version must be rejected before auth is even
         # checked -- correct token, but a different non-empty appVersion
@@ -146,10 +191,13 @@ def run(server_path: str) -> int:
         # closed server-side immediately (net_server.cpp doesn't enter its
         # keep-reading loop when !handshakeOk), so bad_ctrl above doesn't
         # need to be closed client-side first for this next attempt to land.
-        stale_ctrl, accepted, reason, host_version, _ = do_handshake(control_port, token, "v0.0.1-stale")
-        assert accepted == 0, "expected a mismatched app version to be rejected"
-        assert reason == REJECT_APP_VERSION_MISMATCH, f"expected AppVersionMismatch, got {reason}"
-        assert host_version == host_app_version, f"expected host to report its own version, got {host_version!r}"
+        stale = do_handshake(control_port, token, "v0.0.1-stale")
+        stale_ctrl = stale["ctrl"]
+        assert stale["accepted"] == 0, "expected a mismatched app version to be rejected"
+        assert stale["reject_reason"] == REJECT_APP_VERSION_MISMATCH, f"expected AppVersionMismatch, got {stale['reject_reason']}"
+        assert stale["host_app_version"] == host_app_version, (
+            f"expected host to report its own version, got {stale['host_app_version']!r}"
+        )
         print("[ok] mismatched app version rejected, host reports its own version in HelloAck")
         stale_ctrl.close()
 
@@ -173,10 +221,25 @@ def run(server_path: str) -> int:
         time.sleep(0.2)
 
         # --- Correct token: full happy path ---
-        ctrl, accepted, reason, _, mic_supported = do_handshake(control_port, token)
-        assert accepted == 1, f"expected correct token to be accepted, reject_reason={reason}"
-        assert mic_supported == 1, "expected the standalone host to advertise micSupported by default"
-        print("[ok] control handshake with correct auth token, host advertises micSupported")
+        good = do_handshake(control_port, token)
+        ctrl = good["ctrl"]
+        assert good["accepted"] == 1, f"expected correct token to be accepted, reject_reason={good['reject_reason']}"
+        assert good["mic_supported"] == 1, "expected the standalone host to advertise micSupported by default"
+        # GitHub issue #28: the --system-id/--adapter-id etc. flags given
+        # to the server above must show up verbatim in the accepted
+        # handshake too, not just the rejected ones checked above.
+        assert good["system_id"] == system_id and good["system_name"] == system_name, (
+            f"expected system identity {system_id!r}/{system_name!r}, got "
+            f"{good['system_id']!r}/{good['system_name']!r}"
+        )
+        assert good["adapter_id"] == adapter_id and good["adapter_name"] == adapter_name, (
+            f"expected adapter identity {adapter_id!r}/{adapter_name!r}, got "
+            f"{good['adapter_id']!r}/{good['adapter_name']!r}"
+        )
+        assert good["adapter_version"] == adapter_version, (
+            f"expected adapter version {adapter_version!r}, got {good['adapter_version']!r}"
+        )
+        print("[ok] control handshake with correct auth token, host advertises micSupported and identity")
 
         udp.sendto(header(PT_CONTROLLER_STATE, len(payload)) + payload, ("127.0.0.1", input_port))
         print("[ok] sent ControllerState packet")
