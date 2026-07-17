@@ -13,6 +13,7 @@ option(MELONDS_REMOTE_ENABLE_WARNINGS "Enable strict warnings (-Wall -Wextra -Wp
 enable_testing()
 
 add_subdirectory(protocol)
+add_subdirectory(adapter-sdk)
 
 if(MELONDS_REMOTE_BUILD_TESTS)
     add_subdirectory(client/tests)

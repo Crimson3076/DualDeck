@@ -2129,6 +2129,75 @@ surfaces; replacing `ControllerState.dsButtons` with a generic input
 model; real 3DS/Wii U adapters; and installer/manifest support for
 selecting adapters independently (coordinate with GitHub issue #26).
 
+## Adapter contract, ADR, and fake DS/3DS/Wii U fixtures (GitHub issue #28, rest of Phase 1)
+
+Continues the "Emulator identity model" entry above (same GitHub issue
+#28), completing the rest of the issue's own "Phase 1: Architecture
+decision and generic contracts" milestone: an ADR recording the Host
+Service + adapter split, the versioned Emulator Adapter Contract itself
+(session lifecycle, video surfaces, generic input, capabilities), the
+local-IPC and protocol-migration decisions, and fake DS/3DS/Wii U
+capability fixtures proving the contract generalizes. **None of this
+touches the live client/host** -- see below.
+
+**What this implements**: `docs/adr/0001-host-service-and-adapter-architecture.md`
+records the decisions; a new `adapter-sdk/` component
+(`melonds_remote::adapter` namespace) defines `SessionState` +
+`isValidTransition()`, `VideoSurfaceDescriptor`/`SurfaceRole`/
+`PixelFormat`/`Orientation`, `GenericInputState`/`TouchContact`/
+`GenericButton`/`GenericEmulatorAction`, and `AdapterCapabilities`/
+`SurfaceFrame`/`IEmulatorAdapter` (`kAdapterContractVersion = 1`).
+`adapter-sdk/fake_adapters/` implements that contract three times --
+`FakeDsAdapter` (one 256x192 touch surface, matching melonDS's real
+shape exactly, including reusing `protocol.h`'s own `kTouchMaxX`/
+`kTouchMaxY` constants in its test), `FakeThreeDsAdapter` (400x240
+non-touch top + 320x240 touch bottom, real 3DS resolutions), and
+`FakeWiiUAdapter` (1920x1080 non-touch TV + 854x480 touch GamePad, real
+Wii U resolutions) -- test fixtures only, no real emulator behind any of
+them.
+
+**Verified**: 23 new tests (`adapter-sdk/tests/`) covering session-state
+transition validity (every documented valid/invalid transition pair,
+including the "any state may fault to Error" and "Error/Stopped may
+recover to Available" rules), each fixture's declared capabilities/
+surfaces/touch ranges, per-surface latest-frame-wins behavior (including
+that pushing frames to one surface never disturbs another surface's
+independently-tracked frame index -- the required "multiple video
+surfaces with different dimensions" test, exercised concretely on the
+two-surface 3DS/Wii U fixtures), and input release on every path
+(before any input was ever applied, after applying it, and repeatedly).
+Critically, `test_adapter_contract_generic.cpp` runs the *same*
+assertions against all three fixtures purely through `IEmulatorAdapter&`/
+`FakeAdapterBase&` with no per-adapter branches, plus an explicit check
+that the three fixtures report distinct `systemId`s (so that generic
+test can't silently be testing the same thing three times without
+noticing) -- the concrete proof that the contract isn't secretly shaped
+only around melonDS. All of `adapter-sdk` (library, fake-adapter
+library, and the executable above) builds cleanly with strict warnings
+(`-Wall -Wextra -Wpedantic -Wconversion -Wshadow`) and is wired into the
+existing `ctest` run via a new root `add_subdirectory(adapter-sdk)`.
+
+**Deliberately not verified / not applicable yet**: there is no wire
+transport for this contract (it's an in-process C++ interface only), so
+none of the "oversized/malformed message rejected without crashing"
+testing-strategy items from issue #28 apply here -- those become
+relevant once the ADR's Unix-domain-socket decision is actually
+implemented (issue #28 Phase 2), at which point they'll be tested the
+same way `protocol.h`'s existing wire types already are (see
+`protocol/tests/test_identity.cpp`'s truncated-buffer-rejection style,
+for example).
+
+**Zero changes to the live, running system**: `protocol.h`
+(`kProtocolVersion` stays 6), `host/remote-server`'s `NetServer`,
+`client/src/main.cpp`, and the melonDS patch are all completely
+untouched by this entry -- confirmed via `git diff --stat` showing only
+new files plus the two docs files and root `CMakeLists.txt`'s one new
+`add_subdirectory()` line. This was a deliberate scoping choice (see the
+ADR's own framing): get the contract/IPC/migration decisions right
+first, proven out by fixtures, before touching the working v0.1
+networking code in the higher-risk Host Service extraction that comes
+next.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

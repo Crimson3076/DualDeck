@@ -15,6 +15,22 @@ protocol/            Transport-independent wire format + pure logic.
                       - input_state_tracker.h/.cpp
                                                sequence/timeout/fail-safe logic
 
+adapter-sdk/         The versioned Emulator Adapter Contract (GitHub issue
+                      #28 Phase 1 -- see docs/adr/0001-host-service-and-adapter-architecture.md).
+                      Not yet used by the live client/host; a target shape
+                      for a future Host Service extraction (issue #28
+                      Phase 2), proven out today by fake DS/3DS/Wii U
+                      capability fixtures. See "Emulator identity model"
+                      below for the (already-live) identity slice of this
+                      same issue, and the ADR for everything else.
+                      - include/melonds_remote/adapter/
+                          session_state.h    lifecycle enum + isValidTransition()
+                          video_surface.h    VideoSurfaceDescriptor, SurfaceRole, PixelFormat
+                          generic_input.h    GenericInputState, TouchContact, GenericButton/Action
+                          adapter_contract.h AdapterCapabilities, SurfaceFrame, IEmulatorAdapter
+                      - fake_adapters/       FakeDsAdapter/FakeThreeDsAdapter/FakeWiiUAdapter --
+                                             test fixtures, not real emulator integrations
+
 host/remote-server/  Standalone host process. Depends on protocol/ only.
                       - IEmulatorInputSink     seam for melonDS input injection
                         - LoggingInputSink     Phase 1 stand-in (logs, doesn't drive melonDS)
@@ -288,20 +304,25 @@ incompatible Host and Client versions" requirement from issue #28 trivially
 true: incompatible versions never complete a handshake at all, so there is
 no window where a mismatched pair could produce an incorrect mapping.
 
-**What issue #28 still needs** (explicitly out of scope for this
-milestone; tracked as follow-up phases on the issue itself, not attempted
-here): extracting a standalone `dualdeck-host-service` decoupled from the
+**What issue #28 still needed beyond this identity slice** -- now
+addressed by a later Phase 1 pass, see
+`docs/adr/0001-host-service-and-adapter-architecture.md` and the
+`adapter-sdk/` component above: the versioned adapter contract (session
+lifecycle, video-surface list, generic input model, capabilities), the
+local-IPC mechanism decision, the protocol-migration/backward-
+compatibility decision, and fake DS/3DS/Wii U capability fixtures
+proving the contract is genuinely reusable. **Still remaining** after
+that pass (tracked as later phases on the issue itself, not attempted
+yet): actually extracting a standalone Host Service decoupled from the
 melonDS patch (today's `NetServer` still gets vendored directly into the
-melonDS build, unchanged by this work); a versioned emulator-adapter
-contract beyond the identity types here (session lifecycle, capability
-negotiation, local IPC to an out-of-process adapter); replacing the
-single fixed 256x192 DS framebuffer with a list of described video
-surfaces; replacing `ControllerState.dsButtons` with a generic input
-model that adapters translate into native emulator input; a real 3DS or
-Wii U adapter (a *fake* one exists only as a test fixture identity, e.g.
-`tests/smoke_test.py`'s `"3ds"`/`"Fake 3DS Adapter"`, not an actual
-emulator integration); and installer/manifest support for selecting
-adapters independently (coordinated with issue #26).
+melonDS build; the adapter contract exists but nothing calls through it
+in production yet) -- issue #28 Phase 2; implementing the Unix-domain-
+socket transport the ADR decided on (no socket code exists yet); a real
+3DS or Wii U adapter (the fixtures under `adapter-sdk/fake_adapters/`
+are test doubles, not actual emulator integrations, and no target
+emulator has been selected for either system) -- issue #28 Phases 4/5;
+and installer/manifest support for selecting adapters independently
+(coordinated with issue #26) -- issue #28 Phase 6.
 
 ## Known gaps vs. the full spec
 
