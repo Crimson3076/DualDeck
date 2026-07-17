@@ -31,16 +31,22 @@ sandbox.
 
 If you'd rather not build anything, download the latest release archive
 (see the top-level `README.md`'s "Download a build") and extract it in
-Desktop Mode's file manager (Dolphin). Both scripts in `client/` are
-directly double-clickable -- Dolphin offers to run an executable `.sh`
-file when you double-click it, no terminal or typing needed:
+Desktop Mode's file manager (Dolphin).
 
-- **`run-client.sh`** -- runs the client directly, for a quick test.
-- **`install-steam-shortcut.sh`** -- one-time setup that registers it as
-  a Steam library/Gaming Mode shortcut, applied to every local Steam
-  user automatically (**close Steam first**, since it edits Steam's
-  library file directly and Steam can silently undo the change if it's
-  still running).
+**Double-click `client/melonds-remote-client.sh`.** That's the only
+client script you need to know about -- it shows a menu (a graphical
+one via `kdialog` on SteamOS/Bazzite's KDE Plasma desktop, or a plain
+numbered prompt if run from a terminal without `kdialog`) with four
+choices: **Launch melonDS Remote now** (a quick test, connects like
+step 3 below), **Add to Steam** (registers a Gaming Mode shortcut --
+**close Steam first**, since it edits Steam's library file directly and
+Steam can silently undo the change if it's still running), **Remove
+from Steam / uninstall**, and **Check for updates / update** (offers to
+download and install a newer release automatically if one exists).
+Everything else in `client/` -- `run-client.sh`,
+`install-steam-shortcut.sh`, etc. -- moved into `client/internal/`; the
+menu calls those for you, so there's no need to open that folder or
+figure out which script applies.
 
 Everything below this section is the from-source/terminal path -- useful
 if you're modifying the code, but not required for normal use.
@@ -137,45 +143,46 @@ See `docs/building.md` for the actual CMake invocation either way.
 
 ## Gaming Mode: adding as a non-Steam shortcut
 
-**Quickest path**: with Steam closed, double-click
-`client/install-steam-shortcut.sh` (prebuilt release archive -- Dolphin
-offers to run it, no terminal needed) or run
-`./scripts/install-steam-shortcut.sh` (from source; add
+**Quickest path**: with Steam closed, pick "Add to Steam" from
+`client/melonds-remote-client.sh`'s menu (see above), or double-click
+`client/internal/install-steam-shortcut.sh` directly (prebuilt release
+archive) or run `./scripts/install-steam-shortcut.sh` (from source; add
 `--host 192.168.1.50` if you'd rather skip discovery and always connect
 to one address, matching step 4's Launch Options note below) -- it
 builds the client if needed and adds it directly to your
 Steam library, no manual "Add a Non-Steam Game" clicking, and no typing
 required. It applies to every local Steam user automatically (no prompt
 to pick one -- there'd be no way to answer that with just a controller).
-See `scripts/lib/steam_shortcut.py`'s module docstring for exactly what
-it does and doesn't touch (it backs up `shortcuts.vdf` first and refuses
-to run while Steam is open, since Steam caches that file in memory and
-can overwrite the change on its next save). You still need to set its
-**Controller Layout** by hand afterward -- that's a separate per-shortcut
-Steam Input config this script doesn't touch, see step 4 below for why
-it matters.
+See `client/internal/steam_shortcut.py`'s module docstring for exactly
+what it does and doesn't touch (it backs up `shortcuts.vdf` first and
+refuses to run while Steam is open, since Steam caches that file in
+memory and can overwrite the change on its next save). You still need
+to set its **Controller Layout** by hand afterward -- that's a separate
+per-shortcut Steam Input config this script doesn't touch, see step 4
+below for why it matters.
 
-It copies the client binary (and, for the prebuilt-archive path, its
-bundled SDL3 library and launcher wrapper) into a fixed central
+It copies the whole `client/` directory (binary, bundled SDL3 library,
+launcher wrapper, and the `internal/` scripts) into a fixed central
 directory, `~/.config/melonds-remote-client/install/`, and points the
-Steam shortcut's `Exe` at that copy rather than at wherever you happen
-to have extracted or built it -- so the extracted release folder (or a
-`build/` directory) can be deleted right after this runs, and installing
-again later from a newer release still updates the same shortcut instead
-of leaving a stale duplicate behind. This also fixes an earlier bug
-where a shortcut pointed straight at the raw client binary instead of
-the wrapper that sets up its bundled SDL3 library, which could leave the
-shortcut launching to nothing on a real Deck. A failed update can't lose
-a working install either -- the new files are staged separately and only
-swapped in once that succeeds, keeping the replaced version as a
-one-generation backup. If either script ever fails, check
-`~/.config/melonds-remote-client/install.log` (or the graphical error
-box it pops up on KDE Plasma, via `kdialog`) -- see
-`docs/troubleshooting.md` if Steam's shortcut list itself looks wrong
-afterward.
+Steam shortcut's `Exe` at the copy of `run-client.sh` there rather than
+at wherever you happen to have extracted or built it -- so the
+extracted release folder (or a `build/` directory) can be deleted right
+after this runs, and installing again later from a newer release still
+updates the same shortcut instead of leaving a stale duplicate behind.
+This also fixes an earlier bug where a shortcut pointed straight at the
+raw client binary instead of the wrapper that sets up its bundled SDL3
+library, which could leave the shortcut launching to nothing on a real
+Deck. A failed update can't lose a working install either -- the new
+files are staged separately and only swapped in once that succeeds,
+keeping the replaced version as a one-generation backup. If either
+script ever fails, check `~/.config/melonds-remote-client/install.log`
+(or the graphical error box it pops up on KDE Plasma, via `kdialog`) --
+see `docs/troubleshooting.md` if Steam's shortcut list itself looks
+wrong afterward.
 
-**Removing it**: with Steam closed, double-click
-`client/uninstall-steam-shortcut.sh` (or run
+**Removing it**: with Steam closed, pick "Remove from Steam / uninstall"
+from `client/melonds-remote-client.sh`'s menu, or double-click
+`client/internal/uninstall-steam-shortcut.sh` directly (or run
 `./scripts/uninstall-steam-shortcut.sh` from source) -- same no-typing,
 applies-to-every-local-user behavior as the install script, and is safe
 to run again even if the shortcut is already gone (it just does
@@ -183,6 +190,11 @@ nothing). Also deletes the central install directory above, so nothing
 is left behind. Works even if the original download/build is long gone,
 since it only ever depends on that central directory, not on wherever it
 was invoked from.
+
+**Checking for updates**: pick "Check for updates / update" from the
+menu -- reports whether a newer release exists and, if so, offers to
+download and install it automatically (same stage-then-swap safety as
+the install path above).
 
 Or, the standard manual way any non-Steam Linux binary gets added to
 Gaming Mode:

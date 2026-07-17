@@ -18,23 +18,20 @@ rather than overwriting a shared one, so older builds stay downloadable
 if a newer one turns out to be broken. See `RELEASE_NOTES.md` inside the
 archive for exactly which commit a given release was built from.
 
-Everything you need to run is a script you can just double-click, no
-typing required: `run-host.sh`, `run-client.sh`,
-`install-steam-shortcut.sh`, and `uninstall-steam-shortcut.sh` all take
-zero required arguments and check for/auto-install any missing runtime
-libraries (apt/dnf/pacman) before launching. On SteamOS Desktop Mode or Bazzite (both KDE Plasma/Dolphin),
+Everything you need to run is one script per side, no typing required:
+double-click `host/melonds-remote-host.sh` on the machine running
+melonDS, and `client/melonds-remote-client.sh` on your Steam Deck (or
+any Linux machine with a gamepad). Each opens a small menu -- Launch
+now, Add to Steam (Big Picture/Gaming Mode), Remove from Steam, and
+Check for updates (which offers to install one automatically if it
+finds one) -- so there's nothing else in either `host/` or `client/`
+you need to open directly; the rest of what's in there (under each
+directory's `internal/` subfolder) is what the menu calls on your
+behalf. On SteamOS Desktop Mode or Bazzite (both KDE Plasma/Dolphin),
 double-clicking an executable `.sh` file offers to run it directly --
 see `docs/steam-deck-setup.md`/`docs/bazzite-host-setup.md` for the
-quick-start section at the top of each. `install-steam-shortcut.sh`
-copies everything the shortcut needs into a fixed central directory
-(`~/.config/melonds-remote-client/install/`), so the extracted archive
-folder can be deleted afterward -- installing again from a newer release
-later still updates the same shortcut rather than duplicating it, and
-`uninstall-steam-shortcut.sh` keeps working regardless of which
-download folder (if any) is still around. Double-click
-`check-for-updates.sh` (top level of the archive) any time to check
-whether a newer release has been published -- read-only, it only
-reports, it doesn't download or change anything.
+quick-start section at the top of each, and the archive's own bundled
+`README.md` for the full rundown.
 
 ## Status
 

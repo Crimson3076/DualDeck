@@ -1148,14 +1148,98 @@ a real `kdialog` binary showing the actual confirmation dialog, or
 letting an update run to completion against a genuine Bazzite/Distrobox
 environment -- neither exists in this sandbox.
 
-Still not addressed: the same auto-update treatment for the client
-(`client/install-steam-shortcut.sh`/`run-client.sh` don't have an
-equivalent "check and offer to update" menu, since the client has no
-consolidated menu script at all yet -- only the host does), CI-tested
-install/upgrade behavior (no rpm-ostree/Distrobox environment in this
-project's CI, same limitation as everything else Bazzite-specific), and
-real Steam Deck/Bazzite hardware verification (impossible from this
-sandbox). Given these, GitHub issue #10 remains open.
+Still not addressed at the time: the same auto-update treatment for the
+client (added below, in the layout restructuring), CI-tested
+install/upgrade behavior, and real Steam Deck/Bazzite hardware
+verification.
+
+## Release archive restructured into host/client + internal/, client gets its own menu (GitHub issue #10, continued)
+
+User follow-up: "there should be a readme in the main directory for new
+users to use. all of these scripts being in the same directory is
+confusing even for me. this needs to be majorly streamlined." Even
+after the consolidation above, `host/` still showed all ten-odd
+supporting scripts flat alongside the one (`melonds-remote-host.sh`) a
+user actually needed, and `client/` had no menu at all -- still three
+separate visible scripts there (`run-client.sh`,
+`install-steam-shortcut.sh`, `uninstall-steam-shortcut.sh`), an
+asymmetry with the host side.
+
+**New layout**: `host/` and `client/` each now show only the one
+double-click entry point plus the binary it launches; everything else
+(the install/uninstall scripts, `ensure-packages.sh`, `steam_shortcut.py`,
+the Distrobox path, etc.) moved one level down into `host/internal/`
+and `client/internal/`. Both directories are now fully self-contained
+(their own `internal/ensure-packages.sh` and `internal/steam_shortcut.py`
+copies) -- the archive no longer has a shared top-level `scripts/`
+directory at all. `client/melonds-remote-client.sh` is new: the same
+four-choice menu (Launch now / Add to Steam / Remove from Steam / Check
+for updates) as `host/melonds-remote-host.sh`, including its own
+`client/internal/apply-update.sh` (simpler than the host's -- no
+Distrobox step to gate on). A real, genuine top-level `README.md`
+(`docs/release-readme.md` in the repo, copied into the archive at build
+time) replaces relying on `RELEASE_NOTES.md` -- which itself was
+trimmed down to just build provenance, since usage instructions now
+live in `README.md` instead and were growing stale there (still
+mentioning the old flat script names).
+
+**The central install directories were also restructured to match**:
+`~/.config/melonds-remote/install/` (host) and
+`~/.config/melonds-remote-client/install/` (client) now each mirror
+their entire source directory exactly -- entry-point script, binary,
+and `internal/` subfolder all in the same shape as the archive itself
+-- rather than the client's previous nested `install/client/` +
+`install/scripts/lib/` layout. Steam shortcuts now point at
+`install/internal/launch-host.sh` / `install/internal/run-client.sh`
+respectively. This is a breaking change for anyone who already had a
+shortcut from a previous release, but self-heals automatically:
+`steam_shortcut.py`'s existing AppName-fallback matching (built for the
+exact cross-release-path-change scenario earlier in this file) finds
+and rewrites the old entry in place the next time install runs, rather
+than leaving a duplicate.
+
+**This required updating essentially every relative path reference** in
+the host and client scripts, since each one now lives one directory
+level deeper than before. The riskiest part: `install-host-distrobox.sh`
+and `install-steam-shortcut.sh` (both host and client) stage their
+central-directory copy via `cp -a` from a computed `host_root`/`client_root`
+(`cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd`) rather than the
+script's own directory, so the copy captures the *whole* parent
+directory -- entry point, binary, and internal/ together -- not just
+the internal/ subfolder the script itself lives in. The "already
+running from the central directory, skip the wasteful re-copy" check
+added for the host's Distrobox path in the previous pass was updated
+the same way (compares `host_root` against `central_install_dir`,
+not `$(pwd)`).
+
+**Verified** with the same fake-`distrobox`/`dnf`/`kdialog`/`$HOME`
+technique as every pass before this one, rebuilt against the new nested
+paths: for both host and client, on both a simulated immutable and a
+simulated regular system -- fresh install (confirmed the central
+directory is an exact mirror of the source, including the entry-point
+script and binary, not just internal/), the Steam shortcut pointing at
+the correct nested `internal/` path, launching via that shortcut path
+(including the host's `run-host.sh` correctly finding `../melonDS` and
+the client's `run-client.sh` correctly finding `../melonds-remote-client`
+and `../lib/` from within `internal/`), a real update, the dnf-failure-
+mid-update rollback-safety property (re-verified after the refactor --
+a version-marker file survives a simulated `dnf` failure exactly as
+before), a full uninstall (shortcut, central directory, and Distrobox
+container all removed, second run idempotent), the AppName-fallback
+migration of a stale pre-restructuring shortcut entry, and `--dry-run`
+(confirmed to create nothing, reporting the correct new nested `Exe`
+path). **Not verified**: an actual self-update from a real *previous*
+published release into this new layout (the currently published
+release predates this restructuring, so `apply-update.sh` was only
+exercised against that older layout during this pass, not against
+itself) -- this will only be meaningfully verified once this version is
+actually published and a later version updates over it. Also not
+verified: real Distrobox/Steam UI, and real Bazzite/Steam Deck
+hardware, same as every other Bazzite-specific item in this file.
+
+Still not addressed: CI-tested install/upgrade behavior, and real Steam
+Deck/Bazzite hardware verification. Given these, GitHub issue #10
+remains open.
 
 ## Latency instrumentation assumes synced clocks
 

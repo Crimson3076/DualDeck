@@ -71,7 +71,16 @@ version_tag="${RELEASE_VERSION_TAG:-dev-${commit_short}}"
 pkg_name="melonds-remote-${commit_short}-linux-x86_64"
 pkg_dir="${work_dir}/${pkg_name}"
 rm -rf "${pkg_dir}"
-mkdir -p "${pkg_dir}/host" "${pkg_dir}/client/lib" "${pkg_dir}/docs" "${pkg_dir}/scripts/lib"
+# host/ and client/ are each laid out the same way: the one script a
+# user actually needs to double-click sits directly inside, alongside
+# the binary it launches; everything else (install/uninstall scripts,
+# shared helpers, the Distrobox path, etc.) lives one level down in
+# internal/, out of the way. Both directories are fully self-contained
+# (their own internal/ensure-packages.sh and internal/steam_shortcut.py
+# copies) -- there's no shared top-level scripts/ directory in the
+# archive at all, so host/ or client/ alone is always everything that
+# directory needs.
+mkdir -p "${pkg_dir}/host/internal" "${pkg_dir}/client/lib" "${pkg_dir}/client/internal" "${pkg_dir}/docs"
 
 # Read by check-for-updates.sh below to compare against the latest
 # published GitHub release.
@@ -80,37 +89,31 @@ echo "${version_tag}" > "${pkg_dir}/VERSION"
 cp "${melonds_src}/build/melonDS" "${pkg_dir}/host/melonDS"
 chmod +x "${pkg_dir}/host/melonDS"
 ldd "${melonds_src}/build/melonDS" | awk '{print $1}' | sort -u \
-    > "${pkg_dir}/host/host-shared-library-dependencies.txt"
+    > "${pkg_dir}/host/internal/host-shared-library-dependencies.txt"
 
-# host/ is fully self-contained (same reasoning as client/lib/ bundling
-# SDL3): these two are also needed once install-steam-shortcut.sh copies
-# host/ into ~/.config/melonds-remote/install/ -- a flat layout with no
-# scripts/ sibling of its own, unlike the client's central install
-# directory -- so run-host.sh and install-steam-shortcut.sh must find
-# them next to themselves rather than via a `../scripts/lib/` path.
-cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/host/ensure-packages.sh"
-cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/host/steam_shortcut.py"
+cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/host/internal/ensure-packages.sh"
+cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/host/internal/steam_shortcut.py"
 
 cp "${repo_build}/client/melonds-remote-client" "${pkg_dir}/client/melonds-remote-client"
 chmod +x "${pkg_dir}/client/melonds-remote-client"
 cp -a "${sdl3_install}"/lib/libSDL3.so* "${pkg_dir}/client/lib/"
 
-# Shared dependency-check-and-install helper, bundled so the standalone
-# run-host.sh/run-client.sh below can source it on the *end user's*
-# machine (which won't have the rest of this repo checked out).
-cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/scripts/lib/ensure-packages.sh"
+cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/client/internal/ensure-packages.sh"
+cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/client/internal/steam_shortcut.py"
 
-cat > "${pkg_dir}/client/run-client.sh" <<'WRAP'
+cat > "${pkg_dir}/client/internal/run-client.sh" <<'WRAP'
 #!/usr/bin/env bash
 # Runs melonds-remote-client with the bundled SDL3 shared library,
 # auto-installing any missing runtime system libraries first (X11/
-# Wayland etc. -- SDL3 itself is bundled in lib/, no install needed for
-# that part).
+# Wayland etc. -- SDL3 itself is bundled in ../lib/, no install needed
+# for that part). Normally launched via ../../melonds-remote-client.sh's
+# "Launch now" menu choice, not directly.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+client_root="$(cd .. && pwd)"
 
 # shellcheck source=scripts/lib/ensure-packages.sh
-source ../scripts/lib/ensure-packages.sh
+source ./ensure-packages.sh
 
 ensure_packages "client runtime" \
     "libx11-6 libxext6 libxrandr2 libxcursor1 libxfixes3 libxi6 libxss1 libwayland-client0 libwayland-cursor0 libwayland-egl1 libxkbcommon0 libdrm2 libgbm1 libdecor-0-0" \
@@ -118,30 +121,25 @@ ensure_packages "client runtime" \
     "libx11 libxext libxrandr libxcursor libxfixes libxi libxss wayland libxkbcommon libdrm mesa libdecor" \
     || echo "warning: could not verify/install client runtime libraries automatically; continuing anyway in case they're already present" >&2
 
-LD_LIBRARY_PATH="$(pwd)/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" exec ./melonds-remote-client "$@"
+LD_LIBRARY_PATH="${client_root}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" exec "${client_root}/melonds-remote-client" "$@"
 WRAP
-chmod +x "${pkg_dir}/client/run-client.sh"
+chmod +x "${pkg_dir}/client/internal/run-client.sh"
 
-# scripts/lib/steam_shortcut.py is layout-agnostic (takes --exe
-# explicitly), so it's bundled as-is; only the wrapper around it needs to
-# know this archive's layout (client binary next to the wrapper, not
-# under a separate build/ directory like the repo's own
-# scripts/install-steam-shortcut.sh assumes).
-cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/scripts/lib/steam_shortcut.py"
-
-cat > "${pkg_dir}/client/install-steam-shortcut.sh" <<'WRAP'
+cat > "${pkg_dir}/client/internal/install-steam-shortcut.sh" <<'WRAP'
 #!/usr/bin/env bash
 # Registers melonds-remote-client as a Steam non-Steam-game shortcut --
-# see ../scripts/lib/steam_shortcut.py for exactly what this does and why
-# it's careful about it (backs up shortcuts.vdf first, refuses to run
-# while Steam is open unless --force). Any arguments given here are
-# passed through as the shortcut's launch options, e.g.:
+# see ./steam_shortcut.py for exactly what this does and why it's
+# careful about it (backs up shortcuts.vdf first, refuses to run while
+# Steam is open unless --force). Any arguments given here are passed
+# through as the shortcut's launch options, e.g.:
 #   ./install-steam-shortcut.sh --host 192.168.1.50
+# Normally launched via ../../melonds-remote-client.sh's "Add to Steam"
+# menu choice, not directly.
 #
-# Copies this whole client/ + scripts/lib/ tree into a fixed central
-# directory -- see central_install_dir below -- and points the Steam
-# shortcut at the copy there (specifically at run-client.sh, not the
-# raw binary, so the bundled SDL3 library is found via LD_LIBRARY_PATH).
+# Copies the whole client/ directory (this script's parent) into a
+# fixed central location -- see central_install_dir below -- and points
+# the Steam shortcut at run-client.sh there (specifically, not the raw
+# binary, so the bundled SDL3 library is found via LD_LIBRARY_PATH).
 # That way, re-running this from a newer release's extracted archive
 # later always updates the same shortcut instead of leaving a stale
 # duplicate around pointing at a now-deleted download folder, and the
@@ -154,6 +152,7 @@ cat > "${pkg_dir}/client/install-steam-shortcut.sh" <<'WRAP'
 # one-generation backup (*.previous) rather than deleting it outright.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+client_root="$(cd .. && pwd)"
 
 # Surfaces failures visibly instead of just closing silently when
 # double-clicked with no visible terminal attached (GitHub issue #11) --
@@ -189,26 +188,17 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Keep in sync with the same constant in scripts/install-steam-shortcut.sh,
-# scripts/uninstall-steam-shortcut.sh, and this archive's own
-# uninstall-steam-shortcut.sh.
+# Keep in sync with the same constant in uninstall-steam-shortcut.sh and
+# apply-update.sh.
 central_install_dir="${HOME}/.config/melonds-remote-client/install"
 staging_dir="${central_install_dir}.new"
 previous_dir="${central_install_dir}.previous"
 
 if [[ "${dry_run}" -eq 0 ]]; then
     rm -rf "${staging_dir}"
-    mkdir -p "${staging_dir}/client/lib" "${staging_dir}/scripts/lib"
-
-    cp melonds-remote-client "${staging_dir}/client/melonds-remote-client"
-    chmod +x "${staging_dir}/client/melonds-remote-client"
-    cp -a lib/. "${staging_dir}/client/lib/"
-    cp run-client.sh "${staging_dir}/client/run-client.sh"
-    chmod +x "${staging_dir}/client/run-client.sh"
-    cp uninstall-steam-shortcut.sh "${staging_dir}/client/uninstall-steam-shortcut.sh"
-    chmod +x "${staging_dir}/client/uninstall-steam-shortcut.sh"
-    cp ../scripts/lib/ensure-packages.sh "${staging_dir}/scripts/lib/ensure-packages.sh"
-    cp ../scripts/lib/steam_shortcut.py "${staging_dir}/scripts/lib/steam_shortcut.py"
+    mkdir -p "${staging_dir}"
+    cp -a "${client_root}/." "${staging_dir}/"
+    find "${staging_dir}" -name '*.sh' -exec chmod +x {} +
 
     # Only reached if staging succeeded -- safe to activate now. Keeps
     # just one backup generation, not unbounded.
@@ -219,8 +209,8 @@ if [[ "${dry_run}" -eq 0 ]]; then
     mv "${staging_dir}" "${central_install_dir}"
 fi
 
-python3 ../scripts/lib/steam_shortcut.py \
-    --exe "${central_install_dir}/client/run-client.sh" \
+python3 ./steam_shortcut.py \
+    --exe "${central_install_dir}/internal/run-client.sh" \
     --launch-options "${launch_options}" \
     "${extra_args[@]}" && shortcut_exit=0 || shortcut_exit=$?
 if [[ "${shortcut_exit}" -ne 0 ]]; then
@@ -228,16 +218,18 @@ if [[ "${shortcut_exit}" -ne 0 ]]; then
     exit "${shortcut_exit}"
 fi
 WRAP
-chmod +x "${pkg_dir}/client/install-steam-shortcut.sh"
+chmod +x "${pkg_dir}/client/internal/install-steam-shortcut.sh"
 
-cat > "${pkg_dir}/client/uninstall-steam-shortcut.sh" <<'WRAP'
+cat > "${pkg_dir}/client/internal/uninstall-steam-shortcut.sh" <<'WRAP'
 #!/usr/bin/env bash
 # Removes the melonDS Remote Steam non-Steam-game shortcut added by
 # install-steam-shortcut.sh, and deletes the central install directory
-# that script copies everything into. See ../scripts/lib/steam_shortcut.py
-# for exactly what the shortcut-removal part does and why it's careful
+# that script copies everything into. See ./steam_shortcut.py for
+# exactly what the shortcut-removal part does and why it's careful
 # about it (backs up shortcuts.vdf first, refuses to run while Steam is
-# open unless --force).
+# open unless --force). Normally launched via
+# ../../melonds-remote-client.sh's "Remove from Steam" menu choice, not
+# directly.
 #
 # Always targets the fixed central install directory below for the
 # actual --exe match, regardless of where this script itself is run
@@ -273,15 +265,15 @@ ${error_log}" 2>/dev/null || true
 }
 trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
 
-# Keep in sync with the same constant in install-steam-shortcut.sh above,
-# and in scripts/install-steam-shortcut.sh / scripts/uninstall-steam-shortcut.sh.
+# Keep in sync with the same constant in install-steam-shortcut.sh and
+# apply-update.sh.
 central_install_dir="${HOME}/.config/melonds-remote-client/install"
 self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 steam_shortcut_py=""
 for candidate in \
-    "${central_install_dir}/scripts/lib/steam_shortcut.py" \
-    "${self_dir}/../scripts/lib/steam_shortcut.py"
+    "${central_install_dir}/internal/steam_shortcut.py" \
+    "${self_dir}/steam_shortcut.py"
 do
     if [[ -f "${candidate}" ]]; then
         steam_shortcut_py="${candidate}"
@@ -296,7 +288,7 @@ if [[ -z "${steam_shortcut_py}" ]]; then
 fi
 
 python3 "${steam_shortcut_py}" \
-    --exe "${central_install_dir}/client/run-client.sh" \
+    --exe "${central_install_dir}/internal/run-client.sh" \
     --remove \
     "$@"
 
@@ -319,9 +311,210 @@ if [[ "${dry_run}" -eq 0 ]]; then
     done
 fi
 WRAP
-chmod +x "${pkg_dir}/client/uninstall-steam-shortcut.sh"
+chmod +x "${pkg_dir}/client/internal/uninstall-steam-shortcut.sh"
 
-cat > "${pkg_dir}/host/run-host.sh" <<'WRAP'
+cat > "${pkg_dir}/client/internal/apply-update.sh" <<'WRAP'
+#!/usr/bin/env bash
+# Downloads the latest melonDS Remote release and installs the client
+# part, by handing off to that release's own
+# client/internal/install-steam-shortcut.sh --force -- reusing its
+# already-verified stage-then-swap file safety rather than duplicating
+# any of that logic here. This script's only job is fetching and
+# extracting the new release archive. Normally invoked from
+# ../../melonds-remote-client.sh's "Check for updates" menu choice
+# after the user confirms; also runnable standalone. See
+# host/internal/apply-update.sh for the host equivalent (same design,
+# minus the Distrobox complexity the client doesn't need).
+#
+# Only ever downloads from this exact, hardcoded GitHub Releases URL
+# over HTTPS -- never anything derived from user input, an environment
+# variable, or a config file.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+error_log="${HOME}/.config/melonds-remote-client/install.log"
+on_error() {
+    local exit_code="$1" line_no="$2" failing_cmd="$3"
+    mkdir -p "$(dirname "${error_log}")"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") apply-update.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "melonDS Remote" --error "Updating failed: ${failing_cmd}
+(exit code ${exit_code})
+
+Details logged to:
+${error_log}" 2>/dev/null || true
+    fi
+}
+trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
+
+if ! command -v curl >/dev/null 2>&1; then
+    echo "error: curl is required to download updates -- install it, or download" >&2
+    echo "the latest release manually from https://github.com/Crimson3076/DualDeck/releases/latest" >&2
+    exit 1
+fi
+
+repo="Crimson3076/DualDeck"
+download_url="https://github.com/${repo}/releases/latest/download/melonds-remote-linux-x86_64.tar.gz"
+
+work_dir="$(mktemp -d)"
+trap 'rm -rf "${work_dir}"' EXIT
+
+echo "Downloading the latest release..."
+curl -fsSL --max-time 180 -o "${work_dir}/release.tar.gz" "${download_url}"
+
+echo "Extracting..."
+tar xzf "${work_dir}/release.tar.gz" -C "${work_dir}"
+
+extracted_dir=""
+for candidate in "${work_dir}"/melonds-remote-*; do
+    [[ -d "${candidate}" ]] && extracted_dir="${candidate}" && break
+done
+if [[ -z "${extracted_dir}" ]]; then
+    echo "error: couldn't find the extracted release directory" >&2
+    exit 1
+fi
+
+echo "Installing..."
+# Not exec'd: the work_dir EXIT trap above must still fire to clean up
+# the download afterward, which exec'ing over this process would skip.
+"${extracted_dir}/client/internal/install-steam-shortcut.sh" --force
+WRAP
+chmod +x "${pkg_dir}/client/internal/apply-update.sh"
+
+cat > "${pkg_dir}/client/melonds-remote-client.sh" <<'WRAP'
+#!/usr/bin/env bash
+# The one thing to double-click to set up or run the melonDS Remote
+# client -- shows a simple menu and delegates to whichever of the
+# internal/ scripts actually applies, so a user never has to figure out
+# which one they need. See ../host/melonds-remote-host.sh for the host
+# equivalent (same menu shape).
+#
+# Uses a graphical kdialog menu when available (SteamOS Desktop Mode
+# and Bazzite are both KDE Plasma, where kdialog is standard) and falls
+# back to a plain numbered prompt in a terminal otherwise.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+error_log="${HOME}/.config/melonds-remote-client/install.log"
+on_error() {
+    local exit_code="$1" line_no="$2" failing_cmd="$3"
+    mkdir -p "$(dirname "${error_log}")"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") melonds-remote-client.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "melonDS Remote" --error "Something went wrong: ${failing_cmd}
+(exit code ${exit_code})
+
+Details logged to:
+${error_log}" 2>/dev/null || true
+    fi
+}
+trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
+
+have_kdialog() { command -v kdialog >/dev/null 2>&1; }
+
+info() {
+    if have_kdialog; then
+        kdialog --title "melonDS Remote" --msgbox "$1" 2>/dev/null
+    else
+        echo
+        echo "$1"
+        echo
+    fi
+}
+
+confirm() {
+    if have_kdialog; then
+        kdialog --title "melonDS Remote" --yesno "$1" 2>/dev/null
+    else
+        read -rp "$1 [y/N] " reply
+        [[ "${reply}" =~ ^[Yy]$ ]]
+    fi
+}
+
+choose_action() {
+    if have_kdialog; then
+        kdialog --title "melonDS Remote" --menu "What would you like to do?" \
+            launch "Launch melonDS Remote now" \
+            steam-add "Add to Steam (Big Picture / Gaming Mode)" \
+            steam-remove "Remove from Steam / uninstall" \
+            update "Check for updates / update" \
+            2>/dev/null || echo "cancel"
+    else
+        # All of this goes to stderr, not stdout -- the caller captures
+        # this function's stdout as the actual selection
+        # ("action=\"\$(choose_action)\"" below), so any of the menu
+        # display text leaking onto stdout would get appended to that
+        # and break the case match entirely.
+        {
+            echo "melonDS Remote"
+            echo "  1) Launch melonDS Remote now"
+            echo "  2) Add to Steam (Big Picture / Gaming Mode)"
+            echo "  3) Remove from Steam / uninstall"
+            echo "  4) Check for updates / update"
+            echo "  5) Exit"
+        } >&2
+        read -rp "Choice [1-5]: " choice
+        case "${choice}" in
+            1) echo "launch" ;;
+            2) echo "steam-add" ;;
+            3) echo "steam-remove" ;;
+            4) echo "update" ;;
+            *) echo "cancel" ;;
+        esac
+    fi
+}
+
+action="$(choose_action)"
+
+case "${action}" in
+    launch)
+        # exec, not a plain call: this becomes the foreground process,
+        # same as launching any other way (Steam shortcut, double-
+        # clicking internal/run-client.sh directly, etc.) -- no menu
+        # process left hanging around behind it.
+        exec ./internal/run-client.sh
+        ;;
+    steam-add)
+        if ./internal/install-steam-shortcut.sh; then
+            info "Added melonDS Remote to Steam. Restart Steam (or switch to Gaming Mode) to see it, and set its Controller Layout to a plain Gamepad template once it's there."
+        fi
+        # A failure here already logged and showed its own error dialog
+        # (install-steam-shortcut.sh has the same error-trap pattern as
+        # this script) -- nothing more to do.
+        ;;
+    steam-remove)
+        if confirm "This removes the Steam shortcut and the installed files. Continue?"; then
+            if ./internal/uninstall-steam-shortcut.sh; then
+                info "Removed."
+            fi
+        fi
+        ;;
+    update)
+        update_report="$(../check-for-updates.sh)"
+        if echo "${update_report}" | grep -q "update available:"; then
+            latest_version="$(echo "${update_report}" | sed -n 's/.*update available: //p' | head -1)"
+            if confirm "${update_report}
+
+Install ${latest_version} now? This downloads it from GitHub and also adds/updates the Steam shortcut."; then
+                if ./internal/apply-update.sh; then
+                    info "Updated to ${latest_version}. Restart Steam (or switch to Gaming Mode) to see the change."
+                fi
+                # A failure here already logged and showed its own error
+                # dialog (apply-update.sh has the same error-trap pattern
+                # as this script) -- nothing more to do.
+            fi
+        else
+            info "${update_report}"
+        fi
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+WRAP
+chmod +x "${pkg_dir}/client/melonds-remote-client.sh"
+
+cat > "${pkg_dir}/host/internal/run-host.sh" <<'WRAP'
 #!/usr/bin/env bash
 # Runs the patched melonDS binary with the remote server enabled,
 # auto-installing any missing runtime system libraries first (Qt6, SDL2,
@@ -337,8 +530,11 @@ cat > "${pkg_dir}/host/run-host.sh" <<'WRAP'
 # own --help for the rest.
 # Omit MELONDS_REMOTE_AUTH_TOKEN to use device-approval authentication
 # instead of a static shared secret.
+# Normally launched via ../../melonds-remote-host.sh's "Launch now" menu
+# choice, not directly.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+host_root="$(cd .. && pwd)"
 
 # shellcheck source=scripts/lib/ensure-packages.sh
 source ./ensure-packages.sh
@@ -358,21 +554,25 @@ if [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1; then
 fi
 
 export MELONDS_REMOTE_ENABLE=1
-exec ./melonDS "$@"
+exec "${host_root}/melonDS" "$@"
 WRAP
-chmod +x "${pkg_dir}/host/run-host.sh"
+chmod +x "${pkg_dir}/host/internal/run-host.sh"
 
-cat > "${pkg_dir}/host/install-host-distrobox.sh" <<'WRAP'
+cat > "${pkg_dir}/host/internal/install-host-distrobox.sh" <<'WRAP'
 #!/usr/bin/env bash
 # Runs the melonDS Remote host inside a Distrobox container, for
 # immutable-filesystem systems (Bazzite, other rpm-ostree/Fedora Atomic
 # derivatives) where run-host.sh can't install missing runtime libraries
 # directly -- see docs/bazzite-host-setup.md. On a regular (non-immutable)
 # Linux system, just use run-host.sh instead; this refuses to run there
-# rather than needlessly creating a container.
+# rather than needlessly creating a container. Normally launched via
+# ../../melonds-remote-host.sh's "Launch now"/"Add to Steam" menu
+# choices, not directly.
 #
 # Safe to re-run any time, including from a newer release's extracted
-# archive: it always re-syncs this host/ directory into a fixed location
+# archive: it always re-syncs the whole host/ directory (this script's
+# grandparent -- the entry-point script and binary alongside it, plus
+# this internal/ directory) into a fixed location
 # (~/.config/melonds-remote/install/) and re-installs into the same
 # Distrobox container (dnf skips packages already present), so updating
 # is just "download the new release, run this again" -- no need to
@@ -396,6 +596,7 @@ cat > "${pkg_dir}/host/install-host-distrobox.sh" <<'WRAP'
 # also immediately start the emulator.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+host_root="$(cd .. && pwd)"
 
 if [[ ! -f /run/ostree-booted ]] && ! command -v rpm-ostree >/dev/null 2>&1; then
     echo "This doesn't look like an immutable (rpm-ostree) system -- just run" >&2
@@ -425,7 +626,7 @@ previous_dir="${central_install_dir}.previous"
 container_name="melonds-remote-host"
 
 already_central=0
-if [[ "$(pwd)" == "${central_install_dir}" ]]; then
+if [[ "${host_root}" == "${central_install_dir}" ]]; then
     # Already running from the central directory itself -- e.g.
     # launch-host.sh re-invoking this script on every Steam-shortcut
     # launch, or a user double-clicking this exact copy a second time.
@@ -439,18 +640,19 @@ else
     echo "Staging host files at ${staging_dir} ..."
     rm -rf "${staging_dir}"
     mkdir -p "${staging_dir}"
-    cp -a . "${staging_dir}/"
+    cp -a "${host_root}/." "${staging_dir}/"
 
     # So check-for-updates.sh keeps working via melonds-remote-host.sh's
     # "../check-for-updates.sh" reference even when a copy of that menu
     # script is later run from inside the central directory itself
     # (e.g. after the original downloaded archive has been deleted) --
-    # these two live one level up, as siblings of install/, so they
-    # survive the install/install.previous swap below untouched.
-    # Best-effort: a missing source (e.g. this got invoked some other
-    # way) shouldn't fail the whole install over a convenience file.
-    cp "../check-for-updates.sh" "$(dirname "${central_install_dir}")/check-for-updates.sh" 2>/dev/null || true
-    cp "../VERSION" "$(dirname "${central_install_dir}")/VERSION" 2>/dev/null || true
+    # these two live one level up from host_root, as siblings of
+    # install/, so they survive the install/install.previous swap below
+    # untouched. Best-effort: a missing source (e.g. this got invoked
+    # some other way) shouldn't fail the whole install over a
+    # convenience file.
+    cp "$(dirname "${host_root}")/check-for-updates.sh" "$(dirname "${central_install_dir}")/check-for-updates.sh" 2>/dev/null || true
+    cp "$(dirname "${host_root}")/VERSION" "$(dirname "${central_install_dir}")/VERSION" 2>/dev/null || true
 fi
 
 echo "Creating/reusing Distrobox container \"${container_name}\" (Fedora-based) ..."
@@ -485,9 +687,9 @@ fi
 echo "Launching the host inside the container ..."
 exec distrobox enter "${container_name}" -- env MELONDS_REMOTE_ENABLE=1 "${central_install_dir}/melonDS" "$@"
 WRAP
-chmod +x "${pkg_dir}/host/install-host-distrobox.sh"
+chmod +x "${pkg_dir}/host/internal/install-host-distrobox.sh"
 
-cat > "${pkg_dir}/host/uninstall-host-distrobox.sh" <<'WRAP'
+cat > "${pkg_dir}/host/internal/uninstall-host-distrobox.sh" <<'WRAP'
 #!/usr/bin/env bash
 # Undoes install-host-distrobox.sh: removes the Distrobox container it
 # created and the central install directory it copied files into. Only
@@ -502,7 +704,6 @@ cat > "${pkg_dir}/host/uninstall-host-distrobox.sh" <<'WRAP'
 # Safe to re-run -- does nothing (not an error) if already uninstalled,
 # or if install-host-distrobox.sh was never run at all.
 set -uo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")"
 
 # Keep in sync with the same paths in install-host-distrobox.sh,
 # install-steam-shortcut.sh, and uninstall-steam-shortcut.sh.
@@ -539,9 +740,9 @@ if [[ "${removed_anything}" -eq 0 ]]; then
     echo "Nothing installed -- already uninstalled, or install-host-distrobox.sh was never run."
 fi
 WRAP
-chmod +x "${pkg_dir}/host/uninstall-host-distrobox.sh"
+chmod +x "${pkg_dir}/host/internal/uninstall-host-distrobox.sh"
 
-cat > "${pkg_dir}/host/launch-host.sh" <<'WRAP'
+cat > "${pkg_dir}/host/internal/launch-host.sh" <<'WRAP'
 #!/usr/bin/env bash
 # Single entry point for the host Steam Big Picture/Gaming Mode shortcut
 # (GitHub issue #10: "the installed host can be launched from Steam Big
@@ -561,19 +762,17 @@ else
     exec ./run-host.sh "$@"
 fi
 WRAP
-chmod +x "${pkg_dir}/host/launch-host.sh"
+chmod +x "${pkg_dir}/host/internal/launch-host.sh"
 
 cat > "${pkg_dir}/host/melonds-remote-host.sh" <<'WRAP'
 #!/usr/bin/env bash
 # The one thing to double-click to set up or run the melonDS Remote
-# host -- shows a simple menu and delegates to whichever of
-# run-host.sh / install-host-distrobox.sh / install-steam-shortcut.sh /
-# uninstall-steam-shortcut.sh / check-for-updates.sh actually applies,
-# so a user never has to figure out which of those five scripts they
-# need (GitHub issue #10: "the normal path requires no terminal
-# commands"). Those scripts still exist and still work standalone (e.g.
-# for scripting or troubleshooting) -- this is just the single entry
-# point a human actually needs to know about.
+# host -- shows a simple menu and delegates to whichever of the
+# internal/ scripts actually applies, so a user never has to figure out
+# which one they need (GitHub issue #10: "the normal path requires no
+# terminal commands"). Those scripts still exist and still work
+# standalone (e.g. for scripting or troubleshooting) -- this is just
+# the single entry point a human actually needs to know about.
 #
 # Uses a graphical kdialog menu when available (SteamOS Desktop Mode
 # and Bazzite are both KDE Plasma, where kdialog is standard) and falls
@@ -656,12 +855,12 @@ case "${action}" in
     launch)
         # exec, not a plain call: this becomes the foreground process,
         # same as launching melonDS any other way (Steam shortcut,
-        # double-clicking run-host.sh directly, etc.) -- no menu process
-        # left hanging around behind it.
-        exec ./launch-host.sh
+        # double-clicking internal/run-host.sh directly, etc.) -- no
+        # menu process left hanging around behind it.
+        exec ./internal/launch-host.sh
         ;;
     steam-add)
-        if ./install-steam-shortcut.sh; then
+        if ./internal/install-steam-shortcut.sh; then
             info "Added melonDS Remote Host to Steam. Restart Steam (or switch to Gaming Mode) to see it, and set its Controller Layout to a plain Gamepad template once it's there."
         fi
         # A failure here already logged and showed its own error dialog
@@ -670,7 +869,7 @@ case "${action}" in
         ;;
     steam-remove)
         if confirm "This removes the Steam shortcut, the installed files, and the Distrobox container if one was created. Your ROMs, saves, and firmware are never touched. Continue?"; then
-            if ./uninstall-steam-shortcut.sh; then
+            if ./internal/uninstall-steam-shortcut.sh; then
                 info "Removed."
             fi
         fi
@@ -682,7 +881,7 @@ case "${action}" in
             if confirm "${update_report}
 
 Install ${latest_version} now? This downloads it from GitHub and also adds/updates the Steam shortcut."; then
-                if ./apply-update.sh; then
+                if ./internal/apply-update.sh; then
                     info "Updated to ${latest_version}. Restart Steam (or switch to Gaming Mode) to see the change."
                 fi
                 # A failure here already logged and showed its own error
@@ -700,15 +899,16 @@ esac
 WRAP
 chmod +x "${pkg_dir}/host/melonds-remote-host.sh"
 
-cat > "${pkg_dir}/host/apply-update.sh" <<'WRAP'
+cat > "${pkg_dir}/host/internal/apply-update.sh" <<'WRAP'
 #!/usr/bin/env bash
 # Downloads the latest melonDS Remote release and installs it, by
-# handing off to that release's own install-steam-shortcut.sh --
-# reusing its already-verified stage-then-swap file safety and
-# Distrobox/dnf-gated activation on immutable systems, rather than
-# duplicating any of that logic here. This script's only job is
-# fetching and extracting the new release archive. Normally invoked
-# from melonds-remote-host.sh's "Check for updates" menu choice after
+# handing off to that release's own
+# host/internal/install-steam-shortcut.sh --force -- reusing its
+# already-verified stage-then-swap file safety and Distrobox/dnf-gated
+# activation on immutable systems, rather than duplicating any of that
+# logic here. This script's only job is fetching and extracting the
+# new release archive. Normally invoked from
+# ../../melonds-remote-host.sh's "Check for updates" menu choice after
 # the user confirms; also runnable standalone.
 #
 # Passes --force through to install-steam-shortcut.sh so an update
@@ -771,31 +971,34 @@ fi
 echo "Installing..."
 # Not exec'd: the work_dir EXIT trap above must still fire to clean up
 # the download afterward, which exec'ing over this process would skip.
-"${extracted_dir}/host/install-steam-shortcut.sh" --force
+"${extracted_dir}/host/internal/install-steam-shortcut.sh" --force
 WRAP
-chmod +x "${pkg_dir}/host/apply-update.sh"
+chmod +x "${pkg_dir}/host/internal/apply-update.sh"
 
-cat > "${pkg_dir}/host/install-steam-shortcut.sh" <<'WRAP'
+cat > "${pkg_dir}/host/internal/install-steam-shortcut.sh" <<'WRAP'
 #!/usr/bin/env bash
 # Registers the melonDS Remote host as a Steam non-Steam-game shortcut,
 # so it can be launched from Steam Big Picture/Gaming Mode with only a
 # controller (GitHub issue #10). Mirrors
-# ../client/install-steam-shortcut.sh's approach, reusing the same
-# layout-agnostic steam_shortcut.py -- bundled flat alongside this
-# script rather than shared from a top-level scripts/ directory, since
-# host/ is fully self-contained (same reasoning as client/lib/ bundling
-# SDL3).
+# ../../client/internal/install-steam-shortcut.sh's approach, reusing
+# the same layout-agnostic steam_shortcut.py -- bundled flat alongside
+# this script rather than shared from a top-level scripts/ directory,
+# since host/ is fully self-contained (same reasoning as client/lib/
+# bundling SDL3). Normally launched via ../../melonds-remote-host.sh's
+# "Add to Steam" menu choice, not directly.
 #
-# Copies this whole host/ directory into a fixed central location
-# (~/.config/melonds-remote/install/ -- the same directory
-# install-host-distrobox.sh already uses on immutable systems) and
-# points the shortcut at launch-host.sh there, not at melonDS or
-# run-host.sh directly: that one entry point picks Distrobox or a direct
-# launch depending on whether this is an immutable system, so the same
-# shortcut works either way. Re-running this from a newer release's
-# extracted archive updates the same shortcut in place instead of
-# leaving a stale duplicate pointing at a since-deleted download folder
-# (same reasoning as the client's cross-release-directory fix).
+# Copies the whole host/ directory (this script's grandparent -- the
+# entry-point script and binary, plus this internal/ directory) into a
+# fixed central location (~/.config/melonds-remote/install/ -- the same
+# directory install-host-distrobox.sh already uses on immutable
+# systems) and points the shortcut at internal/launch-host.sh there,
+# not at melonDS or run-host.sh directly: that one entry point picks
+# Distrobox or a direct launch depending on whether this is an
+# immutable system, so the same shortcut works either way. Re-running
+# this from a newer release's extracted archive updates the same
+# shortcut in place instead of leaving a stale duplicate pointing at a
+# since-deleted download folder (same reasoning as the client's
+# cross-release-directory fix).
 #
 # A failed update can't break a working install: on an immutable system,
 # staging the files AND installing the container's packages is entirely
@@ -809,12 +1012,13 @@ cat > "${pkg_dir}/host/install-steam-shortcut.sh" <<'WRAP'
 # plain stage-then-swap file copy here is already safe on its own.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+host_root="$(cd .. && pwd)"
 
 # Surfaces failures visibly instead of just closing silently when
 # double-clicked with no visible terminal attached -- logs to a
 # persistent file and, when available (SteamOS Desktop Mode/Bazzite are
 # both KDE Plasma), pops up a graphical error dialog via kdialog. Same
-# pattern as client/install-steam-shortcut.sh.
+# pattern as client/internal/install-steam-shortcut.sh.
 error_log="${HOME}/.config/melonds-remote/install.log"
 on_error() {
     local exit_code="$1" line_no="$2" failing_cmd="$3"
@@ -857,8 +1061,8 @@ if [[ "${dry_run}" -eq 0 ]]; then
     else
         rm -rf "${staging_dir}"
         mkdir -p "${staging_dir}"
-        cp -a . "${staging_dir}/"
-        chmod +x "${staging_dir}"/*.sh
+        cp -a "${host_root}/." "${staging_dir}/"
+        find "${staging_dir}" -name '*.sh' -exec chmod +x {} +
 
         rm -rf "${previous_dir}"
         if [[ -d "${central_install_dir}" ]]; then
@@ -870,13 +1074,13 @@ if [[ "${dry_run}" -eq 0 ]]; then
         # keeps "../check-for-updates.sh" resolvable from a copy of
         # melonds-remote-host.sh later run from inside the central
         # directory itself.
-        cp "../check-for-updates.sh" "$(dirname "${central_install_dir}")/check-for-updates.sh" 2>/dev/null || true
-        cp "../VERSION" "$(dirname "${central_install_dir}")/VERSION" 2>/dev/null || true
+        cp "$(dirname "${host_root}")/check-for-updates.sh" "$(dirname "${central_install_dir}")/check-for-updates.sh" 2>/dev/null || true
+        cp "$(dirname "${host_root}")/VERSION" "$(dirname "${central_install_dir}")/VERSION" 2>/dev/null || true
     fi
 fi
 
 python3 ./steam_shortcut.py \
-    --exe "${central_install_dir}/launch-host.sh" \
+    --exe "${central_install_dir}/internal/launch-host.sh" \
     --name "melonDS Remote Host" \
     --launch-options "${launch_options}" \
     "${extra_args[@]}" && shortcut_exit=0 || shortcut_exit=$?
@@ -885,9 +1089,9 @@ if [[ "${shortcut_exit}" -ne 0 ]]; then
     exit "${shortcut_exit}"
 fi
 WRAP
-chmod +x "${pkg_dir}/host/install-steam-shortcut.sh"
+chmod +x "${pkg_dir}/host/internal/install-steam-shortcut.sh"
 
-cat > "${pkg_dir}/host/uninstall-steam-shortcut.sh" <<'WRAP'
+cat > "${pkg_dir}/host/internal/uninstall-steam-shortcut.sh" <<'WRAP'
 #!/usr/bin/env bash
 # Removes the "melonDS Remote Host" Steam non-Steam-game shortcut added
 # by install-steam-shortcut.sh, the central install directory
@@ -896,13 +1100,15 @@ cat > "${pkg_dir}/host/uninstall-steam-shortcut.sh" <<'WRAP'
 # host uninstall once a Steam shortcut has been set up. (If you only
 # ever used install-host-distrobox.sh directly and never installed the
 # Steam shortcut, uninstall-host-distrobox.sh alone is equivalent.)
+# Normally launched via ../../melonds-remote-host.sh's "Remove from
+# Steam" menu choice, not directly.
 #
 # Always targets the fixed central install directory below, regardless
 # of where this script itself is run from -- this exact file is also
 # the copy install-steam-shortcut.sh placed there, and must keep
 # removing the same shortcut from there indefinitely, even after the
 # original archive has been deleted (same reasoning as
-# client/uninstall-steam-shortcut.sh).
+# client/internal/uninstall-steam-shortcut.sh).
 set -euo pipefail
 
 error_log="${HOME}/.config/melonds-remote/install.log"
@@ -929,7 +1135,7 @@ container_name="melonds-remote-host"
 
 steam_shortcut_py=""
 for candidate in \
-    "${central_install_dir}/steam_shortcut.py" \
+    "${central_install_dir}/internal/steam_shortcut.py" \
     "${self_dir}/steam_shortcut.py"
 do
     if [[ -f "${candidate}" ]]; then
@@ -945,7 +1151,7 @@ if [[ -z "${steam_shortcut_py}" ]]; then
 fi
 
 python3 "${steam_shortcut_py}" \
-    --exe "${central_install_dir}/launch-host.sh" \
+    --exe "${central_install_dir}/internal/launch-host.sh" \
     --name "melonDS Remote Host" \
     --remove \
     "$@"
@@ -980,23 +1186,26 @@ if [[ "${dry_run}" -eq 0 ]]; then
              "$(dirname "${central_install_dir}")/VERSION"
 fi
 WRAP
-chmod +x "${pkg_dir}/host/uninstall-steam-shortcut.sh"
+chmod +x "${pkg_dir}/host/internal/uninstall-steam-shortcut.sh"
 
 cp "${repo_root}/docs/building.md" "${repo_root}/docs/steam-deck-setup.md" \
    "${repo_root}/docs/bazzite-host-setup.md" "${repo_root}/docs/troubleshooting.md" \
    "${repo_root}/docs/known-limitations.md" "${repo_root}/docs/protocol.md" \
    "${pkg_dir}/docs/"
 cp "${repo_root}/LICENSE" "${pkg_dir}/"
+cp "${repo_root}/docs/release-readme.md" "${pkg_dir}/README.md"
 
 cat > "${pkg_dir}/check-for-updates.sh" <<'WRAP'
 #!/usr/bin/env bash
 # Checks whether a newer melonDS Remote release is published on GitHub --
-# read-only, no download or install of anything happens here (GitHub
-# issue #10: "simplify... updates"). Never blocks or fails a real host/
-# client launch on this -- run-host.sh/run-client.sh don't call this
-# automatically, precisely so a slow/unreachable network never adds
-# delay to actually starting the app; run this yourself whenever you
-# want to check.
+# read-only, no download or install of anything happens here. Both
+# melonds-remote-host.sh and melonds-remote-client.sh's "Check for
+# updates" menu choice call this first and only offer to actually
+# install if it reports one available. Never blocks or fails a real
+# host/client launch on this -- run-host.sh/run-client.sh don't call
+# this automatically, precisely so a slow/unreachable network never
+# adds delay to actually starting the app; run this yourself (or use
+# a menu) whenever you want to check.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -1038,10 +1247,7 @@ cat > "${pkg_dir}/RELEASE_NOTES.md" <<NOTES
 Built from commit \`${commit_full}\` on branch \`${branch_name}\`,
 ${built_at}. This is a distinct, permanently-retained release -- it will
 not be overwritten by a later build, so if this version has a problem,
-just grab an earlier one from the Releases page instead. Double-click
-\`check-for-updates.sh\` any time to check whether a newer version has
-been published since (read-only -- it only checks and reports, it
-doesn't download or change anything).
+just grab an earlier one from the Releases page instead.
 
 Contains \`host/\` (melonDS patched with
 \`host/melonds-patches/0001-remote-server-integration.patch\`, built
@@ -1051,71 +1257,10 @@ Linux x86_64 binaries built on Ubuntu (GitHub Actions \`ubuntu-latest\` or
 equivalent) -- see \`docs/known-limitations.md\` (bundled here) for what's
 verified and portability notes.
 
-## Running it
-
-Every script here (\`run-host.sh\`, \`run-client.sh\`,
-\`install-steam-shortcut.sh\`, \`uninstall-steam-shortcut.sh\`,
-\`check-for-updates.sh\`, and on immutable systems
-\`install-host-distrobox.sh\`/\`uninstall-host-distrobox.sh\`) is directly
-double-click-runnable from a file manager -- no arguments or typing
-required for any of them. On
-SteamOS Desktop Mode / Bazzite (both KDE Plasma/Dolphin), double-clicking
-an executable \`.sh\` file offers to run it directly, no terminal needed.
-(On a GNOME-based file manager instead, you may need to enable
-"Executable Text Files: Run" in Nautilus's preferences first, or
-right-click > Open Terminal Here as a fallback.) Both \`run-host.sh\` and
-\`run-client.sh\` also check for missing runtime system libraries and try
-to install them automatically (apt/dnf/pacman) before launching -- you
-shouldn't need to install anything by hand on a normal desktop Linux
-distro. On an immutable-filesystem distro (Bazzite, SteamOS in Game
-Mode), they'll tell you that instead of guessing, since auto-installing
-onto those needs a reboot or a Distrobox -- see
-\`docs/bazzite-host-setup.md\` / \`docs/steam-deck-setup.md\`.
-
-**Host** (on your Linux HTPC): double-click \`host/run-host.sh\`, or from
-a terminal:
-\`\`\`sh
-cd host
-./run-host.sh
-\`\`\`
-No ROM path needed -- melonDS opens normally and you pick one through
-its own File > Open ROM (defaults to EmuDeck's ROM folder the first
-time, remembers your last one after that). No
-\`MELONDS_REMOTE_AUTH_TOKEN\` needed either -- on a new client's first
-connection attempt, the host logs a pending request for you to approve
-(type \`approve <id>\`, shown in the log, or click Approve on the popup
-if you're running the melonDS GUI). Set \`MELONDS_REMOTE_AUTH_TOKEN\`
-instead if you'd rather use a static shared secret.
-
-**Client** (on your Steam Deck, or any Linux x86_64 machine with a
-gamepad): double-click \`client/run-client.sh\`, or from a terminal:
-\`\`\`sh
-cd client
-./run-client.sh
-\`\`\`
-No arguments needed -- it scans the LAN and shows a pick-a-host list
-every launch. First connection to a new host needs a human to approve it
-at the host (see above); no typing is needed on the client.
-
-To add it as a Steam Gaming Mode shortcut without the manual "Add a
-Non-Steam Game" steps: close Steam, then double-click
-\`client/install-steam-shortcut.sh\`, or from a terminal (from the
-\`client/\` directory):
-\`\`\`sh
-./install-steam-shortcut.sh
-\`\`\`
-Applies to every local Steam user automatically -- no prompt to pick one,
-since the Deck's controller-only input can't type an answer to that kind
-of question. Copies everything the shortcut needs into a fixed central
-directory (\`~/.config/melonds-remote-client/install/\`), so this
-extracted folder can be deleted afterward -- re-running install from a
-newer release later still updates the same shortcut rather than
-duplicating it. See \`docs/steam-deck-setup.md\` for what this does and
-the Controller Layout step it doesn't automate. To undo it later, close
-Steam and double-click \`client/uninstall-steam-shortcut.sh\` the same
-way (works even from this same disposable folder, or later straight from
-the central directory) -- also applies to every local Steam user
-automatically, and deletes that central directory too.
+See \`README.md\` for how to actually run this. In short:
+double-click \`host/melonds-remote-host.sh\` on your HTPC and
+\`client/melonds-remote-client.sh\` on your Steam Deck -- each opens a
+menu that covers launching, Steam integration, and updates.
 NOTES
 
 # The archive itself gets a *constant* filename (unlike the internal

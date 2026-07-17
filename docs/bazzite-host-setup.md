@@ -51,15 +51,15 @@ prompt if run from a terminal without `kdialog`) with four choices:
   there's nothing newer, and nothing is downloaded or changed.
 
 Everything this menu does is really just a thin front end over the
-individual scripts described below (`run-host.sh`,
+individual scripts in `host/internal/` (`run-host.sh`,
 `install-host-distrobox.sh`, `install-steam-shortcut.sh`, `apply-update.sh`,
 etc.) -- those still exist and still work standalone if you want to
 script something directly or troubleshoot a specific step, but there's
-no need to know which one applies to your system: the menu figures that
-out for you. See "Easier Bazzite host install and updates" below for
-what the Distrobox path actually does under the hood, and "Launching
-the host from Steam Big Picture/Gaming Mode" for the Steam-shortcut
-part.
+no need to open that folder or know which one applies to your system:
+the menu figures that out for you. See "Easier Bazzite host install and
+updates" below for what the Distrobox path actually does under the
+hood, and "Launching the host from Steam Big Picture/Gaming Mode" for
+the Steam-shortcut part.
 
 On Bazzite's KDE Plasma/Dolphin desktop, double-clicking an executable
 `.sh` file offers to run it directly -- no terminal or typing needed.
@@ -77,16 +77,19 @@ dependency list unattended), so the only options were reading
 `host/melonds-patches/README.md`'s from-source Distrobox instructions or
 figuring out `rpm-ostree install` + reboot by hand.
 
-`host/install-host-distrobox.sh` (packaged alongside `run-host.sh` in
-every release archive) automates the Distrobox path end to end:
+`host/internal/install-host-distrobox.sh` (packaged alongside
+`run-host.sh` in every release archive's `host/internal/`, and what
+"Launch now" in `host/melonds-remote-host.sh`'s menu calls on an
+immutable system) automates the Distrobox path end to end:
 
 1. Detects whether this actually is an immutable/rpm-ostree system at
    all (same check `ensure_packages()` already uses elsewhere in this
    project) -- refuses to run and points you at `run-host.sh` instead if
    not, since there's no need for a container there.
-2. Copies the whole extracted `host/` directory into a fixed location,
-   `~/.config/melonds-remote/install/` -- this is what makes updates
-   simple: downloading a newer release and running this script again
+2. Copies the whole `host/` directory (both the entry-point script and
+   binary alongside it, and this internal/ folder) into a fixed
+   location, `~/.config/melonds-remote/install/` -- this is what makes
+   updates simple: downloading a newer release and running this again
    re-syncs that copy and re-verifies the container's packages, so
    there's nothing to redo by hand, and once set up once you can launch
    or update straight from that central directory instead of keeping the
@@ -110,8 +113,10 @@ If the copy or the package install fails partway (no disk space,
 network drops mid-`dnf`, etc.), the previous, still-working install is
 left completely untouched, not deleted-then-maybe-not-replaced.
 
-**Uninstalling**: double-click `host/uninstall-host-distrobox.sh` --
-removes the Distrobox container and everything under
+**Uninstalling**: pick "Remove from Steam / uninstall" from
+`host/melonds-remote-host.sh`'s menu, or double-click
+`host/internal/uninstall-host-distrobox.sh` directly -- either removes
+the Distrobox container and everything under
 `~/.config/melonds-remote/install*`. Never touches ROMs, saves,
 firmware, or any other melonDS data, since none of that lives in either
 of those places -- it all stays in your normal home directory the whole
@@ -124,14 +129,15 @@ Addresses the last remaining piece of GitHub issue #10's acceptance
 criteria: "the installed host can be launched from Steam Big Picture or
 Gaming Mode and accept a client connection." Pick "Add to Steam" from
 `host/melonds-remote-host.sh`'s menu (see above), or double-click
-`host/install-steam-shortcut.sh` directly (once, in Desktop Mode, with
-Steam closed) -- either way it adds a **"melonDS Remote Host"** entry to
-your Steam library, mirroring `client/install-steam-shortcut.sh`'s
-approach exactly, down to the same stage-then-swap update safety and
-error-log/`kdialog` failure visibility.
+`host/internal/install-steam-shortcut.sh` directly (once, in Desktop
+Mode, with Steam closed) -- either way it adds a **"melonDS Remote
+Host"** entry to your Steam library, mirroring
+`client/internal/install-steam-shortcut.sh`'s approach exactly, down to
+the same stage-then-swap update safety and error-log/`kdialog` failure
+visibility.
 
-This registers the shortcut's `Exe` as `launch-host.sh`, a small entry
-point that picks the right launch path for you:
+This registers the shortcut's `Exe` as `internal/launch-host.sh`, a
+small entry point that picks the right launch path for you:
 
 - **On an immutable system** (Bazzite, etc.): behaves like
   `install-host-distrobox.sh` -- prepares (or reuses) the Distrobox
@@ -156,13 +162,15 @@ swapped into place once the container's packages actually installed
 successfully, so a failed `dnf install` during an update can never leave
 half-applied, unverified files active in place of a working install.
 
-**Uninstalling**: double-click `host/uninstall-steam-shortcut.sh` --
-removes the Steam shortcut, the central install directory, *and* the
-Distrobox container if one was created, so this alone is a complete
-uninstall once you've used the Steam-shortcut path. (If you only ever
-used `install-host-distrobox.sh` directly and never installed the
-shortcut, `uninstall-host-distrobox.sh` alone is equivalent -- it just
-doesn't know about a shortcut that was never created.)
+**Uninstalling**: pick "Remove from Steam / uninstall" from
+`host/melonds-remote-host.sh`'s menu, or double-click
+`host/internal/uninstall-steam-shortcut.sh` directly -- either removes
+the Steam shortcut, the central install directory, *and* the Distrobox
+container if one was created, so this alone is a complete uninstall
+once you've used the Steam-shortcut path. (If you only ever used
+`install-host-distrobox.sh` directly and never installed the shortcut,
+`uninstall-host-distrobox.sh` alone is equivalent -- it just doesn't
+know about a shortcut that was never created.)
 
 **Not verified on a real Bazzite install** (same caveat as everything
 else Bazzite-specific here): exercised end-to-end in this project's own
