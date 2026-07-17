@@ -138,6 +138,19 @@ struct NetServerConfig {
     // Friendly name returned in DiscoveryResponse; empty means "ask the
     // OS for the hostname at start() time" (see NetServer::discoveryLoop).
     std::string hostName;
+
+    // This host's own release version string (e.g. "v0.1.24"), sent back
+    // in every HelloAck regardless of accept/reject so the client can
+    // always show what the host is running. If both this and the
+    // connecting client's HelloPayload::appVersion are non-empty and
+    // differ, the handshake is rejected with
+    // HelloRejectReason::AppVersionMismatch before authentication is even
+    // checked -- see protocol.h's HelloPayload::appVersion comment for
+    // why this is separate from kProtocolVersion. Left empty (the
+    // default) to disable this check entirely, e.g. for a from-source dev
+    // build with no meaningful version string -- run-host.sh/main.cpp set
+    // this from the packaged archive's VERSION file.
+    std::string appVersion;
 };
 
 // Aggregated counters reset each time they're logged. Guarded by

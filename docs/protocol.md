@@ -13,7 +13,7 @@ same fixed-size header.
 | Offset | Size | Field            | Notes                                   |
 |-------:|-----:|------------------|------------------------------------------|
 | 0      | 4    | `magic`          | Always `0x444D5231` ("DMR1"). Packets with any other value are rejected before further parsing. |
-| 4      | 2    | `protocolVersion`| Currently `3` (bumped from `2` when `HelloAckPayload.pairingToken` was removed and `HelloRejectReason::PairingRequired` was renamed to `ApprovalRequired`, moving from a typed-code pairing flow to device-approval -- see "Authentication and device approval" below; `2` itself had bumped from `1` when those pairing-code fields were first added). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
+| 4      | 2    | `protocolVersion`| Currently `4` (bumped from `3` when `HelloPayload.appVersion`/`HelloAckPayload.appVersion` were added and `HelloRejectReason::AppVersionMismatch` was introduced -- see "App version mismatch" below; `3` itself had bumped from `2` when `HelloAckPayload.pairingToken` was removed and `HelloRejectReason::PairingRequired` was renamed to `ApprovalRequired`, moving from a typed-code pairing flow to device-approval; `2` itself had bumped from `1` when those pairing-code fields were first added). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
 | 6      | 2    | `packetType`     | See table below.                        |
 | 8      | 4    | `payloadSize`    | Size of the payload that follows, in bytes. Receivers must verify this matches the number of bytes actually available before parsing the payload. |
 
@@ -176,6 +176,7 @@ declared length that would run past the end of the received buffer.
 | `displayWidth`    | `u16`         | Client's display width in pixels. Not currently used by the host. |
 | `displayHeight`   | `u16`         | Client's display height in pixels. Not currently used by the host. |
 | `authToken`       | length-prefixed string | See "Authentication and device approval" below -- meaning depends on whether the host has a static `--auth-token` configured. |
+| `appVersion`      | length-prefixed string | This client's release version (e.g. "v0.1.24"), from `MELONDS_REMOTE_VERSION`/the archive's `VERSION` file. Distinct from `protocolVersion` above -- see "App version mismatch" below. Empty on a from-source dev build with no wrapper script setting it. |
 
 The whole `Hello` payload is capped at 512 bytes by the host before it will
 even attempt to parse it, so a hostile `payloadSize` can't be used to make
@@ -187,7 +188,7 @@ touch/microphone capability flags. `clientName`/`clientPlatform`/display
 size exist on the wire today but the host does not yet act on them beyond
 logging.
 
-## HelloAck payload (10 fixed bytes)
+## HelloAck payload (10 fixed bytes, plus a trailing length-prefixed string)
 
 | Offset | Size | Field          | Notes |
 |-------:|-----:|----------------|-------|
@@ -196,18 +197,41 @@ logging.
 | 2      | 4    | `sessionId`    | Non-zero, host-chosen, only when `accepted == 1`. Informational today (logging/future reconnect correlation); not yet validated on subsequent packets. |
 | 6      | 2    | `nativeWidth`  | Always 256. |
 | 8      | 2    | `nativeHeight` | Always 192. |
+| 10     | length-prefixed string | `appVersion` | The host's own release version, sent regardless of `accepted`/`rejectReason` -- lets the client show e.g. "host is on vX, you're on vY" even on a rejection. Empty if the host doesn't know its own version. |
 
 (Protocol v2 added a trailing length-prefixed `pairingToken` string here,
 for the 6-digit-pairing-code flow described below under "History: the
-6-digit pairing code". Protocol v3 removed it again along with that flow
--- `HelloAckPayload` is back to a fixed 10 bytes.)
+6-digit pairing code". Protocol v3 removed it again along with that flow,
+making `HelloAckPayload` a fixed 10 bytes for one version. Protocol v4
+added the trailing `appVersion` string described above, making it
+variable-length again.)
 
 `HelloRejectReason`: `0` = none (accepted), `1` = protocol version
 mismatch, `2` = authentication failed, `3` = host busy (reserved, not
 currently sent since the host doesn't yet reject on "busy" -- an extra
 control connection while one is active is simply closed without a
 handshake attempt), `4` = approval required (see "Authentication and
-device approval" below; renamed from `PairingRequired` in protocol v3).
+device approval" below; renamed from `PairingRequired` in protocol v3),
+`5` = app version mismatch (see "App version mismatch" below; added in
+protocol v4).
+
+## App version mismatch
+
+`kProtocolVersion` (currently 4) only guards *wire-format* compatibility
+-- two builds can share a wire format while being different releases
+with different features/fixes. `appVersion` (both payloads above) is a
+separate, exact-string check for that: if the host was started with a
+known `appVersion` (`NetServerConfig::appVersion`, wired from
+`MELONDS_REMOTE_VERSION`/the archive's `VERSION` file by
+`run-host.sh`/`install-host-distrobox.sh`) and a connecting client's
+`Hello.appVersion` is also non-empty and doesn't match exactly, the
+handshake is rejected with `AppVersionMismatch` -- checked before
+authentication/device-approval, so a stale client never even learns
+whether its stale credentials would have worked. If either side's
+`appVersion` is empty (a from-source dev build with no wrapper script
+setting it), this check is skipped entirely and the handshake proceeds
+as before -- this is opt-in hardening for packaged releases, not a
+requirement for development.
 
 ## Authentication and device approval
 

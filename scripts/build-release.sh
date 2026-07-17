@@ -153,6 +153,13 @@ ensure_packages "client runtime" \
     "libx11 libxext libxrandr libxcursor libxfixes libxi libxss wayland libxkbcommon libdrm mesa libdecor" \
     || echo "warning: could not verify/install client runtime libraries automatically; continuing anyway in case they're already present" >&2
 
+# Read by main.cpp so the host can reject a connection from a client
+# running a different, incompatible release -- see protocol.h's
+# HelloPayload::appVersion and net_server.cpp's comparison logic.
+# dirname(client_root) matches check-for-updates.sh's own VERSION lookup
+# (the archive root, or the central install directory's parent).
+export MELONDS_REMOTE_VERSION="$(cat "$(dirname "${client_root}")/VERSION" 2>/dev/null || true)"
+
 LD_LIBRARY_PATH="${client_root}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" exec "${client_root}/melonds-remote-client" "$@"
 WRAP
 chmod +x "${pkg_dir}/client/internal/run-client.sh"
@@ -600,6 +607,14 @@ if [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1; then
 fi
 
 export MELONDS_REMOTE_ENABLE=1
+# Read by the patched melonDS's remote-server integration (see
+# host/melonds-patches/0001-remote-server-integration.patch's
+# MELONDS_REMOTE_VERSION wiring) so it can reject a connecting client
+# running a different, incompatible release -- see
+# protocol.h's HelloPayload::appVersion. dirname(host_root) is the
+# archive root (or the central install directory's parent), matching
+# check-for-updates.sh's own VERSION lookup.
+export MELONDS_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
 exec "${host_root}/melonDS" "$@"
 WRAP
 chmod +x "${pkg_dir}/host/internal/run-host.sh"
@@ -731,7 +746,11 @@ if [[ "${install_only}" -eq 1 ]]; then
 fi
 
 echo "Launching the host inside the container ..."
-exec distrobox enter "${container_name}" -- env MELONDS_REMOTE_ENABLE=1 "${central_install_dir}/melonDS" "$@"
+# See run-host.sh's identical MELONDS_REMOTE_VERSION comment -- read from
+# the same central-directory sibling copy of VERSION staged above.
+host_app_version="$(cat "$(dirname "${central_install_dir}")/VERSION" 2>/dev/null || true)"
+exec distrobox enter "${container_name}" -- env MELONDS_REMOTE_ENABLE=1 \
+    "MELONDS_REMOTE_VERSION=${host_app_version}" "${central_install_dir}/melonDS" "$@"
 WRAP
 chmod +x "${pkg_dir}/host/internal/install-host-distrobox.sh"
 

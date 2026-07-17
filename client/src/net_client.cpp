@@ -80,6 +80,7 @@ bool NetClient::connect() {
     {
         std::lock_guard<std::mutex> resultLock(handshakeResultMutex_);
         lastRejectReason_ = HelloRejectReason::None;
+        hostAppVersion_.clear();
     }
 
     // A previous connect() attempt may have failed partway through (or a
@@ -115,6 +116,7 @@ bool NetClient::connect() {
     helloPayload.displayWidth = config_.displayWidth;
     helloPayload.displayHeight = config_.displayHeight;
     helloPayload.authToken = config_.authToken;
+    helloPayload.appVersion = config_.appVersion;
     ByteBuffer hello = buildHelloPacket(helloPayload);
     if (!sendAll(controlFd_, hello.data(), hello.size())) {
         std::fprintf(stderr, "failed to send Hello\n");
@@ -150,12 +152,18 @@ bool NetClient::connect() {
     {
         std::lock_guard<std::mutex> resultLock(handshakeResultMutex_);
         lastRejectReason_ = ack->rejectReason;
+        hostAppVersion_ = ack->appVersion;
     }
     if (!ack->accepted) {
         if (ack->rejectReason == HelloRejectReason::ApprovalRequired) {
             std::fprintf(stderr,
                           "handshake rejected by host: awaiting approval -- a human at the host "
                           "needs to approve this device, no action needed here\n");
+        } else if (ack->rejectReason == HelloRejectReason::AppVersionMismatch) {
+            std::fprintf(stderr,
+                          "handshake rejected by host: version mismatch (host is %s, this client is "
+                          "%s) -- update one side to match the other\n",
+                          ack->appVersion.c_str(), config_.appVersion.c_str());
         } else {
             std::fprintf(stderr, "handshake rejected by host (reason code %d)\n",
                           static_cast<int>(ack->rejectReason));
@@ -243,6 +251,11 @@ void NetClient::sendControllerState(const ControllerState& state) {
 HelloRejectReason NetClient::lastRejectReason() const {
     std::lock_guard<std::mutex> lock(handshakeResultMutex_);
     return lastRejectReason_;
+}
+
+std::string NetClient::hostAppVersion() const {
+    std::lock_guard<std::mutex> lock(handshakeResultMutex_);
+    return hostAppVersion_;
 }
 
 bool NetClient::getLatestFrame(std::vector<uint8_t>& outFrame) {

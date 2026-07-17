@@ -37,6 +37,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
@@ -725,6 +726,9 @@ WizardConnectResult wizardConnectAndApprove(SDL_Renderer* renderer, SDL_Gamepad*
                 case HelloRejectReason::HostBusy:
                     status = "HOST IS BUSY - RETRYING";
                     break;
+                case HelloRejectReason::AppVersionMismatch:
+                    status = "VERSION MISMATCH - HOST IS " + net.hostAppVersion() + ", UPDATE TO MATCH";
+                    break;
                 case HelloRejectReason::None:
                 default:
                     status = "HOST UNREACHABLE AT " + hostAddress;
@@ -1103,6 +1107,18 @@ bool runSetupWizard(SDL_Window* window, SDL_Renderer* renderer, SDL_Texture* tex
 
 int main(int argc, char** argv) {
     NetClientConfig netConfig;
+    // Set from MELONDS_REMOTE_VERSION (exported by run-client.sh, read
+    // from the archive's VERSION file) rather than baked in at compile
+    // time, matching how the host's version is threaded into the patched
+    // melonDS via the same env var -- see net_server.h's
+    // NetServerConfig::appVersion and protocol.h's
+    // HelloPayload::appVersion for what this is compared against and why.
+    // Empty (unset) disables the version-mismatch check for this
+    // connection, e.g. for a from-source dev build run directly, not via
+    // run-client.sh.
+    if (const char* envVersion = std::getenv("MELONDS_REMOTE_VERSION")) {
+        netConfig.appVersion = envVersion;
+    }
     bool authTokenExplicit = false; // --auth-token given: skip device-approval entirely (CI/scripting use)
     bool hostExplicit = false;      // --host/positional given: skip LAN discovery entirely
     uint16_t discoveryPort = kDefaultDiscoveryPort;
@@ -1127,6 +1143,8 @@ int main(int argc, char** argv) {
             netConfig.clientName = nextArg();
         } else if (arg == "--discovery-port") {
             discoveryPort = static_cast<uint16_t>(std::stoi(nextArg()));
+        } else if (arg == "--app-version") {
+            netConfig.appVersion = nextArg(); // overrides MELONDS_REMOTE_VERSION above
         } else if (!arg.empty() && arg[0] != '-') {
             // Positional host address, for scripts/run-client.sh's
             // `melonds-remote-client 127.0.0.1` convenience form.
@@ -1509,12 +1527,25 @@ int main(int argc, char** argv) {
             // trying -- the actual retry attempts only show up in stdout,
             // which Gaming Mode has no visible terminal for (same reasoning
             // as the discovery screen using the bitmap font). Distinguishing
-            // ApprovalRequired specifically tells the user where to look --
-            // there's nothing to do here, a human needs to approve on the host.
+            // ApprovalRequired/AppVersionMismatch specifically tell the user
+            // where to look/what to do -- there's nothing to do for
+            // ApprovalRequired but wait (a human needs to approve on the
+            // host), while AppVersionMismatch means retrying forever won't
+            // help until one side is updated to match the other.
             if (!net.isConnected()) {
-                std::string status = net.lastRejectReason() == HelloRejectReason::ApprovalRequired
-                                          ? "WAITING FOR APPROVAL ON HOST " + netConfig.hostAddress + "..."
-                                          : "CONNECTING TO " + netConfig.hostAddress + "...";
+                std::string status;
+                switch (net.lastRejectReason()) {
+                    case HelloRejectReason::ApprovalRequired:
+                        status = "WAITING FOR APPROVAL ON HOST " + netConfig.hostAddress + "...";
+                        break;
+                    case HelloRejectReason::AppVersionMismatch:
+                        status = "VERSION MISMATCH WITH " + netConfig.hostAddress + " (HOST IS " +
+                                  net.hostAppVersion() + ") - UPDATE TO MATCH";
+                        break;
+                    default:
+                        status = "CONNECTING TO " + netConfig.hostAddress + "...";
+                        break;
+                }
                 renderCenteredBitmapText(renderer, status, 24.0f, 2, SDL_Color{220, 200, 80, 255});
                 renderCenteredBitmapText(renderer, kMenuComboHint, 54.0f, 2, SDL_Color{140, 140, 140, 255});
             }

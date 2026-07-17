@@ -169,6 +169,7 @@ void serializeHelloPayload(ByteBuffer& out, const HelloPayload& hello) {
     appendU16(out, hello.displayWidth);
     appendU16(out, hello.displayHeight);
     appendString(out, hello.authToken);
+    appendString(out, hello.appVersion);
 }
 
 std::optional<HelloPayload> parseHelloPayload(const uint8_t* data, size_t size) {
@@ -195,6 +196,10 @@ std::optional<HelloPayload> parseHelloPayload(const uint8_t* data, size_t size) 
     if (!token) return std::nullopt;
     hello.authToken = std::move(*token);
 
+    auto version = readString(data, size, offset);
+    if (!version) return std::nullopt;
+    hello.appVersion = std::move(*version);
+
     if (offset != size) {
         // trailing garbage: reject rather than silently ignore
         return std::nullopt;
@@ -215,11 +220,12 @@ void serializeHelloAckPayload(ByteBuffer& out, const HelloAckPayload& ack) {
     appendU32(out, ack.sessionId);
     appendU16(out, ack.nativeWidth);
     appendU16(out, ack.nativeHeight);
+    appendString(out, ack.appVersion);
 }
 
 std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t size) {
     constexpr size_t kFixedWireSize = 1 + 1 + 4 + 2 + 2;
-    if (data == nullptr || size != kFixedWireSize) {
+    if (data == nullptr || size < kFixedWireSize) {
         return std::nullopt;
     }
 
@@ -233,7 +239,7 @@ std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t 
     ack.accepted = accepted;
 
     uint8_t reason = data[offset]; offset += 1;
-    if (reason > static_cast<uint8_t>(HelloRejectReason::ApprovalRequired)) {
+    if (reason > static_cast<uint8_t>(HelloRejectReason::AppVersionMismatch)) {
         return std::nullopt;
     }
     ack.rejectReason = static_cast<HelloRejectReason>(reason);
@@ -241,6 +247,15 @@ std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t 
     ack.sessionId = readU32(data, offset); offset += 4;
     ack.nativeWidth = readU16(data, offset); offset += 2;
     ack.nativeHeight = readU16(data, offset); offset += 2;
+
+    auto version = readString(data, size, offset);
+    if (!version) return std::nullopt;
+    ack.appVersion = std::move(*version);
+
+    if (offset != size) {
+        // trailing garbage: reject rather than silently ignore
+        return std::nullopt;
+    }
 
     return ack;
 }

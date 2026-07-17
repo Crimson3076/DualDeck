@@ -21,7 +21,7 @@
 namespace melonds_remote {
 
 // Bumped whenever the wire format changes incompatibly.
-inline constexpr uint16_t kProtocolVersion = 3;
+inline constexpr uint16_t kProtocolVersion = 4;
 
 // Sentinel at the start of every packet so malformed/foreign traffic on the
 // same port can be rejected cheaply before any further parsing.
@@ -98,6 +98,17 @@ struct HelloPayload {
     uint16_t displayWidth = 0;
     uint16_t displayHeight = 0;
     std::string authToken;     // up to kMaxProtocolStringLength bytes; empty if host requires none
+    // Release version string (the archive's VERSION file, e.g. "v0.1.24"),
+    // up to kMaxProtocolStringLength bytes -- distinct from kProtocolVersion
+    // above, which only guards wire-format compatibility. Two builds can
+    // share a wire format (same kProtocolVersion) while being different
+    // releases with different features/fixes; this field lets the host
+    // reject a connection from a client it knows predates it, or vice
+    // versa, per HelloRejectReason::AppVersionMismatch below. Left empty by
+    // a build with no known version (e.g. a from-source dev build not
+    // packaged via scripts/build-release.sh) -- see net_server.cpp's
+    // comparison logic for how an empty value on either side is handled.
+    std::string appVersion;
 };
 
 enum class HelloRejectReason : uint8_t {
@@ -113,6 +124,13 @@ enum class HelloRejectReason : uint8_t {
     // connection failure) rather than prompt the user for anything --
     // there's nothing for the client side to do but wait.
     ApprovalRequired = 4,
+    // The host's and client's HelloPayload/HelloAckPayload appVersion
+    // fields are both non-empty and differ. Distinct from
+    // ProtocolVersionMismatch: the wire format itself parsed fine (same
+    // kProtocolVersion), this is purely "you two are different releases."
+    // Never raised when either side's appVersion is empty (unknown/dev
+    // build) -- see net_server.cpp.
+    AppVersionMismatch = 5,
 };
 
 // HelloAck (host -> client) handshake payload.
@@ -122,6 +140,11 @@ struct HelloAckPayload {
     uint32_t sessionId = 0;
     uint16_t nativeWidth = 256;
     uint16_t nativeHeight = 192;
+    // The host's own release version string, always populated (regardless
+    // of accepted/rejectReason) so the client can show e.g. "host is on
+    // vX.Y, you're on vA.B" even on an AppVersionMismatch rejection. Empty
+    // if the host doesn't know its own version (see HelloPayload::appVersion).
+    std::string appVersion;
 };
 
 // DiscoveryRequest (client -> host) has no payload: a bare packet header

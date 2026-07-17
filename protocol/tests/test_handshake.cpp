@@ -10,6 +10,7 @@ MDR_TEST(hello_payload_round_trip) {
     hello.displayWidth = 1280;
     hello.displayHeight = 800;
     hello.authToken = "s3cr3t";
+    hello.appVersion = "v0.1.24";
 
     ByteBuffer buf;
     serializeHelloPayload(buf, hello);
@@ -21,6 +22,7 @@ MDR_TEST(hello_payload_round_trip) {
     MDR_CHECK_EQ(parsed->displayWidth, hello.displayWidth);
     MDR_CHECK_EQ(parsed->displayHeight, hello.displayHeight);
     MDR_CHECK(parsed->authToken == hello.authToken);
+    MDR_CHECK(parsed->appVersion == hello.appVersion);
 }
 
 MDR_TEST(hello_payload_empty_fields_round_trip) {
@@ -32,6 +34,7 @@ MDR_TEST(hello_payload_empty_fields_round_trip) {
     MDR_CHECK(parsed.has_value());
     MDR_CHECK(parsed->clientName.empty());
     MDR_CHECK(parsed->authToken.empty());
+    MDR_CHECK(parsed->appVersion.empty());
 }
 
 MDR_TEST(hello_payload_rejects_truncated_buffer) {
@@ -80,6 +83,7 @@ MDR_TEST(hello_ack_payload_round_trip_accepted) {
     ack.sessionId = 0xCAFEBABE;
     ack.nativeWidth = 256;
     ack.nativeHeight = 192;
+    ack.appVersion = "v0.1.24";
 
     ByteBuffer buf;
     serializeHelloAckPayload(buf, ack);
@@ -90,6 +94,22 @@ MDR_TEST(hello_ack_payload_round_trip_accepted) {
     MDR_CHECK_EQ(parsed->sessionId, ack.sessionId);
     MDR_CHECK_EQ(parsed->nativeWidth, 256);
     MDR_CHECK_EQ(parsed->nativeHeight, 192);
+    MDR_CHECK(parsed->appVersion == ack.appVersion);
+}
+
+MDR_TEST(hello_ack_payload_round_trip_app_version_mismatch) {
+    HelloAckPayload ack;
+    ack.accepted = 0;
+    ack.rejectReason = HelloRejectReason::AppVersionMismatch;
+    ack.appVersion = "v0.1.25";
+
+    ByteBuffer buf;
+    serializeHelloAckPayload(buf, ack);
+    auto parsed = parseHelloAckPayload(buf.data(), buf.size());
+    MDR_CHECK(parsed.has_value());
+    MDR_CHECK_EQ(parsed->accepted, 0);
+    MDR_CHECK(parsed->rejectReason == HelloRejectReason::AppVersionMismatch);
+    MDR_CHECK(parsed->appVersion == "v0.1.25");
 }
 
 MDR_TEST(hello_ack_payload_round_trip_approval_required) {

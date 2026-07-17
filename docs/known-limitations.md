@@ -1431,6 +1431,91 @@ whenever the next real release supersedes this one, same as the host
 auto-update's own "not verified" note above), and real Steam Deck/Gaming
 Mode hardware.
 
+## Client-host version check (AppVersionMismatch)
+
+Third part of the same user message as the two entries above: "I would
+like to have some sort of client host version check verification, so
+that the client does not try to connect using an older version." The
+existing `kProtocolVersion` check (see `docs/protocol.md`) only guards
+*wire-format* compatibility -- two different releases can share a wire
+format while having meaningfully different features/fixes, and nothing
+previously stopped a stale client from connecting to a newer host (or
+vice versa) as long as the bytes on the wire still parsed.
+
+Added a second, orthogonal check: `HelloPayload`/`HelloAckPayload` both
+gained an `appVersion` string field (the release version, e.g.
+"v0.1.24"), and a new `HelloRejectReason::AppVersionMismatch`.
+`kProtocolVersion` bumped 3->4 for the wire-format change this required
+(protocol.h/.cpp, unit-tested in `protocol/tests/test_handshake.cpp`).
+`net_server.cpp` rejects a handshake with `AppVersionMismatch` -- checked
+before authentication/device-approval, so a stale client never learns
+whether its stale credentials would have worked -- whenever both the
+host's `NetServerConfig::appVersion` and the connecting client's
+`Hello.appVersion` are non-empty and don't match exactly; either side
+being empty (a from-source dev build with no wrapper script setting it)
+skips the check entirely, so this is opt-in hardening for packaged
+releases rather than a new requirement for development. The host always
+echoes its own version back in `HelloAckPayload.appVersion` regardless
+of accept/reject, so the client can show e.g. "host is on vX, you're on
+vY" -- both `client/src/main.cpp`'s setup-wizard connect step and the
+main connection loop's status line do this now.
+
+Threaded through via the same `MELONDS_REMOTE_*` env-var pattern as
+`MELONDS_REMOTE_AUTH_TOKEN`: `run-host.sh`/`install-host-distrobox.sh`
+export `MELONDS_REMOTE_VERSION` (read from the archive's `VERSION` file,
+one level up from `host_root`/`central_install_dir`, same lookup
+`check-for-updates.sh` already uses) before launching melonDS;
+`run-client.sh` does the same for the client binary. The standalone host
+prototype (`host/remote-server/src/main.cpp`) gained a matching
+`--app-version` CLI flag for testing without needing melonDS at all.
+
+**The melonDS patch had to be regenerated** (not just this repo's own
+`protocol/`/`host/remote-server/` code) since
+`host/melonds-patches/0001-remote-server-integration.patch` vendors full
+copies of `protocol.h/.cpp` and `net_server.h/.cpp` as embedded "new
+file" diff content -- see that file's own history for why. Regeneration
+procedure used here (not previously written down anywhere in this repo,
+so noting it for next time): clone melonDS fresh at the pinned commit,
+`git apply` the *old* patch, overwrite the vendored copies of the
+now-changed repo files with the current repo versions (they're literal
+copies, so this is a straight `cp`), hand-edit the melonDS-only glue
+(`RemoteServerBridge.h/.cpp` gained an `appVersion` constructor
+parameter forwarded to `NetServerConfig::appVersion`; `EmuInstance.cpp`'s
+`startRemoteServer()` passes
+`envOr("MELONDS_REMOTE_VERSION", "MelonDSRemote.Version")` for it,
+matching the existing `AuthToken` wiring exactly; `Config.cpp` gained a
+`MelonDSRemote.Version` default-empty-string key), then `git add -A &&
+git diff --cached` for a fresh full patch (plain `git diff` without
+`add -A` misses "new file" hunks entirely, since `git apply`-created
+files are untracked until staged -- a real mistake made and caught while
+doing this). Diffed the regenerated patch against the original
+file-by-file (Python, splitting on `diff --git` lines) to confirm only
+the 8 intentionally-changed files actually differ and all 25 others are
+byte-identical (module a `core.abbrev`-driven blob-hash-length cosmetic
+difference in the `index` lines, normalized away with `git -c
+core.abbrev=7`) -- i.e. this regeneration didn't accidentally reintroduce
+or lose anything from earlier passes.
+
+**Verified**: the regenerated patch applies cleanly (`git apply`, no
+fuzz/reject) to a fresh, pristine clone of melonDS at the pinned commit
+(not just as an incremental edit on top of an already-patched tree, which
+would have hidden an apply-order mistake); the full patched melonDS
+Release build (Qt6, the same ~15-20 minute build this project always
+requires) compiled with no errors or warnings from the changed files.
+`protocol/tests/test_handshake.cpp` gained round-trip tests for
+`appVersion` on both payloads and a dedicated
+`hello_ack_payload_round_trip_app_version_mismatch` test; full `ctest`
+run clean. The standalone host prototype and the SDL3 client were both
+rebuilt against the new protocol/net_client/net_server code and compile
+cleanly. **Not verified**: an actual end-to-end handshake rejection
+against the real patched melonDS binary with a genuinely mismatched
+client (this sandbox has no windowing/GPU environment to run melonDS
+itself, the same limitation noted throughout this file for other
+melonDS-specific features) -- the protocol-level round-trip and the
+`net_server.cpp` rejection logic are unit- and structurally-verified, but
+a live two-process handshake through the real patched binary specifically
+is not. Also not verified: real Steam Deck hardware.
+
 ## Latency instrumentation assumes synced clocks
 
 The host's periodic latency stat (`docs/protocol.md`'s note on

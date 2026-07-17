@@ -328,34 +328,43 @@ void NetServer::controlLoop() {
                                   : ::recv(clientFd, payloadBuf.data(), payloadBuf.size(), MSG_WAITALL);
                 if (got == static_cast<ssize_t>(payloadBuf.size())) {
                     auto hello = parseHelloPayload(payloadBuf.data(), payloadBuf.size());
-                    if (hello) {
-                        if (!config_.authToken.empty()) {
-                            // Legacy/CI-friendly static-token mode: exact match or reject,
-                            // device-approval flow is bypassed entirely.
-                            if (constantTimeEquals(hello->authToken, config_.authToken)) {
-                                handshakeOk = true;
-                            } else {
-                                std::fprintf(stderr,
-                                              "NetServer: rejecting handshake from %s (bad auth token)\n",
-                                              ipStr);
-                                rejectReason = HelloRejectReason::AuthenticationFailed;
-                            }
+                    if (!hello) {
+                        std::fprintf(stderr, "NetServer: rejecting handshake (malformed Hello payload)\n");
+                    } else if (!config_.appVersion.empty() && !hello->appVersion.empty() &&
+                               hello->appVersion != config_.appVersion) {
+                        // Wire-format-compatible (same kProtocolVersion) but a
+                        // different release -- checked before authentication so
+                        // a stale client never even learns whether its stale
+                        // credentials would have worked.
+                        std::fprintf(stderr,
+                                      "NetServer: rejecting handshake from %s (app version mismatch: "
+                                      "host is %s, client is %s)\n",
+                                      ipStr, config_.appVersion.c_str(), hello->appVersion.c_str());
+                        rejectReason = HelloRejectReason::AppVersionMismatch;
+                    } else if (!config_.authToken.empty()) {
+                        // Legacy/CI-friendly static-token mode: exact match or reject,
+                        // device-approval flow is bypassed entirely.
+                        if (constantTimeEquals(hello->authToken, config_.authToken)) {
+                            handshakeOk = true;
                         } else {
-                            switch (deviceApproval_.check(hello->authToken, hello->clientName, ipStr)) {
-                                case DeviceApprovalManager::CheckResult::Approved:
-                                    handshakeOk = true;
-                                    break;
-                                case DeviceApprovalManager::CheckResult::Pending:
-                                    std::fprintf(stderr,
-                                                  "NetServer: rejecting handshake from %s (device not "
-                                                  "yet approved -- see the pending-request log above)\n",
-                                                  ipStr);
-                                    rejectReason = HelloRejectReason::ApprovalRequired;
-                                    break;
-                            }
+                            std::fprintf(stderr,
+                                          "NetServer: rejecting handshake from %s (bad auth token)\n",
+                                          ipStr);
+                            rejectReason = HelloRejectReason::AuthenticationFailed;
                         }
                     } else {
-                        std::fprintf(stderr, "NetServer: rejecting handshake (malformed Hello payload)\n");
+                        switch (deviceApproval_.check(hello->authToken, hello->clientName, ipStr)) {
+                            case DeviceApprovalManager::CheckResult::Approved:
+                                handshakeOk = true;
+                                break;
+                            case DeviceApprovalManager::CheckResult::Pending:
+                                std::fprintf(stderr,
+                                              "NetServer: rejecting handshake from %s (device not "
+                                              "yet approved -- see the pending-request log above)\n",
+                                              ipStr);
+                                rejectReason = HelloRejectReason::ApprovalRequired;
+                                break;
+                        }
                     }
                 } else {
                     std::fprintf(stderr, "NetServer: rejecting handshake (short Hello payload)\n");
@@ -369,6 +378,7 @@ void NetServer::controlLoop() {
         ack.accepted = handshakeOk ? 1 : 0;
         ack.rejectReason = handshakeOk ? HelloRejectReason::None : rejectReason;
         ack.sessionId = handshakeOk ? static_cast<uint32_t>(nowMicros()) : 0;
+        ack.appVersion = config_.appVersion;
         ByteBuffer ackPacket = buildHelloAckPacket(ack);
         sendAll(clientFd, ackPacket.data(), ackPacket.size());
 

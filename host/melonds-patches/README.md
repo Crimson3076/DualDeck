@@ -435,6 +435,15 @@ that exact pre-shared token. `MELONDS_REMOTE_STATE_DIR` overrides where
 approved devices are remembered (default
 `$HOME/.config/melonds-remote/approved_devices.txt`).
 
+`MELONDS_REMOTE_VERSION` is optional; set it to this build's release
+version string (`run-host.sh` in a packaged release does this
+automatically, from the archive's `VERSION` file) to reject a connecting
+client that reports a different, non-empty `appVersion` of its own --
+see `docs/protocol.md`'s "App version mismatch" section. Omit it (the
+default, and always the case for a from-source build run directly) to
+skip that check entirely and accept any client regardless of its
+reported version, same as before this existed.
+
 Only instance 0 (melonDS supports multiple emulator instances for local
 multiplayer testing) starts the remote server, matching this project's
 one-client-at-a-time v0.1 scope.

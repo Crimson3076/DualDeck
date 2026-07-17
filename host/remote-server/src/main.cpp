@@ -101,12 +101,15 @@ int main(int argc, char** argv) {
             config.hostName = nextArg();
         } else if (arg == "--no-discovery") {
             config.discoveryEnabled = false;
+        } else if (arg == "--app-version") {
+            config.appVersion = nextArg();
         } else if (arg == "--help") {
             std::printf(
                 "Usage: melonds-remote-server [--bind ADDR] [--control-port N] "
                 "[--input-port N] [--video-port N] [--timeout-ms N] [--auth-token TOKEN] "
                 "[--state-dir PATH] [--pending-request-ttl-s N] [--stats-interval-ms N] "
-                "[--discovery-port N] [--host-name NAME] [--no-discovery]\n"
+                "[--discovery-port N] [--host-name NAME] [--no-discovery] "
+                "[--app-version STRING]\n"
                 "\n"
                 "Phase 1 prototype: serves a synthetic 256x192 test-pattern bottom\n"
                 "screen and logs received controller/touch state. Not yet wired to\n"
@@ -148,7 +151,14 @@ int main(int argc, char** argv) {
                 "--bind defaults to 0.0.0.0 (all interfaces) so a client elsewhere\n"
                 "on the LAN can actually reach what discovery just told it about --\n"
                 "pass --bind 127.0.0.1 explicitly to restrict to same-machine-only\n"
-                "testing instead.\n");
+                "testing instead.\n"
+                "\n"
+                "--app-version sets this host's release version string, sent to every\n"
+                "client in HelloAck. If given and a connecting client reports a\n"
+                "different non-empty version of its own, the handshake is rejected\n"
+                "with AppVersionMismatch before authentication is even checked.\n"
+                "Omitted by default (no version-mismatch check at all) -- the\n"
+                "packaged release wires this from the archive's VERSION file.\n");
             return 0;
         } else {
             std::fprintf(stderr, "unrecognized argument: %s\n", arg.c_str());

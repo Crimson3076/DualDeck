@@ -36,6 +36,13 @@ struct NetClientConfig {
     // host/remote-server/include/host/device_approval_manager.h).
     std::string authToken;
 
+    // This client's own release version string (e.g. "v0.1.24"), sent to
+    // the host in Hello. See melonds_remote::HelloPayload::appVersion for
+    // the full explanation; empty (the default) means "unknown/dev
+    // build", which disables the app-version check on the host side for
+    // this connection regardless of what the host itself is running.
+    std::string appVersion;
+
     // How often to send a Heartbeat packet on the control channel while
     // otherwise idle, so the host's control-channel timeout doesn't fire
     // on a live-but-quiet connection.
@@ -81,6 +88,15 @@ public:
     // this replaced.
     HelloRejectReason lastRejectReason() const;
 
+    // The host's own release version string as reported in its most
+    // recent HelloAck, regardless of whether that handshake was accepted
+    // -- meaningful right after any connect() call that got as far as
+    // receiving a HelloAck (including an AppVersionMismatch rejection, so
+    // the caller can display e.g. "host is on vX, you're on vY"). Empty
+    // if no HelloAck has been received yet, or if the host itself didn't
+    // report a version.
+    std::string hostAppVersion() const;
+
 private:
     void videoReceiveLoop();
     void heartbeatLoop();
@@ -116,6 +132,7 @@ private:
     // connect()), so it gets its own narrower lock.
     mutable std::mutex handshakeResultMutex_;
     HelloRejectReason lastRejectReason_ = HelloRejectReason::None;
+    std::string hostAppVersion_;
 };
 
 } // namespace melonds_remote::client

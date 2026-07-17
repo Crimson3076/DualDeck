@@ -40,7 +40,7 @@ index 31207f8..3ed9866 100644
      target_include_directories(melonDS PUBLIC ${Qt6Gui_PRIVATE_INCLUDE_DIRS})
  else()
 diff --git a/src/frontend/qt_sdl/Config.cpp b/src/frontend/qt_sdl/Config.cpp
-index 0d48ee1..95edebe 100644
+index 0d48ee1..90c91c3 100644
 --- a/src/frontend/qt_sdl/Config.cpp
 +++ b/src/frontend/qt_sdl/Config.cpp
 @@ -72,6 +72,17 @@ DefaultList<int> DefaultInts =
@@ -61,7 +61,7 @@ index 0d48ee1..95edebe 100644
  };
  
  RangeList IntRanges =
-@@ -112,13 +123,33 @@ DefaultList<bool> DefaultBools =
+@@ -112,13 +123,42 @@ DefaultList<bool> DefaultBools =
  #endif
      {"DSi.DSP.HLE", true},
      {"Instance*.RTC.SyncToHost", true},
@@ -87,6 +87,15 @@ index 0d48ee1..95edebe 100644
 +    {"MelonDSRemote.StateDir",   ""},
 +    {"MelonDSRemote.HostName",   ""},
 +
++    // Release version string sent in Hello/HelloAck for the
++    // AppVersionMismatch check (see HelloPayload::appVersion) --
++    // empty (default) disables that check entirely, since a
++    // from-source melonDS build with no wrapper script setting
++    // MELONDS_REMOTE_VERSION has no meaningful version string to
++    // compare. Set automatically by run-host.sh in a packaged
++    // release; not meant to be hand-edited here.
++    {"MelonDSRemote.Version",    ""},
++
 +    // Shared secret for the management listener (ManagementServer.h) --
 +    // empty (default) means that listener doesn't start at all, since
 +    // it's a new always-on network listener whenever melonDS is running
@@ -97,7 +106,7 @@ index 0d48ee1..95edebe 100644
  
  DefaultList<double> DefaultDoubles =
 diff --git a/src/frontend/qt_sdl/EmuInstance.cpp b/src/frontend/qt_sdl/EmuInstance.cpp
-index a8b1021..95b1b67 100755
+index a8b1021..7f7c7b2 100755
 --- a/src/frontend/qt_sdl/EmuInstance.cpp
 +++ b/src/frontend/qt_sdl/EmuInstance.cpp
 @@ -20,15 +20,24 @@
@@ -187,7 +196,7 @@ index a8b1021..95b1b67 100755
      deleteAllWindows();
  
      emuThread->emuExit();
-@@ -175,6 +225,174 @@ EmuInstance::~EmuInstance()
+@@ -175,6 +225,175 @@ EmuInstance::~EmuInstance()
      }
  }
  
@@ -340,7 +349,8 @@ index a8b1021..95b1b67 100755
 +
 +                emit mainWindow->screenLayoutChange();
 +            }, Qt::QueuedConnection);
-+        });
++        },
++        envOr("MELONDS_REMOTE_VERSION", "MelonDSRemote.Version"));
 +    remoteServer->start();
 +    Platform::Log(Platform::LogLevel::Info, "melonds-remote: remote server enabled\n");
 +}
@@ -1273,10 +1283,10 @@ index 0000000..05308c9
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
 new file mode 100644
-index 0000000..d064889
+index 0000000..001d54f
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,56 @@
 +#include "RemoteServerBridge.h"
 +
 +namespace melonds_remote_bridge {
@@ -1287,7 +1297,7 @@ index 0000000..d064889
 +    std::function<void(std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest>)>
 +        onPendingRequestsChanged,
 +    bool discoveryEnabled, uint16_t discoveryPort, std::string hostName,
-+    std::function<void(bool)> onClientConnectionChanged) {
++    std::function<void(bool)> onClientConnectionChanged, std::string appVersion) {
 +    melonds_remote::host::NetServerConfig config;
 +    config.bindAddress = std::move(bindAddress);
 +    config.controlPort = controlPort;
@@ -1300,6 +1310,7 @@ index 0000000..d064889
 +    config.discoveryPort = discoveryPort;
 +    config.hostName = std::move(hostName);
 +    config.onClientConnectionChanged = std::move(onClientConnectionChanged);
++    config.appVersion = std::move(appVersion);
 +    server_ = std::make_unique<melonds_remote::host::NetServer>(config, inputSink_, frameSource_);
 +}
 +
@@ -1334,10 +1345,10 @@ index 0000000..d064889
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
 new file mode 100644
-index 0000000..2e62a63
+index 0000000..49e29a4
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,84 @@
 +#pragma once
 +
 +// Ties the standalone melonds-remote protocol/host networking code
@@ -1383,13 +1394,17 @@ index 0000000..2e62a63
 +    // (see host/net_server.h) -- fired true/false as a client's session
 +    // starts/ends, so the caller can e.g. switch the local window to a
 +    // top-screen-only layout while someone is actively streaming.
++    //
++    // `appVersion` forwards NetServerConfig::appVersion -- see its comment
++    // in host/net_server.h for the AppVersionMismatch rejection this
++    // enables.
 +    RemoteServerBridge(
 +        std::string bindAddress, uint16_t controlPort, uint16_t inputPort, uint16_t videoPort,
 +        std::string authToken, std::string approvalStateFilePath = {},
 +        std::function<void(std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest>)>
 +            onPendingRequestsChanged = {},
 +        bool discoveryEnabled = true, uint16_t discoveryPort = 8763, std::string hostName = {},
-+        std::function<void(bool)> onClientConnectionChanged = {});
++        std::function<void(bool)> onClientConnectionChanged = {}, std::string appVersion = {});
 +    ~RemoteServerBridge();
 +
 +    RemoteServerBridge(const RemoteServerBridge&) = delete;
@@ -1816,10 +1831,10 @@ index 0000000..903d848
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.cpp b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
 new file mode 100644
-index 0000000..9759500
+index 0000000..8d95d79
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
-@@ -0,0 +1,705 @@
+@@ -0,0 +1,715 @@
 +#include "host/net_server.h"
 +
 +#include <arpa/inet.h>
@@ -2150,34 +2165,43 @@ index 0000000..9759500
 +                                  : ::recv(clientFd, payloadBuf.data(), payloadBuf.size(), MSG_WAITALL);
 +                if (got == static_cast<ssize_t>(payloadBuf.size())) {
 +                    auto hello = parseHelloPayload(payloadBuf.data(), payloadBuf.size());
-+                    if (hello) {
-+                        if (!config_.authToken.empty()) {
-+                            // Legacy/CI-friendly static-token mode: exact match or reject,
-+                            // device-approval flow is bypassed entirely.
-+                            if (constantTimeEquals(hello->authToken, config_.authToken)) {
-+                                handshakeOk = true;
-+                            } else {
-+                                std::fprintf(stderr,
-+                                              "NetServer: rejecting handshake from %s (bad auth token)\n",
-+                                              ipStr);
-+                                rejectReason = HelloRejectReason::AuthenticationFailed;
-+                            }
++                    if (!hello) {
++                        std::fprintf(stderr, "NetServer: rejecting handshake (malformed Hello payload)\n");
++                    } else if (!config_.appVersion.empty() && !hello->appVersion.empty() &&
++                               hello->appVersion != config_.appVersion) {
++                        // Wire-format-compatible (same kProtocolVersion) but a
++                        // different release -- checked before authentication so
++                        // a stale client never even learns whether its stale
++                        // credentials would have worked.
++                        std::fprintf(stderr,
++                                      "NetServer: rejecting handshake from %s (app version mismatch: "
++                                      "host is %s, client is %s)\n",
++                                      ipStr, config_.appVersion.c_str(), hello->appVersion.c_str());
++                        rejectReason = HelloRejectReason::AppVersionMismatch;
++                    } else if (!config_.authToken.empty()) {
++                        // Legacy/CI-friendly static-token mode: exact match or reject,
++                        // device-approval flow is bypassed entirely.
++                        if (constantTimeEquals(hello->authToken, config_.authToken)) {
++                            handshakeOk = true;
 +                        } else {
-+                            switch (deviceApproval_.check(hello->authToken, hello->clientName, ipStr)) {
-+                                case DeviceApprovalManager::CheckResult::Approved:
-+                                    handshakeOk = true;
-+                                    break;
-+                                case DeviceApprovalManager::CheckResult::Pending:
-+                                    std::fprintf(stderr,
-+                                                  "NetServer: rejecting handshake from %s (device not "
-+                                                  "yet approved -- see the pending-request log above)\n",
-+                                                  ipStr);
-+                                    rejectReason = HelloRejectReason::ApprovalRequired;
-+                                    break;
-+                            }
++                            std::fprintf(stderr,
++                                          "NetServer: rejecting handshake from %s (bad auth token)\n",
++                                          ipStr);
++                            rejectReason = HelloRejectReason::AuthenticationFailed;
 +                        }
 +                    } else {
-+                        std::fprintf(stderr, "NetServer: rejecting handshake (malformed Hello payload)\n");
++                        switch (deviceApproval_.check(hello->authToken, hello->clientName, ipStr)) {
++                            case DeviceApprovalManager::CheckResult::Approved:
++                                handshakeOk = true;
++                                break;
++                            case DeviceApprovalManager::CheckResult::Pending:
++                                std::fprintf(stderr,
++                                              "NetServer: rejecting handshake from %s (device not "
++                                              "yet approved -- see the pending-request log above)\n",
++                                              ipStr);
++                                rejectReason = HelloRejectReason::ApprovalRequired;
++                                break;
++                        }
 +                    }
 +                } else {
 +                    std::fprintf(stderr, "NetServer: rejecting handshake (short Hello payload)\n");
@@ -2191,6 +2215,7 @@ index 0000000..9759500
 +        ack.accepted = handshakeOk ? 1 : 0;
 +        ack.rejectReason = handshakeOk ? HelloRejectReason::None : rejectReason;
 +        ack.sessionId = handshakeOk ? static_cast<uint32_t>(nowMicros()) : 0;
++        ack.appVersion = config_.appVersion;
 +        ByteBuffer ackPacket = buildHelloAckPacket(ack);
 +        sendAll(clientFd, ackPacket.data(), ackPacket.size());
 +
@@ -2527,10 +2552,10 @@ index 0000000..9759500
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.h b/src/frontend/qt_sdl/remote_server/host/net_server.h
 new file mode 100644
-index 0000000..6d454c5
+index 0000000..65493af
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.h
-@@ -0,0 +1,242 @@
+@@ -0,0 +1,255 @@
 +#pragma once
 +
 +// Minimal standalone host server: one TCP control connection (handshake +
@@ -2671,6 +2696,19 @@ index 0000000..6d454c5
 +    // Friendly name returned in DiscoveryResponse; empty means "ask the
 +    // OS for the hostname at start() time" (see NetServer::discoveryLoop).
 +    std::string hostName;
++
++    // This host's own release version string (e.g. "v0.1.24"), sent back
++    // in every HelloAck regardless of accept/reject so the client can
++    // always show what the host is running. If both this and the
++    // connecting client's HelloPayload::appVersion are non-empty and
++    // differ, the handshake is rejected with
++    // HelloRejectReason::AppVersionMismatch before authentication is even
++    // checked -- see protocol.h's HelloPayload::appVersion comment for
++    // why this is separate from kProtocolVersion. Left empty (the
++    // default) to disable this check entirely, e.g. for a from-source dev
++    // build with no meaningful version string -- run-host.sh/main.cpp set
++    // this from the packaged archive's VERSION file.
++    std::string appVersion;
 +};
 +
 +// Aggregated counters reset each time they're logged. Guarded by
@@ -2845,10 +2883,10 @@ index 0000000..48014b9
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
 new file mode 100644
-index 0000000..b25b18f
+index 0000000..17653e1
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
-@@ -0,0 +1,242 @@
+@@ -0,0 +1,265 @@
 +#pragma once
 +
 +// melonDS Remote wire protocol definitions.
@@ -2872,7 +2910,7 @@ index 0000000..b25b18f
 +namespace melonds_remote {
 +
 +// Bumped whenever the wire format changes incompatibly.
-+inline constexpr uint16_t kProtocolVersion = 3;
++inline constexpr uint16_t kProtocolVersion = 4;
 +
 +// Sentinel at the start of every packet so malformed/foreign traffic on the
 +// same port can be rejected cheaply before any further parsing.
@@ -2949,6 +2987,17 @@ index 0000000..b25b18f
 +    uint16_t displayWidth = 0;
 +    uint16_t displayHeight = 0;
 +    std::string authToken;     // up to kMaxProtocolStringLength bytes; empty if host requires none
++    // Release version string (the archive's VERSION file, e.g. "v0.1.24"),
++    // up to kMaxProtocolStringLength bytes -- distinct from kProtocolVersion
++    // above, which only guards wire-format compatibility. Two builds can
++    // share a wire format (same kProtocolVersion) while being different
++    // releases with different features/fixes; this field lets the host
++    // reject a connection from a client it knows predates it, or vice
++    // versa, per HelloRejectReason::AppVersionMismatch below. Left empty by
++    // a build with no known version (e.g. a from-source dev build not
++    // packaged via scripts/build-release.sh) -- see net_server.cpp's
++    // comparison logic for how an empty value on either side is handled.
++    std::string appVersion;
 +};
 +
 +enum class HelloRejectReason : uint8_t {
@@ -2964,6 +3013,13 @@ index 0000000..b25b18f
 +    // connection failure) rather than prompt the user for anything --
 +    // there's nothing for the client side to do but wait.
 +    ApprovalRequired = 4,
++    // The host's and client's HelloPayload/HelloAckPayload appVersion
++    // fields are both non-empty and differ. Distinct from
++    // ProtocolVersionMismatch: the wire format itself parsed fine (same
++    // kProtocolVersion), this is purely "you two are different releases."
++    // Never raised when either side's appVersion is empty (unknown/dev
++    // build) -- see net_server.cpp.
++    AppVersionMismatch = 5,
 +};
 +
 +// HelloAck (host -> client) handshake payload.
@@ -2973,6 +3029,11 @@ index 0000000..b25b18f
 +    uint32_t sessionId = 0;
 +    uint16_t nativeWidth = 256;
 +    uint16_t nativeHeight = 192;
++    // The host's own release version string, always populated (regardless
++    // of accepted/rejectReason) so the client can show e.g. "host is on
++    // vX.Y, you're on vA.B" even on an AppVersionMismatch rejection. Empty
++    // if the host doesn't know its own version (see HelloPayload::appVersion).
++    std::string appVersion;
 +};
 +
 +// DiscoveryRequest (client -> host) has no payload: a bare packet header
@@ -3242,10 +3303,10 @@ index 0000000..a1aff53
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
 new file mode 100644
-index 0000000..807417c
+index 0000000..a147ea8
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
-@@ -0,0 +1,296 @@
+@@ -0,0 +1,311 @@
 +#include "melonds_remote/protocol.h"
 +
 +#include <cstring>
@@ -3417,6 +3478,7 @@ index 0000000..807417c
 +    appendU16(out, hello.displayWidth);
 +    appendU16(out, hello.displayHeight);
 +    appendString(out, hello.authToken);
++    appendString(out, hello.appVersion);
 +}
 +
 +std::optional<HelloPayload> parseHelloPayload(const uint8_t* data, size_t size) {
@@ -3443,6 +3505,10 @@ index 0000000..807417c
 +    if (!token) return std::nullopt;
 +    hello.authToken = std::move(*token);
 +
++    auto version = readString(data, size, offset);
++    if (!version) return std::nullopt;
++    hello.appVersion = std::move(*version);
++
 +    if (offset != size) {
 +        // trailing garbage: reject rather than silently ignore
 +        return std::nullopt;
@@ -3463,11 +3529,12 @@ index 0000000..807417c
 +    appendU32(out, ack.sessionId);
 +    appendU16(out, ack.nativeWidth);
 +    appendU16(out, ack.nativeHeight);
++    appendString(out, ack.appVersion);
 +}
 +
 +std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t size) {
 +    constexpr size_t kFixedWireSize = 1 + 1 + 4 + 2 + 2;
-+    if (data == nullptr || size != kFixedWireSize) {
++    if (data == nullptr || size < kFixedWireSize) {
 +        return std::nullopt;
 +    }
 +
@@ -3481,7 +3548,7 @@ index 0000000..807417c
 +    ack.accepted = accepted;
 +
 +    uint8_t reason = data[offset]; offset += 1;
-+    if (reason > static_cast<uint8_t>(HelloRejectReason::ApprovalRequired)) {
++    if (reason > static_cast<uint8_t>(HelloRejectReason::AppVersionMismatch)) {
 +        return std::nullopt;
 +    }
 +    ack.rejectReason = static_cast<HelloRejectReason>(reason);
@@ -3489,6 +3556,15 @@ index 0000000..807417c
 +    ack.sessionId = readU32(data, offset); offset += 4;
 +    ack.nativeWidth = readU16(data, offset); offset += 2;
 +    ack.nativeHeight = readU16(data, offset); offset += 2;
++
++    auto version = readString(data, size, offset);
++    if (!version) return std::nullopt;
++    ack.appVersion = std::move(*version);
++
++    if (offset != size) {
++        // trailing garbage: reject rather than silently ignore
++        return std::nullopt;
++    }
 +
 +    return ack;
 +}
