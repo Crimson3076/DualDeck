@@ -3,8 +3,8 @@
 // Remembers whether the first-run setup wizard (main.cpp's
 // runSetupWizard()) has already completed successfully, so it only runs
 // automatically once -- later launches go straight to the normal
-// discovery/connect flow, and the wizard is only reachable again by
-// picking "SETUP WIZARD" from the in-app menu (GitHub issue #19).
+// discovery/connect flow, and the wizard is only reachable again by opening
+// Settings from the in-app menu (GitHub issue #19).
 // Plain marker file: its mere existence means "done", content unused.
 
 #include <string>
