@@ -5,6 +5,8 @@ add_executable(melonds_remote_adapter_sdk_tests
     test_fake_3ds_adapter.cpp
     test_fake_wiiu_adapter.cpp
     test_adapter_contract_generic.cpp
+    test_ipc_protocol.cpp
+    test_adapter_ipc_end_to_end.cpp
 )
 
 target_include_directories(melonds_remote_adapter_sdk_tests PRIVATE
@@ -13,6 +15,7 @@ target_include_directories(melonds_remote_adapter_sdk_tests PRIVATE
 
 target_link_libraries(melonds_remote_adapter_sdk_tests PRIVATE
     melonds_remote_adapter_sdk_fakes
+    melonds_remote_adapter_sdk_ipc
     melonds_remote_adapter_sdk
 )
 

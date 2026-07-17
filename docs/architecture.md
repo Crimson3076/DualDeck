@@ -30,6 +30,17 @@ adapter-sdk/         The versioned Emulator Adapter Contract (GitHub issue
                           adapter_contract.h AdapterCapabilities, SurfaceFrame, IEmulatorAdapter
                       - fake_adapters/       FakeDsAdapter/FakeThreeDsAdapter/FakeWiiUAdapter --
                                              test fixtures, not real emulator integrations
+                      - ipc/                 The local Host-Service<->adapter Unix-domain-socket
+                                             transport (ADR section 3), now implemented:
+                                             AdapterIpcServer (implements IEmulatorAdapter itself,
+                                             proxies over the socket) and AdapterIpcClient (wraps a
+                                             local IEmulatorAdapter, exposes it remotely). Not yet
+                                             used by host/remote-server's NetServer in production.
+                      - synthetic_adapter/   SyntheticEmulatorAdapter (a real, self-contained
+                                             animated-pattern IEmulatorAdapter) plus the
+                                             dualdeck-synthetic-adapter standalone binary that
+                                             connects it over ipc/ -- proven against a real
+                                             AdapterIpcServer across two separate OS processes.
 
 host/remote-server/  Standalone host process. Depends on protocol/ only.
                       - IEmulatorInputSink     seam for melonDS input injection

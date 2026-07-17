@@ -1,7 +1,8 @@
 # ADR 0001: Host Service + Adapter Architecture
 
-**Status**: Accepted (Phase 1 slice only -- see "What this ADR does not
-decide yet" below)
+**Status**: Accepted; section 3's IPC transport is now implemented (see
+its "Implemented" note below) -- see "What this ADR does not decide
+yet" for what's still outstanding.
 **Related**: GitHub issue #28 ("Architecture: Decouple DualDeck from
 melonDS and add 3DS/Wii U emulator adapters")
 
@@ -111,7 +112,25 @@ assertions against all three purely through `IEmulatorAdapter&`/
 `FakeAdapterBase&`, with no per-adapter branches, as the concrete proof
 that the contract doesn't secretly only fit melonDS.
 
-### 3. Local IPC: decided now, implemented in Phase 2
+### 3. Local IPC: decided here, now implemented
+
+**Implemented** (`adapter-sdk/ipc/`, GitHub issue #28 Phase 2): the
+decision below was carried out in full as new, additive infrastructure
+-- `AdapterIpcServer` (implements `IEmulatorAdapter` itself, proxying
+every call over the socket to whatever's connected -- callers cannot
+tell a local adapter from a remote one apart), `AdapterIpcClient` (wraps
+any local `IEmulatorAdapter` and exposes it to a Host Service), and a
+real out-of-process `dualdeck-synthetic-adapter` binary
+(`adapter-sdk/synthetic_adapter/`) proven to exchange real, changing
+frames with a real server across two genuinely separate OS processes
+(not just an in-test-process pair) -- see
+`docs/known-limitations.md`'s matching entry for the exact verification
+performed, including a real bug this caught (see that entry's "Verified"
+section). **Still not done**: `host/remote-server`'s `NetServer` does
+not speak this channel yet -- there is no production Host Service
+listening on this socket anywhere, only the test/demo harnesses that
+prove the mechanism itself works. That wiring remains future work (see
+"What this ADR does not decide yet" below).
 
 For an adapter that runs **in the same process** as the Host Service
 (today's melonDS patch, and the fake fixtures above), no IPC is needed
@@ -231,11 +250,11 @@ Explicitly deferred, tracked as later phases on issue #28 itself, not
 attempted here:
 
 - Actually extracting `NetServer`/discovery/auth/diagnostics out of the
-  melonDS-specific patch into a standalone Host Service process (issue
-  #28 Phase 2).
-- Implementing the Unix-domain-socket transport decided in section 3
-  above -- only its shape/path/framing/versioning/liveness/backpressure
-  policy is recorded here, no socket code exists yet.
+  melonDS-specific patch into a standalone Host Service process, and
+  making that process listen on the `AdapterIpcServer` socket described
+  in section 3 (which exists and is tested as a standalone component,
+  but nothing in `host/remote-server` constructs or starts one yet) --
+  issue #28 Phase 2's remaining work.
 - Implementing the DS compatibility adapter described in section 4 --
   only the approach is decided; `protocol.h`'s wire format and
   `host/remote-server`'s `NetServer` are completely unchanged by this

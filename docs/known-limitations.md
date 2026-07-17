@@ -2198,6 +2198,84 @@ first, proven out by fixtures, before touching the working v0.1
 networking code in the higher-risk Host Service extraction that comes
 next.
 
+## Adapter IPC channel + real out-of-process synthetic adapter (GitHub issue #28, start of Phase 2)
+
+Continues the two entries above (same GitHub issue #28): with the
+contract (`adapter-sdk/`) and its ADR in place, this entry implements
+the ADR's Unix-domain-socket IPC decision for real, plus a genuine
+out-of-process adapter proving it -- issue #28 Phase 2's "make the
+synthetic adapter connect through the same contract real adapters will
+use" checklist item. **`host/remote-server`'s `NetServer` still does
+not use any of this in production** -- see below for exactly what's
+still deferred.
+
+**What this implements**: `adapter-sdk/ipc/` -- a versioned wire format
+(`ipc_protocol.h/.cpp`, distinct magic `"DAI1"` from the client<->host
+channel's `"DMR1"` so the two can never be confused, gated on
+`kAdapterContractVersion`) for `Hello`/`HelloAck`/`InputState`/
+`ReleaseInputs`/`Frame`/`StateChanged`/`Heartbeat`/`Disconnect`
+messages; `AdapterIpcServer` (implements `IEmulatorAdapter` itself,
+listens on a Unix domain socket under `$XDG_RUNTIME_DIR/dualdeck/`
+mode 0700/0600, checks the connecting peer's UID via `SO_PEERCRED`
+before even reading a handshake byte, and proxies every
+`IEmulatorAdapter` call to whatever's currently connected); and
+`AdapterIpcClient` (wraps any local `IEmulatorAdapter` and exposes it
+to a Host Service over that socket). `adapter-sdk/synthetic_adapter/`
+adds `SyntheticEmulatorAdapter` (a real, self-contained animated BGRA
+test pattern on its own thread -- no dependency on
+`host::SyntheticFrameSource`, since `adapter-sdk` is meant to be a
+layer `host/remote-server` will eventually depend on, not the reverse)
+and `dualdeck-synthetic-adapter`, a standalone executable wiring it
+through `AdapterIpcClient`.
+
+**Verified**: 22 new tests (`test_ipc_protocol.cpp`,
+`test_adapter_ipc_end_to_end.cpp`) covering wire round-trips for every
+message payload type, oversized/malformed-size rejection (a declared
+frame pixel count or surface count over the documented bound is
+rejected before any allocation), a real `AdapterIpcServer` +
+`AdapterIpcClient` pair connected over an actual Unix socket in the
+same test process (capability negotiation, input relayed from the
+server call all the way into the real connected `FakeDsAdapter`, frames
+and session-state changes relayed the other direction, a hand-crafted
+raw-socket contract-version mismatch correctly rejected with
+`ContractVersionMismatch`, hand-crafted garbage bytes correctly
+rejected without crashing the server, and "replacement" -- a second
+adapter successfully taking over once the first disconnects).
+**Beyond the automated tests**, a real cross-process run was performed:
+a throwaway harness process started a real `AdapterIpcServer`, and the
+actual packaged `dualdeck-synthetic-adapter` binary was launched
+separately and pointed at its socket -- confirmed identity/capabilities
+negotiated correctly, and 147 real frames received with a strictly
+increasing frame index (7 → 154 across the observation window) and the
+correct 196,608-byte (256×192×4) payload size, i.e. genuinely animated
+frames flowing between two independent OS processes, not just two
+threads in one test binary.
+
+**A real bug was caught by this verification and fixed**: none of the
+IPC socket code originally set a receive timeout, so a peer that never
+sends anything (including a second adapter's connection attempt sitting
+in the listen backlog while `AdapterIpcServer`'s single-connection-at-
+a-time accept loop was still busy serving a different, still-connected
+adapter) left `recv()` blocking forever -- a real deadlock, hit
+immediately by the first version of the "second connection while one is
+active" test. Fixed by adding `SO_RCVTIMEO` (5s) to every socket on this
+channel, matching `NetServer::controlLoop()`'s existing precedent for
+the client<->host control channel; the test itself was also restructured
+to run the blocking `connect()` call on its own thread rather than the
+test's main thread, since a second adapter genuinely is expected to
+block until the first disconnects under this "one at a time" design,
+not fail immediately.
+
+**Deliberately not done in this phase** (tracked as issue #28 Phase 2's
+remaining work, not attempted here): wiring any of this into
+`host/remote-server`'s actual `NetServer`/`main.cpp` -- there is no
+production Host Service listening on this socket anywhere yet, only the
+test suite and the manual verification harness described above. The
+live client<->host wire protocol (`protocol.h`, `kProtocolVersion 6`)
+and the melonDS patch remain completely untouched, confirmed the same
+way as the previous two entries (`git diff --stat` showing only new
+files under `adapter-sdk/` plus this doc and the ADR).
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

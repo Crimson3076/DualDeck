@@ -21,6 +21,8 @@ if(MELONDS_REMOTE_ENABLE_WARNINGS)
 endif()
 
 add_subdirectory(fake_adapters)
+add_subdirectory(ipc)
+add_subdirectory(synthetic_adapter)
 
 if(MELONDS_REMOTE_BUILD_TESTS)
     add_subdirectory(tests)
