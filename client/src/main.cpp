@@ -65,11 +65,24 @@ constexpr int kDSHeight = 192;
 
 // Matches host::NetServerConfig::discoveryPort's default (net_server.h).
 constexpr uint16_t kDefaultDiscoveryPort = 8763;
-// Each discoverHosts() call blocks for this long; while no host has
-// answered yet, the discovery screen loops calling it again rather than
-// giving up, so this is "how often does the searching screen get a
-// chance to notice SDL_EVENT_QUIT", not a total search timeout.
+// Each discoverHosts() call blocks for this long. discoverAndSelectHost()
+// runs it on a background thread, repeatedly, for as long as the picker
+// screen is shown -- not a total search timeout, just how often the
+// on-screen host list refreshes. Originally run inline on the render/
+// input thread itself, which meant SDL_PollEvent() (and therefore every
+// button press, not just DPAD/SOUTH on the picker) went unserviced for
+// this entire duration on every single scan -- reported as buttons
+// "sometimes doing nothing" (GitHub issue #21, reopened after the first
+// pass only added a "connecting" screen for the *post-selection* wait,
+// not this pre-selection one).
 constexpr int kDiscoveryScanMs = 1200;
+// discoverAndSelectHost()'s own loop no longer blocks on network I/O (see
+// kDiscoveryScanMs's comment), so without an explicit cap it would poll
+// events and re-render as fast as the platform allows -- measured at a
+// full CPU core pinned to 100% under Xvfb software rendering, since
+// nothing else paces it. ~60Hz is plenty for a picker/menu screen with
+// no low-latency requirement of its own.
+constexpr int kPickerFrameIntervalMs = 16;
 
 // Deliberate-hold duration for the L3+R3 "open menu" chord, shared
 // by discoverAndSelectHost() and main()'s inner loop so every screen uses
@@ -277,6 +290,16 @@ void renderPauseMenu(SDL_Renderer* renderer, const std::vector<std::string>& ite
 // address, and the list is sorted for a stable display order (discovery
 // itself doesn't guarantee reply order is consistent scan to scan).
 //
+// The scan itself runs on its own background thread (GitHub issue #21,
+// reopened) -- discoverHosts() blocks for kDiscoveryScanMs, and running
+// that inline on this function's own loop, as a first pass of this fix
+// did, meant SDL_PollEvent() (and every button press with it) went
+// unserviced for the whole 1.2s of every single rescan, not just the
+// initial one, making the picker feel randomly unresponsive depending on
+// exactly when a press landed relative to the blocking call. This
+// thread does nothing but scan-and-publish; the loop below always polls
+// events and renders every frame regardless of scan timing.
+//
 // Returns std::nullopt if the user closed the window before a host was
 // chosen (SDL_EVENT_QUIT), or chose EXIT from the L3+R3 menu below;
 // main() treats either as "cancel the whole run", not "connect anyway."
@@ -285,6 +308,30 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
                                                      const std::string& lastHostAddress) {
     std::vector<DiscoveredHost> hosts;
     int selectedIndex = 0;
+
+    std::mutex scanMutex;
+    std::vector<DiscoveredHost> latestScan;
+    std::atomic<bool> scanStop{false};
+    std::thread scanThread([&]() {
+        while (!scanStop.load()) {
+            std::vector<DiscoveredHost> fresh = discoverHosts(discoveryPort, kDiscoveryScanMs, &scanStop);
+            std::sort(fresh.begin(), fresh.end(),
+                      [](const DiscoveredHost& a, const DiscoveredHost& b) { return a.address < b.address; });
+            std::lock_guard<std::mutex> lock(scanMutex);
+            latestScan = std::move(fresh);
+        }
+    });
+    // Guarantees scanThread is stopped and joined on every return path
+    // below (including SDL_EVENT_QUIT and the menu's EXIT) without
+    // needing a matching stop+join before each one individually.
+    struct ScanThreadGuard {
+        std::atomic<bool>& stop;
+        std::thread& thread;
+        ~ScanThreadGuard() {
+            stop = true;
+            if (thread.joinable()) thread.join();
+        }
+    } scanThreadGuard{scanStop, scanThread};
 
     // L3+R3 "open menu" chord, offering an EXIT control -- this
     // screen previously had none at all (GitHub issues #8, #9), despite
@@ -393,6 +440,7 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
 
         if (menuActive) {
             renderPauseMenu(renderer, menuItems, menuSelectedIndex);
+            SDL_Delay(kPickerFrameIntervalMs);
             continue;
         }
 
@@ -402,28 +450,33 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
             renderDiscoveryList(renderer, hosts, selectedIndex);
         }
 
+        // Pull whatever the background scan thread has published so far --
+        // never blocks on network I/O itself, just a quick copy under a
+        // mutex, so this loop iterates at normal frame rate regardless of
+        // scan timing (see the function-level comment above for why this
+        // used to run discoverHosts() inline here instead).
         std::string selectedAddress = hosts.empty() ? "" : hosts[static_cast<size_t>(selectedIndex)].address;
-
-        std::vector<DiscoveredHost> freshHosts = discoverHosts(discoveryPort, kDiscoveryScanMs);
-        std::sort(freshHosts.begin(), freshHosts.end(),
-                  [](const DiscoveredHost& a, const DiscoveredHost& b) { return a.address < b.address; });
-        hosts = std::move(freshHosts);
+        {
+            std::lock_guard<std::mutex> lock(scanMutex);
+            hosts = latestScan;
+        }
 
         if (hosts.empty()) {
             selectedIndex = 0;
-            continue;
+        } else {
+            auto it = std::find_if(hosts.begin(), hosts.end(),
+                                    [&](const DiscoveredHost& h) { return h.address == selectedAddress; });
+            if (it != hosts.end()) {
+                selectedIndex = static_cast<int>(it - hosts.begin());
+            } else {
+                auto lastIt = std::find_if(hosts.begin(), hosts.end(), [&](const DiscoveredHost& h) {
+                    return h.address == lastHostAddress;
+                });
+                selectedIndex = lastIt != hosts.end() ? static_cast<int>(lastIt - hosts.begin()) : 0;
+            }
         }
 
-        auto it = std::find_if(hosts.begin(), hosts.end(),
-                                [&](const DiscoveredHost& h) { return h.address == selectedAddress; });
-        if (it != hosts.end()) {
-            selectedIndex = static_cast<int>(it - hosts.begin());
-        } else {
-            auto lastIt = std::find_if(hosts.begin(), hosts.end(), [&](const DiscoveredHost& h) {
-                return h.address == lastHostAddress;
-            });
-            selectedIndex = lastIt != hosts.end() ? static_cast<int>(lastIt - hosts.begin()) : 0;
-        }
+        SDL_Delay(kPickerFrameIntervalMs);
     }
 }
 

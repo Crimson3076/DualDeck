@@ -1654,6 +1654,81 @@ Given the above, GitHub issue #19 is left open rather than closed --
 this is a substantial but partial pass at its scope, not a complete
 implementation of its acceptance criteria.
 
+## Host-picker input unresponsiveness (GitHub issue #21, reopened)
+
+A first pass at issue #21 (see the two sections above, "Add immediate
+client connection feedback") added a "CONNECTING TO..." screen for the
+wait *after* a host is selected, but the issue was reopened with a more
+specific report: "sometimes when using A to select a host, it does
+nothing, either frozen or does not respond." That's a different,
+earlier point in the flow -- the host-picker screen itself, before
+selection.
+
+Root cause: `discoverAndSelectHost()`'s loop called `discoverHosts()`
+(a blocking UDP scan, `kDiscoveryScanMs` = 1.2s per call) **inline**,
+once per loop iteration, for as long as the picker was shown. Every
+single rescan -- not just the first one -- blocked `SDL_PollEvent()`
+entirely for up to 1.2s, so a button press landing in that window sat
+unprocessed until the current scan happened to finish. The existing
+code comment even described this as intentional ("how often does the
+searching screen get a chance to notice SDL_EVENT_QUIT"), without
+recognizing it also gated every other input, not just quit.
+
+Fixed by moving the scan onto its own background thread
+(`client/src/main.cpp`): the thread does nothing but call
+`discoverHosts()` in a loop and publish results into a mutex-guarded
+`latestScan` vector; the render/input loop never blocks on it, just
+copies out whatever's latest each frame (same pattern as
+`NetClient::getLatestFrame()`) and keeps polling events and rendering
+continuously. `discoverHosts()` (`client/src/discovery_client.h/.cpp`)
+gained an optional `cancel` parameter so the background thread's
+`select()` waits are capped at `kCancelPollMs` (100ms) instead of one
+uninterruptible wait for the full remaining budget -- without this, a
+thread-shutdown `join()` (e.g. when the user actually does select a
+host, or backs out) could itself block for up to 1.2s waiting for the
+in-flight scan to finish before the function could return, which would
+have just moved the same class of delay to a different, though smaller
+and one-time, point in the flow.
+
+**A related regression was found and fixed during verification, not
+present in the initial rewrite**: removing the accidental 1.2s-per-frame
+throttling this bug had been providing meant the loop, once no longer
+gated by anything, polled events and re-rendered as fast as the
+platform would allow -- measured at a full CPU core pinned near 100%
+under this sandbox's Xvfb/software rendering. Added an explicit
+`kPickerFrameIntervalMs` (16ms, ~60Hz) `SDL_Delay()` at the end of each
+loop iteration (including the menu-active branch, which already had
+this same unthrottled-loop shape from before this fix and was fixed the
+same way while already in this function). A picker/menu screen has no
+low-latency requirement of its own, so this cap is unnoticeable while
+eliminating the CPU burn.
+
+**Verified**: full host/protocol/client build with
+`-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror`, clean;
+`ctest` passes. Built both the fixed code and the pre-fix baseline
+(via a git worktree at the previous commit) side by side and compared
+them directly under Xvfb + a real standalone host prototype instance
+answering real LAN discovery broadcasts: closing the client's window
+(which exercises the exact same blocked-`SDL_PollEvent`-loop mechanism
+as a picker button press, `SDL_EVENT_QUIT` going through the same inline
+`discoverHosts()` call) **did not get honored at all within 3 seconds**
+on the pre-fix baseline (had to be force-killed) -- directly reproducing
+the reported "frozen/does not respond" symptom -- versus **34-35ms**
+consistently on the fixed build, run twice. Confirmed the CPU-usage
+regression was fixed by comparing instantaneous per-process CPU
+consumption (via `/proc/<pid>/stat` tick deltas over fixed windows, not
+`ps`'s cumulative-since-start average, which is misleading for a
+short-lived comparison) before and after adding the frame-rate cap.
+**Not verified**: real Steam Deck hardware, and a full press-a-button-
+during-an-active-scan trace with real gamepad input specifically (LAN
+broadcast discovery between two processes on the same host inside this
+sandbox worked reliably enough to run the host/protocol/client build
+against, but driving the actual on-screen host-selection list via
+synthetic input under a window-manager-less Xvfb setup was not reliable
+enough in this environment to complete that exact trace -- the
+window-close reproduction above exercises the identical blocked-event-
+loop code path, which is what makes it a faithful stand-in).
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

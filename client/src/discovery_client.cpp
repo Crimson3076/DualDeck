@@ -15,7 +15,15 @@
 
 namespace melonds_remote::client {
 
-std::vector<DiscoveredHost> discoverHosts(uint16_t discoveryPort, int timeoutMs) {
+namespace {
+// How often the scan loop below checks `cancel` (when given) between
+// select() waits -- bounds how long a caller's stop request can take to
+// actually end the scan, independent of how much of `timeoutMs` remains.
+constexpr int kCancelPollMs = 100;
+} // namespace
+
+std::vector<DiscoveredHost> discoverHosts(uint16_t discoveryPort, int timeoutMs,
+                                           const std::atomic<bool>* cancel) {
     std::unordered_map<std::string, DiscoveredHost> found;
 
     int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
@@ -45,11 +53,21 @@ std::vector<DiscoveredHost> discoverHosts(uint16_t discoveryPort, int timeoutMs)
 
     uint8_t buf[512];
     while (true) {
+        if (cancel && cancel->load()) {
+            break;
+        }
+
         auto remaining = deadline - std::chrono::steady_clock::now();
         if (remaining <= std::chrono::steady_clock::duration::zero()) {
             break;
         }
         auto remainingUs = std::chrono::duration_cast<std::chrono::microseconds>(remaining).count();
+        // Capped at kCancelPollMs (when cancellable) so a single select()
+        // wait can never itself outlast how quickly `cancel` needs to be
+        // noticed, regardless of how much of `timeoutMs` is left.
+        if (cancel) {
+            remainingUs = std::min<int64_t>(remainingUs, kCancelPollMs * 1000);
+        }
 
         fd_set readfds;
         FD_ZERO(&readfds);
@@ -59,8 +77,16 @@ std::vector<DiscoveredHost> discoverHosts(uint16_t discoveryPort, int timeoutMs)
         selectTimeout.tv_usec = static_cast<suseconds_t>(remainingUs % 1'000'000);
 
         int ready = ::select(fd + 1, &readfds, nullptr, nullptr, &selectTimeout);
-        if (ready <= 0) {
-            break; // timed out (or error) -- return whatever we collected
+        if (ready == 0) {
+            // A real timeout: with `cancel` given, this may just be one
+            // kCancelPollMs poll slice ending, not the whole scan's
+            // deadline -- loop back around to check `cancel` and
+            // recompute the real remaining budget rather than treating
+            // every such wakeup as "done scanning."
+            continue;
+        }
+        if (ready < 0) {
+            break; // a real select() error -- return whatever we collected
         }
 
         sockaddr_in fromAddr{};

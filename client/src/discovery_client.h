@@ -6,10 +6,14 @@
 // client doesn't need to be given a host address if there's exactly one
 // (or the user picks from a short list) melonds-remote host on the LAN.
 //
-// Deliberately a one-shot blocking call rather than a background
-// service -- discovery only matters at startup/reconnect-selection time,
-// not continuously, so there's no long-lived socket/thread to manage.
+// A single call is a one-shot blocking operation -- no long-lived socket
+// of its own. main.cpp's discoverAndSelectHost() calls this repeatedly
+// on a dedicated background thread (not the render/input thread) for as
+// long as the host-picker screen is shown, so the picker keeps
+// refreshing without ever blocking event/frame handling; see
+// `cancel` below for how that thread gets torn down promptly.
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -25,10 +29,17 @@ struct DiscoveredHost {
 };
 
 // Broadcasts a DiscoveryRequest on `discoveryPort` and collects replies
-// for `timeoutMs` milliseconds. Deduplicates by source address (keeps
-// the most recent reply if a host somehow answers more than once).
-// Returns an empty vector if nothing replied in time -- not an error,
-// just "no host found yet" (the caller is expected to retry).
-std::vector<DiscoveredHost> discoverHosts(uint16_t discoveryPort, int timeoutMs);
+// for up to `timeoutMs` milliseconds. Deduplicates by source address
+// (keeps the most recent reply if a host somehow answers more than
+// once). Returns an empty vector if nothing replied in time -- not an
+// error, just "no host found yet" (the caller is expected to retry).
+//
+// `cancel`, if non-null, is polled roughly every kCancelPollMs and ends
+// the scan early (returning whatever was collected so far) once it
+// reads true -- lets a caller running this in a loop on a background
+// thread stop within a bounded, short delay instead of waiting out the
+// rest of whatever `timeoutMs` remained.
+std::vector<DiscoveredHost> discoverHosts(uint16_t discoveryPort, int timeoutMs,
+                                           const std::atomic<bool>* cancel = nullptr);
 
 } // namespace melonds_remote::client
