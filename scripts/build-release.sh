@@ -1091,6 +1091,32 @@ fi
 WRAP
 chmod +x "${pkg_dir}/host/internal/install-steam-shortcut.sh"
 
+# Compatibility shim: every release before this host/internal/
+# restructuring had install-steam-shortcut.sh directly at host/, and
+# those releases' own host/apply-update.sh hardcodes exactly that path
+# when it downloads and invokes a newer release's copy (see
+# docs/known-limitations.md). That already-installed
+# old script can't be changed retroactively, so a real user on one of
+# those versions hit exactly this: "Check for updates" downloads this
+# new, restructured release fine, then fails with exit 127 trying to
+# run a file that no longer exists at the old flat path. This shim
+# forwards to the real (current) location so updating *from* one of
+# those older releases keeps working. New installs/updates never
+# reach this file directly -- melonds-remote-host.sh and apply-update.sh
+# both already call internal/install-steam-shortcut.sh -- so this exists
+# purely for that one-time upgrade path and is safe to delete once no
+# supported release still depends on it.
+cat > "${pkg_dir}/host/install-steam-shortcut.sh" <<'WRAP'
+#!/usr/bin/env bash
+# Compatibility shim for releases before the host/internal/
+# restructuring -- see the comment above this heredoc in
+# scripts/build-release.sh for why this exists. Just forwards to the
+# real script's current location.
+set -euo pipefail
+exec "$(dirname "${BASH_SOURCE[0]}")/internal/install-steam-shortcut.sh" "$@"
+WRAP
+chmod +x "${pkg_dir}/host/install-steam-shortcut.sh"
+
 cat > "${pkg_dir}/host/internal/uninstall-steam-shortcut.sh" <<'WRAP'
 #!/usr/bin/env bash
 # Removes the "melonDS Remote Host" Steam non-Steam-game shortcut added

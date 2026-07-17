@@ -1237,6 +1237,59 @@ actually published and a later version updates over it. Also not
 verified: real Distrobox/Steam UI, and real Bazzite/Steam Deck
 hardware, same as every other Bazzite-specific item in this file.
 
+Still not addressed at the time: CI-tested install/upgrade behavior,
+real Steam Deck/Bazzite hardware verification, and (as it turned out)
+updating *from* a real pre-restructuring release, below.
+
+## Compatibility shim for updating from a pre-restructuring release (GitHub issue #10, continued)
+
+**Real-hardware report, the first concrete confirmation of the
+"not verified: an actual self-update from a real previous published
+release" gap flagged immediately above**: a user running an
+already-installed pre-restructuring release picked "Check for updates"
+and got `Updating failed: "${extracted_dir}/host/install-steam-shortcut.sh"
+--force (exit code 127)`.
+
+Root cause was exactly the anticipated one: every release before the
+`host/internal/` restructuring had `install-steam-shortcut.sh` directly
+at `host/`, and that version's own `host/apply-update.sh` hardcodes
+that exact path when it downloads and invokes a *newer* release's copy.
+Once the restructured release was published, that file no longer
+exists there -- it moved to `host/internal/install-steam-shortcut.sh`
+-- so the already-installed old `apply-update.sh` (which can't be
+changed retroactively; it's already on the user's disk) downloaded the
+new release fine and then failed trying to exec a path that no longer
+existed (exit 127 = command not found).
+
+Fixed by adding `host/install-steam-shortcut.sh` back as a three-line
+compatibility shim in the packaged archive -- `exec`s straight through
+to `host/internal/install-steam-shortcut.sh`, forwarding all arguments.
+Every *current* code path (`melonds-remote-host.sh`, the current
+`apply-update.sh`) already calls `internal/install-steam-shortcut.sh`
+directly and never touches this file -- it exists purely so an old,
+already-installed `apply-update.sh` downloading *this* release can
+still find what it's hardcoded to look for. Safe to delete once no
+supported release still depends on it (i.e. once enough time has
+passed that no one reasonably still has a pre-restructuring version
+installed).
+
+**Verified**: reproduced the exact reported failure first (extracted
+just the pre-fix `host/install-steam-shortcut.sh` heredoc and the
+`host/internal/` one side by side, confirmed the flat path was
+genuinely absent, matching exit 127), then confirmed the fix by
+invoking the new shim with the *exact* argument pattern the old
+`apply-update.sh` uses (`"${extracted_dir}/host/install-steam-shortcut.sh"
+--force`) against a full fake-`distrobox`/`dnf`/`$HOME` install --
+completes successfully end to end (container created, packages
+"installed", central directory populated with the full new nested
+layout, Steam shortcut registered at the correct `internal/launch-host.sh`
+path) instead of failing with a missing file. **Not verified**: this
+exact scenario against a real previously-installed binary on real
+Bazzite hardware (the report that surfaced this was exactly that, but
+this fix itself has only been re-verified in this project's own
+sandbox) -- the reporting user re-running "Check for updates" against
+this fix is the next real confirmation.
+
 Still not addressed: CI-tested install/upgrade behavior, and real Steam
 Deck/Bazzite hardware verification. Given these, GitHub issue #10
 remains open.
