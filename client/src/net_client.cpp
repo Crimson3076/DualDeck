@@ -63,10 +63,23 @@ void NetClient::closePartialConnection() {
 }
 
 bool NetClient::connect() {
-    // Serializes against disconnect() (and against another concurrent
-    // connect(), though callers aren't expected to do that) -- e.g. the
-    // reconnect-on-a-background-thread pattern in client/src/main.cpp,
-    // which may race with a main-thread disconnect() at shutdown.
+    // A second connect() should not wait behind an in-flight handshake and
+    // then make a duplicate attempt with the same user action. This is a
+    // last line of defense for callers in addition to main.cpp giving its
+    // reconnect thread sole ownership of connection attempts.
+    bool expected = false;
+    if (!connectionAttemptInProgress_.compare_exchange_strong(expected, true)) {
+        std::fprintf(stderr, "connection attempt already in progress; ignoring duplicate request\n");
+        return false;
+    }
+    struct AttemptGuard {
+        std::atomic<bool>& inProgress;
+        ~AttemptGuard() { inProgress = false; }
+    } attemptGuard{connectionAttemptInProgress_};
+
+    // Serializes against disconnect() -- e.g. the reconnect-on-a-background
+    // thread pattern in client/src/main.cpp may race with a main-thread
+    // disconnect() at shutdown.
     std::lock_guard<std::mutex> lock(connectMutex_);
 
     // Reset first: lastRejectReason_ is only ever written when a real
