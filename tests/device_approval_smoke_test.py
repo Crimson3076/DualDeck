@@ -43,7 +43,7 @@ import tempfile
 import time
 
 MAGIC = 0x444D5231
-VERSION = 3
+VERSION = 4
 
 PT_HELLO = 1
 PT_HELLO_ACK = 2
@@ -62,7 +62,13 @@ def lp_string(s: str) -> bytes:
 
 
 def hello_payload(name: str, platform: str, width: int, height: int, device_id: str) -> bytes:
-    return lp_string(name) + lp_string(platform) + struct.pack("<HH", width, height) + lp_string(device_id)
+    # Trailing empty appVersion: this server is never started with
+    # --app-version, so the AppVersionMismatch check is skipped regardless
+    # of what's sent here -- see protocol.h's HelloPayload::appVersion.
+    return (
+        lp_string(name) + lp_string(platform) + struct.pack("<HH", width, height) + lp_string(device_id)
+        + lp_string("")
+    )
 
 
 def recv_exact(sock: socket.socket, size: int) -> bytes:

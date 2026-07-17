@@ -27,7 +27,7 @@ import sys
 import time
 
 MAGIC = 0x444D5231
-VERSION = 3
+VERSION = 4
 
 PT_HELLO = 1
 PT_HELLO_ACK = 2
@@ -41,6 +41,7 @@ REJECT_NONE = 0
 REJECT_VERSION_MISMATCH = 1
 REJECT_AUTH_FAILED = 2
 REJECT_HOST_BUSY = 3
+REJECT_APP_VERSION_MISMATCH = 5
 
 
 def header(packet_type: int, payload_size: int) -> bytes:
@@ -53,8 +54,17 @@ def lp_string(s: str) -> bytes:
     return struct.pack("<H", len(b)) + b
 
 
-def hello_payload(name: str, platform: str, width: int, height: int, token: str) -> bytes:
-    return lp_string(name) + lp_string(platform) + struct.pack("<HH", width, height) + lp_string(token)
+def hello_payload(name: str, platform: str, width: int, height: int, token: str, app_version: str = "") -> bytes:
+    # app_version left empty by default: an empty appVersion on either side
+    # skips the AppVersionMismatch check entirely (see protocol.h), which is
+    # what every test below except a dedicated version-mismatch case wants.
+    return (
+        lp_string(name)
+        + lp_string(platform)
+        + struct.pack("<HH", width, height)
+        + lp_string(token)
+        + lp_string(app_version)
+    )
 
 
 def controller_state_payload(seq: int, buttons: int, touch_x: int, touch_y: int) -> bytes:
@@ -74,10 +84,10 @@ def recv_exact(sock: socket.socket, size: int) -> bytes:
     return buf
 
 
-def do_handshake(control_port: int, token: str):
-    """Connects, sends Hello with `token`, and returns (socket, accepted, reject_reason)."""
+def do_handshake(control_port: int, token: str, app_version: str = ""):
+    """Connects, sends Hello with `token`, and returns (socket, accepted, reject_reason, host_app_version)."""
     ctrl = socket.create_connection(("127.0.0.1", control_port), timeout=3)
-    payload = hello_payload("smoke-test-client", "linux", 1280, 800, token)
+    payload = hello_payload("smoke-test-client", "linux", 1280, 800, token, app_version)
     ctrl.sendall(header(PT_HELLO, len(payload)) + payload)
 
     ack_header = recv_exact(ctrl, 12)
@@ -87,12 +97,15 @@ def do_handshake(control_port: int, token: str):
 
     ack_payload = recv_exact(ctrl, psize)
     accepted, reject_reason, session_id, native_w, native_h = struct.unpack_from("<BBIHH", ack_payload, 0)
-    return ctrl, accepted, reject_reason
+    (host_app_version,) = struct.unpack_from("<H", ack_payload, 10)
+    host_app_version = ack_payload[12:12 + host_app_version].decode("utf-8")
+    return ctrl, accepted, reject_reason, host_app_version
 
 
 def run(server_path: str) -> int:
     control_port, input_port, video_port = 28760, 28761, 28762
     token = "smoke-test-secret"
+    host_app_version = "v0.1.99-smoketest"
     proc = subprocess.Popen(
         [
             server_path,
@@ -102,6 +115,7 @@ def run(server_path: str) -> int:
             "--video-port", str(video_port),
             "--timeout-ms", "500",
             "--auth-token", token,
+            "--app-version", host_app_version,
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -112,10 +126,23 @@ def run(server_path: str) -> int:
         time.sleep(0.3)  # let the listeners bind
 
         # --- Wrong token must be rejected, and must not be able to inject input ---
-        bad_ctrl, accepted, reason = do_handshake(control_port, "wrong-token")
+        bad_ctrl, accepted, reason, _ = do_handshake(control_port, "wrong-token")
         assert accepted == 0, "expected wrong token to be rejected"
         assert reason == REJECT_AUTH_FAILED, f"expected AuthenticationFailed, got {reason}"
         print("[ok] wrong auth token rejected")
+
+        # --- Mismatched app version must be rejected before auth is even
+        # checked -- correct token, but a different non-empty appVersion
+        # than --app-version above. A rejected handshake's TCP connection is
+        # closed server-side immediately (net_server.cpp doesn't enter its
+        # keep-reading loop when !handshakeOk), so bad_ctrl above doesn't
+        # need to be closed client-side first for this next attempt to land.
+        stale_ctrl, accepted, reason, host_version = do_handshake(control_port, token, "v0.0.1-stale")
+        assert accepted == 0, "expected a mismatched app version to be rejected"
+        assert reason == REJECT_APP_VERSION_MISMATCH, f"expected AppVersionMismatch, got {reason}"
+        assert host_version == host_app_version, f"expected host to report its own version, got {host_version!r}"
+        print("[ok] mismatched app version rejected, host reports its own version in HelloAck")
+        stale_ctrl.close()
 
         udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         payload = controller_state_payload(seq=1, buttons=0x0001, touch_x=128, touch_y=96)
@@ -137,7 +164,7 @@ def run(server_path: str) -> int:
         time.sleep(0.2)
 
         # --- Correct token: full happy path ---
-        ctrl, accepted, reason = do_handshake(control_port, token)
+        ctrl, accepted, reason, _ = do_handshake(control_port, token)
         assert accepted == 1, f"expected correct token to be accepted, reject_reason={reason}"
         print("[ok] control handshake with correct auth token")
 

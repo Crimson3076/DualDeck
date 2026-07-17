@@ -1516,6 +1516,29 @@ melonDS-specific features) -- the protocol-level round-trip and the
 a live two-process handshake through the real patched binary specifically
 is not. Also not verified: real Steam Deck hardware.
 
+**A real regression was found and fixed in a later pass**: this change's
+own `ctest` (the C++ protocol/host/client unit and structural tests) was
+run and passed at the time, but `tests/smoke_test.py` and
+`tests/device_approval_smoke_test.py` -- the two Python end-to-end
+scripts CI's `ci.yml` actually runs against the real standalone host
+binary -- were never updated to match the new wire format (still sending
+protocol version 3 and a `HelloPayload` with no trailing `appVersion`
+string), so every host handshake in both scripts was silently rejected
+with `ProtocolVersionMismatch`/a malformed-payload parse failure from
+the moment this change merged. Caught only because a later, unrelated
+task happened to run `smoke_test.py` directly and got an assertion
+failure instead of the expected pass -- CI itself would have been
+showing this as red the whole time otherwise. Fixed by bumping both
+scripts' `VERSION` to 4 and adding the trailing `appVersion` string to
+`hello_payload()` (empty by default, so the check stays skipped for
+every existing test case exactly as before); `smoke_test.py` also
+gained a dedicated `--app-version`-on-the-host-process test case
+(mismatched version rejected with `AppVersionMismatch`, matching
+version accepted, host's own version correctly echoed back in
+`HelloAck` even on the rejection) since the server-process fixture was
+already right there to exercise it cheaply. Both scripts re-verified
+passing end to end against the real binary.
+
 ## Latency instrumentation assumes synced clocks
 
 The host's periodic latency stat (`docs/protocol.md`'s note on
