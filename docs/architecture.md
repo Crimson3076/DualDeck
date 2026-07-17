@@ -16,13 +16,14 @@ protocol/            Transport-independent wire format + pure logic.
                                                sequence/timeout/fail-safe logic
 
 adapter-sdk/         The versioned Emulator Adapter Contract (GitHub issue
-                      #28 Phase 1 -- see docs/adr/0001-host-service-and-adapter-architecture.md).
-                      Not yet used by the live client/host; a target shape
-                      for a future Host Service extraction (issue #28
-                      Phase 2), proven out today by fake DS/3DS/Wii U
-                      capability fixtures. See "Emulator identity model"
-                      below for the (already-live) identity slice of this
-                      same issue, and the ADR for everything else.
+                      #28 Phase 1/2 -- see docs/adr/0001-host-service-and-adapter-architecture.md).
+                      Driven in production today only by host/remote-server's
+                      opt-in --adapter-ipc mode (see below); melonDS's own
+                      patch does not go through this yet. Proven out by fake
+                      DS/3DS/Wii U capability fixtures and a real out-of-
+                      process synthetic adapter. See "Emulator identity
+                      model" below for the (already-live) identity slice of
+                      this same issue, and the ADR for everything else.
                       - include/melonds_remote/adapter/
                           session_state.h    lifecycle enum + isValidTransition()
                           video_surface.h    VideoSurfaceDescriptor, SurfaceRole, PixelFormat
@@ -31,23 +32,33 @@ adapter-sdk/         The versioned Emulator Adapter Contract (GitHub issue
                       - fake_adapters/       FakeDsAdapter/FakeThreeDsAdapter/FakeWiiUAdapter --
                                              test fixtures, not real emulator integrations
                       - ipc/                 The local Host-Service<->adapter Unix-domain-socket
-                                             transport (ADR section 3), now implemented:
+                                             transport (ADR section 3), implemented:
                                              AdapterIpcServer (implements IEmulatorAdapter itself,
                                              proxies over the socket) and AdapterIpcClient (wraps a
-                                             local IEmulatorAdapter, exposes it remotely). Not yet
-                                             used by host/remote-server's NetServer in production.
+                                             local IEmulatorAdapter, exposes it remotely). Used by
+                                             host/remote-server's --adapter-ipc mode in production.
                       - synthetic_adapter/   SyntheticEmulatorAdapter (a real, self-contained
                                              animated-pattern IEmulatorAdapter) plus the
                                              dualdeck-synthetic-adapter standalone binary that
                                              connects it over ipc/ -- proven against a real
-                                             AdapterIpcServer across two separate OS processes.
+                                             AdapterIpcServer across two separate OS processes,
+                                             and against a real melonds-remote-server +
+                                             melonds-remote-client end-to-end.
 
-host/remote-server/  Standalone host process. Depends on protocol/ only.
+host/remote-server/  Standalone host process. Depends on protocol/ and,
+                      for its opt-in adapter-driven mode, adapter-sdk/.
                       - IEmulatorInputSink     seam for melonDS input injection
                         - LoggingInputSink     Phase 1 stand-in (logs, doesn't drive melonDS)
                       - IFrameSource           seam for bottom-screen frames
                         - SyntheticFrameSource Phase 1 stand-in (animated test pattern)
-                      - NetServer              TCP control + UDP input + TCP video threads
+                      - AdapterBridge          implements IEmulatorInputSink + IFrameSource by
+                                             translating to/from adapter-sdk's IEmulatorAdapter --
+                                             the "DS compatibility adapter" from the ADR (GitHub
+                                             issue #28 Phase 2). Used only when main.cpp is given
+                                             --adapter-ipc/--adapter-socket; the default invocation
+                                             still uses LoggingInputSink+SyntheticFrameSource.
+                      - NetServer              TCP control + UDP input + TCP video threads --
+                                             unchanged by AdapterBridge's existence either way.
 
 host/melonds-patches/ 0001-remote-server-integration.patch: implements the
                       integration described in
@@ -316,24 +327,28 @@ true: incompatible versions never complete a handshake at all, so there is
 no window where a mismatched pair could produce an incorrect mapping.
 
 **What issue #28 still needed beyond this identity slice** -- now
-addressed by a later Phase 1 pass, see
+addressed by Phase 1 and the start of Phase 2, see
 `docs/adr/0001-host-service-and-adapter-architecture.md` and the
-`adapter-sdk/` component above: the versioned adapter contract (session
-lifecycle, video-surface list, generic input model, capabilities), the
-local-IPC mechanism decision, the protocol-migration/backward-
-compatibility decision, and fake DS/3DS/Wii U capability fixtures
-proving the contract is genuinely reusable. **Still remaining** after
-that pass (tracked as later phases on the issue itself, not attempted
+`adapter-sdk/` and `host/remote-server/AdapterBridge` components above:
+the versioned adapter contract (session lifecycle, video-surface list,
+generic input model, capabilities), the local-IPC mechanism (a real
+Unix-domain-socket `AdapterIpcServer`/`AdapterIpcClient` pair, not just
+a design decision), the protocol-migration/backward-compatibility
+decision implemented as `AdapterBridge`, and fake DS/3DS/Wii U capability
+fixtures plus a real out-of-process synthetic adapter proving the
+contract is genuinely reusable end-to-end through a real client. **Still
+remaining** (tracked as later phases on the issue itself, not attempted
 yet): actually extracting a standalone Host Service decoupled from the
-melonDS patch (today's `NetServer` still gets vendored directly into the
-melonDS build; the adapter contract exists but nothing calls through it
-in production yet) -- issue #28 Phase 2; implementing the Unix-domain-
-socket transport the ADR decided on (no socket code exists yet); a real
-3DS or Wii U adapter (the fixtures under `adapter-sdk/fake_adapters/`
-are test doubles, not actual emulator integrations, and no target
-emulator has been selected for either system) -- issue #28 Phases 4/5;
-and installer/manifest support for selecting adapters independently
-(coordinated with issue #26) -- issue #28 Phase 6.
+melonDS patch (`host/remote-server` can already drive a real
+out-of-process adapter via `--adapter-ipc`, but melonDS's own patch
+still vendors its own copy of `NetServer` in-process rather than
+connecting as an adapter over this channel) -- rest of issue #28 Phase 2;
+a real 3DS or Wii U adapter (the fixtures under
+`adapter-sdk/fake_adapters/` are test doubles, not actual emulator
+integrations, and no target emulator has been selected for either
+system) -- issue #28 Phases 4/5; and installer/manifest support for
+selecting adapters independently (coordinated with issue #26) -- issue
+#28 Phase 6.
 
 ## Known gaps vs. the full spec
 

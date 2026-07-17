@@ -8,10 +8,12 @@
 #include <string>
 #include <thread>
 
+#include "host/adapter_bridge.h"
 #include "host/logging_input_sink.h"
 #include "host/logging_mic_audio_sink.h"
 #include "host/net_server.h"
 #include "host/synthetic_frame_source.h"
+#include "melonds_remote/adapter/ipc/adapter_ipc_server.h"
 
 namespace {
 volatile std::sig_atomic_t g_stopRequested = 0;
@@ -63,10 +65,49 @@ void approvalConsoleLoop(melonds_remote::host::NetServer& server) {
         }
     }
 }
+
+// Shared by both the default (synthetic-stub) and --adapter-ipc code
+// paths in main() below: starts the approval console loop if
+// applicable, blocks until SIGINT/SIGTERM, then returns so the caller
+// can tear down whatever sink/frame-source objects it constructed.
+void runUntilStopped(melonds_remote::host::NetServer& server, const melonds_remote::host::NetServerConfig& config) {
+    server.start();
+
+    if (config.authToken.empty()) {
+        std::thread(approvalConsoleLoop, std::ref(server)).detach();
+    }
+
+    std::printf("melonds-remote-server running. Press Ctrl+C to stop.\n");
+    while (!g_stopRequested) {
+        struct timespec ts{0, 100'000'000};
+        nanosleep(&ts, nullptr);
+    }
+
+    std::printf("shutting down...\n");
+    server.stop();
+}
 } // namespace
 
 int main(int argc, char** argv) {
     melonds_remote::host::NetServerConfig config;
+    // GitHub issue #28 Phase 2: when set, this process is driven by a
+    // real adapter connected over the local IPC channel
+    // (adapter-sdk/ipc/) instead of the built-in synthetic-stub
+    // LoggingInputSink/SyntheticFrameSource pair -- see
+    // docs/adr/0001-host-service-and-adapter-architecture.md section 4.
+    bool useAdapterIpc = false;
+    std::string adapterSocketPath; // empty -> defaultAdapterSocketPath()
+    // Whether --system-id/--system-name or --adapter-id/--adapter-name/
+    // --adapter-version were explicitly given -- if so, they win over
+    // whatever a connected adapter reports in --adapter-ipc mode (see
+    // below); otherwise the connected adapter's own real identity
+    // (e.g. dualdeck-synthetic-adapter's "synthetic"/"Synthetic Test
+    // System") replaces the static default/CLI-flag identity once it's
+    // known, so this host doesn't keep reporting a generic
+    // "Synthetic Test Adapter" identity once a specific real adapter is
+    // actually driving it.
+    bool systemIdentityExplicit = false;
+    bool adapterIdentityExplicit = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -110,14 +151,24 @@ int main(int argc, char** argv) {
             config.appVersion = nextArg();
         } else if (arg == "--system-id") {
             config.systemIdentity.systemId = nextArg();
+            systemIdentityExplicit = true;
         } else if (arg == "--system-name") {
             config.systemIdentity.systemName = nextArg();
+            systemIdentityExplicit = true;
         } else if (arg == "--adapter-id") {
             config.adapterIdentity.adapterId = nextArg();
+            adapterIdentityExplicit = true;
         } else if (arg == "--adapter-name") {
             config.adapterIdentity.adapterName = nextArg();
+            adapterIdentityExplicit = true;
         } else if (arg == "--adapter-version") {
             config.adapterIdentity.adapterVersion = nextArg();
+            adapterIdentityExplicit = true;
+        } else if (arg == "--adapter-ipc") {
+            useAdapterIpc = true;
+        } else if (arg == "--adapter-socket") {
+            adapterSocketPath = nextArg();
+            useAdapterIpc = true;
         } else if (arg == "--help") {
             std::printf(
                 "Usage: melonds-remote-server [--bind ADDR] [--control-port N] "
@@ -126,7 +177,8 @@ int main(int argc, char** argv) {
                 "[--discovery-port N] [--host-name NAME] [--no-discovery] "
                 "[--audio-port N] [--no-mic] [--app-version STRING] "
                 "[--system-id ID] [--system-name NAME] [--adapter-id ID] "
-                "[--adapter-name NAME] [--adapter-version STRING]\n"
+                "[--adapter-name NAME] [--adapter-version STRING] "
+                "[--adapter-ipc] [--adapter-socket PATH]\n"
                 "\n"
                 "Phase 1 prototype: serves a synthetic 256x192 test-pattern bottom\n"
                 "screen and logs received controller/touch state. Not yet wired to\n"
@@ -199,7 +251,22 @@ int main(int argc, char** argv) {
                 "'melonds'/'melonDS' instead of these flags (hardcoded in\n"
                 "RemoteServerBridge's constructor, see docs/architecture.md's\n"
                 "'Emulator identity model' section) -- these only apply to this\n"
-                "standalone binary.\n");
+                "standalone binary.\n"
+                "\n"
+                "GitHub issue #28 Phase 2: --adapter-ipc switches this process from\n"
+                "the built-in synthetic test-pattern stub to being driven by a real\n"
+                "adapter connected over a local Unix-domain-socket IPC channel (see\n"
+                "docs/adr/0001-host-service-and-adapter-architecture.md) -- e.g. the\n"
+                "dualdeck-synthetic-adapter binary, or eventually a real emulator\n"
+                "adapter. Waits indefinitely for an adapter to connect before this\n"
+                "host can accept a client (there is nothing to stream otherwise).\n"
+                "--adapter-socket PATH overrides the socket location (implies\n"
+                "--adapter-ipc); default is $XDG_RUNTIME_DIR/dualdeck/adapter.sock.\n"
+                "Microphone audio is not bridged through this path yet -- it is still\n"
+                "only ever logged, same as the default mode, regardless of --no-mic.\n"
+                "The client<->host wire protocol (kProtocolVersion) does not change\n"
+                "in this mode; only where this process gets its frames/sends its\n"
+                "input from/to internally changes.\n");
             return 0;
         } else {
             std::fprintf(stderr, "unrecognized argument: %s\n", arg.c_str());
@@ -210,26 +277,44 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, handleSignal);
     std::signal(SIGTERM, handleSignal);
 
-    melonds_remote::host::LoggingInputSink inputSink;
-    melonds_remote::host::SyntheticFrameSource frameSource(60);
-    frameSource.start();
-    melonds_remote::host::LoggingMicAudioSink micSink;
+    melonds_remote::host::LoggingMicAudioSink micSink; // unchanged either way -- see --help's note above
 
-    melonds_remote::host::NetServer server(config, inputSink, frameSource, micSink);
-    server.start();
+    if (useAdapterIpc) {
+        melonds_remote::adapter::ipc::AdapterIpcServer adapterServer(adapterSocketPath);
+        if (!adapterServer.start()) {
+            std::fprintf(stderr, "failed to start adapter IPC server -- see stderr above for why\n");
+            return 1;
+        }
 
-    if (config.authToken.empty()) {
-        std::thread(approvalConsoleLoop, std::ref(server)).detach();
+        std::printf(
+            "waiting for an adapter to connect over the local IPC channel "
+            "(e.g. dualdeck-synthetic-adapter)...\n");
+        while (!g_stopRequested && !adapterServer.hasConnectedAdapter()) {
+            struct timespec ts{0, 100'000'000};
+            nanosleep(&ts, nullptr);
+        }
+        if (g_stopRequested) {
+            adapterServer.stop();
+            return 0;
+        }
+        std::printf("adapter connected (%s/%s)\n", adapterServer.capabilities().system.systemName.c_str(),
+                    adapterServer.capabilities().adapter.adapterName.c_str());
+        if (!systemIdentityExplicit) config.systemIdentity = adapterServer.capabilities().system;
+        if (!adapterIdentityExplicit) config.adapterIdentity = adapterServer.capabilities().adapter;
+
+        melonds_remote::host::AdapterBridge bridge(adapterServer);
+        melonds_remote::host::NetServer server(config, bridge, bridge, micSink);
+        runUntilStopped(server, config);
+        adapterServer.stop();
+    } else {
+        melonds_remote::host::LoggingInputSink inputSink;
+        melonds_remote::host::SyntheticFrameSource frameSource(60);
+        frameSource.start();
+
+        melonds_remote::host::NetServer server(config, inputSink, frameSource, micSink);
+        runUntilStopped(server, config);
+        frameSource.stop();
     }
 
-    std::printf("melonds-remote-server running. Press Ctrl+C to stop.\n");
-    while (!g_stopRequested) {
-        struct timespec ts{0, 100'000'000};
-        nanosleep(&ts, nullptr);
-    }
-
-    std::printf("shutting down...\n");
-    server.stop();
-    frameSource.stop();
     return 0;
 }

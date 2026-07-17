@@ -4,6 +4,7 @@ add_library(melonds_remote_host STATIC
     src/net_server.cpp
     src/device_approval_manager.cpp
     src/logging_mic_audio_sink.cpp
+    src/adapter_bridge.cpp
 )
 
 target_include_directories(melonds_remote_host PUBLIC
@@ -11,6 +12,10 @@ target_include_directories(melonds_remote_host PUBLIC
 )
 
 target_link_libraries(melonds_remote_host PUBLIC melonds_remote_protocol)
+# adapter_bridge.h/.cpp (GitHub issue #28 Phase 2) depend on the
+# adapter-sdk contract; adapter_ipc.h's AdapterIpcServer is what
+# main.cpp's opt-in --adapter-socket mode actually constructs.
+target_link_libraries(melonds_remote_host PUBLIC melonds_remote_adapter_sdk melonds_remote_adapter_sdk_ipc)
 target_compile_features(melonds_remote_host PUBLIC cxx_std_20)
 
 find_package(Threads REQUIRED)
@@ -29,4 +34,8 @@ if(MELONDS_REMOTE_ENABLE_WARNINGS)
     target_compile_options(melonds-remote-server PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow
     )
+endif()
+
+if(MELONDS_REMOTE_BUILD_TESTS)
+    add_subdirectory(tests)
 endif()

@@ -1,8 +1,9 @@
 # ADR 0001: Host Service + Adapter Architecture
 
-**Status**: Accepted; section 3's IPC transport is now implemented (see
-its "Implemented" note below) -- see "What this ADR does not decide
-yet" for what's still outstanding.
+**Status**: Accepted; section 3's IPC transport and section 4's DS
+compatibility adapter are now implemented (see their "Implemented"
+notes below) -- see "What this ADR does not decide yet" for what's
+still outstanding.
 **Related**: GitHub issue #28 ("Architecture: Decouple DualDeck from
 melonDS and add 3DS/Wii U emulator adapters")
 
@@ -126,11 +127,18 @@ frames with a real server across two genuinely separate OS processes
 (not just an in-test-process pair) -- see
 `docs/known-limitations.md`'s matching entry for the exact verification
 performed, including a real bug this caught (see that entry's "Verified"
-section). **Still not done**: `host/remote-server`'s `NetServer` does
-not speak this channel yet -- there is no production Host Service
-listening on this socket anywhere, only the test/demo harnesses that
-prove the mechanism itself works. That wiring remains future work (see
-"What this ADR does not decide yet" below).
+section).
+
+`host/remote-server`'s `NetServer` now speaks this channel: `main.cpp`
+gained an opt-in `--adapter-ipc`/`--adapter-socket PATH` mode that
+constructs an `AdapterIpcServer`, waits for an adapter to connect, and
+hands it to `NetServer` wrapped in the `AdapterBridge` described in
+section 4 below, instead of the default `LoggingInputSink`+
+`SyntheticFrameSource` pair. The default (no-flag) invocation is
+completely unchanged -- this is additive, not a replacement. See section
+4's "Implemented" note for the compatibility-adapter details and
+`docs/known-limitations.md` for the real client/server/adapter
+cross-process verification performed against this mode.
 
 For an adapter that runs **in the same process** as the Host Service
 (today's melonDS patch, and the fake fixtures above), no IPC is needed
@@ -191,17 +199,51 @@ these explicitly"), the chosen option is:
 > A compatibility adapter that maps the old DS messages into the new
 > internal model.
 
+**Implemented** (`host/remote-server/src/adapter_bridge.{h,cpp}`,
+GitHub issue #28 Phase 2): `AdapterBridge` implements the existing
+`host::IEmulatorInputSink`/`host::IFrameSource` interfaces by
+translating to/from `melonds_remote::adapter::IEmulatorAdapter` --
+exactly the compatibility adapter this section describes. It picks one
+target surface at construction time (preferring the first
+`remotelyDisplayed` surface, falling back to the first declared one),
+maps `ControllerState.dsButtons` to `GenericButton` via an explicit
+bit-by-bit table (their bit layouts coincide for A/B/X/Y/D-pad/L/R but
+diverge at Start/Select, since `GenericButton` reserves bits for
+L2/R2/L3/R3 that DS has no equivalent of), and passes
+`EmulatorAction`/`GenericEmulatorAction` straight through as a raw
+`uint32_t` since those two enums were deliberately given identical bit
+positions. Mic audio is **not** bridged in this phase -- see
+`docs/known-limitations.md`.
+
+`host/remote-server/src/main.cpp` gained an opt-in
+`--adapter-ipc`/`--adapter-socket PATH` mode: it starts an
+`AdapterIpcServer`, blocks until an adapter connects, auto-detects
+`SystemIdentity`/`AdapterIdentity` from the connected adapter's
+capabilities (unless the corresponding `--system-*`/`--adapter-*` flags
+were explicitly given), then constructs `NetServer` with an
+`AdapterBridge` wrapping that adapter instead of the default
+`LoggingInputSink`+`SyntheticFrameSource` pair. The wire protocol
+(`protocol.h`, `kProtocolVersion` still 6) and `NetServer` itself are
+**completely unchanged** -- confirmed by re-running the existing
+`tests/smoke_test.py`/`tests/device_approval_smoke_test.py` against the
+default (no-flag) invocation after every change in this phase, and by a
+real cross-process run (a genuine SDL3 `melonds-remote-client`, a real
+`melonds-remote-server --adapter-socket`, and the real
+`dualdeck-synthetic-adapter` binary as three separate OS processes) that
+confirmed the client renders live, animating frames sourced entirely
+from the separate adapter process. See `docs/known-limitations.md` for
+the exact verification performed.
+
 Concretely: the live wire protocol (`protocol.h`, `kProtocolVersion 6`,
 `ControllerState.dsButtons` + the fixed `VideoFrame` payload) is **not
 changed by this ADR or this phase** and keeps working exactly as today.
-When Phase 2/3 extract the Host Service, `NetServer`'s existing
-DS-specific parsing stays in place at the wire boundary; a new,
-small "DS compatibility adapter" translates a parsed `ControllerState`
-into a `GenericInputState` (and a raw DS framebuffer into a
-single-surface `SurfaceFrame`) before it reaches the generic
-`IEmulatorAdapter` boundary, and translates back the other direction for
-anything the adapter needs to report outward. A DS/melonDS client never
-has to know the internal model changed underneath it.
+`NetServer`'s existing DS-specific parsing stays in place at the wire
+boundary; `AdapterBridge` translates a parsed `ControllerState` into a
+`GenericInputState` (and a raw DS framebuffer into a single-surface
+`SurfaceFrame`) before it reaches the generic `IEmulatorAdapter`
+boundary, and translates back the other direction for anything the
+adapter needs to report outward. A DS/melonDS client never has to know
+the internal model changed underneath it.
 
 This was chosen over introducing a parallel `kProtocolVersion 7`
 generic wire format alongside v6 because there is exactly one wire
@@ -233,16 +275,17 @@ the (larger, riskier) Host Service extraction; nothing about today's
 live client/host behavior changes, so this phase carries effectively
 zero regression risk to the working v0.1 system.
 
-**Negative / accepted cost**: for a while, two independent sets of
-types exist side by side -- the production wire types in `protocol.h`
-(`DSButton`, `EmulatorAction`, `ControllerState`) and the new generic
-contract types in `adapter-sdk/` (`GenericButton`,
-`GenericEmulatorAction`, `GenericInputState`) -- with no code path
-connecting them yet (the DS compatibility adapter described above is
-Phase 2/3 work, not built here). Anyone touching input-related code
-during this window must be careful not to conflate the two; this ADR
-and the header comments on both sides call out the distinction
-explicitly to reduce that risk.
+**Negative / accepted cost**: two independent sets of types still exist
+side by side -- the production wire types in `protocol.h` (`DSButton`,
+`EmulatorAction`, `ControllerState`) and the generic contract types in
+`adapter-sdk/` (`GenericButton`, `GenericEmulatorAction`,
+`GenericInputState`). `AdapterBridge` now connects them, but only for
+the opt-in `--adapter-ipc` mode -- the default invocation still uses
+`LoggingInputSink`/`SyntheticFrameSource` directly, and melonDS's own
+patch (`RemoteServerBridge`) does not go through `AdapterBridge` at all
+yet. Anyone touching input-related code must still be careful not to
+conflate the two type sets; this ADR and the header comments on both
+sides call out the distinction explicitly to reduce that risk.
 
 ## What this ADR does not decide yet
 
@@ -250,15 +293,15 @@ Explicitly deferred, tracked as later phases on issue #28 itself, not
 attempted here:
 
 - Actually extracting `NetServer`/discovery/auth/diagnostics out of the
-  melonDS-specific patch into a standalone Host Service process, and
-  making that process listen on the `AdapterIpcServer` socket described
-  in section 3 (which exists and is tested as a standalone component,
-  but nothing in `host/remote-server` constructs or starts one yet) --
-  issue #28 Phase 2's remaining work.
-- Implementing the DS compatibility adapter described in section 4 --
-  only the approach is decided; `protocol.h`'s wire format and
-  `host/remote-server`'s `NetServer` are completely unchanged by this
-  phase.
+  melonDS-specific patch into a standalone Host Service process.
+  `host/remote-server` already builds and runs as its own binary
+  (`melonds-remote-server`) and can now drive a real out-of-process
+  adapter via `--adapter-ipc`, but melonDS's own patch
+  (`RemoteServerBridge`) still vendors its own copy of `NetServer`
+  in-process rather than talking to a standalone Host Service over this
+  channel -- making melonDS itself connect as an out-of-process adapter
+  is the natural next milestone, now that `AdapterBridge` and the IPC
+  mechanism are both proven.
 - A real 3DS or Wii U adapter (issue #28 Phases 4/5) -- the fake
   fixtures here are capability-shape test doubles only, built with no
   target emulator selected for either system.

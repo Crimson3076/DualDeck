@@ -2205,9 +2205,10 @@ contract (`adapter-sdk/`) and its ADR in place, this entry implements
 the ADR's Unix-domain-socket IPC decision for real, plus a genuine
 out-of-process adapter proving it -- issue #28 Phase 2's "make the
 synthetic adapter connect through the same contract real adapters will
-use" checklist item. **`host/remote-server`'s `NetServer` still does
-not use any of this in production** -- see below for exactly what's
-still deferred.
+use" checklist item. **At the time this entry was written,
+`host/remote-server`'s `NetServer` did not yet use any of this in
+production** -- see below for exactly what was still deferred; the next
+entry below closes that gap.
 
 **What this implements**: `adapter-sdk/ipc/` -- a versioned wire format
 (`ipc_protocol.h/.cpp`, distinct magic `"DAI1"` from the client<->host
@@ -2267,14 +2268,108 @@ block until the first disconnects under this "one at a time" design,
 not fail immediately.
 
 **Deliberately not done in this phase** (tracked as issue #28 Phase 2's
-remaining work, not attempted here): wiring any of this into
-`host/remote-server`'s actual `NetServer`/`main.cpp` -- there is no
-production Host Service listening on this socket anywhere yet, only the
-test suite and the manual verification harness described above. The
-live client<->host wire protocol (`protocol.h`, `kProtocolVersion 6`)
-and the melonDS patch remain completely untouched, confirmed the same
-way as the previous two entries (`git diff --stat` showing only new
-files under `adapter-sdk/` plus this doc and the ADR).
+remaining work at the time, not attempted in this entry): wiring any of
+this into `host/remote-server`'s actual `NetServer`/`main.cpp` -- at
+this point there was no production Host Service listening on this
+socket anywhere yet, only the test suite and the manual verification
+harness described above. The live client<->host wire protocol
+(`protocol.h`, `kProtocolVersion 6`) and the melonDS patch remained
+completely untouched, confirmed the same way as the previous two entries
+(`git diff --stat` showing only new files under `adapter-sdk/` plus this
+doc and the ADR). See the entry immediately below for the follow-up that
+closed this gap.
+
+## AdapterBridge wires the adapter contract into the real Host Service (GitHub issue #28, rest of Phase 2)
+
+Continues the entry above (same GitHub issue #28): the previous entry
+built the IPC mechanism but explicitly stopped short of wiring it into
+`host/remote-server`'s actual `NetServer`/`main.cpp`. This entry closes
+that gap -- issue #28 Phase 2's "make NetServer able to drive a real
+out-of-process adapter" checklist item.
+
+**What this implements**: `host/remote-server/src/adapter_bridge.{h,cpp}`
+adds `AdapterBridge`, which implements the existing
+`host::IEmulatorInputSink`/`host::IFrameSource` interfaces by
+translating to/from `melonds_remote::adapter::IEmulatorAdapter` -- the
+"DS compatibility adapter" the ADR (`docs/adr/0001-...md`) already
+decided on, now actually built. It picks one target video surface at
+construction time (the first `remotelyDisplayed` surface, falling back
+to the first declared surface if none is flagged -- verified against
+`FakeThreeDsAdapter`, which declares a `locallyDisplayed` "top" surface
+before its `remotelyDisplayed` "bottom" surface, to prove the bridge
+isn't just taking whichever surface happens to be listed first), maps
+`ControllerState.dsButtons` to `GenericButton` via an explicit
+bit-by-bit table (deliberately not a shift/mask trick, since the two
+enums' bit layouts coincide for A/B/X/Y/D-pad/L/R but diverge at
+Start/Select -- `GenericButton` reserves bits 10-13 for L2/R2/L3/R3,
+concepts the DS has none of, pushing Start/Select to bits 14/15 where
+`DSButton` has them at bits 10/11), and passes
+`EmulatorAction`/`GenericEmulatorAction` straight through as a raw
+`uint32_t` since those two enums were deliberately given identical bit
+positions when the generic contract was designed.
+
+`host/remote-server/src/main.cpp` gained an opt-in
+`--adapter-ipc`/`--adapter-socket PATH` flag pair: when given, the
+server starts an `AdapterIpcServer`, blocks until a real adapter
+connects over the local Unix socket, auto-detects
+`SystemIdentity`/`AdapterIdentity` from the connected adapter's reported
+capabilities (unless the corresponding `--system-id`/`--system-name`/
+`--adapter-id`/`--adapter-name`/`--adapter-version` flags were given
+explicitly, in which case those win), then constructs `NetServer` with
+an `AdapterBridge` wrapping that adapter instead of the default
+`LoggingInputSink`+`SyntheticFrameSource` pair. **The default,
+no-flag invocation is completely unchanged** -- this is purely additive.
+
+**Deliberately not done in this phase**: mic audio is not bridged --
+`GenericInputState` only carries a `micActive` bool, not raw PCM
+samples, so actually forwarding audio through `IEmulatorAdapter` would
+need a contract change not made here; `--adapter-ipc` mode keeps using
+the same `LoggingMicAudioSink` as the default mode (mic is logged, never
+injected, in either mode on the standalone host -- this was already true
+before this milestone). There is also no host-side notification yet if
+the adapter disconnects mid-session -- frames/input just silently stop
+flowing via existing no-op/false-return paths; this is deferred until
+melonDS itself becomes a real out-of-process adapter, since that's when
+this gap first has real consequences for an actual user session.
+
+**Verified**: 11 new unit tests (`host/remote-server/tests/test_adapter_bridge.cpp`)
+covering both target-surface-selection cases above, every individual
+`DSButton`→`GenericButton` mapping (data-driven, one case per button),
+a button-combination test that also asserts the DS-unused L2 bit stays
+clear, touch-active/inactive translation, `emulatorActions` bit-identical
+passthrough, sequence/timestamp passthrough, `releaseAll()` reaching the
+wrapped adapter, and `getLatestFrame()`'s both false-when-empty and
+proxies-pushed-frame behavior -- all run against the same
+`FakeDsAdapter`/`FakeThreeDsAdapter` fixtures from the earlier Phase 1
+entry, so no socket is needed for this layer's own tests.
+
+**Beyond the unit tests, a real cross-process end-to-end run was
+performed** with three genuinely separate OS processes and no test
+harness standing in for any of them: the real `melonds-remote-server`
+binary (`--bind 127.0.0.1 --adapter-socket <path>`), the real
+`dualdeck-synthetic-adapter` binary pointed at that same socket, and the
+real SDL3 `melonds-remote-client` binary (run under Xvfb, exactly the
+same verification pattern used for the identity-model milestone
+earlier). The client's log showed a genuine `[net] connected` against
+the adapter-driven server; two screenshots taken one second apart while
+the adapter was running showed different pixel content (the synthetic
+adapter's animated test pattern actually changing), confirming live
+frames are reaching the real client end-to-end from a separate adapter
+process through the unchanged wire protocol. (An earlier pair of
+screenshots, taken after the synthetic adapter process had already
+exited, came back byte-identical -- a useful negative control showing
+the client correctly holds its last frame rather than fabricating motion
+when the adapter goes away, matching the "silently stop flowing" gap
+noted above.) Input-path coverage for this specific run relied on the
+unit tests above plus the previous entry's real cross-process IPC tests
+rather than a live keypress probe, since the translation and transport
+legs are each already independently proven and a live probe would only
+be re-confirming the same wiring a third time.
+
+Existing `tests/smoke_test.py` and `tests/device_approval_smoke_test.py`
+were re-run against the default (no `--adapter-ipc`) invocation after
+every change in this milestone and continued to pass, confirming
+today's released client/host behavior is unaffected.
 
 ## Things intentionally out of scope for v0.1
 
