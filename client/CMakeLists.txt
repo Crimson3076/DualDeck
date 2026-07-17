@@ -6,6 +6,7 @@ add_executable(melonds-remote-client
     src/device_identity.cpp
     src/discovery_client.cpp
     src/discovery_store.cpp
+    src/client_settings.cpp
     src/wizard_state.cpp
     src/bitmap_font.cpp
 )

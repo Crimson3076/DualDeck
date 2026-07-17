@@ -48,6 +48,7 @@
 #include <vector>
 
 #include "bitmap_font.h"
+#include "client_settings.h"
 #include "device_identity.h"
 #include "discovery_client.h"
 #include "discovery_store.h"
@@ -245,10 +246,11 @@ void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHos
     SDL_RenderPresent(renderer);
 }
 
-void renderPauseMenu(SDL_Renderer* renderer, const std::vector<std::string>& items, int selectedIndex) {
+void renderPauseMenu(SDL_Renderer* renderer, const std::vector<std::string>& items, int selectedIndex,
+                     const std::string& title = "MENU", const std::string& statusLine = "") {
     SDL_SetRenderDrawColor(renderer, 20, 20, 24, 220);
     SDL_RenderClear(renderer);
-    renderCenteredBitmapText(renderer, "MENU", 100.0f, 4, SDL_Color{220, 220, 220, 255});
+    renderCenteredBitmapText(renderer, title, 100.0f, 4, SDL_Color{220, 220, 220, 255});
 
     constexpr float kRowHeight = 70.0f;
     constexpr int kPixelSize = 4;
@@ -271,7 +273,11 @@ void renderPauseMenu(SDL_Renderer* renderer, const std::vector<std::string>& ite
         renderCenteredBitmapText(renderer, items[i], rowY, kPixelSize, color);
     }
 
-    renderCenteredBitmapText(renderer, "D-PAD TO MOVE, A TO SELECT, L3+R3 TO CLOSE",
+    if (!statusLine.empty()) {
+        renderCenteredBitmapText(renderer, statusLine, static_cast<float>(kWindowHeight) - 125.0f, 2,
+                                  SDL_Color{220, 90, 90, 255});
+    }
+    renderCenteredBitmapText(renderer, "D-PAD TO MOVE, A TO SELECT, B TO GO BACK",
                               static_cast<float>(kWindowHeight) - 80.0f, 2,
                               SDL_Color{140, 140, 140, 255});
     SDL_RenderPresent(renderer);
@@ -487,8 +493,8 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
 // that walks a new user through connecting to a host and confirming
 // video/controller/touch all work, instead of dropping them straight onto
 // the discovery screen with no explanation. Runs once automatically (see
-// wizard_state.h) and is reachable again afterward via "SETUP WIZARD" in
-// main()'s pause menu.
+// wizard_state.h) and is reachable again afterward from the Settings screen
+// in main()'s pause menu.
 //
 // Deliberately out of scope, documented in docs/known-limitations.md
 // rather than silently skipped: audio/microphone testing (this project has
@@ -1310,13 +1316,15 @@ int main(int argc, char** argv) {
     }
 
     // First-run setup wizard (GitHub issue #19): runs once automatically,
-    // then only reachable again via "SETUP WIZARD" in the pause menu below
-    // (see wizard_state.h). Skipped entirely for an explicit --host/
+    // then only reachable again from the Settings screen in the pause menu
+    // below (see wizard_state.h). Skipped entirely for an explicit --host/
     // positional address, same reasoning as "CHANGE HOST" being hidden in
     // that case -- an explicit host address means scripted/CI use, not an
     // interactive first-time user.
     const std::string wizardStatePath = defaultWizardStatePath();
     bool runWizardNow = !hostExplicit && !isSetupComplete(wizardStatePath);
+    const std::string clientSettingsPath = defaultClientSettingsPath();
+    ClientSettings clientSettings = loadClientSettings(clientSettingsPath);
 
     // L3+R3 "open menu" chord state -- see kMenuChordHoldUs's
     // declaration above for why a deliberate hold is required.
@@ -1443,10 +1451,22 @@ int main(int argc, char** argv) {
         // has no host list to go back to.
         std::vector<std::string> menuItems = {"RESUME"};
         if (!hostExplicit) menuItems.push_back("CHANGE HOST");
-        if (!hostExplicit) menuItems.push_back("SETUP WIZARD");
+        menuItems.push_back("SETTINGS");
         menuItems.push_back("EXIT");
         bool menuActive = false;
         int menuSelectedIndex = 0;
+        bool settingsActive = false;
+        int settingsSelectedIndex = 0;
+        bool settingsSaveFailed = false;
+        auto settingsMenuItems = [&]() {
+            std::vector<std::string> items{
+                std::string("AUTO UPDATE ON LAUNCH: ") +
+                    (clientSettings.autoUpdateOnLaunch ? "ON" : "OFF"),
+            };
+            if (!hostExplicit) items.push_back("RUN SETUP WIZARD");
+            items.push_back("BACK");
+            return items;
+        };
         bool changeHostRequested = false;
         bool setupWizardRequested = false;
 
@@ -1476,7 +1496,7 @@ int main(int argc, char** argv) {
                         break;
                     case SDL_EVENT_FINGER_DOWN:
                     case SDL_EVENT_FINGER_MOTION: {
-                        if (menuActive) break;
+                        if (menuActive || settingsActive) break;
                         double px = static_cast<double>(event.tfinger.x) * kWindowWidth;
                         double py = static_cast<double>(event.tfinger.y) * kWindowHeight;
                         auto mapped = mapPointToDSCoords(px, py, dsRect);
@@ -1506,7 +1526,7 @@ int main(int argc, char** argv) {
                         // delivered as SDL_EVENT_FINGER_DOWN above -- skip it
                         // here to avoid double-handling the same physical
                         // touch as two separate input sources.
-                        if (menuActive || event.button.which == SDL_TOUCH_MOUSEID ||
+                        if (menuActive || settingsActive || event.button.which == SDL_TOUCH_MOUSEID ||
                             event.button.button != SDL_BUTTON_LEFT) {
                             break;
                         }
@@ -1525,7 +1545,8 @@ int main(int argc, char** argv) {
                         // held isn't a touch, unlike SDL_EVENT_FINGER_MOTION
                         // (a touchscreen has no "hover" state to generate
                         // motion events for in the first place).
-                        if (menuActive || !mouseTouchDown || event.motion.which == SDL_TOUCH_MOUSEID) {
+                        if (menuActive || settingsActive || !mouseTouchDown ||
+                            event.motion.which == SDL_TOUCH_MOUSEID) {
                             break;
                         }
                         if (auto mapped = mapPointToDSCoords(event.motion.x, event.motion.y, dsRect)) {
@@ -1547,7 +1568,6 @@ int main(int argc, char** argv) {
                         }
                         break;
                     case SDL_EVENT_KEY_DOWN: {
-                        int count = static_cast<int>(menuItems.size());
                         // Only honored with no gamepad connected (Desktop
                         // Mode/keyboard testing convenience). On real Steam
                         // Deck hardware a gamepad is always present, and
@@ -1561,11 +1581,37 @@ int main(int argc, char** argv) {
                         // ignored and only the real L3+R3 gamepad
                         // chord can open the menu.
                         if (!gamepad && event.key.key == SDLK_ESCAPE) {
-                            menuActive = !menuActive;
-                            menuSelectedIndex = 0;
+                            if (settingsActive) {
+                                settingsActive = false;
+                                menuActive = true;
+                            } else {
+                                menuActive = !menuActive;
+                                menuSelectedIndex = 0;
+                            }
+                        } else if (settingsActive && event.key.key == SDLK_UP) {
+                            int count = static_cast<int>(settingsMenuItems().size());
+                            settingsSelectedIndex = (settingsSelectedIndex + count - 1) % count;
+                        } else if (settingsActive && event.key.key == SDLK_DOWN) {
+                            int count = static_cast<int>(settingsMenuItems().size());
+                            settingsSelectedIndex = (settingsSelectedIndex + 1) % count;
+                        } else if (settingsActive && event.key.key == SDLK_RETURN) {
+                            const std::string picked =
+                                settingsMenuItems()[static_cast<size_t>(settingsSelectedIndex)];
+                            if (picked.rfind("AUTO UPDATE ON LAUNCH:", 0) == 0) {
+                                clientSettings.autoUpdateOnLaunch = !clientSettings.autoUpdateOnLaunch;
+                                settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
+                            } else if (picked == "RUN SETUP WIZARD") {
+                                setupWizardRequested = true;
+                                runningInner = false;
+                            } else if (picked == "BACK") {
+                                settingsActive = false;
+                                menuActive = true;
+                            }
                         } else if (menuActive && event.key.key == SDLK_UP) {
+                            int count = static_cast<int>(menuItems.size());
                             menuSelectedIndex = (menuSelectedIndex + count - 1) % count;
                         } else if (menuActive && event.key.key == SDLK_DOWN) {
+                            int count = static_cast<int>(menuItems.size());
                             menuSelectedIndex = (menuSelectedIndex + 1) % count;
                         } else if (menuActive && event.key.key == SDLK_RETURN) {
                             const std::string& picked = menuItems[static_cast<size_t>(menuSelectedIndex)];
@@ -1574,9 +1620,10 @@ int main(int argc, char** argv) {
                             } else if (picked == "CHANGE HOST") {
                                 changeHostRequested = true;
                                 runningInner = false;
-                            } else if (picked == "SETUP WIZARD") {
-                                setupWizardRequested = true;
-                                runningInner = false;
+                            } else if (picked == "SETTINGS") {
+                                menuActive = false;
+                                settingsActive = true;
+                                settingsSelectedIndex = 0;
                             } else if (picked == "EXIT") {
                                 quitApp = true;
                                 runningInner = false;
@@ -1585,7 +1632,30 @@ int main(int argc, char** argv) {
                         break;
                     }
                     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-                        if (menuActive) {
+                        if (settingsActive) {
+                            int count = static_cast<int>(settingsMenuItems().size());
+                            if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP) {
+                                settingsSelectedIndex = (settingsSelectedIndex + count - 1) % count;
+                            } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_DOWN) {
+                                settingsSelectedIndex = (settingsSelectedIndex + 1) % count;
+                            } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH) {
+                                const std::string picked =
+                                    settingsMenuItems()[static_cast<size_t>(settingsSelectedIndex)];
+                                if (picked.rfind("AUTO UPDATE ON LAUNCH:", 0) == 0) {
+                                    clientSettings.autoUpdateOnLaunch = !clientSettings.autoUpdateOnLaunch;
+                                    settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
+                                } else if (picked == "RUN SETUP WIZARD") {
+                                    setupWizardRequested = true;
+                                    runningInner = false;
+                                } else if (picked == "BACK") {
+                                    settingsActive = false;
+                                    menuActive = true;
+                                }
+                            } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_EAST) {
+                                settingsActive = false;
+                                menuActive = true;
+                            }
+                        } else if (menuActive) {
                             int count = static_cast<int>(menuItems.size());
                             if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP) {
                                 menuSelectedIndex = (menuSelectedIndex + count - 1) % count;
@@ -1598,9 +1668,10 @@ int main(int argc, char** argv) {
                                 } else if (picked == "CHANGE HOST") {
                                     changeHostRequested = true;
                                     runningInner = false;
-                                } else if (picked == "SETUP WIZARD") {
-                                    setupWizardRequested = true;
-                                    runningInner = false;
+                                } else if (picked == "SETTINGS") {
+                                    menuActive = false;
+                                    settingsActive = true;
+                                    settingsSelectedIndex = 0;
                                 } else if (picked == "EXIT") {
                                     quitApp = true;
                                     runningInner = false;
@@ -1627,13 +1698,24 @@ int main(int argc, char** argv) {
             if (menuChordHeld) {
                 if (menuChordSinceUs == 0) menuChordSinceUs = nowForChordUs;
                 if (!menuChordFired && nowForChordUs - menuChordSinceUs >= kMenuChordHoldUs) {
-                    menuActive = !menuActive;
-                    menuSelectedIndex = 0;
+                    if (settingsActive) {
+                        settingsActive = false;
+                        menuActive = false;
+                    } else {
+                        menuActive = !menuActive;
+                        menuSelectedIndex = 0;
+                    }
                     menuChordFired = true;
                 }
             } else {
                 menuChordSinceUs = 0;
                 menuChordFired = false;
+            }
+
+            if (settingsActive) {
+                renderPauseMenu(renderer, settingsMenuItems(), settingsSelectedIndex, "SETTINGS",
+                                settingsSaveFailed ? "COULD NOT SAVE SETTINGS" : "");
+                continue;
             }
 
             if (menuActive) {

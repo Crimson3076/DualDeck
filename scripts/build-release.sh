@@ -131,7 +131,14 @@ client_root="$(cd .. && pwd)"
 # so the rest of this launch (library check, the binary itself) runs the
 # new version, not whatever was already loaded into this process image.
 update_script="$(dirname "${client_root}")/check-for-updates.sh"
-if [[ -x "${update_script}" ]]; then
+settings_file="${HOME}/.config/melonds-remote-client/settings.conf"
+auto_update_on_launch=1
+if [[ -f "${settings_file}" ]] &&
+   grep -Eq '^[[:space:]]*auto_update_on_launch[[:space:]]*=[[:space:]]*(0|false|off)[[:space:]]*$' \
+       "${settings_file}"; then
+    auto_update_on_launch=0
+fi
+if (( auto_update_on_launch )) && [[ -x "${update_script}" ]]; then
     if update_report="$("${update_script}" 2>/dev/null)" && \
        echo "${update_report}" | grep -q "update available:"; then
         echo "melonDS Remote: update available, installing automatically..." >&2

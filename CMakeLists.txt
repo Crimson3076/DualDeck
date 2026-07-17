@@ -14,6 +14,10 @@ enable_testing()
 
 add_subdirectory(protocol)
 
+if(MELONDS_REMOTE_BUILD_TESTS)
+    add_subdirectory(client/tests)
+endif()
+
 if(MELONDS_REMOTE_BUILD_HOST)
     add_subdirectory(host/remote-server)
 endif()

@@ -20,8 +20,10 @@ gameplay performance. If video still doesn't show up, see
 picking a host (or entering its address manually), connecting, and
 testing video/controller/touch, entirely with the D-pad and face
 buttons -- no typing needed unless you choose manual entry. It only runs
-automatically once; pick "SETUP WIZARD" from the L3+R3 pause menu
-to run it again later (e.g. after switching to a different host). See
+automatically once; open **Settings > Run Setup Wizard** from the L3+R3
+pause menu to run it again later (e.g. after switching to a different
+host). The same Settings screen lets you turn automatic update checks on
+launch on or off. See
 `docs/known-limitations.md`'s "First-run setup wizard" entry for what it
 does and doesn't cover -- in particular, it has not yet been run on real
 Steam Deck hardware, only built and exercised in this project's own
