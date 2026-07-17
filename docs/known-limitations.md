@@ -1807,6 +1807,74 @@ mouse device, which is the same SDL event path a Steam Input-emulated
 mouse would produce, but the actual trackpad-to-mouse mapping step
 itself is unverified).
 
+## Client-side exit-emulation menu (GitHub issue #25)
+
+User request: "Client should have a secondary 'exit emulation' button, so
+that it closes on the host device. when pressing the button, it should
+prompt the user to either exit the current ROM, or exit the entire
+application." The existing L3+R3 pause menu only offered `RESUME`,
+`CHANGE HOST`, `SETUP WIZARD`, and a client-local `EXIT` (which just
+closes the client app, leaving the host's melonDS running) -- there was
+no way to affect the *host* from the Deck at all.
+
+Added a new `EXIT EMULATION` entry to that menu which opens a submenu
+(`EXIT ROM` / `EXIT MELONDS ENTIRELY` / `CANCEL`) rather than acting
+immediately, matching the issue's explicit request for a confirmation
+prompt. `protocol.h` gained `EmulatorAction_QuitApplication` (bit 8) as a
+new value within the existing `emulatorActions` bitmask field -- since
+this only adds a bitmask value and doesn't change wire *layout*, it did
+not need a `kProtocolVersion` bump (unlike a new field, e.g.
+`HelloPayload::appVersion` from earlier work). The pre-existing but
+previously-unused `EmulatorAction_QuitSession` (bit 7) was repurposed/
+documented as "eject the current ROM."
+
+Picking either option sends the corresponding action bit, resent for
+`kPendingEmulatorActionUs` (250ms, roughly 28 packets at the ~120Hz
+`ControllerState` send rate) rather than in a single packet, matching the
+existing resend-for-reliability convention used elsewhere in the client
+for one-shot actions over lossy UDP. On the host side,
+`EmuInstance::inputProcess()` (`EmuInstanceInput.cpp`, in the melonDS
+patch) can't just treat "bit is set this frame" as the trigger given that
+resend window -- it would fire repeatedly for one menu confirmation -- so
+it edge-detects against a new persistent `lastRemoteEmulatorActions`
+member (`EmuInstance.h`) and only acts on the rising edge. melonDS has no
+native hotkey (`HK_*`) equivalent for "eject cart" or "quit app" -- only
+Qt menu-action slots (`MainWindow::onEjectCart()`/`onQuit()`, both
+private) -- so unlike the other emulator actions here (which ride
+`hotkeyMask`), these two are invoked directly via
+`QMetaObject::invokeMethod(mainWindow, "...", Qt::QueuedConnection)` from
+the emulation thread, the same cross-thread marshaling pattern
+`EmuInstance.cpp`'s `startRemoteServer()` already uses for its
+pending-approval dialog and screen-layout-change callback. Qt's
+meta-object system exposes slots for invocation by name regardless of
+C++ access control, so this needed no changes to `Window.h`'s access
+specifiers.
+
+**Verified**: protocol, host, and client all build clean with
+`-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror`; `ctest` passes.
+The regenerated melonDS patch applies cleanly to a fresh pristine clone
+of the base commit and a full Release build of the patched melonDS
+succeeds. End-to-end, driven for real: a minimal Python fake host (same
+technique as the issue #21/#23 entries above) plus the actual client
+binary running under Xvfb, with `xdotool`-injected keyboard input
+navigating Escape -> Down -> Enter -> Enter through the real menu/submenu
+UI. Confirmed all three submenu outcomes by decoding the real
+`ControllerState` packets the client sent: picking `EXIT ROM` sends
+`emulatorActions=0x0080` (`EmulatorAction_QuitSession`) for exactly the
+expected resend window, then correctly stops (returns to `0x0000`);
+picking `EXIT MELONDS ENTIRELY` likewise sends `0x0100`
+(`EmulatorAction_QuitApplication`) and stops; picking `CANCEL` returns to
+the main menu (confirmed via screenshot) without ever sending either bit.
+**Not verified**: real Steam Deck hardware, and the deepest host-side
+behavior specifically -- that `onEjectCart()`/`onQuit()` firing actually
+ejects the cart/closes melonDS's Qt window when driven by a real client
+connected to the real patched melonDS binary (verified only that the
+patched binary builds and links correctly, and that
+`EmuInstanceInput.cpp`'s edge-detection/invokeMethod logic itself is
+correct C++ by inspection and compilation, not by observing melonDS's
+actual UI react to it in this sandbox, which has no way to load a ROM
+and drive a full Qt GUI end-to-end).
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

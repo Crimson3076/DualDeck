@@ -373,7 +373,7 @@ index a8b1021..7f7c7b2 100755
  std::string EmuInstance::instanceFileSuffix()
  {
 diff --git a/src/frontend/qt_sdl/EmuInstance.h b/src/frontend/qt_sdl/EmuInstance.h
-index a1eab0e..eef7539 100755
+index a1eab0e..c2c7721 100755
 --- a/src/frontend/qt_sdl/EmuInstance.h
 +++ b/src/frontend/qt_sdl/EmuInstance.h
 @@ -21,6 +21,9 @@
@@ -400,7 +400,7 @@ index a1eab0e..eef7539 100755
  const int kMaxWindows = 4;
  
  enum
-@@ -378,6 +388,44 @@ private:
+@@ -378,6 +388,55 @@ private:
      bool isTouching;
      melonDS::u16 touchX, touchY;
  
@@ -442,11 +442,22 @@ index a1eab0e..eef7539 100755
 +    // can't just be "isTouching = remote.touchActive" every frame).
 +    bool remoteTouchActive = false;
 +
++    // Rising-edge state for melonds_remote::EmulatorAction_QuitSession/
++    // _QuitApplication (GitHub issue #25 in the melonds-remote repo: a
++    // client-side "exit emulation" menu). The client resends whichever
++    // action bit is set for a short window (its own resend-for-
++    // reliability policy over UDP), not just one packet, so this can't
++    // reuse the local `bool` edge-tracking hotkeyMask already gets from
++    // EmuThread.cpp -- inputProcess() below needs its own previous-value
++    // comparison to fire the eject/quit exactly once per menu
++    // confirmation instead of once per packet.
++    uint16_t lastRemoteEmulatorActions = 0;
++
      friend class EmuThread;
      friend class MainWindow;
  };
 diff --git a/src/frontend/qt_sdl/EmuInstanceInput.cpp b/src/frontend/qt_sdl/EmuInstanceInput.cpp
-index a0bc623..1d43501 100644
+index a0bc623..bf8133d 100644
 --- a/src/frontend/qt_sdl/EmuInstanceInput.cpp
 +++ b/src/frontend/qt_sdl/EmuInstanceInput.cpp
 @@ -25,8 +25,37 @@
@@ -487,7 +498,7 @@ index a0bc623..1d43501 100644
  const char* EmuInstance::buttonNames[12] =
  {
      "A",
-@@ -454,6 +483,72 @@ void EmuInstance::inputProcess()
+@@ -454,6 +483,106 @@ void EmuInstance::inputProcess()
      }
  
      hotkeyMask = keyHotkeyMask | joyHotkeyMask;
@@ -546,15 +557,49 @@ index a0bc623..1d43501 100644
 +        }
 +
 +        // Only the emulator actions with an existing, unambiguous hotkey
-+        // equivalent are wired up so far; save/load state and the rest of
-+        // spec section 7.5 are intentionally not implemented yet (see
-+        // docs/known-limitations.md in the melonds-remote repository).
++        // equivalent are wired up via hotkeyMask so far; save/load state
++        // and the rest of spec section 7.5 are intentionally not
++        // implemented yet (see docs/known-limitations.md in the
++        // melonds-remote repository). QuitSession/QuitApplication just
++        // below are the two exceptions -- melonDS has no *hotkey*
++        // equivalent for "eject the cart" or "quit the app" at all, only
++        // Qt menu actions, so they're handled separately rather than
++        // through hotkeyMask.
 +        if (remote.emulatorActions & melonds_remote::EmulatorAction_PauseResume)
 +            hotkeyMask |= (1 << HK_Pause);
 +        if (remote.emulatorActions & melonds_remote::EmulatorAction_FastForward)
 +            hotkeyMask |= (1 << HK_FastForward);
 +        if (remote.emulatorActions & melonds_remote::EmulatorAction_SwapScreens)
 +            hotkeyMask |= (1 << HK_SwapScreens);
++
++        // GitHub issue #25: client-side "exit emulation" menu, letting the
++        // user eject the ROM (QuitSession) or close melonDS entirely
++        // (QuitApplication) from the Steam Deck without needing to be at
++        // the host. Edge-detected against lastRemoteEmulatorActions, not
++        // "bit is set this frame" -- the client resends its confirmed
++        // choice for a short window to survive UDP loss, not just one
++        // packet (see that member's declaration in EmuInstance.h), so a
++        // naive "is the bit set" check here would fire onEjectCart()/
++        // onQuit() repeatedly for a single menu confirmation. Both are Qt
++        // UI-thread slots (they touch MainWindow/EmuThread state), so
++        // they're invoked via QMetaObject::invokeMethod rather than
++        // called directly from this function, which runs on the
++        // emulation thread -- same marshaling pattern already used by
++        // the pending-approval dialog and screen-layout-change callback
++        // in EmuInstance.cpp's startRemoteServer(). onEjectCart()/onQuit()
++        // are private slots, but Qt's meta-object system exposes slots
++        // for invocation by name regardless of C++ access control, so
++        // this doesn't need Window.h changed to call them from here.
++        uint16_t remoteActionsRisingEdge = remote.emulatorActions & static_cast<uint16_t>(~lastRemoteEmulatorActions);
++        if (mainWindow && (remoteActionsRisingEdge & melonds_remote::EmulatorAction_QuitSession))
++        {
++            QMetaObject::invokeMethod(mainWindow, "onEjectCart", Qt::QueuedConnection);
++        }
++        if (mainWindow && (remoteActionsRisingEdge & melonds_remote::EmulatorAction_QuitApplication))
++        {
++            QMetaObject::invokeMethod(mainWindow, "onQuit", Qt::QueuedConnection);
++        }
++        lastRemoteEmulatorActions = remote.emulatorActions;
 +    }
 +
      hotkeyPress = hotkeyMask & ~lastHotkeyMask;
@@ -2883,10 +2928,10 @@ index 0000000..48014b9
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
 new file mode 100644
-index 0000000..17653e1
+index 0000000..0f0e7eb
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
-@@ -0,0 +1,265 @@
+@@ -0,0 +1,278 @@
 +#pragma once
 +
 +// melonDS Remote wire protocol definitions.
@@ -2954,7 +2999,20 @@ index 0000000..17653e1
 +    EmulatorAction_SwapScreens    = 1u << 4,
 +    EmulatorAction_OpenClientMenu = 1u << 5,
 +    EmulatorAction_Disconnect     = 1u << 6,
++    // Ejects the current ROM (melonDS's own "Eject Cart" action) --
++    // ends this play session without closing melonDS itself. Named
++    // "QuitSession" per SPEC.md section 7.5's original wording, which
++    // reads most naturally as "end the current game session" rather
++    // than "close the whole app" (see EmulatorAction_QuitApplication
++    // for that).
 +    EmulatorAction_QuitSession    = 1u << 7,
++    // Closes melonDS entirely (GitHub issue #25: "prompt the user to
++    // either exit the current ROM, or exit the entire application").
++    // A new bit value within the same existing uint16_t field --
++    // adding it doesn't change the wire layout, so this doesn't need a
++    // kProtocolVersion bump (unlike a new *field*, e.g.
++    // HelloPayload::appVersion).
++    EmulatorAction_QuitApplication = 1u << 8,
 +};
 +
 +// Native DS bottom-screen touch range (spec section 7.4).

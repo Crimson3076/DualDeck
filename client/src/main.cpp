@@ -1452,6 +1452,15 @@ int main(int argc, char** argv) {
         std::vector<std::string> menuItems = {"RESUME"};
         if (!hostExplicit) menuItems.push_back("CHANGE HOST");
         menuItems.push_back("SETTINGS");
+        // "EXIT EMULATION" ends the game/app running on the HOST (GitHub
+        // issue #25) -- distinct from "EXIT" below, which only quits this
+        // client. Picking it opens a second-level confirm menu rather than
+        // acting immediately, since either choice there is destructive on
+        // a machine the user isn't necessarily looking at (per SPEC.md's
+        // "Wii U GamePad" model, the host's own screen is showing the top
+        // screen only while a client streams, and no one may be at the
+        // host to see or undo a mistake) -- see exitEmulationItems below.
+        menuItems.push_back("EXIT EMULATION");
         menuItems.push_back("EXIT");
         bool menuActive = false;
         int menuSelectedIndex = 0;
@@ -1467,6 +1476,20 @@ int main(int argc, char** argv) {
             items.push_back("BACK");
             return items;
         };
+        bool exitEmulationConfirm = false;
+        int exitEmulationSelectedIndex = 0;
+        const std::vector<std::string> exitEmulationItems = {"EXIT ROM", "EXIT MELONDS ENTIRELY", "CANCEL"};
+        // Sent as ControllerState::emulatorActions for a fixed window after
+        // confirming a choice above, not just one packet -- input goes over
+        // UDP (spec section 6.3), so a single-packet one-shot action risks
+        // silently doing nothing if that one packet is lost. Continuous
+        // per-frame state (buttons, touch) doesn't have this problem since
+        // it's resent every packet regardless; a momentary action like this
+        // needs its own resend window. See pendingEmulatorActionMs below
+        // for how long.
+        uint16_t pendingEmulatorAction = 0;
+        uint64_t pendingEmulatorActionUntilUs = 0;
+        constexpr uint64_t kPendingEmulatorActionUs = 250'000; // 250ms of ~120Hz packets
         bool changeHostRequested = false;
         bool setupWizardRequested = false;
 
@@ -1587,6 +1610,7 @@ int main(int argc, char** argv) {
                             } else {
                                 menuActive = !menuActive;
                                 menuSelectedIndex = 0;
+                                exitEmulationConfirm = false;
                             }
                         } else if (settingsActive && event.key.key == SDLK_UP) {
                             int count = static_cast<int>(settingsMenuItems().size());
@@ -1607,6 +1631,27 @@ int main(int argc, char** argv) {
                                 settingsActive = false;
                                 menuActive = true;
                             }
+                        } else if (menuActive && exitEmulationConfirm) {
+                            int subCount = static_cast<int>(exitEmulationItems.size());
+                            if (event.key.key == SDLK_UP) {
+                                exitEmulationSelectedIndex = (exitEmulationSelectedIndex + subCount - 1) % subCount;
+                            } else if (event.key.key == SDLK_DOWN) {
+                                exitEmulationSelectedIndex = (exitEmulationSelectedIndex + 1) % subCount;
+                            } else if (event.key.key == SDLK_RETURN) {
+                                const std::string& picked =
+                                    exitEmulationItems[static_cast<size_t>(exitEmulationSelectedIndex)];
+                                if (picked == "CANCEL") {
+                                    exitEmulationConfirm = false;
+                                } else {
+                                    pendingEmulatorAction = (picked == "EXIT ROM")
+                                                                 ? EmulatorAction_QuitSession
+                                                                 : EmulatorAction_QuitApplication;
+                                    pendingEmulatorActionUntilUs =
+                                        SDL_GetTicksNS() / 1000 + kPendingEmulatorActionUs;
+                                    exitEmulationConfirm = false;
+                                    menuActive = false;
+                                }
+                            }
                         } else if (menuActive && event.key.key == SDLK_UP) {
                             int count = static_cast<int>(menuItems.size());
                             menuSelectedIndex = (menuSelectedIndex + count - 1) % count;
@@ -1624,6 +1669,9 @@ int main(int argc, char** argv) {
                                 menuActive = false;
                                 settingsActive = true;
                                 settingsSelectedIndex = 0;
+                            } else if (picked == "EXIT EMULATION") {
+                                exitEmulationConfirm = true;
+                                exitEmulationSelectedIndex = 0;
                             } else if (picked == "EXIT") {
                                 quitApp = true;
                                 runningInner = false;
@@ -1655,6 +1703,29 @@ int main(int argc, char** argv) {
                                 settingsActive = false;
                                 menuActive = true;
                             }
+                        } else if (menuActive && exitEmulationConfirm) {
+                            int subCount = static_cast<int>(exitEmulationItems.size());
+                            if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP) {
+                                exitEmulationSelectedIndex = (exitEmulationSelectedIndex + subCount - 1) % subCount;
+                            } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_DOWN) {
+                                exitEmulationSelectedIndex = (exitEmulationSelectedIndex + 1) % subCount;
+                            } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH) {
+                                const std::string& picked =
+                                    exitEmulationItems[static_cast<size_t>(exitEmulationSelectedIndex)];
+                                if (picked == "CANCEL") {
+                                    exitEmulationConfirm = false;
+                                } else {
+                                    pendingEmulatorAction = (picked == "EXIT ROM")
+                                                                 ? EmulatorAction_QuitSession
+                                                                 : EmulatorAction_QuitApplication;
+                                    pendingEmulatorActionUntilUs =
+                                        SDL_GetTicksNS() / 1000 + kPendingEmulatorActionUs;
+                                    exitEmulationConfirm = false;
+                                    menuActive = false;
+                                }
+                            } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_EAST) {
+                                exitEmulationConfirm = false; // back to the main menu, no action taken
+                            }
                         } else if (menuActive) {
                             int count = static_cast<int>(menuItems.size());
                             if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP) {
@@ -1672,6 +1743,9 @@ int main(int argc, char** argv) {
                                     menuActive = false;
                                     settingsActive = true;
                                     settingsSelectedIndex = 0;
+                                } else if (picked == "EXIT EMULATION") {
+                                    exitEmulationConfirm = true;
+                                    exitEmulationSelectedIndex = 0;
                                 } else if (picked == "EXIT") {
                                     quitApp = true;
                                     runningInner = false;
@@ -1704,6 +1778,7 @@ int main(int argc, char** argv) {
                     } else {
                         menuActive = !menuActive;
                         menuSelectedIndex = 0;
+                        exitEmulationConfirm = false;
                     }
                     menuChordFired = true;
                 }
@@ -1719,7 +1794,11 @@ int main(int argc, char** argv) {
             }
 
             if (menuActive) {
-                renderPauseMenu(renderer, menuItems, menuSelectedIndex);
+                if (exitEmulationConfirm) {
+                    renderPauseMenu(renderer, exitEmulationItems, exitEmulationSelectedIndex, "EXIT EMULATION");
+                } else {
+                    renderPauseMenu(renderer, menuItems, menuSelectedIndex);
+                }
                 continue;
             }
 
@@ -1729,7 +1808,16 @@ int main(int argc, char** argv) {
                 state.sequence = sequence++;
                 state.clientTimestampUs = wallClockNowUs();
                 state.dsButtons = buildButtonsFromGamepad(gamepad);
-                state.emulatorActions = 0;
+                // See pendingEmulatorAction's declaration above for why this
+                // resends for a window instead of just the one packet that
+                // set it.
+                if (pendingEmulatorActionUntilUs != 0 && nowUs < pendingEmulatorActionUntilUs) {
+                    state.emulatorActions = pendingEmulatorAction;
+                } else {
+                    state.emulatorActions = 0;
+                    pendingEmulatorAction = 0;
+                    pendingEmulatorActionUntilUs = 0;
+                }
                 state.touchActive = touchActive ? 1 : 0;
                 state.touchX = touchX;
                 state.touchY = touchY;

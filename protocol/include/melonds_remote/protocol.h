@@ -65,7 +65,20 @@ enum EmulatorAction : uint16_t {
     EmulatorAction_SwapScreens    = 1u << 4,
     EmulatorAction_OpenClientMenu = 1u << 5,
     EmulatorAction_Disconnect     = 1u << 6,
+    // Ejects the current ROM (melonDS's own "Eject Cart" action) --
+    // ends this play session without closing melonDS itself. Named
+    // "QuitSession" per SPEC.md section 7.5's original wording, which
+    // reads most naturally as "end the current game session" rather
+    // than "close the whole app" (see EmulatorAction_QuitApplication
+    // for that).
     EmulatorAction_QuitSession    = 1u << 7,
+    // Closes melonDS entirely (GitHub issue #25: "prompt the user to
+    // either exit the current ROM, or exit the entire application").
+    // A new bit value within the same existing uint16_t field --
+    // adding it doesn't change the wire layout, so this doesn't need a
+    // kProtocolVersion bump (unlike a new *field*, e.g.
+    // HelloPayload::appVersion).
+    EmulatorAction_QuitApplication = 1u << 8,
 };
 
 // Native DS bottom-screen touch range (spec section 7.4).
