@@ -1,8 +1,8 @@
 diff --git a/src/frontend/qt_sdl/CMakeLists.txt b/src/frontend/qt_sdl/CMakeLists.txt
-index 31207f8..98b5277 100644
+index 31207f86..a19df056 100644
 --- a/src/frontend/qt_sdl/CMakeLists.txt
 +++ b/src/frontend/qt_sdl/CMakeLists.txt
-@@ -60,6 +60,19 @@ set(SOURCES_QT_SDL
+@@ -60,6 +60,22 @@ set(SOURCES_QT_SDL
  
      LANDialog.cpp
      NetplayDialog.cpp
@@ -16,13 +16,16 @@ index 31207f8..98b5277 100644
 +    remote_server/MelonDSFrameSource.cpp
 +    remote_server/MelonDSInputSink.cpp
 +    remote_server/MelonDSMicAudioSink.cpp
++    remote_server/MelonDSAdapter.cpp
++    remote_server/host/adapter_bridge.cpp
++    remote_server/adapter_sdk/src/session_state.cpp
 +    remote_server/RemoteServerBridge.cpp
 +    remote_server/GLBottomScreenCapture.cpp
 +    remote_server/ManagementServer.cpp
  )
  
  option(USE_QT6 "Use Qt 6 instead of Qt 5" ON)
-@@ -185,6 +198,17 @@ target_include_directories(melonDS PUBLIC
+@@ -185,6 +201,18 @@ target_include_directories(melonDS PUBLIC
      "${CMAKE_CURRENT_SOURCE_DIR}"
      "${CMAKE_CURRENT_SOURCE_DIR}/..")
  
@@ -33,6 +36,7 @@ index 31207f8..98b5277 100644
 +# melonds-remote repo (e.g. "melonds_remote/protocol.h", "host/net_server.h").
 +target_include_directories(melonDS PRIVATE
 +    "${CMAKE_CURRENT_SOURCE_DIR}/remote_server/protocol/include"
++    "${CMAKE_CURRENT_SOURCE_DIR}/remote_server/adapter_sdk/include"
 +    "${CMAKE_CURRENT_SOURCE_DIR}/remote_server")
 +find_package(Threads REQUIRED)
 +target_link_libraries(melonDS PRIVATE Threads::Threads)
@@ -41,7 +45,7 @@ index 31207f8..98b5277 100644
      target_include_directories(melonDS PUBLIC ${Qt6Gui_PRIVATE_INCLUDE_DIRS})
  else()
 diff --git a/src/frontend/qt_sdl/Config.cpp b/src/frontend/qt_sdl/Config.cpp
-index 0d48ee1..05610f5 100644
+index 0d48ee16..05610f52 100644
 --- a/src/frontend/qt_sdl/Config.cpp
 +++ b/src/frontend/qt_sdl/Config.cpp
 @@ -72,6 +72,21 @@ DefaultList<int> DefaultInts =
@@ -111,7 +115,7 @@ index 0d48ee1..05610f5 100644
  
  DefaultList<double> DefaultDoubles =
 diff --git a/src/frontend/qt_sdl/EmuInstance.cpp b/src/frontend/qt_sdl/EmuInstance.cpp
-index a8b1021..7f6a73d 100755
+index a8b10218..7f6a73d8 100755
 --- a/src/frontend/qt_sdl/EmuInstance.cpp
 +++ b/src/frontend/qt_sdl/EmuInstance.cpp
 @@ -20,15 +20,24 @@
@@ -379,7 +383,7 @@ index a8b1021..7f6a73d 100755
  std::string EmuInstance::instanceFileSuffix()
  {
 diff --git a/src/frontend/qt_sdl/EmuInstance.h b/src/frontend/qt_sdl/EmuInstance.h
-index a1eab0e..2c30617 100755
+index a1eab0ef..2c306171 100755
 --- a/src/frontend/qt_sdl/EmuInstance.h
 +++ b/src/frontend/qt_sdl/EmuInstance.h
 @@ -21,6 +21,9 @@
@@ -484,7 +488,7 @@ index a1eab0e..2c30617 100755
      friend class MainWindow;
  };
 diff --git a/src/frontend/qt_sdl/EmuInstanceAudio.cpp b/src/frontend/qt_sdl/EmuInstanceAudio.cpp
-index 7df4d9f..d27911f 100644
+index 7df4d9f4..d27911fa 100644
 --- a/src/frontend/qt_sdl/EmuInstanceAudio.cpp
 +++ b/src/frontend/qt_sdl/EmuInstanceAudio.cpp
 @@ -16,6 +16,9 @@
@@ -623,7 +627,7 @@ index 7df4d9f..d27911f 100644
  {
      float f_len_out = (inlen * 47743.4659091 * (curFPS/60.0)) / (float)micFreq;
 diff --git a/src/frontend/qt_sdl/EmuInstanceInput.cpp b/src/frontend/qt_sdl/EmuInstanceInput.cpp
-index a0bc623..0373ce7 100644
+index a0bc6231..0373ce71 100644
 --- a/src/frontend/qt_sdl/EmuInstanceInput.cpp
 +++ b/src/frontend/qt_sdl/EmuInstanceInput.cpp
 @@ -25,8 +25,37 @@
@@ -792,7 +796,7 @@ index a0bc623..0373ce7 100644
      hotkeyRelease = lastHotkeyMask & ~hotkeyMask;
      lastHotkeyMask = hotkeyMask;
 diff --git a/src/frontend/qt_sdl/EmuSettingsDialog.cpp b/src/frontend/qt_sdl/EmuSettingsDialog.cpp
-index 3df2ddf..fa5c315 100644
+index 3df2ddf1..fa5c3150 100644
 --- a/src/frontend/qt_sdl/EmuSettingsDialog.cpp
 +++ b/src/frontend/qt_sdl/EmuSettingsDialog.cpp
 @@ -78,6 +78,14 @@ EmuSettingsDialog::EmuSettingsDialog(QWidget* parent) : QDialog(parent), ui(new
@@ -819,7 +823,7 @@ index 3df2ddf..fa5c315 100644
              Config::Save();
  
 diff --git a/src/frontend/qt_sdl/EmuSettingsDialog.ui b/src/frontend/qt_sdl/EmuSettingsDialog.ui
-index b078789..4254e75 100644
+index b0787891..4254e756 100644
 --- a/src/frontend/qt_sdl/EmuSettingsDialog.ui
 +++ b/src/frontend/qt_sdl/EmuSettingsDialog.ui
 @@ -56,7 +56,17 @@
@@ -850,7 +854,7 @@ index b078789..4254e75 100644
    <tabstop>txtBIOS9Path</tabstop>
    <tabstop>btnBIOS9Browse</tabstop>
 diff --git a/src/frontend/qt_sdl/EmuThread.cpp b/src/frontend/qt_sdl/EmuThread.cpp
-index c3fbdfe..dd088af 100755
+index c3fbdfe6..dd088af1 100755
 --- a/src/frontend/qt_sdl/EmuThread.cpp
 +++ b/src/frontend/qt_sdl/EmuThread.cpp
 @@ -55,6 +55,9 @@
@@ -952,7 +956,7 @@ index c3fbdfe..dd088af 100755
              MelonCap::Update();
  #endif // MELONCAP
 diff --git a/src/frontend/qt_sdl/Window.cpp b/src/frontend/qt_sdl/Window.cpp
-index 92189a5..9e89ffa 100755
+index 92189a56..9e89ffa4 100755
 --- a/src/frontend/qt_sdl/Window.cpp
 +++ b/src/frontend/qt_sdl/Window.cpp
 @@ -33,6 +33,7 @@
@@ -992,7 +996,7 @@ index 92189a5..9e89ffa 100755
  
 diff --git a/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.cpp b/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.cpp
 new file mode 100644
-index 0000000..1f2ef4e
+index 00000000..1f2ef4ef
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.cpp
 @@ -0,0 +1,81 @@
@@ -1079,7 +1083,7 @@ index 0000000..1f2ef4e
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.h b/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.h
 new file mode 100644
-index 0000000..963efac
+index 00000000..963efac7
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.h
 @@ -0,0 +1,63 @@
@@ -1148,7 +1152,7 @@ index 0000000..963efac
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/ManagementServer.cpp b/src/frontend/qt_sdl/remote_server/ManagementServer.cpp
 new file mode 100644
-index 0000000..4ec55e2
+index 00000000..4ec55e22
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/ManagementServer.cpp
 @@ -0,0 +1,148 @@
@@ -1302,7 +1306,7 @@ index 0000000..4ec55e2
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/ManagementServer.h b/src/frontend/qt_sdl/remote_server/ManagementServer.h
 new file mode 100644
-index 0000000..2aece35
+index 00000000..2aece359
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/ManagementServer.h
 @@ -0,0 +1,68 @@
@@ -1374,9 +1378,195 @@ index 0000000..2aece35
 +};
 +
 +} // namespace melonds_remote_bridge
+diff --git a/src/frontend/qt_sdl/remote_server/MelonDSAdapter.cpp b/src/frontend/qt_sdl/remote_server/MelonDSAdapter.cpp
+new file mode 100644
+index 00000000..a4dabf1d
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/MelonDSAdapter.cpp
+@@ -0,0 +1,127 @@
++#include "MelonDSAdapter.h"
++
++// For MELONDS_VERSION, reported as this adapter's own version -- see
++// RemoteServerBridge.cpp's identical include for why (generated at
++// configure time, already on the include path).
++#include "version.h"
++
++namespace melonds_remote_bridge {
++
++namespace {
++
++constexpr const char* kBottomSurfaceId = "bottom";
++
++melonds_remote::adapter::AdapterCapabilities buildCapabilities() {
++    melonds_remote::adapter::AdapterCapabilities caps;
++    caps.system = melonds_remote::SystemIdentity{"nds", "Nintendo DS"};
++    caps.adapter = melonds_remote::AdapterIdentity{"melonds", "melonDS", MELONDS_VERSION};
++
++    melonds_remote::adapter::VideoSurfaceDescriptor bottom;
++    bottom.surfaceId = kBottomSurfaceId;
++    bottom.role = melonds_remote::adapter::SurfaceRole::Bottom;
++    bottom.width = 256;
++    bottom.height = 192;
++    bottom.touchSupported = true;
++    bottom.touchRangeX = melonds_remote::kTouchMaxX;
++    bottom.touchRangeY = melonds_remote::kTouchMaxY;
++    bottom.required = true;
++    bottom.remotelyDisplayed = true;
++    caps.surfaces = {bottom};
++
++    // Mic audio is real here (GitHub issue #2), just not carried through
++    // this specific interface -- MelonDSMicAudioSink is wired directly
++    // to NetServer by RemoteServerBridge, independent of
++    // IEmulatorAdapter/host::AdapterBridge (which only cover video +
++    // controller/touch input). See RemoteServerBridge.h's comment.
++    caps.supportsMicrophone = true;
++    return caps;
++}
++
++// Inverse of host::AdapterBridge's dsButtonsToGenericButtons() (see
++// host/adapter_bridge.cpp) -- explicit bit-by-bit, not a shift/mask
++// trick, for the same reason that table gives: DSButton and
++// GenericButton agree on their low bits (A/B/X/Y/D-pad/L/R) but diverge
++// at Start/Select, since GenericButton reserves bits 10-13 for L2/R2/L3/
++// R3, concepts the DS has none of.
++uint16_t genericButtonsToDsButtons(uint32_t generic) {
++    uint16_t ds = 0;
++    if (generic & melonds_remote::adapter::GenericButton_South) ds |= melonds_remote::DSButton_A;
++    if (generic & melonds_remote::adapter::GenericButton_East) ds |= melonds_remote::DSButton_B;
++    if (generic & melonds_remote::adapter::GenericButton_West) ds |= melonds_remote::DSButton_X;
++    if (generic & melonds_remote::adapter::GenericButton_North) ds |= melonds_remote::DSButton_Y;
++    if (generic & melonds_remote::adapter::GenericButton_DpadUp) ds |= melonds_remote::DSButton_Up;
++    if (generic & melonds_remote::adapter::GenericButton_DpadDown) ds |= melonds_remote::DSButton_Down;
++    if (generic & melonds_remote::adapter::GenericButton_DpadLeft) ds |= melonds_remote::DSButton_Left;
++    if (generic & melonds_remote::adapter::GenericButton_DpadRight) ds |= melonds_remote::DSButton_Right;
++    if (generic & melonds_remote::adapter::GenericButton_L1) ds |= melonds_remote::DSButton_L;
++    if (generic & melonds_remote::adapter::GenericButton_R1) ds |= melonds_remote::DSButton_R;
++    if (generic & melonds_remote::adapter::GenericButton_Start) ds |= melonds_remote::DSButton_Start;
++    if (generic & melonds_remote::adapter::GenericButton_Select) ds |= melonds_remote::DSButton_Select;
++    return ds;
++}
++
++} // namespace
++
++melonds_remote::adapter::AdapterCapabilities MelonDSAdapter::capabilities() const {
++    static const melonds_remote::adapter::AdapterCapabilities caps = buildCapabilities();
++    return caps;
++}
++
++melonds_remote::adapter::SessionState MelonDSAdapter::currentState() const {
++    // host::AdapterBridge (the only consumer of this adapter today)
++    // never calls currentState() -- melonDS's own session concept (ROM
++    // loaded, running, paused) isn't tracked at this layer yet, so this
++    // is a fixed placeholder rather than a real state machine. Revisit
++    // if/when a Host Service actually consults this.
++    return melonds_remote::adapter::SessionState::Running;
++}
++
++void MelonDSAdapter::applyGenericInput(const melonds_remote::adapter::GenericInputState& state) {
++    melonds_remote::ControllerState cs;
++    cs.sequence = state.sequence;
++    cs.clientTimestampUs = state.clientTimestampUs;
++    cs.dsButtons = genericButtonsToDsButtons(state.buttons);
++    cs.leftStickX = state.leftStickX;
++    cs.leftStickY = state.leftStickY;
++    cs.rightStickX = state.rightStickX;
++    cs.rightStickY = state.rightStickY;
++    for (const auto& touch : state.touches) {
++        if (touch.surfaceId == kBottomSurfaceId) {
++            cs.touchActive = 1;
++            cs.touchX = touch.x;
++            cs.touchY = touch.y;
++            break;
++        }
++    }
++    // Bit layout is intentionally identical between EmulatorAction
++    // (protocol.h) and GenericEmulatorAction (generic_input.h) -- see
++    // host::AdapterBridge's matching comment -- so this is a direct
++    // pass-through, not a lookup table like the buttons above.
++    cs.emulatorActions = static_cast<uint16_t>(state.emulatorActions);
++    inputSink_.applyControllerState(cs);
++}
++
++void MelonDSAdapter::releaseAllInputs() {
++    inputSink_.releaseAll();
++}
++
++bool MelonDSAdapter::latestFrame(const std::string& surfaceId, melonds_remote::adapter::SurfaceFrame& outFrame) {
++    if (surfaceId != kBottomSurfaceId) return false;
++    std::vector<uint8_t> frame;
++    uint64_t frameIndex = 0;
++    if (!frameSource_.getLatestFrame(frame, frameIndex)) return false;
++    outFrame.surfaceId = kBottomSurfaceId;
++    outFrame.frameIndex = frameIndex;
++    outFrame.pixels = std::move(frame);
++    return true;
++}
++
++void MelonDSAdapter::pushFrame(const void* bgraData, size_t sizeBytes) {
++    frameSource_.pushFrame(bgraData, sizeBytes);
++}
++
++melonds_remote::ControllerState MelonDSAdapter::latestControllerState() const {
++    return inputSink_.latestState();
++}
++
++} // namespace melonds_remote_bridge
+diff --git a/src/frontend/qt_sdl/remote_server/MelonDSAdapter.h b/src/frontend/qt_sdl/remote_server/MelonDSAdapter.h
+new file mode 100644
+index 00000000..184a2ee9
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/MelonDSAdapter.h
+@@ -0,0 +1,47 @@
++#pragma once
++
++// melonDS's implementation of melonds_remote::adapter::IEmulatorAdapter
++// (GitHub issue #28) -- the "reference implementation" the ADR
++// (docs/adr/0001-host-service-and-adapter-architecture.md) describes.
++// Wraps the same MelonDSInputSink/MelonDSFrameSource this patch already
++// used directly (unchanged, see their own headers), translating between
++// them and the generic adapter contract so RemoteServerBridge can hand a
++// single IEmulatorAdapter to host::AdapterBridge instead of exposing
++// MelonDSInputSink/MelonDSFrameSource as IEmulatorInputSink/IFrameSource
++// itself. Still runs entirely in-process, still fed by the exact same
++// NetServer as before -- see RemoteServerBridge.h/.cpp for how the
++// pieces connect. Out-of-process operation (this adapter connected to a
++// separately-running Host Service over adapter-sdk/ipc/) is a distinct,
++// larger follow-up milestone, not attempted by this class.
++
++#include <cstddef>
++#include <cstdint>
++
++#include "MelonDSFrameSource.h"
++#include "MelonDSInputSink.h"
++#include "melonds_remote/adapter/adapter_contract.h"
++
++namespace melonds_remote_bridge {
++
++class MelonDSAdapter : public melonds_remote::adapter::IEmulatorAdapter {
++public:
++    melonds_remote::adapter::AdapterCapabilities capabilities() const override;
++    melonds_remote::adapter::SessionState currentState() const override;
++    void applyGenericInput(const melonds_remote::adapter::GenericInputState& state) override;
++    void releaseAllInputs() override;
++    bool latestFrame(const std::string& surfaceId, melonds_remote::adapter::SurfaceFrame& outFrame) override;
++
++    // Non-contract pass-throughs RemoteServerBridge calls directly (the
++    // adapter contract itself has no "push a frame in" or "read the
++    // merged controller state back out" method -- those stay exactly
++    // the same shape they were before this class existed, see
++    // MelonDSFrameSource::pushFrame()/MelonDSInputSink::latestState()).
++    void pushFrame(const void* bgraData, size_t sizeBytes);
++    melonds_remote::ControllerState latestControllerState() const;
++
++private:
++    MelonDSInputSink inputSink_;
++    MelonDSFrameSource frameSource_;
++};
++
++} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.cpp b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.cpp
 new file mode 100644
-index 0000000..6ad11d1
+index 00000000..6ad11d13
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.cpp
 @@ -0,0 +1,29 @@
@@ -1411,7 +1601,7 @@ index 0000000..6ad11d1
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.h b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.h
 new file mode 100644
-index 0000000..ab42356
+index 00000000..ab423560
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.h
 @@ -0,0 +1,36 @@
@@ -1453,7 +1643,7 @@ index 0000000..ab42356
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSInputSink.cpp b/src/frontend/qt_sdl/remote_server/MelonDSInputSink.cpp
 new file mode 100644
-index 0000000..998c1e0
+index 00000000..998c1e01
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/MelonDSInputSink.cpp
 @@ -0,0 +1,22 @@
@@ -1481,7 +1671,7 @@ index 0000000..998c1e0
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSInputSink.h b/src/frontend/qt_sdl/remote_server/MelonDSInputSink.h
 new file mode 100644
-index 0000000..05308c9
+index 00000000..05308c9b
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/MelonDSInputSink.h
 @@ -0,0 +1,27 @@
@@ -1514,7 +1704,7 @@ index 0000000..05308c9
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.cpp b/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.cpp
 new file mode 100644
-index 0000000..b5d8d9b
+index 00000000..b5d8d9be
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.cpp
 @@ -0,0 +1,44 @@
@@ -1564,7 +1754,7 @@ index 0000000..b5d8d9b
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.h b/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.h
 new file mode 100644
-index 0000000..a00f345
+index 00000000..a00f345a
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.h
 @@ -0,0 +1,57 @@
@@ -1627,10 +1817,10 @@ index 0000000..a00f345
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
 new file mode 100644
-index 0000000..72d6722
+index 00000000..821992f8
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
-@@ -0,0 +1,98 @@
+@@ -0,0 +1,99 @@
 +#include "RemoteServerBridge.h"
 +
 +#include <chrono>
@@ -1660,7 +1850,8 @@ index 0000000..72d6722
 +    std::function<void(std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest>)>
 +        onPendingRequestsChanged,
 +    bool discoveryEnabled, uint16_t discoveryPort, std::string hostName,
-+    std::function<void(bool)> onClientConnectionChanged, std::string appVersion, uint16_t audioPort) {
++    std::function<void(bool)> onClientConnectionChanged, std::string appVersion, uint16_t audioPort)
++    : bridge_(adapter_) {
 +    melonds_remote::host::NetServerConfig config;
 +    config.bindAddress = std::move(bindAddress);
 +    config.controlPort = controlPort;
@@ -1688,7 +1879,7 @@ index 0000000..72d6722
 +    config.systemIdentity = melonds_remote::SystemIdentity{"nds", "Nintendo DS"};
 +    config.adapterIdentity =
 +        melonds_remote::AdapterIdentity{"melonds", "melonDS", MELONDS_VERSION};
-+    server_ = std::make_unique<melonds_remote::host::NetServer>(config, inputSink_, frameSource_, micSink_);
++    server_ = std::make_unique<melonds_remote::host::NetServer>(config, bridge_, bridge_, micSink_);
 +}
 +
 +RemoteServerBridge::~RemoteServerBridge() {
@@ -1704,11 +1895,11 @@ index 0000000..72d6722
 +}
 +
 +void RemoteServerBridge::pushBottomFrame(const void* bgraData, size_t sizeBytes) {
-+    frameSource_.pushFrame(bgraData, sizeBytes);
++    adapter_.pushFrame(bgraData, sizeBytes);
 +}
 +
 +melonds_remote::ControllerState RemoteServerBridge::latestControllerState() const {
-+    return inputSink_.latestState();
++    return adapter_.latestControllerState();
 +}
 +
 +void RemoteServerBridge::drainMicAudio(std::vector<int16_t>& out) {
@@ -1731,10 +1922,10 @@ index 0000000..72d6722
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
 new file mode 100644
-index 0000000..8d3f77f
+index 00000000..3c8c99a1
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,116 @@
 +#pragma once
 +
 +// Ties the standalone melonds-remote protocol/host networking code
@@ -1755,9 +1946,9 @@ index 0000000..8d3f77f
 +#include <string>
 +#include <vector>
 +
-+#include "MelonDSFrameSource.h"
-+#include "MelonDSInputSink.h"
++#include "MelonDSAdapter.h"
 +#include "MelonDSMicAudioSink.h"
++#include "host/adapter_bridge.h"
 +#include "host/net_server.h"
 +
 +namespace melonds_remote_bridge {
@@ -1833,16 +2024,592 @@ index 0000000..8d3f77f
 +    bool denyDevice(const std::string& deviceIdOrPrefix);
 +
 +private:
-+    MelonDSInputSink inputSink_;
-+    MelonDSFrameSource frameSource_;
++    // GitHub issue #28: melonDS's DS-specific input/video handling goes
++    // through the generic adapter contract now (MelonDSAdapter
++    // implements IEmulatorAdapter), translated back into the
++    // IEmulatorInputSink/IFrameSource shape NetServer expects by
++    // host::AdapterBridge -- the same "DS compatibility adapter" class
++    // the standalone host's --adapter-ipc mode uses, just wired
++    // in-process here instead of over a socket (see the ADR's "for an
++    // adapter that runs in the same process... no IPC is needed at all"
++    // allowance). Mic audio is unaffected -- micSink_ is still handed to
++    // NetServer directly, independent of the adapter contract, exactly
++    // as before.
++    MelonDSAdapter adapter_;
++    melonds_remote::host::AdapterBridge bridge_;
 +    MelonDSMicAudioSink micSink_;
 +    std::unique_ptr<melonds_remote::host::NetServer> server_;
 +};
 +
 +} // namespace melonds_remote_bridge
+diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/adapter_contract.h b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/adapter_contract.h
+new file mode 100644
+index 00000000..7c29ea7b
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/adapter_contract.h
+@@ -0,0 +1,118 @@
++#pragma once
++
++// The versioned Emulator Adapter Contract (GitHub issue #28). Part of
++// the Phase 1 "architecture decision and generic contracts" milestone
++// -- see docs/adr/0001-host-service-and-adapter-architecture.md for the
++// full design rationale, including why this is an in-process C++
++// interface today rather than already being an IPC wire protocol.
++//
++// Nothing here is wired into the live client/host yet: the production
++// wire protocol (protocol.h, kProtocolVersion 6) and the production
++// host (host/remote-server's NetServer + IFrameSource/
++// IEmulatorInputSink) are both completely unchanged by this file. This
++// is the target shape a real Host Service extraction (issue #28 Phase
++// 2) will migrate towards, proven out today only by the fake DS/3DS/
++// Wii U fixtures under adapter-sdk/fake_adapters/.
++
++#include <cstdint>
++#include <string>
++#include <vector>
++
++#include "melonds_remote/adapter/generic_input.h"
++#include "melonds_remote/adapter/session_state.h"
++#include "melonds_remote/adapter/video_surface.h"
++#include "melonds_remote/protocol.h" // SystemIdentity, AdapterIdentity
++
++namespace melonds_remote::adapter {
++
++// Bumped whenever this contract's shape changes incompatibly -- the
++// same versioning discipline protocol.h's kProtocolVersion already
++// applies to the client<->host wire format, applied here to the
++// Host-Service<->adapter boundary instead. Distinct from
++// kProtocolVersion (client<->host) and AdapterIdentity::adapterVersion
++// (a specific adapter's own release, e.g. melonDS's version) -- three
++// independent axes of "what version is this," matching the same
++// reasoning protocol.h's HelloAckPayload comments already give for
++// appVersion vs. kProtocolVersion.
++inline constexpr uint16_t kAdapterContractVersion = 1;
++
++// Everything the Host Service needs to know about an adapter before
++// negotiating a session with it: identity, declared video surfaces, and
++// coarse input capability flags. Reported once when the adapter
++// registers (issue #28: "Adapter identity and version", "Emulated
++// system identity"), not re-sent per frame/input state.
++struct AdapterCapabilities {
++    melonds_remote::SystemIdentity system;
++    melonds_remote::AdapterIdentity adapter;
++    std::vector<VideoSurfaceDescriptor> surfaces;
++
++    // Optional capability flags (issue #28: "Optional motion,
++    // microphone, audio, and status capabilities"). Deliberately coarse
++    // booleans here, not a full sensor/audio-format description --
++    // that level of detail is deferred until a real adapter actually
++    // needs it (issue #28's 3DS/Wii U sections both explicitly mark
++    // motion/microphone as "later", not required for the first real
++    // integration of either).
++    bool supportsMotion = false;
++    bool supportsMicrophone = false;
++    bool supportsAnalogTriggers = false;
++};
++
++// A single frame for a specific surface, latest-frame-wins per surface
++// (issue #28: "Frame submission using latest-frame-wins behavior" and
++// the required test "Per-surface latest-frame-wins behavior"). Payload
++// is raw pixels in the surface's declared PixelFormat/width/height --
++// no compression, matching protocol.h's existing Stage-1 raw-buffer
++// choice for the live VideoFrame payload.
++struct SurfaceFrame {
++    std::string surfaceId;
++    uint64_t frameIndex = 0; // monotonically increasing per surface, starts at 0
++    std::vector<uint8_t> pixels;
++};
++
++// The contract every emulator adapter implements (issue #28's
++// "Emulator Adapter Contract" section). Implemented in-process today by
++// the fake DS/3DS/Wii U fixtures under adapter-sdk/fake_adapters/; a
++// real melonDS adapter and, eventually, out-of-process 3DS/Wii U
++// adapters would implement this same interface -- an out-of-process one
++// behind a local-IPC shim, per the ADR, rather than the Host Service
++// growing a second, parallel API for "adapters that happen to run
++// elsewhere."
++//
++// Security note (issue #28: "The adapter boundary must not expose
++// arbitrary shell execution"): every method here takes a typed,
++// bounded argument (a fixed enum bitmask, a coordinate, a surface ID
++// string) -- there is no "run this command" or "read this path" entry
++// point anywhere in this interface, and there never should be one added
++// to it.
++class IEmulatorAdapter {
++public:
++    virtual ~IEmulatorAdapter() = default;
++
++    virtual AdapterCapabilities capabilities() const = 0;
++    virtual SessionState currentState() const = 0;
++
++    // Applies the latest generic input state. Implementations must not
++    // block (no I/O, no lock that could stall the emulation thread) --
++    // the same no-blocking contract
++    // host::IEmulatorInputSink::applyControllerState() already
++    // documents for today's DS-specific equivalent.
++    virtual void applyGenericInput(const GenericInputState& state) = 0;
++
++    // Called on client disconnect, input timeout, adapter shutdown, or
++    // session change (issue #28: "Input release on disconnect,
++    // timeout, adapter shutdown, or session change"). Must immediately
++    // reflect an all-released state across every surface/button/touch
++    // this adapter exposes -- generalizes
++    // host::IEmulatorInputSink::releaseAll().
++    virtual void releaseAllInputs() = 0;
++
++    // Pull-based, mirrors host::IFrameSource::getLatestFrame()'s
++    // existing never-blocks/latest-frame-wins contract, generalized to
++    // a named surface instead of "the one DS bottom screen." Returns
++    // false if no frame has been produced yet for that surface ID (or
++    // the surface ID is unknown to this adapter).
++    virtual bool latestFrame(const std::string& surfaceId, SurfaceFrame& outFrame) = 0;
++};
++
++} // namespace melonds_remote::adapter
+diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/generic_input.h b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/generic_input.h
+new file mode 100644
+index 00000000..1945b0b5
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/generic_input.h
+@@ -0,0 +1,105 @@
++#pragma once
++
++// Generic input state (GitHub issue #28's "Generic protocol model" ->
++// "Generic input": replace dsButtons as the top-level protocol model
++// with a generic input state). Part of the Phase 1 contract groundwork
++// -- see docs/adr/0001-host-service-and-adapter-architecture.md. Not
++// yet used by the live client/host wire protocol (still
++// protocol.h's DS-specific ControllerState) -- adapters translate
++// generic DualDeck input into native emulator input once the Host
++// Service and a real non-DS adapter both exist; today only the fake
++// fixtures under adapter-sdk/fake_adapters/ consume this type.
++
++#include <cstdint>
++#include <string>
++#include <vector>
++
++namespace melonds_remote::adapter {
++
++// Generic gamepad button bitmask -- deliberately distinct from
++// melonds_remote::DSButton (protocol.h), which remains the DS-specific
++// wire bitmask the live v6 protocol actually sends today. A DS adapter
++// maps between the two (see the ADR's "DS compatibility adapter"
++// decision); a 3DS/Wii U adapter would map its own native buttons
++// straight into this generic set instead.
++enum GenericButton : uint32_t {
++    GenericButton_South     = 1u << 0,  // A / Cross
++    GenericButton_East      = 1u << 1,  // B / Circle
++    GenericButton_West      = 1u << 2,  // X / Square
++    GenericButton_North     = 1u << 3,  // Y / Triangle
++    GenericButton_DpadUp    = 1u << 4,
++    GenericButton_DpadDown  = 1u << 5,
++    GenericButton_DpadLeft  = 1u << 6,
++    GenericButton_DpadRight = 1u << 7,
++    GenericButton_L1        = 1u << 8,
++    GenericButton_R1        = 1u << 9,
++    GenericButton_L2        = 1u << 10, // digital click, when an adapter has no analog trigger of its own
++    GenericButton_R2        = 1u << 11,
++    GenericButton_L3        = 1u << 12, // left stick click
++    GenericButton_R3        = 1u << 13, // right stick click
++    GenericButton_Start     = 1u << 14,
++    GenericButton_Select    = 1u << 15,
++    GenericButton_Home      = 1u << 16, // Wii U Home / 3DS Home-equivalent, not a Steam Deck system button
++};
++
++// Versioned emulator action bitmask -- deliberately distinct from
++// melonds_remote::EmulatorAction (protocol.h), for the same reason as
++// GenericButton above.
++enum GenericEmulatorAction : uint32_t {
++    GenericAction_PauseResume     = 1u << 0,
++    GenericAction_FastForward     = 1u << 1,
++    GenericAction_SaveState       = 1u << 2,
++    GenericAction_LoadState       = 1u << 3,
++    GenericAction_SwapSurfaces    = 1u << 4, // generalizes protocol.h's EmulatorAction_SwapScreens
++    GenericAction_OpenClientMenu  = 1u << 5,
++    GenericAction_Disconnect      = 1u << 6,
++    GenericAction_QuitSession     = 1u << 7,
++    GenericAction_QuitApplication = 1u << 8,
++};
++
++// One active touch/stylus contact, associated with a specific video
++// surface by ID (issue #28: "One or more touch contacts associated
++// with a surface ID") -- unlike protocol.h's ControllerState, which has
++// exactly one implicit touch point on the one-and-only DS bottom
++// screen, this supports zero, one, or more simultaneous contacts across
++// however many touch-capable surfaces an adapter declares.
++struct TouchContact {
++    std::string surfaceId;
++    uint16_t x = 0;
++    uint16_t y = 0;
++};
++
++struct GenericInputState {
++    // Mirrors protocol.h's ControllerState.sequence/clientTimestampUs --
++    // same purpose (stale/out-of-order packet detection once this
++    // travels over real IPC), same wall-clock convention.
++    uint32_t sequence = 0;
++    uint64_t clientTimestampUs = 0;
++
++    uint32_t buttons = 0; // GenericButton bitmask, 1 = pressed
++    int16_t leftStickX = 0;
++    int16_t leftStickY = 0;
++    int16_t rightStickX = 0;
++    int16_t rightStickY = 0;
++
++    // Analog trigger values (issue #28: "Analog triggers where
++    // supported") -- 0..255, only meaningful when
++    // AdapterCapabilities::supportsAnalogTriggers is true (see
++    // adapter_contract.h); an adapter without analog triggers relies on
++    // GenericButton_L2/R2's digital click instead.
++    uint8_t leftTrigger = 0;
++    uint8_t rightTrigger = 0;
++
++    std::vector<TouchContact> touches;
++
++    // Optional microphone state (issue #28: "Optional ... microphone
++    // state") -- whether the client is actively streaming audio right
++    // now, not the audio itself (that stays a separate channel, see
++    // protocol.h's MicAudioFramePayload for the live DS-specific
++    // equivalent).
++    bool micActive = false;
++
++    uint32_t emulatorActions = 0; // GenericEmulatorAction bitmask, 1 = active this state
++};
++
++} // namespace melonds_remote::adapter
+diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/session_state.h b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/session_state.h
+new file mode 100644
+index 00000000..a5981817
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/session_state.h
+@@ -0,0 +1,35 @@
++#pragma once
++
++// Adapter session lifecycle (GitHub issue #28's "Emulator Adapter
++// Contract": "Session lifecycle: available, starting, running, paused,
++// stopped, error"). Part of the Phase 1 generic-contract groundwork --
++// see docs/adr/0001-host-service-and-adapter-architecture.md for why
++// this exists before the Host Service itself is extracted (Phase 2).
++
++namespace melonds_remote::adapter {
++
++enum class SessionState {
++    Available,  // adapter registered, no active emulation session
++    Starting,   // session initializing (e.g. ROM/title loading)
++    Running,    // actively emulating: producing frames, accepting input
++    Paused,     // emulation paused, session still owned by this adapter
++    Stopped,    // session ended cleanly (ROM ejected, emulator closed)
++    Error,      // session ended abnormally
++};
++
++const char* toString(SessionState state);
++
++// Valid transitions for the lifecycle above:
++//   Available -> Starting -> Running <-> Paused -> Stopped
++//   (any state) -> Error            -- an adapter may fault at any point
++//   Stopped -> Available            -- ready for a new session
++//   Error -> Available              -- ready for a new session after cleanup
++// Everything else (e.g. Available -> Paused, skipping Starting/Running
++// entirely) is rejected. This is deliberately a plain function rather
++// than embedding the check inside a state-machine class, so both the
++// fake adapter fixtures here and, later, a real Host Service session
++// tracker can reuse the exact same rule without depending on each
++// other's types.
++bool isValidTransition(SessionState from, SessionState to);
++
++} // namespace melonds_remote::adapter
+diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/video_surface.h b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/video_surface.h
+new file mode 100644
+index 00000000..a4412965
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/video_surface.h
+@@ -0,0 +1,76 @@
++#pragma once
++
++// Generic video surface description (GitHub issue #28's "Emulator
++// Adapter Contract": "One or more video surfaces", and "Generic
++// protocol model" -> "Video surfaces": replace the fixed single DS
++// framebuffer assumption with a list of described surfaces). Part of
++// the Phase 1 contract groundwork -- see
++// docs/adr/0001-host-service-and-adapter-architecture.md. Not yet used
++// by the live client/host wire protocol (still the fixed 256x192 DS
++// bottom screen, protocol.h's VideoFrame) -- that migration is later
++// work, see the ADR's "What this milestone does not do" section.
++
++#include <cstdint>
++#include <string>
++
++namespace melonds_remote::adapter {
++
++// Semantic role a surface plays, so client-side layout code can pick a
++// sensible default (e.g. "host shows top/TV, client shows bottom/
++// GamePad") without knowing about a specific emulated system.
++enum class SurfaceRole {
++    Top,       // DS/3DS top screen
++    Bottom,    // DS/3DS bottom (usually touch) screen
++    Tv,        // Wii U TV output
++    GamePad,   // Wii U GamePad screen
++    Auxiliary, // anything not covered above (reserved for future adapters)
++};
++
++// Only one pixel format exists today (matching protocol.h's existing
++// VideoFrame payload, BGRA8888 -- see docs/protocol.md's "Video
++// payload" section for the exact in-memory byte order and why). Kept as
++// an enum, not hardcoded, so a future adapter needing a different
++// format doesn't require changing this struct's shape.
++enum class PixelFormat {
++    Bgra8888,
++};
++
++enum class Orientation {
++    Landscape,
++    Portrait,
++};
++
++struct VideoSurfaceDescriptor {
++    // Stable within a session, e.g. "top", "bottom", "tv", "gamepad".
++    // Not free text for matching purposes -- code may compare this
++    // across frames of the same session to route a SurfaceFrame (see
++    // adapter_contract.h) to the right destination.
++    std::string surfaceId;
++    SurfaceRole role = SurfaceRole::Bottom;
++    uint16_t width = 0;
++    uint16_t height = 0;
++    PixelFormat pixelFormat = PixelFormat::Bgra8888;
++    Orientation orientation = Orientation::Landscape;
++
++    // Touch support and coordinate range (GitHub issue #28: "Touch
++    // surfaces and coordinate ranges"). touchRangeX/Y are the maximum
++    // valid coordinate (inclusive), matching protocol.h's existing
++    // kTouchMaxX/kTouchMaxY convention -- only meaningful when
++    // touchSupported is true.
++    bool touchSupported = false;
++    uint16_t touchRangeX = 0;
++    uint16_t touchRangeY = 0;
++
++    // Whether a session is considered failed if this surface never
++    // registers a frame (issue #28: "required, optional, locally
++    // displayed, remotely displayed, or selectable").
++    bool required = true;
++    bool locallyDisplayed = false;  // shown on the host's own screen
++    bool remotelyDisplayed = false; // streamed to the DualDeck client
++    bool selectable = false;        // user can choose to switch to/away from this surface
++
++    uint16_t nominalFps = 60;
++    uint16_t maxFps = 60;
++};
++
++} // namespace melonds_remote::adapter
+diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/src/session_state.cpp b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/session_state.cpp
+new file mode 100644
+index 00000000..dc101d2c
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/session_state.cpp
+@@ -0,0 +1,41 @@
++#include "melonds_remote/adapter/session_state.h"
++
++namespace melonds_remote::adapter {
++
++const char* toString(SessionState state) {
++    switch (state) {
++        case SessionState::Available: return "Available";
++        case SessionState::Starting:  return "Starting";
++        case SessionState::Running:   return "Running";
++        case SessionState::Paused:    return "Paused";
++        case SessionState::Stopped:   return "Stopped";
++        case SessionState::Error:     return "Error";
++    }
++    return "Unknown";
++}
++
++bool isValidTransition(SessionState from, SessionState to) {
++    // An adapter may fault out of any state, including into itself
++    // (repeated faults) -- always allowed.
++    if (to == SessionState::Error) {
++        return true;
++    }
++
++    switch (from) {
++        case SessionState::Available:
++            return to == SessionState::Starting;
++        case SessionState::Starting:
++            return to == SessionState::Running;
++        case SessionState::Running:
++            return to == SessionState::Paused || to == SessionState::Stopped;
++        case SessionState::Paused:
++            return to == SessionState::Running || to == SessionState::Stopped;
++        case SessionState::Stopped:
++            return to == SessionState::Available;
++        case SessionState::Error:
++            return to == SessionState::Available;
++    }
++    return false;
++}
++
++} // namespace melonds_remote::adapter
+diff --git a/src/frontend/qt_sdl/remote_server/host/adapter_bridge.cpp b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.cpp
+new file mode 100644
+index 00000000..2263a15a
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.cpp
+@@ -0,0 +1,82 @@
++#include "host/adapter_bridge.h"
++
++namespace melonds_remote::host {
++
++namespace {
++
++std::string pickTargetSurface(const melonds_remote::adapter::AdapterCapabilities& caps) {
++    for (const auto& s : caps.surfaces) {
++        if (s.remotelyDisplayed) return s.surfaceId;
++    }
++    if (!caps.surfaces.empty()) return caps.surfaces.front().surfaceId;
++    return {};
++}
++
++// Explicit bit-by-bit table rather than a raw bitmask cast: DSButton's
++// and GenericButton's low bits happen to agree for A/B/X/Y/D-pad/L/R
++// (both were designed with the same physical-button ordering) but
++// diverge from Start/Select onward, since GenericButton reserves bits
++// 10-13 for L2/R2/L3/R3 (concepts the DS has no equivalent of) before
++// its own Start/Select at bits 14/15 -- see generic_input.h's comment
++// on GenericButton for the full layout. Getting this table wrong would
++// silently swap which physical button does what, so it's written out
++// explicitly rather than "optimized" into a shift/mask trick.
++uint32_t dsButtonsToGenericButtons(uint16_t dsButtons) {
++    uint32_t generic = 0;
++    if (dsButtons & melonds_remote::DSButton_A) generic |= melonds_remote::adapter::GenericButton_South;
++    if (dsButtons & melonds_remote::DSButton_B) generic |= melonds_remote::adapter::GenericButton_East;
++    if (dsButtons & melonds_remote::DSButton_X) generic |= melonds_remote::adapter::GenericButton_West;
++    if (dsButtons & melonds_remote::DSButton_Y) generic |= melonds_remote::adapter::GenericButton_North;
++    if (dsButtons & melonds_remote::DSButton_Up) generic |= melonds_remote::adapter::GenericButton_DpadUp;
++    if (dsButtons & melonds_remote::DSButton_Down) generic |= melonds_remote::adapter::GenericButton_DpadDown;
++    if (dsButtons & melonds_remote::DSButton_Left) generic |= melonds_remote::adapter::GenericButton_DpadLeft;
++    if (dsButtons & melonds_remote::DSButton_Right) generic |= melonds_remote::adapter::GenericButton_DpadRight;
++    if (dsButtons & melonds_remote::DSButton_L) generic |= melonds_remote::adapter::GenericButton_L1;
++    if (dsButtons & melonds_remote::DSButton_R) generic |= melonds_remote::adapter::GenericButton_R1;
++    if (dsButtons & melonds_remote::DSButton_Start) generic |= melonds_remote::adapter::GenericButton_Start;
++    if (dsButtons & melonds_remote::DSButton_Select) generic |= melonds_remote::adapter::GenericButton_Select;
++    return generic;
++}
++
++} // namespace
++
++AdapterBridge::AdapterBridge(melonds_remote::adapter::IEmulatorAdapter& adapter) : adapter_(adapter) {
++    targetSurfaceId_ = pickTargetSurface(adapter_.capabilities());
++}
++
++void AdapterBridge::applyControllerState(const ControllerState& state) {
++    melonds_remote::adapter::GenericInputState generic;
++    generic.sequence = state.sequence;
++    generic.clientTimestampUs = state.clientTimestampUs;
++    generic.buttons = dsButtonsToGenericButtons(state.dsButtons);
++    generic.leftStickX = state.leftStickX;
++    generic.leftStickY = state.leftStickY;
++    generic.rightStickX = state.rightStickX;
++    generic.rightStickY = state.rightStickY;
++    if (state.touchActive) {
++        generic.touches.push_back(
++            melonds_remote::adapter::TouchContact{targetSurfaceId_, state.touchX, state.touchY});
++    }
++    // Bit layout is intentionally identical between EmulatorAction
++    // (protocol.h) and GenericEmulatorAction (generic_input.h) -- see
++    // the latter's comment -- so this is a direct pass-through, not a
++    // lookup table like the buttons above.
++    generic.emulatorActions = state.emulatorActions;
++    adapter_.applyGenericInput(generic);
++}
++
++void AdapterBridge::releaseAll() {
++    adapter_.releaseAllInputs();
++}
++
++bool AdapterBridge::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) {
++    melonds_remote::adapter::SurfaceFrame frame;
++    if (!adapter_.latestFrame(targetSurfaceId_, frame)) {
++        return false;
++    }
++    outFrame = std::move(frame.pixels);
++    outFrameIndex = frame.frameIndex;
++    return true;
++}
++
++} // namespace melonds_remote::host
+diff --git a/src/frontend/qt_sdl/remote_server/host/adapter_bridge.h b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.h
+new file mode 100644
+index 00000000..b82f3ea2
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.h
+@@ -0,0 +1,66 @@
++#pragma once
++
++// The "DS compatibility adapter" decided in
++// docs/adr/0001-host-service-and-adapter-architecture.md section 4:
++// translates between NetServer's existing DS-specific
++// IEmulatorInputSink/IFrameSource interfaces and a connected
++// melonds_remote::adapter::IEmulatorAdapter (in-process, or
++// out-of-process via adapter-sdk/ipc's AdapterIpcServer -- this class
++// doesn't know or care which). This is what lets NetServer, and the
++// live client<->host wire protocol it speaks (kProtocolVersion 6,
++// unchanged by this class), be driven by any adapter implementing the
++// generic contract instead of only the built-in
++// LoggingInputSink/SyntheticFrameSource stand-ins -- without the wire
++// protocol itself needing to become surface/generic-input-aware yet.
++//
++// Only valid for a DS-shaped adapter today: exactly one primary video
++// surface is selected at construction time (the first one flagged
++// remotelyDisplayed, or the first surface at all if none is) and used
++// for every subsequent getLatestFrame()/touch call -- there is no
++// mechanism here for surface selection, multiple simultaneous
++// surfaces, or non-DS touch-coordinate-range rescaling, since the wire
++// protocol this feeds is still fixed at the native 256x192 DS
++// resolution. A true multi-surface Host Service is later work (see the
++// ADR's "What this ADR does not decide yet").
++//
++// Microphone audio is deliberately NOT bridged here: the generic
++// contract's GenericInputState only carries a micActive flag, not raw
++// PCM samples (see generic_input.h) -- actually forwarding audio
++// through IEmulatorAdapter would require a contract change this class
++// doesn't make. A caller wiring this up alongside real mic support
++// needs a separate IMicAudioSink, same as today's LoggingMicAudioSink.
++
++#include <string>
++
++#include "host/emulator_input_sink.h"
++#include "host/frame_source.h"
++#include "melonds_remote/adapter/adapter_contract.h"
++
++namespace melonds_remote::host {
++
++class AdapterBridge : public IEmulatorInputSink, public IFrameSource {
++public:
++    // `adapter` must outlive this object and must already have valid
++    // capabilities() (i.e. be connected, for an AdapterIpcServer-backed
++    // instance) by the time this constructor runs, since the target
++    // surface is picked once here, not re-picked per call.
++    explicit AdapterBridge(melonds_remote::adapter::IEmulatorAdapter& adapter);
++
++    // IEmulatorInputSink
++    void applyControllerState(const ControllerState& state) override;
++    void releaseAll() override;
++
++    // IFrameSource
++    bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) override;
++
++    // The surface ID this bridge reads frames from / attaches touch
++    // contacts to -- exposed for logging/diagnostics, not required for
++    // normal use.
++    const std::string& targetSurfaceId() const { return targetSurfaceId_; }
++
++private:
++    melonds_remote::adapter::IEmulatorAdapter& adapter_;
++    std::string targetSurfaceId_;
++};
++
++} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/device_approval_manager.cpp b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.cpp
 new file mode 100644
-index 0000000..2429912
+index 00000000..24299127
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.cpp
 @@ -0,0 +1,163 @@
@@ -2011,7 +2778,7 @@ index 0000000..2429912
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/device_approval_manager.h b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.h
 new file mode 100644
-index 0000000..a472cba
+index 00000000..a472cbad
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.h
 @@ -0,0 +1,137 @@
@@ -2154,7 +2921,7 @@ index 0000000..a472cba
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/emulator_input_sink.h b/src/frontend/qt_sdl/remote_server/host/emulator_input_sink.h
 new file mode 100644
-index 0000000..b6f99b8
+index 00000000..b6f99b86
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/emulator_input_sink.h
 @@ -0,0 +1,34 @@
@@ -2194,7 +2961,7 @@ index 0000000..b6f99b8
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/frame_source.h b/src/frontend/qt_sdl/remote_server/host/frame_source.h
 new file mode 100644
-index 0000000..903d848
+index 00000000..903d848a
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/frame_source.h
 @@ -0,0 +1,38 @@
@@ -2238,7 +3005,7 @@ index 0000000..903d848
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/mic_audio_sink.h b/src/frontend/qt_sdl/remote_server/host/mic_audio_sink.h
 new file mode 100644
-index 0000000..34cb8a5
+index 00000000..34cb8a58
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/mic_audio_sink.h
 @@ -0,0 +1,35 @@
@@ -2279,7 +3046,7 @@ index 0000000..34cb8a5
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.cpp b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
 new file mode 100644
-index 0000000..cd68e02
+index 00000000..cd68e02d
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
 @@ -0,0 +1,807 @@
@@ -3092,7 +3859,7 @@ index 0000000..cd68e02
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.h b/src/frontend/qt_sdl/remote_server/host/net_server.h
 new file mode 100644
-index 0000000..e966218
+index 00000000..e9662188
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.h
 @@ -0,0 +1,294 @@
@@ -3392,7 +4159,7 @@ index 0000000..e966218
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/input_state_tracker.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/input_state_tracker.h
 new file mode 100644
-index 0000000..48014b9
+index 00000000..48014b9b
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/input_state_tracker.h
 @@ -0,0 +1,64 @@
@@ -3462,7 +4229,7 @@ index 0000000..48014b9
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
 new file mode 100644
-index 0000000..519be63
+index 00000000..519be637
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
 @@ -0,0 +1,431 @@
@@ -3899,7 +4666,7 @@ index 0000000..519be63
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/rate_limiter.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/rate_limiter.h
 new file mode 100644
-index 0000000..f1dc741
+index 00000000..f1dc7418
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/rate_limiter.h
 @@ -0,0 +1,43 @@
@@ -3948,7 +4715,7 @@ index 0000000..f1dc741
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/touch_mapping.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/touch_mapping.h
 new file mode 100644
-index 0000000..4f628e8
+index 00000000..4f628e84
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/touch_mapping.h
 @@ -0,0 +1,39 @@
@@ -3993,7 +4760,7 @@ index 0000000..4f628e8
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/input_state_tracker.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/input_state_tracker.cpp
 new file mode 100644
-index 0000000..a1aff53
+index 00000000..a1aff532
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/input_state_tracker.cpp
 @@ -0,0 +1,49 @@
@@ -4048,7 +4815,7 @@ index 0000000..a1aff53
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
 new file mode 100644
-index 0000000..b959afe
+index 00000000..b959afeb
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
 @@ -0,0 +1,433 @@
@@ -4487,7 +5254,7 @@ index 0000000..b959afe
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/rate_limiter.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/rate_limiter.cpp
 new file mode 100644
-index 0000000..1c0700b
+index 00000000..1c0700bf
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/rate_limiter.cpp
 @@ -0,0 +1,38 @@
@@ -4531,7 +5298,7 @@ index 0000000..1c0700b
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/touch_mapping.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/touch_mapping.cpp
 new file mode 100644
-index 0000000..b8723f3
+index 00000000..b8723f39
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/touch_mapping.cpp
 @@ -0,0 +1,56 @@

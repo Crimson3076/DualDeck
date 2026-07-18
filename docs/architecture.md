@@ -65,13 +65,25 @@ host/melonds-patches/ 0001-remote-server-integration.patch: implements the
                       docs/melonds-integration-analysis.md against real
                       melonDS, vendoring protocol/ + host/remote-server's
                       networking code (unchanged) into melonDS's own
-                      build alongside three new melonDS-specific adapter
-                      files (MelonDSFrameSource, MelonDSInputSink,
-                      RemoteServerBridge). Confirmed to build from a
-                      fresh clone and its handshake/auth verified against
-                      the running patched binary; the video path is not
-                      yet exercised with a real frame -- see
-                      host/melonds-patches/README.md.
+                      build. melonDS's own DS-specific pieces are
+                      MelonDSFrameSource/MelonDSInputSink/
+                      MelonDSMicAudioSink (unchanged low-level sinks) and
+                      MelonDSAdapter (GitHub issue #28 Phase 2 -- wraps
+                      those sinks and implements
+                      melonds_remote::adapter::IEmulatorAdapter, the
+                      generic contract's "reference implementation").
+                      RemoteServerBridge wires MelonDSAdapter through the
+                      same host::AdapterBridge host/remote-server's
+                      --adapter-ipc mode uses (vendored verbatim into the
+                      patch) into the same in-process NetServer as
+                      before -- see "Emulator identity model" below and
+                      docs/adr/0001-host-service-and-adapter-architecture.md
+                      section 5 for the full design. Confirmed to build
+                      from a fresh clone; handshake/auth, the real video
+                      path, and real button-driven input have all been
+                      verified end-to-end against the running patched
+                      binary -- see host/melonds-patches/README.md and
+                      docs/known-limitations.md.
 
 client/               Steam Deck client (SDL3). Depends on protocol/ only.
                       - net_client.h/.cpp      control/input/video sockets
@@ -336,13 +348,19 @@ Unix-domain-socket `AdapterIpcServer`/`AdapterIpcClient` pair, not just
 a design decision), the protocol-migration/backward-compatibility
 decision implemented as `AdapterBridge`, and fake DS/3DS/Wii U capability
 fixtures plus a real out-of-process synthetic adapter proving the
-contract is genuinely reusable end-to-end through a real client. **Still
-remaining** (tracked as later phases on the issue itself, not attempted
-yet): actually extracting a standalone Host Service decoupled from the
-melonDS patch (`host/remote-server` can already drive a real
-out-of-process adapter via `--adapter-ipc`, but melonDS's own patch
-still vendors its own copy of `NetServer` in-process rather than
-connecting as an adapter over this channel) -- rest of issue #28 Phase 2;
+contract is genuinely reusable end-to-end through a real client. melonDS
+itself now goes through the same contract too (`MelonDSAdapter` +
+`host::AdapterBridge`, vendored into the patch), fulfilling "melonDS's
+RemoteServerBridge is the reference implementation" from the ADR's
+section 1 -- but still in-process, not over IPC. **Still remaining**
+(tracked as later phases on the issue itself, not attempted yet):
+actually extracting a standalone Host Service decoupled from the melonDS
+patch (`host/remote-server` can already drive a real out-of-process
+adapter via `--adapter-ipc`, but melonDS's own patch still vendors its
+own copy of `NetServer` in-process rather than connecting as an
+out-of-process adapter over that same channel -- blocked on deciding how
+device-approval's Qt dialog works across a process boundary, see the
+ADR section 5) -- rest of issue #28 Phase 2;
 a real 3DS or Wii U adapter (the fixtures under
 `adapter-sdk/fake_adapters/` are test doubles, not actual emulator
 integrations, and no target emulator has been selected for either

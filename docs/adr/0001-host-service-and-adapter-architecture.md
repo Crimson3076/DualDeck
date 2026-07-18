@@ -1,9 +1,9 @@
 # ADR 0001: Host Service + Adapter Architecture
 
-**Status**: Accepted; section 3's IPC transport and section 4's DS
-compatibility adapter are now implemented (see their "Implemented"
-notes below) -- see "What this ADR does not decide yet" for what's
-still outstanding.
+**Status**: Accepted; section 3's IPC transport, section 4's DS
+compatibility adapter, and section 5's melonDS reference adapter are now
+implemented (see their "Implemented" notes below) -- see "What this ADR
+does not decide yet" for what's still outstanding.
 **Related**: GitHub issue #28 ("Architecture: Decouple DualDeck from
 melonDS and add 3DS/Wii U emulator adapters")
 
@@ -265,6 +265,60 @@ by anything in this ADR, and will continue to hold once the internal
 generic-model translation described above sits behind that same
 unchanged wire boundary.
 
+### 5. melonDS's `RemoteServerBridge` is now the reference `IEmulatorAdapter` implementation, in-process
+
+**Implemented** (`host/melonds-patches/0001-remote-server-integration.patch`,
+GitHub issue #28 Phase 2 continuation): melonDS's DS-specific input/video
+handling goes through the generic adapter contract now, fulfilling
+section 1's "melonDS's `RemoteServerBridge` is the reference
+implementation-to-be" line. A new `MelonDSAdapter` class implements
+`melonds_remote::adapter::IEmulatorAdapter` -- it wraps the same
+`MelonDSInputSink`/`MelonDSFrameSource` this patch already used
+(unchanged internally), translating `GenericInputState` back to a wire
+`ControllerState` via the exact inverse of `host::AdapterBridge`'s
+DS-button table (see that class's own comment for why it's an explicit
+bit-by-bit table, not a shift/mask trick) before handing it to
+`MelonDSInputSink` exactly as before. `RemoteServerBridge` now
+constructs `MelonDSAdapter` + `host::AdapterBridge` (the identical class
+`host/remote-server`'s `--adapter-ipc` mode uses) and hands the bridge
+to `NetServer` instead of exposing `MelonDSInputSink`/`MelonDSFrameSource`
+as `IEmulatorInputSink`/`IFrameSource` directly.
+
+**Deliberately still in-process, not out-of-process**: this reuses the
+ADR's own section 3 allowance ("for an adapter that runs in the same
+process as the Host Service... no IPC is needed at all") rather than
+spawning `melonds-remote-server` as a child process and connecting over
+`adapter-sdk/ipc/`. `NetServer`, `DeviceApprovalManager`, LAN discovery,
+and `MelonDSMicAudioSink` (mic audio is wired directly to `NetServer` as
+its own `IMicAudioSink`, independent of the adapter contract, which only
+covers video + controller/touch input) are all completely untouched --
+same construction pattern, same public `RemoteServerBridge` interface,
+so `EmuInstance.cpp`/`EmuInstanceInput.cpp`/`EmuInstanceAudio.cpp`/
+`Window.cpp`/`Config.cpp` needed **zero changes**. This was a deliberate
+scope choice: a true out-of-process melonDS adapter (spawning
+`melonds-remote-server --adapter-ipc` as a child process) was considered
+and set aside for a later milestone, because it opens a real, unresolved
+question -- `DeviceApprovalManager`'s pending-request queue and
+`approveDevice()`/`denyDevice()` are in-process method calls with no
+persisted "pending" state on disk, so a Qt approval dialog running in a
+different process than the one actually holding `DeviceApprovalManager`
+would need a new cross-process RPC surface that doesn't exist yet. Doing
+the in-process version first proves the contract genuinely drives a real
+emulator (not just fake fixtures and a synthetic test-pattern generator)
+with zero risk to today's device-approval UX, leaving that harder
+process-boundary question for when out-of-process operation is actually
+attempted.
+
+**Verified**: the full `interactive_pipeline_test.py`-style real-pipeline
+proof (see `docs/known-limitations.md` for the exact run) -- a real UDP
+`ControllerState` packet for each of A/B/Up, sent through the actual
+`NetServer` → `AdapterBridge` → `MelonDSAdapter` → `MelonDSInputSink` →
+`EmuInstance::inputProcess()` → `NDS::SetKeyMask()` chain, produced three
+distinct, correctly-mapped colors (Red/Green/Blue respectively) via
+`tests/homebrew-test-rom`'s real, JIT-executing ROM -- conclusive proof
+the double translation (wire `DSButton` → `GenericButton` → wire
+`DSButton` again) didn't scramble which physical button does what.
+
 ## Consequences
 
 **Positive**: a concrete, testable target contract exists for a future
@@ -295,13 +349,15 @@ attempted here:
 - Actually extracting `NetServer`/discovery/auth/diagnostics out of the
   melonDS-specific patch into a standalone Host Service process.
   `host/remote-server` already builds and runs as its own binary
-  (`melonds-remote-server`) and can now drive a real out-of-process
-  adapter via `--adapter-ipc`, but melonDS's own patch
-  (`RemoteServerBridge`) still vendors its own copy of `NetServer`
-  in-process rather than talking to a standalone Host Service over this
-  channel -- making melonDS itself connect as an out-of-process adapter
-  is the natural next milestone, now that `AdapterBridge` and the IPC
-  mechanism are both proven.
+  (`melonds-remote-server`) and can drive a real out-of-process adapter
+  via `--adapter-ipc`; melonDS's own patch now drives the exact same
+  `NetServer` through the generic contract too (section 5), but still
+  in-process -- `RemoteServerBridge` vendors its own copy of `NetServer`
+  rather than talking to a standalone Host Service over
+  `adapter-sdk/ipc/`. Making melonDS connect as a genuinely
+  out-of-process adapter is the natural next milestone, blocked on
+  deciding how device-approval's Qt dialog works across a process
+  boundary first (see section 5's "deliberately still in-process" note).
 - A real 3DS or Wii U adapter (issue #28 Phases 4/5) -- the fake
   fixtures here are capability-shape test doubles only, built with no
   target emulator selected for either system.

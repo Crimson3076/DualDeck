@@ -2371,6 +2371,83 @@ were re-run against the default (no `--adapter-ipc`) invocation after
 every change in this milestone and continued to pass, confirming
 today's released client/host behavior is unaffected.
 
+## melonDS itself now implements the generic adapter contract, in-process (GitHub issue #28, Phase 2 continuation)
+
+Continues the two entries above (same GitHub issue #28): those built
+`AdapterBridge` and proved it against a real out-of-process synthetic
+adapter, but explicitly left `host/melonds-patches`'s `RemoteServerBridge`
+untouched. This entry closes that gap for melonDS specifically.
+
+**What this implements**: a new `MelonDSAdapter` class
+(`host/melonds-patches/0001-remote-server-integration.patch`'s
+`remote_server/MelonDSAdapter.{h,cpp}`) implements
+`melonds_remote::adapter::IEmulatorAdapter`, wrapping the same
+`MelonDSInputSink`/`MelonDSFrameSource` the patch already used
+(internally unchanged) and translating `GenericInputState` back into a
+wire `ControllerState` via the exact inverse of `host::AdapterBridge`'s
+DS-button table. `RemoteServerBridge` now constructs `MelonDSAdapter` +
+`host::AdapterBridge` (the identical class, vendored verbatim into the
+patch alongside the rest of `adapter-sdk`'s contract headers) and hands
+the bridge to `NetServer`, instead of exposing
+`MelonDSInputSink`/`MelonDSFrameSource` as
+`IEmulatorInputSink`/`IFrameSource` directly.
+
+**Deliberately in-process, not out-of-process**: this does *not* spawn
+`melonds-remote-server` as a child process or connect over
+`adapter-sdk/ipc/` -- it reuses the ADR's "an adapter that runs in the
+same process as the Host Service needs no IPC at all" allowance instead.
+`NetServer`, `DeviceApprovalManager`, LAN discovery, and
+`MelonDSMicAudioSink` are all completely untouched (mic audio stays
+wired directly to `NetServer` as its own sink, independent of the
+adapter contract, which only covers video + controller/touch input) --
+same public `RemoteServerBridge` interface as before, so
+`EmuInstance.cpp`/`EmuInstanceInput.cpp`/`EmuInstanceAudio.cpp`/
+`Window.cpp`/`Config.cpp`/`EmuSettingsDialog.*` needed **zero changes**,
+confirmed by diffing the regenerated patch against the previous one:
+every change is contained to `remote_server/` (new `MelonDSAdapter.h/.cpp`,
+vendored `adapter_sdk/` contract headers + `host/adapter_bridge.h/.cpp`,
+and a small `RemoteServerBridge.{h,cpp}`/`CMakeLists.txt` rewire).
+
+A true out-of-process melonDS adapter (spawning `melonds-remote-server
+--adapter-ipc` as a child process, connecting over the socket like the
+synthetic adapter does) was considered and deliberately set aside: it
+opens a real, unresolved design question that doing the in-process
+version first avoids risking anything on -- `DeviceApprovalManager`'s
+pending-request queue and `approveDevice()`/`denyDevice()` are in-process
+method calls with no cross-process API, so a Qt approval dialog running
+in a different process than the one holding `DeviceApprovalManager`
+would need a new RPC surface that doesn't exist yet (the adapter IPC
+channel only covers session/video/input, deliberately not device
+management -- that's a Host Service concern per the ADR). Tracked as
+future work on issue #28, not attempted here.
+
+**Verified**: rebuilt the patched melonDS binary (fresh clone at the
+pinned commit, patch reapplied, `MelonDSAdapter.cpp`/vendored
+`adapter_bridge.cpp`/`session_state.cpp` all compiled clean under the
+same strict warnings as the rest of the patch) and ran the real pipeline
+proof from `tests/homebrew-test-rom/`: direct-booted the real,
+JIT-executing `test.nds` ROM under Xvfb with `MELONDS_REMOTE_ENABLE=1`,
+confirmed the v6 Hello/HelloAck handshake and identity
+(`nds`/`Nintendo DS`, `melonds`/`melonDS`/`1.1`) round-tripped correctly,
+then sent real UDP `ControllerState` packets for A/B/Up in turn through
+the actual `NetServer` → `AdapterBridge` → `MelonDSAdapter` →
+`MelonDSInputSink` → `EmuInstance::inputProcess()` →
+`NDS::SetKeyMask()` → CPU register read → `arm9.c`'s KEYINPUT-reactive
+backdrop-color write → `GPU::GetFramebuffers()` →
+`MelonDSAdapter::pushFrame()` → `AdapterBridge::getLatestFrame()` →
+`NetServer`'s video thread → client chain. Each button produced a
+distinct, stable, correctly-mapped color (A → red channel, B → green,
+Up → blue, matching the exact mapping `tests/homebrew-test-rom/README.md`
+already documented) -- conclusive proof the double bit-table translation
+(wire `DSButton` → `GenericButton` → wire `DSButton` again) didn't
+scramble which physical button does what.
+(`tests/homebrew-test-rom/interactive_pipeline_test.py` itself is stale
+-- written for protocol v1, predating v2-v6's Hello/HelloAck growth --
+so this verification used an ad-hoc probe speaking the current v6
+framing instead; fixing that stale script is tracked separately, not
+blocking here since `tests/smoke_test.py`'s handshake logic already
+covers the current wire format.)
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
