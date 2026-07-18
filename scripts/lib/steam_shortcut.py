@@ -11,9 +11,15 @@ on a stock SteamOS Desktop Mode Python with nothing extra installed).
 The format itself is community-reverse-engineered, not officially
 documented by Valve, so this is deliberately conservative:
 
-- Refuses to run while Steam is running (it caches shortcuts.vdf in
-  memory and can silently overwrite this script's change on its next
-  save) unless --force is passed.
+- Refuses to run while Steam is running *and a write is actually
+  needed* (it caches shortcuts.vdf in memory and can silently overwrite
+  this script's change on its next save) unless --force is passed. A
+  run that finds the shortcut already exactly matching --exe/--name/
+  --launch-options (the common case for a routine version update, since
+  none of those change between releases) never touches the file at all
+  -- nothing for Steam's cache to clobber, so no restart is needed
+  either. This is what makes updates safe to apply without closing
+  Steam first.
 - Always backs up the existing file next to itself before writing.
 - Parses its own freshly-written output back immediately as a sanity
   check, and restores the backup if that fails, rather than leaving a
@@ -182,21 +188,51 @@ def remove_shortcut(root: dict, exe: str, appname: str) -> bool:
     return True
 
 
+def _target_fields(appname: str, exe: str, startdir: str, launch_options: str) -> dict:
+    """The fields upsert_shortcut sets on a matched (or new) entry -- kept
+    as its own function so shortcut_up_to_date can compare against exactly
+    what a real write would produce, without duplicating the field list."""
+    return {
+        "Exe": exe,
+        "AppName": appname,
+        "StartDir": startdir,
+        "LaunchOptions": launch_options,
+        "appid": legacy_shortcut_appid(exe, appname),
+    }
+
+
+def find_matching_entry(root: dict, exe: str, appname: str):
+    """Returns (key, entry) for the shortcut matching --exe, or --name as a
+    fallback (see remove_shortcut's docstring for why), or (None, None)."""
+    for key, entry in root["shortcuts"].items():
+        if isinstance(entry, dict) and (entry.get("Exe") == exe or entry.get("AppName") == appname):
+            return key, entry
+    return None, None
+
+
+def shortcut_up_to_date(root: dict, appname: str, exe: str, startdir: str, launch_options: str) -> bool:
+    """True if a matching entry already has exactly the fields upsert_shortcut
+    would set -- i.e. calling it on this root would be a pure no-op write.
+    False (never up to date) when there's no matching entry at all, since
+    that means upsert_shortcut would add a brand-new one."""
+    _, entry = find_matching_entry(root, exe, appname)
+    if entry is None:
+        return False
+    target = _target_fields(appname, exe, startdir, launch_options)
+    return all(entry.get(k) == v for k, v in target.items())
+
+
 def upsert_shortcut(root: dict, appname: str, exe: str, startdir: str, launch_options: str) -> None:
     shortcuts = root["shortcuts"]
-    for key, entry in shortcuts.items():
+    _, entry = find_matching_entry(root, exe, appname)
+    if entry is not None:
         # Falls back to matching by AppName alone (see remove_shortcut's
         # docstring) so a pre-existing entry from before this project used a
         # fixed central install directory gets migrated in place instead of
         # left behind as an orphaned duplicate -- hence Exe must be
         # overwritten here too, not just the other fields.
-        if isinstance(entry, dict) and (entry.get("Exe") == exe or entry.get("AppName") == appname):
-            entry["Exe"] = exe
-            entry["AppName"] = appname
-            entry["StartDir"] = startdir
-            entry["LaunchOptions"] = launch_options
-            entry["appid"] = legacy_shortcut_appid(exe, appname)
-            return
+        entry.update(_target_fields(appname, exe, startdir, launch_options))
+        return
 
     next_index = 0
     existing_indices = {int(k) for k in shortcuts.keys() if k.isdigit()}
@@ -248,14 +284,6 @@ def main() -> int:
         print(f"error: --exe path does not exist: {exe}", file=sys.stderr)
         return 1
 
-    if steam_is_running() and not args.force:
-        print(
-            "error: Steam appears to be running. Quit Steam first (it can silently overwrite "
-            "this change when it next saves shortcuts.vdf), or pass --force if you're sure.",
-            file=sys.stderr,
-        )
-        return 1
-
     userdata_dirs = find_userdata_dirs()
     if args.user:
         # Optional override for scripted/advanced use -- normal usage on
@@ -283,16 +311,53 @@ def main() -> int:
         for d in userdata_dirs:
             print(f"  {os.path.basename(d)}")
 
-    any_written = False
+    # Pre-scan (read-only, single parse per file): does this run need to
+    # change anything on disk anywhere? A routine version update where the
+    # shortcut already has the right Exe/AppName/StartDir/LaunchOptions --
+    # true for every ordinary release, since none of those change between
+    # versions -- writes nothing at all, so there's nothing for Steam's
+    # in-memory shortcuts.vdf cache to ever clobber, and the Steam-running
+    # safety gate below doesn't even apply. This is what lets an update be
+    # applied without closing Steam first.
+    roots: dict[str, dict] = {}
+    any_change_needed = False
     for userdata_dir in userdata_dirs:
         shortcuts_path = os.path.join(userdata_dir, "config", "shortcuts.vdf")
-
         root = load_shortcuts(shortcuts_path)
+        roots[userdata_dir] = root
+        if args.remove:
+            _, entry = find_matching_entry(root, exe, args.name)
+            if entry is not None:
+                any_change_needed = True
+        elif not shortcut_up_to_date(root, args.name, exe, os.path.dirname(exe), args.launch_options):
+            any_change_needed = True
+
+    if any_change_needed and not args.dry_run and steam_is_running() and not args.force:
+        print(
+            "error: Steam appears to be running. Quit Steam first (it can silently overwrite "
+            "this change when it next saves shortcuts.vdf), or pass --force if you're sure.",
+            file=sys.stderr,
+        )
+        return 1
+
+    any_written = False
+    any_already_uptodate = False
+    for userdata_dir in userdata_dirs:
+        shortcuts_path = os.path.join(userdata_dir, "config", "shortcuts.vdf")
+        root = roots[userdata_dir]
+
         if args.remove:
             if not remove_shortcut(root, exe, args.name):
                 print(f"No shortcut for {exe!r} found in {shortcuts_path} -- nothing to remove")
                 continue
         else:
+            if shortcut_up_to_date(root, args.name, exe, os.path.dirname(exe), args.launch_options):
+                if args.dry_run:
+                    print(f"Would leave \"{args.name}\" shortcut in {shortcuts_path} unchanged (already up to date)")
+                else:
+                    print(f"\"{args.name}\" shortcut in {shortcuts_path} is already up to date -- nothing to write")
+                any_already_uptodate = True
+                continue
             upsert_shortcut(root, args.name, exe, os.path.dirname(exe), args.launch_options)
         new_data = write_vdf_map(root)
 
@@ -333,6 +398,9 @@ def main() -> int:
         if args.remove:
             print("Nothing removed -- shortcut not found for any local Steam user "
                   "(already removed, or never installed).")
+            return 0
+        if any_already_uptodate:
+            print("Already up to date -- no restart needed.")
             return 0
         print("error: nothing was written -- see errors above", file=sys.stderr)
         return 1

@@ -2448,6 +2448,73 @@ framing instead; fixing that stale script is tracked separately, not
 blocking here since `tests/smoke_test.py`'s handshake logic already
 covers the current wire format.)
 
+## Atomic updates: Steam no longer needs to be closed to update
+
+**The problem, reported by the user**: applying an update ("Check for
+updates" from either menu, or the client's silent auto-update on
+launch) always ended with a "Restart Steam" instruction, and in the
+worst case an update applied while Steam was running could be silently
+undone. Tracing this to its root cause: `apply-update.sh` (both client
+and host) always finished by re-running `install-steam-shortcut.sh
+--force`, and `steam_shortcut.py` *unconditionally* rewrote
+`shortcuts.vdf` on every such run -- even though a routine version
+update never actually changes the shortcut's Exe, AppName, StartDir, or
+LaunchOptions (they're all derived from the fixed central install
+directory, not the release version). `steam_shortcut.py`'s own
+docstring already documented the resulting risk: Steam caches
+`shortcuts.vdf` in memory and "can silently overwrite this script's
+change on its next save" -- which is exactly why "restart Steam" was
+the standing advice, and why an update applied by the *silent*
+auto-update-on-launch path (which never showed that advice at all) was
+riskier still.
+
+**The fix**: `scripts/lib/steam_shortcut.py` now checks, before doing
+anything else, whether the shortcut already has exactly the fields a
+write would produce (`shortcut_up_to_date()`, comparing against
+`find_matching_entry()`'s result). If it does -- the case for every
+ordinary update -- `shortcuts.vdf` is never opened for writing at all,
+and the Steam-running/`--force` safety gate doesn't even apply, since
+there's nothing at risk of being clobbered. This makes updates
+genuinely atomic with respect to Steam: the only thing that changes on
+disk is the already-safe stage-then-rename swap of the installed
+program files in `~/.config/melonds-remote-client/install/` (or the
+host equivalent), which Linux handles correctly even while the running
+process has the old files open. `--dry-run` was also fixed to never
+need `--force` (it never writes regardless of whether Steam is running
+-- a pre-existing minor inconsistency, fixed as part of the same
+restructuring). A genuine change (e.g. different `--launch-options`,
+or migrating a stale pre-central-install-dir shortcut via the AppName
+fallback) still goes through the exact same Steam-running/`--force`
+gate as before -- this only removes the check for the common no-op case,
+it doesn't weaken the protection for a real write.
+
+`scripts/build-release.sh`'s "Check for updates" menu choice (both
+client and host) now captures `apply-update.sh`'s own output and only
+shows the "Restart Steam" message when that output actually mentions
+writing the file -- so the common case now just says "Updated to
+vX.Y.Z." with no restart instruction. `docs/steam-deck-setup.md` and
+`docs/bazzite-host-setup.md` updated to match; **Add to Steam**
+(genuinely creating a brand-new shortcut) still recommends closing
+Steam first, since that's an intentional, real write every time.
+
+**Verified**: manual testing against a fake `$HOME` and a fake Steam
+userdata directory, following this project's established convention for
+`steam_shortcut.py` (no automated test suite exists for it -- see the
+Steam-shortcut entries above): a fresh install writes as before; running
+again with identical arguments while a process literally named `steam`
+was running (spawned as a same-named script so `pgrep -x steam` matches
+it) succeeded with exit 0, left `shortcuts.vdf` byte-for-byte unchanged,
+and required no `--force`; a genuine change (different
+`--launch-options`) under the same "Steam running" condition was still
+correctly refused without `--force`, and succeeded once `--force` was
+given; `--remove` run twice was idempotent (second run: "nothing to
+remove", exit 0, no Steam gate); the pre-existing AppName-fallback
+migration path (stale `--exe`, matching `--name`) still correctly
+detects a change is needed and writes. `bash -n` on the full
+`scripts/build-release.sh` and each of its 15 heredoc-embedded scripts
+individually, plus `python3 -m py_compile` on `steam_shortcut.py`, all
+pass.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

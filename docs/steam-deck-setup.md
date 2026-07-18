@@ -41,14 +41,18 @@ one via `kdialog` on SteamOS/Bazzite's KDE Plasma desktop, or a plain
 numbered prompt if run from a terminal without `kdialog`) with four
 choices: **Launch melonDS Remote now** (a quick test, connects like
 step 3 below), **Add to Steam** (registers a Gaming Mode shortcut --
-**close Steam first**, since it edits Steam's library file directly and
-Steam can silently undo the change if it's still running), **Remove
-from Steam / uninstall**, and **Check for updates / update** (offers to
-download and install a newer release automatically if one exists).
-Everything else in `client/` -- `run-client.sh`,
-`install-steam-shortcut.sh`, etc. -- moved into `client/internal/`; the
-menu calls those for you, so there's no need to open that folder or
-figure out which script applies.
+**close Steam first**, since it's creating a brand-new entry in Steam's
+library file and Steam can silently undo that if it's still running),
+**Remove from Steam / uninstall**, and **Check for updates / update**
+(offers to download and install a newer release automatically if one
+exists -- unlike **Add to Steam**, this does **not** require closing
+Steam: a routine update never changes the shortcut's Exe/name/launch
+options, so it never touches Steam's library file at all, only the
+installed program files, which are safe to replace while Steam and the
+client are both running). Everything else in `client/` --
+`run-client.sh`, `install-steam-shortcut.sh`, etc. -- moved into
+`client/internal/`; the menu calls those for you, so there's no need to
+open that folder or figure out which script applies.
 
 Everything below this section is the from-source/terminal path -- useful
 if you're modifying the code, but not required for normal use.
@@ -200,12 +204,16 @@ was invoked from.
 **Checking for updates**: pick "Check for updates / update" from the
 menu -- reports whether a newer release exists and, if so, offers to
 download and install it automatically (same stage-then-swap safety as
-the install path above). The client also checks automatically every
-time it launches -- including from the Steam shortcut itself -- and
-installs a newer version silently if one's found, no confirmation
-needed; see `docs/known-limitations.md`'s "Client auto-update on
-launch" entry for the tradeoff (a slow connection can add up to about
-three minutes the first time it finds one).
+the install path above). Steam does **not** need to be closed for this
+-- a routine update never changes the Steam shortcut's Exe/name/launch
+options, so it never touches Steam's library file, only the installed
+program files, which are safe to replace while Steam and the client are
+both running. The client also checks automatically every time it
+launches -- including from the Steam shortcut itself -- and installs a
+newer version silently if one's found, no confirmation needed; see
+`docs/known-limitations.md`'s "Client auto-update on launch" entry for
+the tradeoff (a slow connection can add up to about three minutes the
+first time it finds one).
 
 Or, the standard manual way any non-Steam Linux binary gets added to
 Gaming Mode:

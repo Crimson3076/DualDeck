@@ -45,10 +45,13 @@ prompt if run from a terminal without `kdialog`) with four choices:
 - **Check for updates / update** -- checks the latest GitHub release
   against your installed version. If you're already current, that's all
   it does. If a newer version exists, it asks for confirmation before
-  doing anything further -- say yes and it downloads that release,
+  doing anything further -- say yes and it downloads that release and
   installs it over your current one (same stage-then-swap safety as
-  everything else here), and refreshes the Steam shortcut. Say no, or
-  there's nothing newer, and nothing is downloaded or changed.
+  everything else here). Steam does **not** need to be closed for this:
+  a routine update never changes the Steam shortcut's Exe/name/launch
+  options, so it never touches Steam's library file, only the installed
+  program files. Say no, or there's nothing newer, and nothing is
+  downloaded or changed.
 
 Everything this menu does is really just a thin front end over the
 individual scripts in `host/internal/` (`run-host.sh`,

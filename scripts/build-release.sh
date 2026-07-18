@@ -386,6 +386,18 @@ cat > "${pkg_dir}/client/internal/apply-update.sh" <<'WRAP'
 # host/internal/apply-update.sh for the host equivalent (same design,
 # minus the Distrobox complexity the client doesn't need).
 #
+# --force here does not mean "always touch shortcuts.vdf": since
+# GitHub issue "atomic updates -- Steam shouldn't need to be closed to
+# update", install-steam-shortcut.sh only writes shortcuts.vdf when the
+# shortcut's Exe/AppName/StartDir/LaunchOptions actually differ from
+# what's already there (see steam_shortcut.py's shortcut_up_to_date()) --
+# which never happens for a routine version bump, since those are all
+# derived from the fixed central install directory, not the release
+# version. --force only matters for the rare case something genuinely
+# needs to change; a plain update's file swap (already atomic via
+# stage-then-rename) is the only thing that happens, and Steam never
+# needs to be closed or restarted for it.
+#
 # Only ever downloads from this exact, hardcoded GitHub Releases URL
 # over HTTPS -- never anything derived from user input, an environment
 # variable, or a config file.
@@ -556,8 +568,20 @@ case "${action}" in
             if confirm "${update_report}
 
 Install ${latest_version} now? This downloads it from GitHub and also adds/updates the Steam shortcut."; then
-                if ./internal/apply-update.sh; then
-                    info "Updated to ${latest_version}. Restart Steam (or switch to Gaming Mode) to see the change."
+                # Captured (not just checked for success) so the message
+                # below can tell whether the Steam shortcut's Exe/AppName/
+                # LaunchOptions actually changed -- for a routine update
+                # they never do (see steam_shortcut.py's shortcut_up_to_date()),
+                # so apply-update.sh doesn't touch shortcuts.vdf at all and
+                # there's nothing for a running Steam to need reloading.
+                # Only mention restarting Steam when apply-update.sh's own
+                # output says it actually wrote the file.
+                if update_output="$(./internal/apply-update.sh 2>&1)"; then
+                    if echo "${update_output}" | grep -q "Restart Steam"; then
+                        info "Updated to ${latest_version}. Restart Steam (or switch to Gaming Mode) to see the change."
+                    else
+                        info "Updated to ${latest_version}."
+                    fi
                 fi
                 # A failure here already logged and showed its own error
                 # dialog (apply-update.sh has the same error-trap pattern
@@ -953,8 +977,20 @@ case "${action}" in
             if confirm "${update_report}
 
 Install ${latest_version} now? This downloads it from GitHub and also adds/updates the Steam shortcut."; then
-                if ./internal/apply-update.sh; then
-                    info "Updated to ${latest_version}. Restart Steam (or switch to Gaming Mode) to see the change."
+                # Captured (not just checked for success) so the message
+                # below can tell whether the Steam shortcut's Exe/AppName/
+                # LaunchOptions actually changed -- for a routine update
+                # they never do (see steam_shortcut.py's shortcut_up_to_date()),
+                # so apply-update.sh doesn't touch shortcuts.vdf at all and
+                # there's nothing for a running Steam to need reloading.
+                # Only mention restarting Steam when apply-update.sh's own
+                # output says it actually wrote the file.
+                if update_output="$(./internal/apply-update.sh 2>&1)"; then
+                    if echo "${update_output}" | grep -q "Restart Steam"; then
+                        info "Updated to ${latest_version}. Restart Steam (or switch to Gaming Mode) to see the change."
+                    else
+                        info "Updated to ${latest_version}."
+                    fi
                 fi
                 # A failure here already logged and showed its own error
                 # dialog (apply-update.sh has the same error-trap pattern
@@ -986,7 +1022,14 @@ cat > "${pkg_dir}/host/internal/apply-update.sh" <<'WRAP'
 # Passes --force through to install-steam-shortcut.sh so an update
 # doesn't silently do nothing just because Steam happens to be open --
 # the confirmation prompt in the menu is the actual "are you sure" gate
-# here, not that check. If Steam genuinely was never set up on this
+# here, not that check. In practice --force rarely matters: since GitHub
+# issue "atomic updates -- Steam shouldn't need to be closed to update",
+# install-steam-shortcut.sh only writes shortcuts.vdf when the
+# shortcut's Exe/AppName/StartDir/LaunchOptions actually differ from
+# what's already there, which never happens for a routine version bump
+# (see steam_shortcut.py's shortcut_up_to_date()) -- so a normal update
+# never touches shortcuts.vdf at all and Steam never needs to be closed
+# or restarted for it. If Steam genuinely was never set up on this
 # machine, installing the Steam shortcut part fails visibly (its own
 # error-trap logs and shows a dialog) while the files themselves are
 # still updated either way, since that copy step doesn't depend on
