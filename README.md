@@ -27,22 +27,27 @@ installer section for exactly what it does and doesn't cover yet (it's
 Phase 1 of GitHub issue #26's larger installer/auto-update rework).
 
 Everything you need to run is one script per side, no typing required:
-double-click `host/melonds-remote-host.sh` on the machine running
-melonDS, and `client/melonds-remote-client.sh` on your Steam Deck (or
-any Linux machine with a gamepad). Each opens a small menu -- Launch
-now, Add to Steam (Big Picture/Gaming Mode), Remove from Steam, and
+double-click `host/melonds-remote-host.sh` on the machine running the
+emulator, and `client/melonds-remote-client.sh` on your Steam Deck (or
+any Linux machine with a gamepad). Each opens a small menu; the host's
+"Launch..." choice picks which system to run -- Nintendo DS (melonDS,
+the default/most-supported path), Nintendo 3DS (Azahar, experimental --
+see `docs/known-limitations.md`'s AzaharAdapter entry), host-control
+mode only (no emulator, browse the host's own UI from the client
+instead -- also experimental), or a custom emulator you've already
+patched yourself with `scripts/patch-existing-emulator.sh`, for anyone
+who doesn't want a separate DualDeck-managed copy. The 3DS and
+host-control-only choices both need a shared secret instead of the
+usual per-device approval prompt -- the menu asks for one when you pick
+either. Add to Steam (Big Picture/Gaming Mode), Remove from Steam, and
 Check for updates (which offers to install one automatically if it
-finds one) -- so there's nothing else in either `host/` or `client/`
-you need to open directly; the rest of what's in there (under each
-directory's `internal/` subfolder) is what the menu calls on your
-behalf. The client additionally checks for and installs updates
-automatically on every launch (Steam shortcut included), no menu or
-confirmation needed. The host menu also has an experimental "Launch
-with host-control mode" choice, which lets the client navigate the
-host's own UI (browse/launch a ROM) before melonDS is even running --
-see `docs/known-limitations.md`'s matching entry for what it needs (a
-shared secret instead of the usual approval prompt) and what it doesn't
-support yet. On SteamOS Desktop Mode or Bazzite (both KDE Plasma/Dolphin),
+finds one) round out the rest of the menu, so there's nothing else in
+either `host/` or `client/` you need to open directly; the rest of
+what's in there (under each directory's `internal/` subfolder) is what
+the menu calls on your behalf. The client additionally checks for and
+installs updates automatically on every launch (Steam shortcut
+included), no menu or confirmation needed. On SteamOS Desktop Mode or
+Bazzite (both KDE Plasma/Dolphin),
 double-clicking an executable `.sh` file offers to run it directly --
 see `docs/steam-deck-setup.md`/`docs/bazzite-host-setup.md` for the
 quick-start section at the top of each, and the archive's own bundled

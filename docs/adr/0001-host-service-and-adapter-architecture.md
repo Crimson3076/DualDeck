@@ -484,6 +484,62 @@ different process, which is real, separate, unfinished work this ADR's
 (`approveDevice()`/`denyDevice()` returning `false` in out-of-process
 mode) and Phase F does not attempt to rush.
 
+### 11. AzaharAdapter proves the generic contract with a second real emulator (Nintendo 3DS)
+
+**Implemented**: `AzaharAdapter`, implementing this ADR's
+`IEmulatorAdapter` contract (section 2/issue #28 Phase 1) against
+[Azahar](https://github.com/azahar-emu/azahar) instead of melonDS -- the
+first real test of whether that contract, designed and proven only
+against fake DS/3DS/Wii U fixtures until now, actually holds up against
+a second genuine emulator. It does, unmodified: no change to
+`adapter_contract.h`, `generic_input.h`, `video_surface.h`, or
+`session_state.h` was needed. See `docs/azahar-integration-analysis.md`
+(this milestone's own Phase 0) and `docs/known-limitations.md`'s
+matching entry for the full technical detail; this section records the
+architectural decisions.
+
+Two decisions worth calling out because they depart from melonDS's own
+pattern:
+
+- **Out-of-process only.** melonDS defaults to in-process (owning its
+  own `NetServer` and interactive device-approval), with out-of-process
+  as Phase A's later opt-in addition. Azahar has no in-process mode at
+  all -- it only ever connects out via `AdapterIpcClient` to an
+  already-running standalone Host Service, using a static shared secret
+  in place of device-approval (the same trade-off host-control mode,
+  section 9's `ModeCoordinator` work, already shipped and documented).
+  This was a scope decision, not a technical limitation of Azahar
+  itself: reimplementing `NetServer`'s device-approval Qt dialog a
+  second time, for a second emulator, in a first integration that also
+  needed to rework the host launcher and add a
+  patch-your-own-emulator feature in the same pass, was not worth
+  doing under time pressure. A future pass could give Azahar (or any
+  future adapter) the same in-process/device-approval treatment melonDS
+  has, once the cross-process device-approval gap section 10 already
+  flagged is actually solved for everyone at once, rather than solving
+  it once per adapter.
+- **The host launcher no longer assumes melonDS.** Previously,
+  `melonds-remote-host.sh`'s only "launch" action went straight to
+  melonDS -- there was no other emulator to choose. It now opens a
+  picker (DS / 3DS / host-control-only / custom), which is also where
+  `scripts/patch-existing-emulator.sh` and
+  `host/internal/launch-custom-emulator.sh`'s "bring your own patched
+  emulator, no duplicate install" feature plugs in. This is the first
+  real evidence the Host Service + Adapter split this whole ADR argues
+  for is more than a theoretical nicety: adding a second real emulator
+  required zero changes to the wire protocol, the adapter contract, or
+  `host/remote-server`'s own code -- only a new adapter implementation
+  and launcher-level plumbing.
+
+**What section 11 does not close**: everything `docs/known-limitations.md`'s
+matching entry lists under "Still open" -- no real 3DS game has been
+tested against this (no display/GPU stack in this sandbox), no
+Distrobox path exists for Azahar yet, and this remains deliberately
+opt-in and labeled experimental. It also does not solve the
+cross-process device-approval gap section 10 flagged -- Azahar's static
+shared secret sidesteps it the same way host-control mode already does,
+rather than closing it.
+
 ## Consequences
 
 **Positive**: a concrete, testable target contract exists for a future
@@ -525,9 +581,10 @@ attempted here:
   device-approval's cross-process gap (its `approveDevice()`/
   `denyDevice()` just return `false`); making out-of-process the
   default, and giving it real device approval, are both still open.
-- A real 3DS or Wii U adapter (issue #28 Phases 4/5) -- the fake
-  fixtures here are capability-shape test doubles only, built with no
-  target emulator selected for either system.
+- A real Wii U adapter (issue #28 Phase 5) -- still just a
+  capability-shape test double, no target emulator selected. The 3DS
+  side of this bullet is now done: see section 11's `AzaharAdapter`,
+  the first real (non-fixture) adapter besides melonDS's own.
 - The repository reorganization issue #28 sketches (`core/`,
   `adapters/`, `adapter-sdk/` as siblings of a real Host Service, etc.)
   -- this phase adds a new `adapter-sdk/` top-level directory (additive

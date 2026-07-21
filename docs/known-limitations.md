@@ -3005,6 +3005,164 @@ is a clear error rather than a crash or silent corruption either way,
 so this isn't fixed here -- just recorded in case an unusually deep or
 long `$HOME` path is ever reported as a real bug against this feature.
 
+## AzaharAdapter: a second emulator (Nintendo 3DS), and a host launcher that no longer assumes melonDS
+
+Answers two direct user questions after issue #4 shipped: "is the server
+now independent of melonDS like planned?" (partially -- see the Phase F
+entry above for the honest nuance) and "can we add 3DS support?" This
+entry covers the follow-up work that started from
+`docs/azahar-integration-analysis.md`'s Phase 0 investigation: a real
+`AzaharAdapter` implementing this project's existing, unchanged
+`IEmulatorAdapter` contract (issue #28), and a host launcher reworked so
+it no longer boots straight into melonDS.
+
+**What this implements**:
+
+- **`AzaharAdapter`** (`src/citra_qt/remote_server/AzaharAdapter.{h,cpp}`
+  in the new `host/azahar-patches/0001-remote-server-integration.patch`):
+  video via `VideoCore::RendererBase::RequestScreenshot()` on a
+  bottom-screen-only `Layout::SingleFrameLayout(320, 240, swapped=true,
+  upright=false)` (native 3DS touch-screen resolution, backend-agnostic
+  across the software/OpenGL/Vulkan renderers -- see the analysis doc's
+  section 1), polled on its own thread at ~30fps (not 60 -- see the
+  class's own comment on why that's a conservative starting point, not
+  a measured optimum, since no display/GPU stack exists in this sandbox
+  to measure against). Input via a registered `Input::Factory` engine
+  (`"melonds_remote"`) for the 12 buttons DS and 3DS share physically
+  (confirmed identical ordering by reading `Settings::NativeButton`),
+  both analog sticks (circle pad + New3DS-only c-stick, both already
+  forwarded end-to-end since `protocol.h`'s `ControllerState` already
+  had `leftStickX/Y`/`rightStickX/Y` fields with nothing consuming them
+  for DS), and touch (reusing `protocol.h`'s `touchX/Y` as a
+  proportional 0..1 position within whatever surface it's actually
+  addressed to, not literally "DS pixel space" -- see
+  `AzaharAdapter::applyGenericInput()`'s comment). No protocol changes
+  were needed for any of this -- confirmed by reading
+  `host/adapter_bridge.cpp`'s existing `dsButtonsToGenericButtons()`
+  table and `ControllerState`'s fields before writing any new code, not
+  assumed.
+- **Out-of-process only, deliberately**: unlike melonDS's own default
+  in-process mode (its own `NetServer` + interactive device-approval
+  dialog), Azahar's integration only ever connects out to an
+  already-running standalone Host Service via `AdapterIpcClient` --
+  the exact mechanism issue #4 Phase A built for melonDS's *opt-in*
+  out-of-process mode, now Azahar's *only* mode. Reimplementing
+  `NetServer`'s device-approval Qt dialog a second time for a second
+  emulator, on a first integration, under the same goal that also asked
+  for the launcher rework and the custom-emulator-patching feature
+  below, was not worth the scope -- a static shared secret
+  (`AZAHAR_REMOTE_AUTH_TOKEN`) is required instead, the same trade-off
+  already made and shipped for host-control mode (Phase F).
+- **Host launcher rework**: `melonds-remote-host.sh`'s "Launch melonDS
+  now" choice is now "Launch...", which opens a picker -- Nintendo DS
+  (melonDS), Nintendo 3DS (Azahar, prompts for the shared secret), Host
+  control only (unchanged from Phase F), or Custom. `run-host.sh`
+  (melonDS) and the new `run-host-azahar.sh` are otherwise unchanged/
+  new-but-parallel -- picking DS still goes through the exact same
+  Distrobox-vs-plain dispatch (`launch-host.sh`) Phase F already
+  verified; Azahar has no Distrobox path yet (see "Still open" below)
+  and is launched directly.
+- **"Patch my own emulator" feature**: `scripts/patch-existing-emulator.sh`
+  (repo-level, run from a terminal) applies either patch to a
+  user-supplied existing melonDS or Azahar git checkout (`git apply`,
+  with a same-commit warning-not-block check, since the patch is
+  generated against one pinned commit and may not apply cleanly, or --
+  worse -- apply with unintended differences, against a different one)
+  and optionally builds it. `host/internal/launch-custom-emulator.sh`
+  (packaged) then remembers the resulting binary's path and system type
+  in `~/.config/melonds-remote/custom-emulator.conf` and launches it
+  through the menu's "Custom" choice from then on, using the same
+  env-var contract as the bundled binaries (`MELONDS_REMOTE_ENABLE` for
+  a DS-based custom build; the same out-of-process
+  `AZAHAR_REMOTE_*`-and-Host-Service wiring as `run-host-azahar.sh` for
+  a 3DS-based one) -- for anyone who already has an emulator set up the
+  way they like it and doesn't want a separate DualDeck-managed copy
+  alongside it.
+- **`scripts/build-release.sh`/`.github/workflows/release.yml`**: Azahar
+  is now cloned, patched, and built the same way melonDS is (a new
+  `[3/5]` step), and packaged as `host/azahar` (top-level, alongside
+  `host/melonDS`) plus its own
+  `host/internal/azahar-shared-library-dependencies.txt`. Cached across
+  CI runs by pinned commit (`actions/cache`, mirroring SDL3's own
+  existing cache step) since Azahar's build is far heavier than
+  melonDS's (36 git submodules -- Vulkan, boost, dynarmic,
+  spirv-tools, etc., for real 3D rendering instead of the DS's mostly
+  software-rendered 2D) and would otherwise add a large amount of time
+  to every single release build, not just ones that touch Azahar code.
+
+**Verified**:
+
+- A real, from-scratch build of the patched Azahar in this sandbox
+  (clone at the pinned commit, all 36 submodules fetched shallow,
+  `AzaharAdapter`/`RemoteServerBridge` compiled as part of `citra_qt`)
+  -- Qt6, Vulkan headers/loader, and boost were all already present in
+  this sandbox (left over from earlier work in this same session),
+  which made this possible at all; a genuinely clean machine would need
+  `scripts/build-release.sh`'s new `ensure_packages "azahar build"`
+  call to actually install them first, which this particular sandbox
+  build did not exercise (dependencies were already satisfied).
+- `bash -n` on the full `scripts/build-release.sh` and on each of the
+  newly-generated scripts extracted in isolation (`run-host-azahar.sh`,
+  `launch-custom-emulator.sh`, the reworked `melonds-remote-host.sh`).
+- A real functional run of `launch-custom-emulator.sh`'s DS path (a
+  stub binary, config file written and reused correctly on a second
+  run) and its 3DS path (a stub binary + the real
+  `melonds-remote-server` binary: confirmed the Host Service starts,
+  the adapter socket is real by the time the stub sees it, the right
+  `AZAHAR_REMOTE_*` env vars reach it, and -- checked with `pgrep`, not
+  just exit code -- the Host Service is genuinely gone after the stub
+  exits).
+- `scripts/patch-existing-emulator.sh` run for real against this
+  session's own already-patched melonDS scratch clone: correctly
+  detected "patch already applied, nothing to do" rather than either
+  erroring or silently double-applying.
+
+**Still open**:
+
+- **No real 3DS game was ever tested against this** -- no display, no
+  GPU stack, and no ROM available in this sandbox (the same category of
+  gap `docs/known-limitations.md` already records for melonDS's own
+  real-hardware-only pieces, e.g. uinput). `RequestScreenshot()`'s real
+  per-frame cost against an actual running game, whether ~30fps is
+  actually a reasonable rate or too aggressive/too conservative, and
+  whether the touch/circle-pad/button mapping actually feels right in
+  practice are all genuinely unverified, not just "verified elsewhere
+  and not re-checked here."
+- **`scripts/build-release.sh`'s own Azahar step was not re-run
+  end-to-end in this sandbox** -- it uses the exact same clone/checkout/
+  submodule/`git apply`/`cmake` commands already verified via the
+  standalone scratch build above, but running the *packaging script
+  itself* (which would re-clone and re-build Azahar a second time) was
+  not done, purely for time -- the underlying build commands are
+  proven, the script wiring around them is `bash -n`-clean but not
+  execution-tested as a whole.
+- **No Distrobox/immutable-system path for Azahar** -- `run-host-azahar.sh`
+  warns (does not block) on an apparent immutable system and just tries
+  anyway, unlike melonDS's real `install-host-distrobox.sh`. Building
+  that (Azahar running inside a container, reaching a Host Service
+  running outside it) is real, separate work, matching the same
+  "don't rush a second implementation of something nontrivial" reasoning
+  already applied to skipping in-process device-approval for Azahar
+  above.
+- **Fedora/Arch runtime and build package names for Azahar are
+  unverified** -- only Debian/Ubuntu package names in both
+  `ensure_packages "azahar build"` (build-time) and
+  `run-host-azahar.sh`'s `ensure_packages "azahar runtime"`
+  (runtime) were checked against this actual sandbox; the others are
+  reasonable best guesses, not confirmed installs, matching how several
+  earlier `ensure_packages` calls in this project already carry the
+  same caveat for less-common distros.
+- **New3DS-exclusive `ZL`/`ZR` shoulder buttons have no wire
+  representation** -- `protocol.h`'s `DSButton`/`ControllerState` have
+  no bits for them (base-model 3DS/2DS never had them either), so a
+  New3DS game that specifically requires them can't be fully controlled
+  yet. The c-stick itself does work (mapped onto the already-existing,
+  previously-unused `rightStickX/Y` wire fields).
+- **This is still opt-in and labeled experimental everywhere it
+  appears** -- deliberately: a first 3DS integration, verified only via
+  compilation and scripted stub tests in a sandbox with no display, is
+  not something to default users into.
+
 ## Atomic updates: Steam no longer needs to be closed to update
 
 **The problem, reported by the user**: applying an update ("Check for

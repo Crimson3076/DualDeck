@@ -12,6 +12,7 @@
 set -euo pipefail
 
 MELONDS_COMMIT="10a173b5536fc75cd93f8a3868349dad963542ef"
+AZAHAR_COMMIT="75134fca82eab4e1a86dca0aaa4a188cefff5469"
 SDL3_TAG="release-3.2.16"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -22,16 +23,27 @@ mkdir -p "${work_dir}" "${out_dir}"
 # shellcheck source=scripts/lib/ensure-packages.sh
 source "${repo_root}/scripts/lib/ensure-packages.sh"
 
-echo "== [0/4] Checking build dependencies =="
+echo "== [0/5] Checking build dependencies =="
 ensure_packages "build" \
     "cmake extra-cmake-modules ninja-build build-essential git python3 libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev libarchive-dev libenet-dev libzstd-dev libfaad-dev qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-svg-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libdecor-0-dev" \
     "cmake extra-cmake-modules ninja-build gcc-c++ git python3 libcurl-devel libpcap-devel SDL2-devel libarchive-devel enet-devel libzstd-devel faad2-devel qt6-qtbase-devel qt6-qtmultimedia-devel qt6-qtsvg-devel libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel" \
     "cmake extra-cmake-modules ninja base-devel git python curl libpcap sdl2 libarchive enet zstd faad2 qt6-base qt6-multimedia qt6-svg libx11 libxext libxrandr libxcursor libxfixes libxi libxss wayland libxkbcommon libdrm mesa libdecor"
 
+# Azahar (3DS) additionally needs a Vulkan SDK and Boost headers beyond
+# melonDS's own dependency list above -- see
+# docs/azahar-integration-analysis.md for why (real 3D rendering, unlike
+# the DS's largely-2D workload). Debian package names verified against
+# this exact sandbox; Fedora/Arch names are best-effort and unverified
+# (see docs/known-limitations.md's AzaharAdapter entry).
+ensure_packages "azahar build" \
+    "libvulkan-dev libboost-dev libboost-iostreams-dev libboost-thread-dev libpulse-dev libasound2-dev" \
+    "vulkan-loader-devel vulkan-headers boost-devel pulseaudio-libs-devel alsa-lib-devel" \
+    "vulkan-headers vulkan-icd-loader boost pulseaudio alsa-lib"
+
 sdl3_src="${work_dir}/sdl3-src"
 sdl3_install="${work_dir}/sdl3-install"
 
-echo "== [1/4] SDL3 (${SDL3_TAG}) =="
+echo "== [1/5] SDL3 (${SDL3_TAG}) =="
 if [[ -f "${sdl3_install}/lib/cmake/SDL3/SDL3Config.cmake" ]]; then
     echo "already built at ${sdl3_install}, skipping (cache hit)"
 else
@@ -44,7 +56,7 @@ else
     cmake --install "${sdl3_src}/build"
 fi
 
-echo "== [2/4] Patched melonDS host (commit ${MELONDS_COMMIT}) =="
+echo "== [2/5] Patched melonDS host (commit ${MELONDS_COMMIT}) =="
 melonds_src="${work_dir}/melonds-src"
 rm -rf "${melonds_src}"
 git clone https://github.com/melonDS-emu/melonDS.git "${melonds_src}"
@@ -53,7 +65,31 @@ git clone https://github.com/melonDS-emu/melonDS.git "${melonds_src}"
 cmake -S "${melonds_src}" -B "${melonds_src}/build" -DCMAKE_BUILD_TYPE=Release
 cmake --build "${melonds_src}/build" -j"$(nproc)"
 
-echo "== [3/4] Client + host prototype (this repo) =="
+echo "== [3/5] Patched Azahar host (Nintendo 3DS, commit ${AZAHAR_COMMIT}) =="
+# See docs/azahar-integration-analysis.md and
+# docs/adr/0001-host-service-and-adapter-architecture.md's AzaharAdapter
+# section for what this patch actually does. This is a much heavier
+# build than melonDS's (36 git submodules -- Vulkan, boost, dynarmic,
+# spirv-tools, etc. -- for real 3D emulation instead of the DS's mostly
+# software-rendered 2D), so it's cached across runs by commit the same
+# way SDL3 already is (see azahar_src/build's existence check below),
+# not just re-cloned+rebuilt from scratch every time like melonDS's
+# still-cheap-enough-not-to-bother step above.
+azahar_src="${work_dir}/azahar-src"
+if [[ -f "${azahar_src}/build/bin/Release/azahar" ]]; then
+    echo "already built at ${azahar_src}, skipping (cache hit)"
+else
+    rm -rf "${azahar_src}"
+    git clone https://github.com/azahar-emu/azahar.git "${azahar_src}"
+    (cd "${azahar_src}" && git checkout "${AZAHAR_COMMIT}")
+    (cd "${azahar_src}" && git submodule update --init --recursive --depth 1)
+    (cd "${azahar_src}" && git apply "${repo_root}/host/azahar-patches/0001-remote-server-integration.patch")
+    cmake -S "${azahar_src}" -B "${azahar_src}/build" -DCMAKE_BUILD_TYPE=Release \
+        -DENABLE_QT_TRANSLATION=OFF
+    cmake --build "${azahar_src}/build" -j"$(nproc)"
+fi
+
+echo "== [4/5] Client + host prototype (this repo) =="
 repo_build="${work_dir}/repo-build"
 cmake -S "${repo_root}" -B "${repo_build}" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DMELONDS_REMOTE_BUILD_CLIENT=ON \
@@ -61,7 +97,7 @@ cmake -S "${repo_root}" -B "${repo_build}" -G Ninja \
 cmake --build "${repo_build}" -j"$(nproc)"
 ctest --test-dir "${repo_build}" --output-on-failure
 
-echo "== [4/4] Packaging =="
+echo "== [5/5] Packaging =="
 commit_short="$(cd "${repo_root}" && git rev-parse --short HEAD)"
 branch_name="$(cd "${repo_root}" && git rev-parse --abbrev-ref HEAD)"
 # Set by .github/workflows/release.yml to the actual published tag
@@ -90,6 +126,17 @@ cp "${melonds_src}/build/melonDS" "${pkg_dir}/host/melonDS"
 chmod +x "${pkg_dir}/host/melonDS"
 ldd "${melonds_src}/build/melonDS" | awk '{print $1}' | sort -u \
     > "${pkg_dir}/host/internal/host-shared-library-dependencies.txt"
+
+# Azahar (Nintendo 3DS, GitHub issue #4 follow-up) -- top-level
+# alongside melonDS, matching how "one binary per double-clickable
+# emulator, everything else under internal/" already works for melonDS.
+# See host/internal/run-host-azahar.sh for how it's actually launched
+# (always as an out-of-process adapter -- see that script's own comment
+# for why).
+cp "${azahar_src}/build/bin/Release/azahar" "${pkg_dir}/host/azahar"
+chmod +x "${pkg_dir}/host/azahar"
+ldd "${azahar_src}/build/bin/Release/azahar" | awk '{print $1}' | sort -u \
+    > "${pkg_dir}/host/internal/azahar-shared-library-dependencies.txt"
 
 # The standalone Host Service binary (GitHub issue #4): not used by the
 # default launch path (melonDS still runs its own in-process server, see
@@ -712,6 +759,227 @@ exec "${host_root}/melonDS" "$@"
 WRAP
 chmod +x "${pkg_dir}/host/internal/run-host.sh"
 
+cat > "${pkg_dir}/host/internal/run-host-azahar.sh" <<'WRAP'
+#!/usr/bin/env bash
+# Runs the patched Azahar binary (Nintendo 3DS) -- see
+# docs/azahar-integration-analysis.md and
+# docs/adr/0001-host-service-and-adapter-architecture.md (section 11)
+# in the DualDeck repository this was built from.
+#
+# Unlike run-host.sh's melonDS, Azahar's integration has only ever been
+# built as an out-of-process adapter -- there is no interactive
+# per-device approval dialog for it yet (see AzaharAdapter's own
+# comment, and docs/known-limitations.md's matching entry for why).
+# This script always starts the standalone Host Service in the
+# background first, the same way run-host.sh's opt-in host-control mode
+# does, and requires AZAHAR_REMOTE_AUTH_TOKEN as a static shared secret
+# instead. Normally launched via ../melonds-remote-host.sh's "Launch..."
+# menu, which prompts for that token, not directly.
+#
+# Pick a ROM through Azahar's own game list / File > Load File once it
+# opens, same as any other Azahar launch.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+host_root="$(cd .. && pwd)"
+
+# shellcheck source=scripts/lib/ensure-packages.sh
+source ./ensure-packages.sh
+
+ensure_packages "azahar runtime" \
+    "qt6-base-dev libvulkan1 libsdl2-2.0-0 libopenal1 libboost-iostreams1.83.0 libboost-thread1.83.0" \
+    "qt6-qtbase vulkan-loader SDL2 openal-soft boost-iostreams boost-thread" \
+    "qt6-base vulkan-icd-loader sdl2 openal-soft boost-libs" \
+    || echo "warning: could not verify/install Azahar runtime libraries automatically; see docs/troubleshooting.md" >&2
+
+if [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1; then
+    echo "Note: this looks like an immutable (rpm-ostree) system, e.g. Bazzite -- Azahar's" >&2
+    echo "Distrobox launch path isn't built yet (see docs/known-limitations.md's" >&2
+    echo "AzaharAdapter entry), so this may fail if a required library isn't already" >&2
+    echo "present on the base image." >&2
+fi
+
+if [[ -z "${AZAHAR_REMOTE_AUTH_TOKEN:-}" ]]; then
+    echo "error: running Azahar through DualDeck requires AZAHAR_REMOTE_AUTH_TOKEN to" >&2
+    echo "be set -- there is no interactive device-approval for this emulator yet," >&2
+    echo "only a shared secret (see docs/known-limitations.md)." >&2
+    exit 1
+fi
+if [[ ! -x "${host_root}/internal/melonds-remote-server" ]]; then
+    echo "error: host/internal/melonds-remote-server is missing from this install --" >&2
+    echo "re-download the release archive." >&2
+    exit 1
+fi
+if [[ ! -x "${host_root}/azahar" ]]; then
+    echo "error: host/azahar is missing from this install -- re-download the" >&2
+    echo "release archive." >&2
+    exit 1
+fi
+
+run_dir="${HOME}/.config/melonds-remote/run"
+mkdir -p "${run_dir}"
+adapter_socket="${run_dir}/azahar-adapter.sock"
+rm -f "${adapter_socket}"
+
+# See run-host.sh's identical MELONDS_REMOTE_VERSION comment -- same
+# central VERSION file, read the same way.
+export AZAHAR_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+
+echo "Starting the standalone Host Service ..." >&2
+"${host_root}/internal/melonds-remote-server" --adapter-ipc --adapter-socket "${adapter_socket}" \
+    --auth-token "${AZAHAR_REMOTE_AUTH_TOKEN}" --app-version "${AZAHAR_REMOTE_VERSION}" &
+host_service_pid=$!
+# Not exec'd below, same reason as run-host.sh's host-control branch:
+# this trap needs to still be able to run once Azahar exits.
+trap 'kill "${host_service_pid}" 2>/dev/null || true' EXIT
+sleep 0.5 # let the listener bind before Azahar tries to connect
+
+export AZAHAR_REMOTE_ENABLE=1
+export AZAHAR_REMOTE_ADAPTER_SOCKET="${adapter_socket}"
+"${host_root}/azahar" "$@"
+WRAP
+chmod +x "${pkg_dir}/host/internal/run-host-azahar.sh"
+
+cat > "${pkg_dir}/host/internal/launch-custom-emulator.sh" <<'WRAP'
+#!/usr/bin/env bash
+# Launches a custom-patched emulator binary the user built themselves
+# (via scripts/patch-existing-emulator.sh in the DualDeck repository, or
+# manually following its same steps) instead of the bundled melonDS/
+# Azahar binaries -- for anyone who already has an emulator set up
+# elsewhere and doesn't want a separate DualDeck-managed copy alongside
+# it. Normally launched via ../../melonds-remote-host.sh's "Launch..."
+# menu's "Custom" choice, not directly.
+#
+# The chosen path and system type are remembered in
+# ~/.config/melonds-remote/custom-emulator.conf so this only has to be
+# configured once; pass --reconfigure to point at a different binary or
+# change the system type.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+host_root="$(cd .. && pwd)"
+
+config_dir="${HOME}/.config/melonds-remote"
+config_file="${config_dir}/custom-emulator.conf"
+mkdir -p "${config_dir}"
+
+have_kdialog() { command -v kdialog >/dev/null 2>&1; }
+
+prompt_path() {
+    if have_kdialog; then
+        kdialog --title "melonDS Remote Host" --getopenfilename "${HOME}" 2>/dev/null || true
+    else
+        read -rp "Path to your patched emulator binary: " path >&2
+        echo "${path}"
+    fi
+}
+
+prompt_type() {
+    if have_kdialog; then
+        kdialog --title "melonDS Remote Host" --menu "Which system is this?" \
+            ds "Nintendo DS (melonDS-based)" \
+            n3ds "Nintendo 3DS (Azahar-based)" \
+            2>/dev/null || true
+    else
+        read -rp "Is this a (d)S-based or (3)DS-based emulator? [d/3]: " t >&2
+        case "${t}" in
+            3) echo "n3ds" ;;
+            *) echo "ds" ;;
+        esac
+    fi
+}
+
+prompt_token() {
+    if have_kdialog; then
+        kdialog --title "melonDS Remote Host" \
+            --inputbox "Shared secret for this emulator (client must use the same value) -- required for a 3DS-based custom emulator, since interactive per-device approval isn't available for it:" \
+            2>/dev/null || true
+    else
+        read -rp "Shared secret (client must use the same value): " t >&2
+        echo "${t}"
+    fi
+}
+
+if [[ "${1:-}" == "--reconfigure" ]]; then
+    rm -f "${config_file}"
+    shift
+fi
+
+if [[ ! -f "${config_file}" ]]; then
+    path="$(prompt_path)"
+    if [[ -z "${path}" || ! -x "${path}" ]]; then
+        echo "error: no valid, executable binary path given." >&2
+        exit 1
+    fi
+    type="$(prompt_type)"
+    if [[ -z "${type}" ]]; then
+        echo "error: no system type chosen." >&2
+        exit 1
+    fi
+    token=""
+    if [[ "${type}" == "n3ds" ]]; then
+        token="$(prompt_token)"
+        if [[ -z "${token}" ]]; then
+            echo "error: a shared secret is required for a 3DS-based custom emulator." >&2
+            exit 1
+        fi
+    fi
+    {
+        echo "type=${type}"
+        echo "path=${path}"
+        echo "token=${token}"
+    } > "${config_file}"
+    chmod 600 "${config_file}"
+fi
+
+# shellcheck disable=SC1090
+source "${config_file}"
+
+if [[ ! -x "${path}" ]]; then
+    echo "error: ${path} no longer exists or isn't executable -- run this again with" >&2
+    echo "--reconfigure to point at a different binary." >&2
+    exit 1
+fi
+
+case "${type}" in
+    ds)
+        # A custom melonDS-based build understands MELONDS_REMOTE_ENABLE
+        # directly (its own patched-in in-process server + interactive
+        # device-approval dialog, same as the bundled host/melonDS) --
+        # no Host Service to start here.
+        export MELONDS_REMOTE_ENABLE=1
+        export MELONDS_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+        exec "${path}" "$@"
+        ;;
+    n3ds)
+        if [[ ! -x "${host_root}/internal/melonds-remote-server" ]]; then
+            echo "error: host/internal/melonds-remote-server is missing from this" >&2
+            echo "install -- re-download the release archive." >&2
+            exit 1
+        fi
+        run_dir="${HOME}/.config/melonds-remote/run"
+        mkdir -p "${run_dir}"
+        adapter_socket="${run_dir}/custom-adapter.sock"
+        rm -f "${adapter_socket}"
+
+        export AZAHAR_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+        "${host_root}/internal/melonds-remote-server" --adapter-ipc --adapter-socket "${adapter_socket}" \
+            --auth-token "${token}" --app-version "${AZAHAR_REMOTE_VERSION}" &
+        host_service_pid=$!
+        trap 'kill "${host_service_pid}" 2>/dev/null || true' EXIT
+        sleep 0.5
+
+        export AZAHAR_REMOTE_ENABLE=1
+        export AZAHAR_REMOTE_ADAPTER_SOCKET="${adapter_socket}"
+        "${path}" "$@"
+        ;;
+    *)
+        echo "error: unknown system type '${type}' in ${config_file} -- re-run with" >&2
+        echo "--reconfigure." >&2
+        exit 1
+        ;;
+esac
+WRAP
+chmod +x "${pkg_dir}/host/internal/launch-custom-emulator.sh"
+
 cat > "${pkg_dir}/host/internal/install-host-distrobox.sh" <<'WRAP'
 #!/usr/bin/env bash
 # Runs the melonDS Remote host inside a Distrobox container, for
@@ -994,8 +1262,7 @@ confirm() {
 choose_action() {
     if have_kdialog; then
         kdialog --title "melonDS Remote Host" --menu "What would you like to do?" \
-            launch "Launch melonDS now" \
-            launch-host-control "Launch with host-control mode (experimental)" \
+            launch "Launch..." \
             steam-add "Add to Steam (Big Picture / Gaming Mode)" \
             steam-remove "Remove from Steam / uninstall" \
             update "Check for updates / update" \
@@ -1008,37 +1275,82 @@ choose_action() {
         # and break the case match entirely.
         {
             echo "melonDS Remote Host"
-            echo "  1) Launch melonDS now"
-            echo "  2) Launch with host-control mode (experimental)"
-            echo "  3) Add to Steam (Big Picture / Gaming Mode)"
-            echo "  4) Remove from Steam / uninstall"
-            echo "  5) Check for updates / update"
-            echo "  6) Exit"
+            echo "  1) Launch..."
+            echo "  2) Add to Steam (Big Picture / Gaming Mode)"
+            echo "  3) Remove from Steam / uninstall"
+            echo "  4) Check for updates / update"
+            echo "  5) Exit"
         } >&2
-        read -rp "Choice [1-6]: " choice
+        read -rp "Choice [1-5]: " choice
         case "${choice}" in
             1) echo "launch" ;;
-            2) echo "launch-host-control" ;;
-            3) echo "steam-add" ;;
-            4) echo "steam-remove" ;;
-            5) echo "update" ;;
+            2) echo "steam-add" ;;
+            3) echo "steam-remove" ;;
+            4) echo "update" ;;
             *) echo "cancel" ;;
         esac
     fi
 }
 
-# Prompts for the shared auth token host-control mode needs (see
-# internal/run-host.sh's comment on MELONDS_REMOTE_AUTH_TOKEN for why
-# interactive device-approval doesn't apply here) and prints it to
-# stdout, or prints nothing if the user cancels. A client's --auth-token
-# (or the setup wizard's manual-entry step) needs to match this exactly.
-prompt_for_host_control_token() {
+# GitHub issue "rework the host launcher so it does not boot into
+# melonDS": picks which system/emulator to actually launch, instead of
+# always going straight to melonDS. Azahar (3DS) and "host control only"
+# both need a shared secret (see prompt_for_shared_token below) since
+# neither has an interactive per-device approval dialog the way
+# melonDS's own in-process default does -- see
+# docs/known-limitations.md's AzaharAdapter entry for why.
+choose_emulator() {
+    local custom_conf="${HOME}/.config/melonds-remote/custom-emulator.conf"
+    local custom_label="Custom (patch my own emulator)"
+    if [[ -f "${custom_conf}" ]]; then
+        local custom_path
+        custom_path="$(sed -n 's/^path=//p' "${custom_conf}")"
+        [[ -n "${custom_path}" ]] && custom_label="Custom (${custom_path})"
+    fi
+
+    if have_kdialog; then
+        kdialog --title "melonDS Remote Host" --menu "Which system?" \
+            ds "Nintendo DS (melonDS)" \
+            n3ds "Nintendo 3DS (Azahar, experimental)" \
+            hostcontrol "Host control only -- no emulator (experimental)" \
+            custom "${custom_label}" \
+            2>/dev/null || echo "cancel"
+    else
+        {
+            echo "Which system?"
+            echo "  1) Nintendo DS (melonDS)"
+            echo "  2) Nintendo 3DS (Azahar, experimental)"
+            echo "  3) Host control only -- no emulator (experimental)"
+            echo "  4) ${custom_label}"
+            echo "  5) Back"
+        } >&2
+        read -rp "Choice [1-5]: " choice
+        case "${choice}" in
+            1) echo "ds" ;;
+            2) echo "n3ds" ;;
+            3) echo "hostcontrol" ;;
+            4) echo "custom" ;;
+            *) echo "cancel" ;;
+        esac
+    fi
+}
+
+# Prompts for the shared auth token host-control mode and the Azahar
+# (3DS) adapter both need (see internal/run-host.sh's comment on
+# MELONDS_REMOTE_AUTH_TOKEN, and internal/run-host-azahar.sh's on
+# AZAHAR_REMOTE_AUTH_TOKEN, for why interactive device-approval doesn't
+# apply to either) and prints it to stdout, or prints nothing if the
+# user cancels. A client's --auth-token (or the setup wizard's
+# manual-entry step) needs to match this exactly. `context` is shown in
+# the prompt so it's clear which mode is asking.
+prompt_for_shared_token() {
+    local context="$1"
     if have_kdialog; then
         kdialog --title "melonDS Remote Host" \
-            --inputbox "Host-control mode needs a shared secret (since the usual per-device approval prompt doesn't work in this mode). Enter one -- the client will need to enter this same value to connect:" \
+            --inputbox "${context} needs a shared secret (since the usual per-device approval prompt isn't available for it). Enter one -- the client will need to enter this same value to connect:" \
             2>/dev/null || true
     else
-        read -rp "Host-control mode shared secret (client must use the same value): " token >&2
+        read -rp "${context} shared secret (client must use the same value): " token >&2
         echo "${token}"
     fi
 }
@@ -1047,26 +1359,51 @@ action="$(choose_action)"
 
 case "${action}" in
     launch)
-        # exec, not a plain call: this becomes the foreground process,
-        # same as launching melonDS any other way (Steam shortcut,
-        # double-clicking internal/run-host.sh directly, etc.) -- no
-        # menu process left hanging around behind it.
-        exec ./internal/launch-host.sh
-        ;;
-    launch-host-control)
-        token="$(prompt_for_host_control_token)"
-        if [[ -z "${token}" ]]; then
-            exit 0 # cancelled
-        fi
-        # Exported before the same launch-host.sh dispatch the plain
-        # "launch" case above uses -- MELONDS_REMOTE_HOST_CONTROL/
-        # MELONDS_REMOTE_AUTH_TOKEN are environment variables, so
-        # run-host.sh (or install-host-distrobox.sh's rejection check,
-        # on an immutable system) sees them either way without
-        # launch-host.sh itself needing to know this mode exists.
-        export MELONDS_REMOTE_HOST_CONTROL=1
-        export MELONDS_REMOTE_AUTH_TOKEN="${token}"
-        exec ./internal/launch-host.sh
+        emulator="$(choose_emulator)"
+        case "${emulator}" in
+            ds)
+                # exec, not a plain call: this becomes the foreground
+                # process, same as launching melonDS any other way
+                # (Steam shortcut, double-clicking internal/run-host.sh
+                # directly, etc.) -- no menu process left hanging
+                # around behind it.
+                exec ./internal/launch-host.sh
+                ;;
+            n3ds)
+                token="$(prompt_for_shared_token "Nintendo 3DS (Azahar)")"
+                if [[ -z "${token}" ]]; then
+                    exit 0 # cancelled
+                fi
+                export AZAHAR_REMOTE_AUTH_TOKEN="${token}"
+                # Azahar has no Distrobox launch path yet (see
+                # internal/run-host-azahar.sh's own comment) -- called
+                # directly, not through launch-host.sh's melonDS-specific
+                # Distrobox-vs-plain dispatch.
+                exec ./internal/run-host-azahar.sh
+                ;;
+            hostcontrol)
+                token="$(prompt_for_shared_token "Host control mode")"
+                if [[ -z "${token}" ]]; then
+                    exit 0 # cancelled
+                fi
+                # Exported before the same launch-host.sh dispatch the
+                # "ds" case above uses -- MELONDS_REMOTE_HOST_CONTROL/
+                # MELONDS_REMOTE_AUTH_TOKEN are environment variables, so
+                # run-host.sh (or install-host-distrobox.sh's rejection
+                # check, on an immutable system) sees them either way
+                # without launch-host.sh itself needing to know this
+                # mode exists.
+                export MELONDS_REMOTE_HOST_CONTROL=1
+                export MELONDS_REMOTE_AUTH_TOKEN="${token}"
+                exec ./internal/launch-host.sh
+                ;;
+            custom)
+                exec ./internal/launch-custom-emulator.sh
+                ;;
+            *)
+                exit 0 # cancelled/back
+                ;;
+        esac
         ;;
     steam-add)
         if ./internal/install-steam-shortcut.sh; then
@@ -1505,11 +1842,14 @@ ${built_at}. This is a distinct, permanently-retained release -- it will
 not be overwritten by a later build, so if this version has a problem,
 just grab an earlier one from the Releases page instead.
 
-Contains \`host/\` (melonDS patched with
-\`host/melonds-patches/0001-remote-server-integration.patch\`, built
-against upstream commit \`${MELONDS_COMMIT}\`) and \`client/\` (SDL3
-Steam Deck client, SDL3 ${SDL3_TAG} bundled in \`client/lib/\`). Both are
-Linux x86_64 binaries built on Ubuntu (GitHub Actions \`ubuntu-latest\` or
+Contains \`host/\` (melonDS, Nintendo DS, patched with
+\`host/melonds-patches/0001-remote-server-integration.patch\` against
+upstream commit \`${MELONDS_COMMIT}\`; and Azahar, Nintendo 3DS,
+experimental, patched with
+\`host/azahar-patches/0001-remote-server-integration.patch\` against
+upstream commit \`${AZAHAR_COMMIT}\`) and \`client/\` (SDL3 Steam Deck
+client, SDL3 ${SDL3_TAG} bundled in \`client/lib/\`). All are Linux
+x86_64 binaries built on Ubuntu (GitHub Actions \`ubuntu-latest\` or
 equivalent) -- see \`docs/known-limitations.md\` (bundled here) for what's
 verified and portability notes.
 
