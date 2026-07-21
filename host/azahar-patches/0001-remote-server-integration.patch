@@ -36,10 +36,10 @@ index 91d8e13..c8876b4 100644
    target_sources(citra_qt PUBLIC
      qt_swizzle.h
 diff --git a/src/citra_qt/citra_qt.cpp b/src/citra_qt/citra_qt.cpp
-index f08a7ea..803b692 100644
+index f08a7ea..78d22af 100644
 --- a/src/citra_qt/citra_qt.cpp
 +++ b/src/citra_qt/citra_qt.cpp
-@@ -3,6 +3,7 @@
+@@ -3,12 +3,14 @@
  // Refer to the license.txt file included.
  
  #include <clocale>
@@ -47,7 +47,14 @@ index f08a7ea..803b692 100644
  #include <iostream>
  #include <memory>
  #include <optional>
-@@ -45,6 +46,7 @@
+ #include <thread>
+ #include <unordered_map>
+ #include <QFileDialog>
++#include <QFileIconProvider>
+ #include <QFutureWatcher>
+ #include <QIcon>
+ #include <QLabel>
+@@ -45,6 +47,7 @@
  #include "citra_qt/camera/qt_multimedia_camera.h"
  #include "citra_qt/camera/still_image_camera.h"
  #include "citra_qt/citra_qt.h"
@@ -55,7 +62,7 @@ index f08a7ea..803b692 100644
  #include "citra_qt/compatibility_list.h"
  #include "citra_qt/configuration/config.h"
  #include "citra_qt/configuration/configure_dialog.h"
-@@ -1572,6 +1574,20 @@ void GMainWindow::BootGame(const QString& filename) {
+@@ -1572,6 +1575,20 @@ void GMainWindow::BootGame(const QString& filename) {
      emit EmulationStarting(emu_thread.get());
      emu_thread->start();
  
@@ -76,7 +83,7 @@ index f08a7ea..803b692 100644
      connect(render_window, &GRenderWindow::Closed, this, &GMainWindow::OnStopGame);
      connect(render_window, &GRenderWindow::MouseActivity, this, &GMainWindow::OnMouseActivity);
      connect(secondary_window, &GRenderWindow::Closed, this, &GMainWindow::OnStopGame);
-@@ -1624,6 +1640,12 @@ void GMainWindow::ShutdownGame() {
+@@ -1624,6 +1641,12 @@ void GMainWindow::ShutdownGame() {
          return;
      }
  
@@ -89,6 +96,45 @@ index f08a7ea..803b692 100644
      if (ui->action_Fullscreen->isChecked()) {
          HideFullscreen();
      }
+@@ -2302,8 +2325,36 @@ void GMainWindow::OnMenuLoadFile() {
+     const QString file_filter = tr("3DS Executable (%1);;All Files (*.*)",
+                                    "%1 is an identifier for the 3DS executable file extensions.")
+                                     .arg(extensions);
+-    const QString filename = QFileDialog::getOpenFileName(
+-        this, tr("Load File"), UISettings::values.roms_path, file_filter);
++
++    // DualDeck (melonDS Remote) note: constructed explicitly instead of
++    // the QFileDialog::getOpenFileName() convenience static so a plain
++    // QFileIconProvider can be forced via setIconProvider() below --
++    // works around a crash reported on some Fedora/KDE Plasma systems
++    // where the platform-theme-supplied icon provider triggers KIO's
++    // thumbnail generation (KIO::FilePreviewJob) and crashes inside
++    // Qt's OpenSSL-backed QCryptographicHash. See DualDeck's
++    // docs/known-limitations.md for the diagnosis -- setting
++    // QT_QPA_PLATFORMTHEME did not avoid this, since Qt's own theme
++    // fallback chain reaches the same KDE integration regardless of
++    // what's explicitly requested. Forcing the icon provider here
++    // bypasses that fallback entirely, independent of which theme Qt
++    // ends up selecting. QFileIconProvider isn't a QObject, so
++    // setIconProvider() can't be assumed to take ownership -- kept as a
++    // stack variable declared before `dialog` so it's guaranteed to
++    // outlive it (destroyed in reverse declaration order).
++    QFileIconProvider icon_provider;
++    QFileDialog dialog(this, tr("Load File"), UISettings::values.roms_path, file_filter);
++    dialog.setFileMode(QFileDialog::ExistingFile);
++    dialog.setAcceptMode(QFileDialog::AcceptOpen);
++    dialog.setIconProvider(&icon_provider);
++    if (dialog.exec() != QDialog::Accepted) {
++        return;
++    }
++    const QStringList selected_files = dialog.selectedFiles();
++    if (selected_files.isEmpty()) {
++        return;
++    }
++    const QString filename = selected_files.first();
+ 
+     if (filename.isEmpty()) {
+         return;
 diff --git a/src/citra_qt/citra_qt.h b/src/citra_qt/citra_qt.h
 index 673c513..542d0f8 100644
 --- a/src/citra_qt/citra_qt.h

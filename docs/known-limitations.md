@@ -3339,54 +3339,99 @@ byte-identical token rather than generating a new one, and that the
 persisted file is `chmod 600`. `bash -n` on the full
 `scripts/build-release.sh` and both extracted heredocs passes.
 
-## Azahar crashing when browsing files to pick a ROM (mitigation applied, not conclusively verified)
+## Azahar crashing when browsing files to pick a ROM (code-level fix applied, not conclusively verified)
 
 **The problem, reported by the user**: Azahar kept crashing specifically
-when browsing for a ROM (File > Load File's native file-picker dialog).
+when browsing for a ROM (File > Load File's file-picker dialog).
 
-**Diagnosis**: reading Azahar's own source
-(`src/citra_qt/citra_qt.cpp`'s `OnMenuLoadFile()`) confirms this uses
-Qt's standard `QFileDialog::getOpenFileName`, code this project's patch
-never touches at all -- the AzaharAdapter/RemoteServerBridge hooks only
-run from `BootGame()`/`ShutdownGame()`, after a ROM is already chosen,
-so this isn't a regression introduced by the DualDeck patch itself.
-Researching the symptom turned up a well-documented, broader class of
-bug affecting Qt6 applications on Linux generally (not Azahar-specific):
-native file dialogs crashing due to a GTK3 platform-theme integration
-bug in how Qt and GTK hand off dialog window parenting -- see the Qt
-Forum/Arch Linux threads linked below. This matches the reported
-symptom closely enough to be the leading explanation, though it has
-**not** been reproduced or conclusively confirmed here, since this
-sandbox has no display or GPU to actually run Azahar's GUI at all.
+**First hypothesis (wrong)**: a well-documented, broader class of Qt6
+bug where native file dialogs crash due to a GTK3 platform-theme
+integration bug in window parenting. `QT_QPA_PLATFORMTHEME=""` was
+applied to both `internal/run-host-azahar.sh` and
+`internal/launch-custom-emulator.sh`'s Azahar case as the standard
+workaround for that bug class. **This did not fix it** -- the user
+confirmed the exact same crash persisted on the release with that fix
+applied, and also persisted after manually trying `QT_QPA_PLATFORMTHEME`
+set to two other placeholder values and to `gtk3` (to force a non-KDE
+theme), even when bypassing Steam entirely and running the binary
+directly from a terminal. All four attempts crashed identically,
+ruling out platform-theme selection as the actual lever.
 
-**Mitigation applied**: `internal/run-host-azahar.sh` and
-`internal/launch-custom-emulator.sh`'s Azahar-based ("n3ds") case now
-export `QT_QPA_PLATFORMTHEME=""` before launching Azahar, which disables
-Qt's native GTK3 platform-theme integration and falls back to Qt's own
-built-in (non-native) file dialog implementation -- the standard,
-widely-documented workaround for this exact bug class. The only
-downside is cosmetic: file dialogs render in Qt's own style rather than
-matching the desktop's native GTK theme.
+**Real diagnosis, from a real crash backtrace**: the user captured a
+`coredumpctl gdb` backtrace of the actual SIGSEGV. It shows:
 
-**Still open**: this has only been verified by `bash -n` on the
-modified scripts and reading Azahar's source for the dialog call site
--- it has **not** been confirmed to actually fix the crash on real
-hardware, since reproducing it requires a real display/GPU this sandbox
-doesn't have. If it recurs after this fix, the next things worth trying
-are: capturing a terminal/journal backtrace at the moment of the crash
-(run `host/melonds-remote-host.sh` from a terminal rather than
-double-clicking it, so stderr isn't lost), checking whether it's
-specific to Wayland/gamescope (SteamOS's compositor) vs. a plain X11/
-KDE Plasma desktop, and checking whether `xdg-desktop-portal` (a
-separate possible cause, if the desktop routes GTK's portal integration
-through it) is installed and running.
+```
+QFileDialog::getOpenFileName -> QFileDialog::getOpenFileUrl -> QDialog::exec()
+  -> KIO::FilePreviewJob::slotStatFile(KJob*)
+    -> QCryptographicHash::QCryptographicHash(Algorithm)
+      -> QCryptographicHashPrivate::EVP::EVP(Algorithm)
+        -> [null function pointer] -- SIGSEGV
+```
 
-Sources consulted (Qt6-on-Linux native file dialog + GTK crash reports,
-not Azahar-specific):
-- [Qt Forum: QFileDialog::getOpenFileName causing program to crash](https://forum.qt.io/topic/143116/qfiledialog-getopenfilename-causing-program-to-crash)
-- [Qt Forum: QFileDialog "The program has unexpectedly finished"](https://forum.qt.io/topic/76909/qfiledialog-the-program-has-unexpectedly-finished)
-- [Arch Linux Forums: Qt file dialogues unusable since update](https://bbs.archlinux.org/viewtopic.php?id=279464)
-- [Arch Linux ARM Forum: Qt6 program crashes when activating the file dialog](https://archlinuxarm.org/forum/viewtopic.php?f=15&t=17202)
+This is KDE Frameworks' file-preview/thumbnail generation
+(`KIO::FilePreviewJob`, part of `libKF6KIOGui.so.6`/`libKF6KIOCore.so.6`
+on the user's Fedora system) crashing inside Qt6's own
+`libQt6Core.so.6`, several frames below any code this project's patch
+controls -- `OnMenuLoadFile()` (frame near the top of the stack) is the
+only DualDeck-adjacent frame, and it's Azahar's own unmodified code at
+that point, calling the same `QFileDialog::getOpenFileName` upstream
+Azahar has always called. Crucially, the DualDeck-added
+AzaharAdapter/RemoteServerBridge background threads don't exist yet at
+the moment of this crash either -- they're only constructed in
+`BootGame()`, which runs *after* a ROM is chosen, and this crash happens
+*while choosing one*. So this is not a regression, race condition, or
+resource-contention effect introduced by this project's patch; the
+crash is entirely inside Fedora's own system Qt6/KDE-Frameworks
+packages, several frames beneath where DualDeck's code or Azahar's own
+code has any influence.
+
+**Fix applied**: rather than continue guessing at environment
+variables (four attempts already failed), `OnMenuLoadFile()`
+(`src/citra_qt/citra_qt.cpp`) was patched to construct an explicit
+`QFileDialog` object instead of using the `QFileDialog::getOpenFileName`
+convenience static, and calls `setIconProvider()` with a plain
+`QFileIconProvider` before executing it. This forces Qt to use its own
+built-in icon/preview logic for the dialog's file listing instead of
+whatever icon provider the platform theme would otherwise supply --
+bypassing the path that reaches `KIO::FilePreviewJob` entirely,
+regardless of which theme Qt's fallback chain ends up selecting (which
+is also why the `QT_QPA_PLATFORMTHEME` attempts likely never mattered:
+Qt's own theme-selection fallback logic evidently still reaches the
+same KDE integration when an explicitly-requested theme name fails to
+construct, rather than genuinely disabling it). `QFileIconProvider`
+isn't a `QObject`, so it's kept as a stack variable declared before the
+`QFileDialog` object (rather than heap-allocated), guaranteeing it
+outlives the dialog via C++'s reverse-order destruction rather than
+relying on unclear ownership semantics from `setIconProvider()`.
+
+**Verified**: the patched `citra_qt.cpp` compiles cleanly (confirmed via
+a real incremental rebuild -- `0` compiler errors, the new code's
+symbols present in the resulting binary via `nm`), and the regenerated
+`host/azahar-patches/0001-remote-server-integration.patch` still applies
+cleanly to a fresh, pristine checkout of the pinned commit.
+
+**Still open -- this is the important caveat**: this has **not** been
+confirmed to actually stop the crash on real hardware. This sandbox has
+no display or GPU, so there is no way to open Azahar's GUI and click
+"Load File" here to observe the fix work. The diagnosis (KIO preview
+generation reaching a crash inside Qt's OpenSSL-backed
+`QCryptographicHash`) is based on a real backtrace, not speculation, and
+the fix directly targets the mechanism that backtrace shows triggering
+the preview generation in the first place -- but only testing on the
+actual affected machine can confirm it. If it still crashes after this
+fix ships, the next most likely explanation is that Qt/KDE's icon
+provider override doesn't fully suppress `KIO::FilePreviewJob` the way
+its API contract suggests it should on this specific Qt6/KDE Frameworks
+version, in which case the underlying bug (a null function pointer
+inside `QCryptographicHashPrivate::EVP`, most plausibly an OpenSSL
+provider/version issue on the affected Fedora system, though the
+system's crypto-policy was confirmed `DEFAULT`, not `FIPS`) would need
+a fix from Fedora's own Qt6/KDE-Frameworks/OpenSSL packaging, not
+something patchable from DualDeck's side -- worth checking `sudo dnf
+update` (especially `qt6-qtbase`, `kf6-kio`, `openssl`) and testing
+whether the same crash reproduces on an unrelated, unmodified Azahar
+build on the same machine, which would conclusively confirm it's a
+system-level issue independent of this project entirely.
 
 ## Things intentionally out of scope for v0.1
 
