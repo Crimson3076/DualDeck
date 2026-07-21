@@ -54,16 +54,21 @@ jobs:
       # fixed commit the same way melonDS is, but its build is far
       # heavier (36 git submodules -- Vulkan, boost, dynarmic,
       # spirv-tools, etc.) -- unlike melonDS's own still-cheap-enough
-      # step, this one is cached across runs the same way SDL3 is, keyed
-      # on the pinned commit so a future bump invalidates it
-      # automatically. See scripts/build-release.sh's own cache-hit
-      # check (azahar_src/build/bin/Release/azahar existing) for the
-      # other half of this.
+      # step, this one is cached across runs the same way SDL3 is. The
+      # key includes hashFiles() on our own patch file, not just the
+      # pinned upstream commit: a real bug shipped two releases (v0.1.39,
+      # v0.1.40) with byte-for-byte identical azahar binaries despite the
+      # patch changing between them, confirmed via md5sum -- the old key
+      # (pinned commit only) never changed when the patch did, so the
+      # cache kept serving a stale pre-patch-change build indefinitely.
+      # See scripts/build-release.sh's own cache-hit check (a real
+      # `git apply --reverse --check` against the current patch content,
+      # not just file existence) for the other half of this fix.
       - name: Cache Azahar build (pinned commit, independent of this repo's commits)
         uses: actions/cache@v4
         with:
           path: .release-work/azahar-src
-          key: azahar-75134fca82eab4e1a86dca0aaa4a188cefff5469-${{ runner.os }}-v1
+          key: azahar-75134fca82eab4e1a86dca0aaa4a188cefff5469-${{ hashFiles('host/azahar-patches/0001-remote-server-integration.patch') }}-${{ runner.os }}-v2
 
       - name: Build release package
         env:

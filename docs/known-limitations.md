@@ -3433,6 +3433,85 @@ whether the same crash reproduces on an unrelated, unmodified Azahar
 build on the same machine, which would conclusively confirm it's a
 system-level issue independent of this project entirely.
 
+**A second, likely-related lead**: the user also reported an SELinux
+AVC denial notification (setroubleshoot popup) appearing at the same
+time as the crash. This fits the OpenSSL-EVP-null-pointer diagnosis
+well: if SELinux denies the process access to an OpenSSL provider
+module (e.g. under `/usr/lib64/ossl-modules/`) or its config
+(`/etc/pki/tls/openssl.cnf`) -- plausible for a binary launched from a
+non-standard, user-home install path
+(`~/.config/melonds-remote/install/azahar`) rather than a normal
+system-package location -- `EVP_MD_fetch()`/similar could fail and
+return null, which Qt's `QCryptographicHash` wrapper doesn't appear to
+null-check before calling through, matching the crash exactly. Not yet
+confirmed (waiting on the actual AVC denial detail, via
+`sudo ausearch -m avc -ts recent` or `sudo sealert -a
+/var/log/audit/audit.log`), but if confirmed, it would mean the
+`QFileIconProvider` fix above works by luck (avoiding the one code path
+that happens to reach the vulnerable call) rather than by addressing
+the actual root cause -- any other code path in Azahar that calls
+`QCryptographicHash` while SELinux is blocking the same access would
+still crash the same way. If that's what the AVC denial confirms, the
+real fix would be either an SELinux policy module allowing the
+installed binary's context to load OpenSSL's provider modules, or
+running `restorecon` on the install directory in case a `cp`-based copy
+step lost the correct SELinux context along the way.
+
+## Azahar's build cache was silently serving stale, unpatched binaries across two releases
+
+**The bug**: v0.1.39 and v0.1.40's `host/azahar` binaries turned out to
+be byte-for-byte identical (`md5sum` confirmed), despite the source
+patch changing between them (the `QT_QPA_PLATFORMTHEME` launcher env
+var in v0.1.39, then the real `OnMenuLoadFile()`/`QFileIconProvider`
+code fix in v0.1.40) -- meaning **the second fix was never actually
+built or shipped**, even though CI reported success and the release
+notes named the right commit.
+
+**Root cause**: `.github/workflows/release.yml`'s `actions/cache` step
+for Azahar's build keyed its cache **only** on the pinned upstream
+commit (`azahar-75134fca...-v1`), which never changes when this
+project's own patch file does. Once the first successful build was
+cached, every later run restored that same cached `.release-work/
+azahar-src` directory (source tree, already patched with whatever
+version of the patch existed at caching time, plus its already-built
+binary) -- and `scripts/build-release.sh`'s own cache-hit check only
+tested whether a binary existed at that path
+(`[[ -f ".../build/bin/Release/azahar" ]]`), not whether it actually
+matched the current patch. So every subsequent CI run, no matter how
+the patch changed, silently skipped re-cloning, re-patching, and
+rebuilding entirely -- confirmed by the "Build release package" step's
+own duration (~3 minutes for v0.1.40, far too short for Azahar's real
+20-40+ minute build from scratch).
+
+**The fix**: both halves of the caching now key on the patch file's
+actual content, not just the pinned commit:
+- `release.yml`'s cache key gained
+  `${{ hashFiles('host/azahar-patches/0001-remote-server-integration.patch') }}`
+  (bumped `v1` to `v2` too, to guarantee a clean break from the
+  already-poisoned old cache entries).
+- `build-release.sh`'s local cache-hit check now runs
+  `git apply --reverse --check` with the *current* patch file against
+  the cached tree -- the same idempotency technique
+  `scripts/patch-existing-emulator.sh` already uses to detect
+  already-applied vs. needs-reapplying. Only a tree that reverse-applies
+  cleanly (meaning it currently has *exactly* this patch, not some
+  earlier version of it) counts as a cache hit; anything else triggers
+  a full re-clone, re-patch, and rebuild.
+
+**Verified**: tested both the true-positive case (current patch against
+the scratch tree it was authored against: correctly reports a match)
+and the true-negative case (reverting one patched file back to its
+pristine pre-patch state via `git checkout HEAD --`, simulating a stale
+cache holding an older patch version: correctly reports no match,
+triggering a rebuild) directly with `git apply --reverse --check`.
+`bash -n` on the updated `build-release.sh` passes.
+
+**Practical consequence for this session**: the v0.1.40 release the user
+tested does **not** actually contain the `QFileIconProvider` crash fix
+-- it's running the exact same pre-fix binary as v0.1.39. A new release
+built after this caching fix is the first one that will actually
+contain it.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

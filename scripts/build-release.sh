@@ -75,15 +75,33 @@ echo "== [3/5] Patched Azahar host (Nintendo 3DS, commit ${AZAHAR_COMMIT}) =="
 # way SDL3 already is (see azahar_src/build's existence check below),
 # not just re-cloned+rebuilt from scratch every time like melonDS's
 # still-cheap-enough-not-to-bother step above.
+#
+# The cache-hit check below verifies the CURRENT patch file is actually
+# what's applied in the cached tree (via `git apply --reverse --check`,
+# the same idempotency technique patch-existing-emulator.sh already
+# uses), not just that a binary happens to exist at this path -- a real
+# bug shipped two releases (v0.1.39, v0.1.40) with byte-for-byte
+# identical azahar binaries despite the patch changing in between,
+# confirmed via md5sum, because the old check only tested file
+# existence: once a binary was cached, every later change to the patch
+# was silently ignored. .github/workflows/release.yml's own cache key
+# needed the matching fix (hashFiles() on this same patch file), since
+# a stale GitHub Actions cache restore recreates exactly this same
+# stale-file-exists condition even before this script's own check runs.
 azahar_src="${work_dir}/azahar-src"
-if [[ -f "${azahar_src}/build/bin/Release/azahar" ]]; then
-    echo "already built at ${azahar_src}, skipping (cache hit)"
-else
+azahar_patch_file="${repo_root}/host/azahar-patches/0001-remote-server-integration.patch"
+azahar_cache_hit=0
+if [[ -f "${azahar_src}/build/bin/Release/azahar" ]] && \
+   (cd "${azahar_src}" && git apply --reverse --check "${azahar_patch_file}" 2>/dev/null); then
+    echo "already built at ${azahar_src} with the current patch applied, skipping (cache hit)"
+    azahar_cache_hit=1
+fi
+if [[ "${azahar_cache_hit}" -eq 0 ]]; then
     rm -rf "${azahar_src}"
     git clone https://github.com/azahar-emu/azahar.git "${azahar_src}"
     (cd "${azahar_src}" && git checkout "${AZAHAR_COMMIT}")
     (cd "${azahar_src}" && git submodule update --init --recursive --depth 1)
-    (cd "${azahar_src}" && git apply "${repo_root}/host/azahar-patches/0001-remote-server-integration.patch")
+    (cd "${azahar_src}" && git apply "${azahar_patch_file}")
     cmake -S "${azahar_src}" -B "${azahar_src}/build" -DCMAKE_BUILD_TYPE=Release \
         -DENABLE_QT_TRANSLATION=OFF
     cmake --build "${azahar_src}/build" -j"$(nproc)"
