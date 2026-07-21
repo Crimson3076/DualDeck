@@ -43,6 +43,34 @@ enum class PacketType : uint16_t {
     // audio" state, matching how melonDS's own Mic input already treats
     // silence (see docs/known-limitations.md's microphone section).
     MicAudioFrame = 10,
+    // host -> client, control channel, unsolicited notification that the
+    // host switched which mode/adapter is driving the session (GitHub
+    // issue #4 Phase B) -- e.g. melonDS launching or exiting while a
+    // client stays connected throughout, swapping NetServer's target
+    // between HostControlAdapter and the emulator. Sent only to an
+    // already-authenticated, currently-connected client; a new
+    // connection just learns the current state from HelloAck instead
+    // (see HelloAckPayload::system/adapter), so there is no negotiated
+    // payload shape to keep compatible here and this addition does not
+    // need a kProtocolVersion bump -- same reasoning as
+    // DiscoveryRequest/DiscoveryResponse's original introduction. An
+    // older client that doesn't yet read anything from the control
+    // channel post-handshake simply never consumes these bytes; they sit
+    // harmlessly unread rather than causing any error.
+    ModeChanged = 11,
+};
+
+// Which of two states the host is currently in (GitHub issue #4): a live
+// emulation session with a real adapter (e.g. melonDS) connected and
+// driving input/video, or idle host-control navigation with no emulator
+// running at all (a virtual gamepad -- HostControlAdapter -- the client
+// can use to browse/launch the host's own UI instead). Every host today
+// implicitly starts in, and stays in, Emulation; HostControl only
+// exists once a Host Service that outlives the emulator process is
+// wired up (issue #4's later phases) -- see NetServer::setTarget().
+enum class HostMode : uint8_t {
+    Emulation = 0,
+    HostControl = 1,
 };
 
 // DS button bitmask (wire format; independent from melonDS's internal
@@ -328,6 +356,17 @@ struct MicAudioFramePayload {
     std::vector<int16_t> samples;
 };
 
+// ModeChanged (host -> client) payload: the new mode plus the identity
+// now driving it, mirroring HelloAckPayload::system/adapter's fields and
+// encoding so a mid-session UI update (GitHub issue #4 Phase E) needs no
+// separate lookup -- e.g. "Host Menu" while HostMode::HostControl, or
+// "Nintendo DS · melonDS" once HostMode::Emulation resumes.
+struct ModeChangedPayload {
+    HostMode mode = HostMode::Emulation;
+    SystemIdentity system;
+    AdapterIdentity adapter;
+};
+
 struct PacketHeader {
     uint32_t magic = kPacketMagic;
     uint16_t protocolVersion = kProtocolVersion;
@@ -427,5 +466,15 @@ std::optional<MicAudioFramePayload> parseMicAudioFramePayload(const uint8_t* dat
 
 // Builds a complete MicAudioFrame packet (header + serialized body).
 ByteBuffer buildMicAudioFramePacket(const MicAudioFramePayload& frame);
+
+// Serializes a ModeChangedPayload (header not included).
+void serializeModeChangedPayload(ByteBuffer& out, const ModeChangedPayload& modeChanged);
+
+// Parses a ModeChangedPayload. Returns std::nullopt on malformed input
+// (unrecognized mode byte, a malformed identity, or trailing garbage).
+std::optional<ModeChangedPayload> parseModeChangedPayload(const uint8_t* data, size_t size);
+
+// Builds a complete ModeChanged packet (header + serialized body).
+ByteBuffer buildModeChangedPacket(const ModeChangedPayload& modeChanged);
 
 } // namespace melonds_remote

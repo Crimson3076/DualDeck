@@ -348,6 +348,33 @@ connected yet) -- see `docs/known-limitations.md`'s matching entry for
 both fixes and the full real-pipeline verification, including a
 deliberate 7-second zero-input-traffic gap proving the second fix.
 
+### 7. NetServer's target is now runtime-swappable, with a ModeChanged notification (GitHub issue #4 Phase B)
+
+**Implemented**: `NetServer` no longer binds to one
+`IEmulatorInputSink`/`IFrameSource` pair for its whole lifetime.
+`setTarget(inputSink, frameSource, mode, systemIdentity,
+adapterIdentity)` atomically swaps the active pair, releases whatever
+the previous target thought was still held, and -- if a client is
+already connected -- sends it a new `ModeChanged` packet on the control
+channel so it learns the new mode/identity without reconnecting. This
+is the other half of Phase A's prerequisite: a Host Service can now
+start pointed at a placeholder target (the future `HostControlAdapter`,
+issue #4 Phase C) and swap to a real emulator adapter once one connects
+via `--adapter-ipc`, then swap back on disconnect, all while a single
+client session spans the whole thing.
+
+This section deliberately does **not** decide how or when something
+actually *calls* `setTarget()` in response to an emulator
+connecting/disconnecting -- that coordination logic (and the manual
+override a user might want) is issue #4 Phase D, still open. Nor does
+it give the client anything to react to yet: no client build reads from
+the control channel after its handshake today, so a sent `ModeChanged`
+packet is real on the wire but currently unconsumed (issue #4 Phase E).
+This phase only had to prove the mechanism itself -- swap, release,
+notify -- works correctly under real concurrent socket traffic; see
+`docs/known-limitations.md`'s matching entry for the real end-to-end
+test suite that verifies it.
+
 ## Consequences
 
 **Positive**: a concrete, testable target contract exists for a future

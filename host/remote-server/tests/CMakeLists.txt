@@ -1,6 +1,7 @@
 add_executable(melonds_remote_host_tests
     main.cpp
     test_adapter_bridge.cpp
+    test_net_server_mode_switch.cpp
 )
 
 target_include_directories(melonds_remote_host_tests PRIVATE

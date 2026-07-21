@@ -2563,6 +2563,76 @@ sending control-channel heartbeats throughout the gap, same as any
 real client (which is always rendering) already does -- at which point
 the real fix was confirmed working cleanly on the first try.
 
+## NetServer's runtime-swappable target + ModeChanged notification (GitHub issue #4 Phase B)
+
+Continues the entry above (same GitHub issue #4): Phase A made it
+possible for an emulator to connect to an already-running Host Service
+as an out-of-process adapter. Phase B is the other half of the
+prerequisite for host-control mode -- letting the Host Service itself
+switch which adapter is driving a session *while a client stays
+connected*, instead of every mode change requiring a fresh handshake.
+This is what will let a client navigate the host's own UI before an
+emulator has been launched and after it exits (issue #4's later
+phases), without ever needing to reconnect.
+
+**What this implements**: `NetServer` no longer binds permanently to
+one `IEmulatorInputSink&`/`IFrameSource&` pair at construction.
+`NetServer::setTarget(inputSink, frameSource, mode, systemIdentity,
+adapterIdentity)` atomically swaps the active pair (guarded by a new
+`targetMutex_`, held briefly around every touch of the target from
+`inputLoop()`/`videoLoop()`/`watchdogLoop()`/handshake/discovery code,
+matching how this codebase already treats `trackerMutex_`/`statsMutex_`
+for similarly frequent, briefly-held state), calls the *previous*
+target's `releaseAll()` (so a button/touch held at the moment of a swap
+can never carry over onto whatever's driving the session now), and
+sends an already-connected, already-authenticated client a new
+`ModeChanged` packet (`protocol/`'s `PacketType::ModeChanged`) on the
+control channel -- a safe no-op, deferred to the next connecting
+client's `HelloAck`, if nobody is connected right now or the send
+fails. `HostMode` (`Emulation` or `HostControl`) and `ModeChangedPayload`
+(mode + the same `SystemIdentity`/`AdapterIdentity` encoding
+`HelloAckPayload`/`DiscoveryResponsePayload` already use) are new wire
+types in `protocol/`; see `docs/protocol.md`'s "ModeChanged payload"
+section for the exact format and why this addition did not need a
+`kProtocolVersion` bump (unlike every previous wire change, it's not
+part of Hello/HelloAck/DiscoveryResponse negotiation -- an older client
+build simply never reads it, since none of them read anything from the
+control channel post-handshake at all yet).
+
+**Client-side is deliberately not touched here**: no client build
+today has a read loop on the control channel after the initial
+`HelloAck`, so a sent `ModeChanged` packet currently just sits unread
+in the client's TCP receive buffer -- harmless, not an error, but also
+not yet acted on. Wiring an actual read loop and reacting to mode
+changes in the UI is GitHub issue #4 Phase E's job, intentionally
+deferred; this phase only had to prove the host side of the mechanism
+works, ahead of a client that consumes it (same "wire format lands
+before the consumer" sequencing `docs/protocol.md`'s new section
+explicitly calls out).
+
+**Verified**: a new real end-to-end test suite,
+`host/remote-server/tests/test_net_server_mode_switch.cpp` (7 new
+cases, all real sockets against a real running `NetServer` -- no mocks
+of the network layer, matching this project's established testing
+convention). Confirms: a real UDP `ControllerState` packet reaches
+whichever `IEmulatorInputSink` is currently active and *not* the
+previous one; the previous target's `releaseAll()` fires immediately on
+swap (checked by asserting its last-known state goes back to
+all-released); a real TCP video connection's next frames come from the
+newly-active `IFrameSource` (a small `FakeFrameSource` test double
+fills every pixel with one distinct byte per instance, so which source
+produced a captured frame is unambiguous without needing
+`SyntheticFrameSource`'s own generator thread); a connected client
+receives a correctly-populated `ModeChanged` packet exactly when
+`setTarget()` is called mid-session; calling `setTarget()` with nobody
+connected is a genuine no-op (no crash, no hang); `currentMode()`
+always reflects the most recent call; and a brand-new handshake made
+*after* a `setTarget()` call that predates any connection at all
+correctly sees the swapped identity in its `HelloAck`, not the
+construction-time default. Full `ctest` suite (protocol, adapter-sdk,
+client-settings, host) passes with strict warnings
+(`-Wall -Wextra -Wpedantic -Wconversion -Wshadow`) enabled.
+
 ## Atomic updates: Steam no longer needs to be closed to update
 
 **The problem, reported by the user**: applying an update ("Check for

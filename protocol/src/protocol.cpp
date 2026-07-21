@@ -430,4 +430,46 @@ ByteBuffer buildMicAudioFramePacket(const MicAudioFramePayload& frame) {
     return buildPacket(PacketType::MicAudioFrame, payload);
 }
 
+void serializeModeChangedPayload(ByteBuffer& out, const ModeChangedPayload& modeChanged) {
+    out.push_back(static_cast<uint8_t>(modeChanged.mode));
+    appendSystemIdentity(out, modeChanged.system);
+    appendAdapterIdentity(out, modeChanged.adapter);
+}
+
+std::optional<ModeChangedPayload> parseModeChangedPayload(const uint8_t* data, size_t size) {
+    if (data == nullptr || size < 1) {
+        return std::nullopt;
+    }
+
+    ModeChangedPayload modeChanged;
+    size_t offset = 0;
+
+    uint8_t mode = data[offset]; offset += 1;
+    if (mode > static_cast<uint8_t>(HostMode::HostControl)) {
+        return std::nullopt;
+    }
+    modeChanged.mode = static_cast<HostMode>(mode);
+
+    auto system = readSystemIdentity(data, size, offset);
+    if (!system) return std::nullopt;
+    modeChanged.system = std::move(*system);
+
+    auto adapter = readAdapterIdentity(data, size, offset);
+    if (!adapter) return std::nullopt;
+    modeChanged.adapter = std::move(*adapter);
+
+    if (offset != size) {
+        // trailing garbage: reject rather than silently ignore
+        return std::nullopt;
+    }
+
+    return modeChanged;
+}
+
+ByteBuffer buildModeChangedPacket(const ModeChangedPayload& modeChanged) {
+    ByteBuffer payload;
+    serializeModeChangedPayload(payload, modeChanged);
+    return buildPacket(PacketType::ModeChanged, payload);
+}
+
 } // namespace melonds_remote

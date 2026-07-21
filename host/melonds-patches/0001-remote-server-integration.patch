@@ -4093,10 +4093,10 @@ index 00000000..34cb8a58
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.cpp b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
 new file mode 100644
-index 00000000..cd68e02d
+index 00000000..85d313db
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
-@@ -0,0 +1,807 @@
+@@ -0,0 +1,882 @@
 +#include "host/net_server.h"
 +
 +#include <arpa/inet.h>
@@ -4229,7 +4229,9 @@ index 00000000..cd68e02d
 +
 +NetServer::NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource,
 +                     IMicAudioSink& micSink)
-+    : config_(std::move(config)), inputSink_(inputSink), frameSource_(frameSource), micSink_(micSink),
++    : config_(std::move(config)), inputSink_(&inputSink), frameSource_(&frameSource),
++      currentSystemIdentity_(config_.systemIdentity), currentAdapterIdentity_(config_.adapterIdentity),
++      micSink_(micSink),
 +      deviceApproval_(config_.approvalStateFilePath, config_.pendingRequestTtl),
 +      rateLimiter_(config_.maxConnectionAttemptsPerWindow, config_.connectionAttemptWindowUs) {
 +    if (!config_.authToken.empty()) {
@@ -4270,6 +4272,56 @@ index 00000000..cd68e02d
 +
 +NetServer::~NetServer() {
 +    stop();
++}
++
++void NetServer::setTarget(IEmulatorInputSink& inputSink, IFrameSource& frameSource, HostMode mode,
++                           SystemIdentity systemIdentity, AdapterIdentity adapterIdentity) {
++    IEmulatorInputSink* previousSink;
++    {
++        std::lock_guard<std::mutex> lock(targetMutex_);
++        previousSink = inputSink_;
++        inputSink_ = &inputSink;
++        frameSource_ = &frameSource;
++        currentMode_ = mode;
++        currentSystemIdentity_ = std::move(systemIdentity);
++        currentAdapterIdentity_ = std::move(adapterIdentity);
++    }
++
++    // Release outside the lock (and unconditionally, even on the very
++    // first setTarget() call from a constructor -- releaseAll() must
++    // already be safe to call on an idle sink): a button/touch the old
++    // target thought was still held must not carry over to whatever's
++    // driving the session now.
++    if (previousSink) {
++        previousSink->releaseAll();
++    }
++
++    int fd = controlClientFd_.load();
++    if (fd >= 0 && clientAuthenticated_.load()) {
++        ModeChangedPayload payload;
++        payload.mode = mode;
++        {
++            // Re-read under the lock rather than reusing the (now-moved-
++            // from) parameters above: another setTarget() call could
++            // have already raced ahead of this one between the unlock
++            // above and here, and the notification should always
++            // reflect whatever is actually current, not stale local
++            // state.
++            std::lock_guard<std::mutex> lock(targetMutex_);
++            payload.system = currentSystemIdentity_;
++            payload.adapter = currentAdapterIdentity_;
++        }
++        ByteBuffer packet = buildModeChangedPacket(payload);
++        // Best-effort: a failed send here just means this client learns
++        // the new state on its next reconnect via HelloAck instead,
++        // same fallback as any other transient control-channel hiccup.
++        sendAll(fd, packet.data(), packet.size());
++    }
++}
++
++HostMode NetServer::currentMode() const {
++    std::lock_guard<std::mutex> lock(targetMutex_);
++    return currentMode_;
 +}
 +
 +bool NetServer::approveDevice(const std::string& deviceIdOrPrefix) {
@@ -4503,8 +4555,14 @@ index 00000000..cd68e02d
 +        // was already in use) is honestly reported rather than promising
 +        // a feature that silently won't work.
 +        ack.micSupported = audioFd_ >= 0 ? 1 : 0;
-+        ack.system = config_.systemIdentity;
-+        ack.adapter = config_.adapterIdentity;
++        {
++            // Whatever setTarget() (GitHub issue #4 Phase B) most
++            // recently set, not just the construction-time default --
++            // a brand-new connection should never see stale identity.
++            std::lock_guard<std::mutex> lock(targetMutex_);
++            ack.system = currentSystemIdentity_;
++            ack.adapter = currentAdapterIdentity_;
++        }
 +        ByteBuffer ackPacket = buildHelloAckPacket(ack);
 +        sendAll(clientFd, ackPacket.data(), ackPacket.size());
 +
@@ -4554,7 +4612,10 @@ index 00000000..cd68e02d
 +            std::lock_guard<std::mutex> lock(trackerMutex_);
 +            inputTracker_.reset();
 +        }
-+        inputSink_.releaseAll();
++        {
++            std::lock_guard<std::mutex> lock(targetMutex_);
++            inputSink_->releaseAll();
++        }
 +        micSink_.releaseAudio();
 +    }
 +}
@@ -4631,7 +4692,8 @@ index 00000000..cd68e02d
 +        }
 +
 +        if (accepted) {
-+            inputSink_.applyControllerState(*state);
++            std::lock_guard<std::mutex> lock(targetMutex_);
++            inputSink_->applyControllerState(*state);
 +        }
 +    }
 +}
@@ -4718,7 +4780,8 @@ index 00000000..cd68e02d
 +        }
 +        if (timedOut) {
 +            std::fprintf(stderr, "NetServer: input timeout, releasing all inputs\n");
-+            inputSink_.releaseAll();
++            std::lock_guard<std::mutex> lock(targetMutex_);
++            inputSink_->releaseAll();
 +        }
 +
 +        uint64_t now = nowMicros();
@@ -4830,7 +4893,12 @@ index 00000000..cd68e02d
 +            auto tickStart = std::chrono::steady_clock::now();
 +
 +            uint64_t frameIndex = 0;
-+            if (frameSource_.getLatestFrame(frame, frameIndex)) {
++            bool gotFrame;
++            {
++                std::lock_guard<std::mutex> lock(targetMutex_);
++                gotFrame = frameSource_->getLatestFrame(frame, frameIndex);
++            }
++            if (gotFrame) {
 +                ByteBuffer packet = buildPacket(PacketType::VideoFrame, frame);
 +                if (!sendAll(clientFd, packet.data(), packet.size())) {
 +                    break;
@@ -4894,8 +4962,15 @@ index 00000000..cd68e02d
 +        response.inputPort = config_.inputPort;
 +        response.videoPort = config_.videoPort;
 +        response.audioPort = config_.audioPort;
-+        response.system = config_.systemIdentity;
-+        response.adapter = config_.adapterIdentity;
++        {
++            // Same reasoning as controlLoop()'s HelloAck above: reflect
++            // whatever setTarget() most recently set, so the
++            // host-selection list shows the current mode/identity even
++            // before a client attempts a handshake.
++            std::lock_guard<std::mutex> lock(targetMutex_);
++            response.system = currentSystemIdentity_;
++            response.adapter = currentAdapterIdentity_;
++        }
 +        ByteBuffer packet = buildDiscoveryResponsePacket(response);
 +        // Unicast back to the specific sender -- never a broadcast reply.
 +        ::sendto(discoveryFd_, packet.data(), packet.size(), 0,
@@ -4906,10 +4981,10 @@ index 00000000..cd68e02d
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.h b/src/frontend/qt_sdl/remote_server/host/net_server.h
 new file mode 100644
-index 00000000..e9662188
+index 00000000..cb8c9d42
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.h
-@@ -0,0 +1,294 @@
+@@ -0,0 +1,340 @@
 +#pragma once
 +
 +// Minimal standalone host server: one TCP control connection (handshake +
@@ -5125,6 +5200,9 @@ index 00000000..e9662188
 +    // `micSink` receives MicAudioFrame packets (GitHub issue #2). Pass a
 +    // LoggingMicAudioSink when no real audio destination exists yet, same
 +    // as `inputSink` before a real melonDS integration existed.
++    // `config.systemIdentity`/`adapterIdentity` become the initial values
++    // reported to clients -- see setTarget() below for changing them (and
++    // the target itself) after start().
 +    NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource,
 +               IMicAudioSink& micSink);
 +    ~NetServer();
@@ -5136,6 +5214,38 @@ index 00000000..e9662188
 +    // object) to shut down.
 +    void start();
 +    void stop();
++
++    // Atomically swaps which IEmulatorInputSink/IFrameSource this server
++    // is driven by, and updates the identity it reports, without
++    // disturbing any already-connected client's control/input/video
++    // sockets (GitHub issue #4 Phase B). This is what lets a Host
++    // Service outlive a single emulator process: it can start pointed at
++    // a HostControlAdapter (`mode` == HostMode::HostControl, no emulator
++    // running yet), then swap to a real adapter once one connects
++    // (`mode` == HostMode::Emulation), and swap back when it disconnects
++    // -- all while a client stays connected throughout instead of having
++    // to reconnect.
++    //
++    // The previous target's releaseAll() is called (after the swap, not
++    // under any internal lock) so a button/touch held at the moment of a
++    // swap can never carry over onto the new target. If a client is
++    // currently authenticated, a ModeChanged packet is sent to it on the
++    // control channel; a safe no-op (state applies to the next connecting
++    // client's HelloAck instead) if nobody is connected right now, or if
++    // the send itself fails (the client learns the new state on its next
++    // reconnect regardless).
++    //
++    // Safe to call from any thread, including before start() (e.g. to
++    // establish the initial target/identity the same way the constructor
++    // parameters do -- construction-time and post-construction swaps go
++    // through the exact same code path).
++    void setTarget(IEmulatorInputSink& inputSink, IFrameSource& frameSource, HostMode mode,
++                    SystemIdentity systemIdentity, AdapterIdentity adapterIdentity);
++
++    // The mode set by the most recent setTarget() call (or the
++    // construction-time default, HostMode::Emulation, if setTarget() was
++    // never called). Safe from any thread.
++    HostMode currentMode() const;
 +
 +    // Approves/denies a pending connection request by exact device id or
 +    // unambiguous prefix (see DeviceApprovalManager::approve/deny).
@@ -5158,8 +5268,19 @@ index 00000000..e9662188
 +    void audioLoop();
 +
 +    NetServerConfig config_;
-+    IEmulatorInputSink& inputSink_;
-+    IFrameSource& frameSource_;
++
++    // The active target and reported identity, swappable at runtime via
++    // setTarget() (GitHub issue #4 Phase B) -- guarded together so
++    // inputLoop()/videoLoop()/watchdogLoop() and a fresh handshake's
++    // HelloAck never see inputSink_/frameSource_ paired with a mismatched
++    // identity mid-swap. Never null after construction.
++    mutable std::mutex targetMutex_;
++    IEmulatorInputSink* inputSink_;
++    IFrameSource* frameSource_;
++    HostMode currentMode_ = HostMode::Emulation;
++    SystemIdentity currentSystemIdentity_;
++    AdapterIdentity currentAdapterIdentity_;
++
 +    IMicAudioSink& micSink_;
 +    DeviceApprovalManager deviceApproval_;
 +    // Only ever touched from inside the onPendingRequestsChanged callback
@@ -5276,10 +5397,10 @@ index 00000000..48014b9b
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
 new file mode 100644
-index 00000000..519be637
+index 00000000..bbab4888
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
-@@ -0,0 +1,431 @@
+@@ -0,0 +1,480 @@
 +#pragma once
 +
 +// melonDS Remote wire protocol definitions.
@@ -5325,6 +5446,34 @@ index 00000000..519be637
 +    // audio" state, matching how melonDS's own Mic input already treats
 +    // silence (see docs/known-limitations.md's microphone section).
 +    MicAudioFrame = 10,
++    // host -> client, control channel, unsolicited notification that the
++    // host switched which mode/adapter is driving the session (GitHub
++    // issue #4 Phase B) -- e.g. melonDS launching or exiting while a
++    // client stays connected throughout, swapping NetServer's target
++    // between HostControlAdapter and the emulator. Sent only to an
++    // already-authenticated, currently-connected client; a new
++    // connection just learns the current state from HelloAck instead
++    // (see HelloAckPayload::system/adapter), so there is no negotiated
++    // payload shape to keep compatible here and this addition does not
++    // need a kProtocolVersion bump -- same reasoning as
++    // DiscoveryRequest/DiscoveryResponse's original introduction. An
++    // older client that doesn't yet read anything from the control
++    // channel post-handshake simply never consumes these bytes; they sit
++    // harmlessly unread rather than causing any error.
++    ModeChanged = 11,
++};
++
++// Which of two states the host is currently in (GitHub issue #4): a live
++// emulation session with a real adapter (e.g. melonDS) connected and
++// driving input/video, or idle host-control navigation with no emulator
++// running at all (a virtual gamepad -- HostControlAdapter -- the client
++// can use to browse/launch the host's own UI instead). Every host today
++// implicitly starts in, and stays in, Emulation; HostControl only
++// exists once a Host Service that outlives the emulator process is
++// wired up (issue #4's later phases) -- see NetServer::setTarget().
++enum class HostMode : uint8_t {
++    Emulation = 0,
++    HostControl = 1,
 +};
 +
 +// DS button bitmask (wire format; independent from melonDS's internal
@@ -5610,6 +5759,17 @@ index 00000000..519be637
 +    std::vector<int16_t> samples;
 +};
 +
++// ModeChanged (host -> client) payload: the new mode plus the identity
++// now driving it, mirroring HelloAckPayload::system/adapter's fields and
++// encoding so a mid-session UI update (GitHub issue #4 Phase E) needs no
++// separate lookup -- e.g. "Host Menu" while HostMode::HostControl, or
++// "Nintendo DS · melonDS" once HostMode::Emulation resumes.
++struct ModeChangedPayload {
++    HostMode mode = HostMode::Emulation;
++    SystemIdentity system;
++    AdapterIdentity adapter;
++};
++
 +struct PacketHeader {
 +    uint32_t magic = kPacketMagic;
 +    uint16_t protocolVersion = kProtocolVersion;
@@ -5709,6 +5869,16 @@ index 00000000..519be637
 +
 +// Builds a complete MicAudioFrame packet (header + serialized body).
 +ByteBuffer buildMicAudioFramePacket(const MicAudioFramePayload& frame);
++
++// Serializes a ModeChangedPayload (header not included).
++void serializeModeChangedPayload(ByteBuffer& out, const ModeChangedPayload& modeChanged);
++
++// Parses a ModeChangedPayload. Returns std::nullopt on malformed input
++// (unrecognized mode byte, a malformed identity, or trailing garbage).
++std::optional<ModeChangedPayload> parseModeChangedPayload(const uint8_t* data, size_t size);
++
++// Builds a complete ModeChanged packet (header + serialized body).
++ByteBuffer buildModeChangedPacket(const ModeChangedPayload& modeChanged);
 +
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/rate_limiter.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/rate_limiter.h
@@ -5862,10 +6032,10 @@ index 00000000..a1aff532
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
 new file mode 100644
-index 00000000..b959afeb
+index 00000000..19c96612
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
-@@ -0,0 +1,433 @@
+@@ -0,0 +1,475 @@
 +#include "melonds_remote/protocol.h"
 +
 +#include <cstring>
@@ -6296,6 +6466,48 @@ index 00000000..b959afeb
 +    ByteBuffer payload;
 +    serializeMicAudioFramePayload(payload, frame);
 +    return buildPacket(PacketType::MicAudioFrame, payload);
++}
++
++void serializeModeChangedPayload(ByteBuffer& out, const ModeChangedPayload& modeChanged) {
++    out.push_back(static_cast<uint8_t>(modeChanged.mode));
++    appendSystemIdentity(out, modeChanged.system);
++    appendAdapterIdentity(out, modeChanged.adapter);
++}
++
++std::optional<ModeChangedPayload> parseModeChangedPayload(const uint8_t* data, size_t size) {
++    if (data == nullptr || size < 1) {
++        return std::nullopt;
++    }
++
++    ModeChangedPayload modeChanged;
++    size_t offset = 0;
++
++    uint8_t mode = data[offset]; offset += 1;
++    if (mode > static_cast<uint8_t>(HostMode::HostControl)) {
++        return std::nullopt;
++    }
++    modeChanged.mode = static_cast<HostMode>(mode);
++
++    auto system = readSystemIdentity(data, size, offset);
++    if (!system) return std::nullopt;
++    modeChanged.system = std::move(*system);
++
++    auto adapter = readAdapterIdentity(data, size, offset);
++    if (!adapter) return std::nullopt;
++    modeChanged.adapter = std::move(*adapter);
++
++    if (offset != size) {
++        // trailing garbage: reject rather than silently ignore
++        return std::nullopt;
++    }
++
++    return modeChanged;
++}
++
++ByteBuffer buildModeChangedPacket(const ModeChangedPayload& modeChanged) {
++    ByteBuffer payload;
++    serializeModeChangedPayload(payload, modeChanged);
++    return buildPacket(PacketType::ModeChanged, payload);
 +}
 +
 +} // namespace melonds_remote

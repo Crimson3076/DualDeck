@@ -213,6 +213,9 @@ public:
     // `micSink` receives MicAudioFrame packets (GitHub issue #2). Pass a
     // LoggingMicAudioSink when no real audio destination exists yet, same
     // as `inputSink` before a real melonDS integration existed.
+    // `config.systemIdentity`/`adapterIdentity` become the initial values
+    // reported to clients -- see setTarget() below for changing them (and
+    // the target itself) after start().
     NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource,
                IMicAudioSink& micSink);
     ~NetServer();
@@ -224,6 +227,38 @@ public:
     // object) to shut down.
     void start();
     void stop();
+
+    // Atomically swaps which IEmulatorInputSink/IFrameSource this server
+    // is driven by, and updates the identity it reports, without
+    // disturbing any already-connected client's control/input/video
+    // sockets (GitHub issue #4 Phase B). This is what lets a Host
+    // Service outlive a single emulator process: it can start pointed at
+    // a HostControlAdapter (`mode` == HostMode::HostControl, no emulator
+    // running yet), then swap to a real adapter once one connects
+    // (`mode` == HostMode::Emulation), and swap back when it disconnects
+    // -- all while a client stays connected throughout instead of having
+    // to reconnect.
+    //
+    // The previous target's releaseAll() is called (after the swap, not
+    // under any internal lock) so a button/touch held at the moment of a
+    // swap can never carry over onto the new target. If a client is
+    // currently authenticated, a ModeChanged packet is sent to it on the
+    // control channel; a safe no-op (state applies to the next connecting
+    // client's HelloAck instead) if nobody is connected right now, or if
+    // the send itself fails (the client learns the new state on its next
+    // reconnect regardless).
+    //
+    // Safe to call from any thread, including before start() (e.g. to
+    // establish the initial target/identity the same way the constructor
+    // parameters do -- construction-time and post-construction swaps go
+    // through the exact same code path).
+    void setTarget(IEmulatorInputSink& inputSink, IFrameSource& frameSource, HostMode mode,
+                    SystemIdentity systemIdentity, AdapterIdentity adapterIdentity);
+
+    // The mode set by the most recent setTarget() call (or the
+    // construction-time default, HostMode::Emulation, if setTarget() was
+    // never called). Safe from any thread.
+    HostMode currentMode() const;
 
     // Approves/denies a pending connection request by exact device id or
     // unambiguous prefix (see DeviceApprovalManager::approve/deny).
@@ -246,8 +281,19 @@ private:
     void audioLoop();
 
     NetServerConfig config_;
-    IEmulatorInputSink& inputSink_;
-    IFrameSource& frameSource_;
+
+    // The active target and reported identity, swappable at runtime via
+    // setTarget() (GitHub issue #4 Phase B) -- guarded together so
+    // inputLoop()/videoLoop()/watchdogLoop() and a fresh handshake's
+    // HelloAck never see inputSink_/frameSource_ paired with a mismatched
+    // identity mid-swap. Never null after construction.
+    mutable std::mutex targetMutex_;
+    IEmulatorInputSink* inputSink_;
+    IFrameSource* frameSource_;
+    HostMode currentMode_ = HostMode::Emulation;
+    SystemIdentity currentSystemIdentity_;
+    AdapterIdentity currentAdapterIdentity_;
+
     IMicAudioSink& micSink_;
     DeviceApprovalManager deviceApproval_;
     // Only ever touched from inside the onPendingRequestsChanged callback

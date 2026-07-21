@@ -9,6 +9,7 @@ add_executable(melonds_remote_protocol_tests
     test_discovery.cpp
     test_mic_audio.cpp
     test_identity.cpp
+    test_mode_changed.cpp
 )
 
 target_link_libraries(melonds_remote_protocol_tests PRIVATE melonds_remote_protocol)

@@ -31,6 +31,7 @@ same fixed-size header.
 | 8     | `DiscoveryRequest`  | client -> host (UDP broadcast) | discovery | none |
 | 9     | `DiscoveryResponse` | host -> client (UDP unicast)   | discovery | see "Discovery payload" below |
 | 10    | `MicAudioFrame`   | client -> host  | UDP audio | see "MicAudioFrame payload" below |
+| 11    | `ModeChanged`     | host -> client  | TCP control | see "ModeChanged payload" below |
 
 ## ControllerState payload (29 bytes)
 
@@ -199,6 +200,45 @@ Raw/uncompressed audio over lossy UDP with no FEC is a deliberate
 Stage-1 tradeoff (same spirit as the video transport's own Stage-1
 raw-pixel-buffer choice above) -- revisiting it (compression, jitter
 buffering, loss concealment) is future work, not attempted here.
+
+## ModeChanged payload
+
+Implements GitHub issue #4 Phase B: an unsolicited, host-initiated
+notification that the host switched which mode/adapter is driving the
+session, sent to an already-connected, already-authenticated client on
+the TCP control channel. Exists so a client can stay connected across
+an emulator starting or exiting instead of having to reconnect --
+`host/remote-server`'s `NetServer::setTarget()` is what triggers this
+(see `docs/known-limitations.md`'s matching entry and
+`docs/adr/0001-host-service-and-adapter-architecture.md` section 6).
+
+Unlike every other packet type in this document, adding `ModeChanged`
+did **not** bump `protocolVersion`: it carries no negotiated-payload
+compatibility concern the way a new *field* on `HelloPayload`/
+`HelloAckPayload`/`DiscoveryResponsePayload` would (those are parsed
+during the version-gated handshake itself). `ModeChanged` is sent later,
+mid-session, unsolicited, to a client that already completed its
+handshake against whatever `protocolVersion` it negotiated -- an older
+client build that doesn't yet read anything from the control channel
+after the handshake simply never consumes these bytes; they sit
+harmlessly unread in its TCP receive buffer rather than causing any
+parse error.
+
+| Offset | Size | Field   | Notes |
+|-------:|-----:|---------|-------|
+| 0      | 1    | `mode`  | `0` = `Emulation` (a real adapter, e.g. melonDS, is driving the session), `1` = `HostControl` (no emulator running -- client input drives a virtual gamepad, `HostControlAdapter`, that navigates the host's own UI instead). Any other value is rejected as malformed. |
+| 1      | length-prefixed identity | `system`  | Same encoding as `HelloAckPayload.system`/`DiscoveryResponsePayload.system` below -- see "Emulator identity model". |
+| ...    | length-prefixed identity | `adapter` | Same encoding as `HelloAckPayload.adapter`/`DiscoveryResponsePayload.adapter` below. |
+
+Sending the identity alongside the mode (rather than just the bare mode
+byte) means a client UI can show e.g. "Host Menu" or "Nintendo DS ·
+melonDS" the instant this arrives, without a second round-trip or a
+stale value left over from the last handshake.
+
+As of this writing, no client build actually reads this packet yet
+(GitHub issue #4 Phase E, client UI for host-control mode, is later
+work) -- this section documents the wire format `NetServer` already
+sends, ahead of a client that consumes it.
 
 ## Emulator identity model
 

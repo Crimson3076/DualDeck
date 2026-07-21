@@ -130,7 +130,9 @@ bool sendAll(int fd, const uint8_t* data, size_t size) {
 
 NetServer::NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource,
                      IMicAudioSink& micSink)
-    : config_(std::move(config)), inputSink_(inputSink), frameSource_(frameSource), micSink_(micSink),
+    : config_(std::move(config)), inputSink_(&inputSink), frameSource_(&frameSource),
+      currentSystemIdentity_(config_.systemIdentity), currentAdapterIdentity_(config_.adapterIdentity),
+      micSink_(micSink),
       deviceApproval_(config_.approvalStateFilePath, config_.pendingRequestTtl),
       rateLimiter_(config_.maxConnectionAttemptsPerWindow, config_.connectionAttemptWindowUs) {
     if (!config_.authToken.empty()) {
@@ -171,6 +173,56 @@ NetServer::NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFra
 
 NetServer::~NetServer() {
     stop();
+}
+
+void NetServer::setTarget(IEmulatorInputSink& inputSink, IFrameSource& frameSource, HostMode mode,
+                           SystemIdentity systemIdentity, AdapterIdentity adapterIdentity) {
+    IEmulatorInputSink* previousSink;
+    {
+        std::lock_guard<std::mutex> lock(targetMutex_);
+        previousSink = inputSink_;
+        inputSink_ = &inputSink;
+        frameSource_ = &frameSource;
+        currentMode_ = mode;
+        currentSystemIdentity_ = std::move(systemIdentity);
+        currentAdapterIdentity_ = std::move(adapterIdentity);
+    }
+
+    // Release outside the lock (and unconditionally, even on the very
+    // first setTarget() call from a constructor -- releaseAll() must
+    // already be safe to call on an idle sink): a button/touch the old
+    // target thought was still held must not carry over to whatever's
+    // driving the session now.
+    if (previousSink) {
+        previousSink->releaseAll();
+    }
+
+    int fd = controlClientFd_.load();
+    if (fd >= 0 && clientAuthenticated_.load()) {
+        ModeChangedPayload payload;
+        payload.mode = mode;
+        {
+            // Re-read under the lock rather than reusing the (now-moved-
+            // from) parameters above: another setTarget() call could
+            // have already raced ahead of this one between the unlock
+            // above and here, and the notification should always
+            // reflect whatever is actually current, not stale local
+            // state.
+            std::lock_guard<std::mutex> lock(targetMutex_);
+            payload.system = currentSystemIdentity_;
+            payload.adapter = currentAdapterIdentity_;
+        }
+        ByteBuffer packet = buildModeChangedPacket(payload);
+        // Best-effort: a failed send here just means this client learns
+        // the new state on its next reconnect via HelloAck instead,
+        // same fallback as any other transient control-channel hiccup.
+        sendAll(fd, packet.data(), packet.size());
+    }
+}
+
+HostMode NetServer::currentMode() const {
+    std::lock_guard<std::mutex> lock(targetMutex_);
+    return currentMode_;
 }
 
 bool NetServer::approveDevice(const std::string& deviceIdOrPrefix) {
@@ -404,8 +456,14 @@ void NetServer::controlLoop() {
         // was already in use) is honestly reported rather than promising
         // a feature that silently won't work.
         ack.micSupported = audioFd_ >= 0 ? 1 : 0;
-        ack.system = config_.systemIdentity;
-        ack.adapter = config_.adapterIdentity;
+        {
+            // Whatever setTarget() (GitHub issue #4 Phase B) most
+            // recently set, not just the construction-time default --
+            // a brand-new connection should never see stale identity.
+            std::lock_guard<std::mutex> lock(targetMutex_);
+            ack.system = currentSystemIdentity_;
+            ack.adapter = currentAdapterIdentity_;
+        }
         ByteBuffer ackPacket = buildHelloAckPacket(ack);
         sendAll(clientFd, ackPacket.data(), ackPacket.size());
 
@@ -455,7 +513,10 @@ void NetServer::controlLoop() {
             std::lock_guard<std::mutex> lock(trackerMutex_);
             inputTracker_.reset();
         }
-        inputSink_.releaseAll();
+        {
+            std::lock_guard<std::mutex> lock(targetMutex_);
+            inputSink_->releaseAll();
+        }
         micSink_.releaseAudio();
     }
 }
@@ -532,7 +593,8 @@ void NetServer::inputLoop() {
         }
 
         if (accepted) {
-            inputSink_.applyControllerState(*state);
+            std::lock_guard<std::mutex> lock(targetMutex_);
+            inputSink_->applyControllerState(*state);
         }
     }
 }
@@ -619,7 +681,8 @@ void NetServer::watchdogLoop() {
         }
         if (timedOut) {
             std::fprintf(stderr, "NetServer: input timeout, releasing all inputs\n");
-            inputSink_.releaseAll();
+            std::lock_guard<std::mutex> lock(targetMutex_);
+            inputSink_->releaseAll();
         }
 
         uint64_t now = nowMicros();
@@ -731,7 +794,12 @@ void NetServer::videoLoop() {
             auto tickStart = std::chrono::steady_clock::now();
 
             uint64_t frameIndex = 0;
-            if (frameSource_.getLatestFrame(frame, frameIndex)) {
+            bool gotFrame;
+            {
+                std::lock_guard<std::mutex> lock(targetMutex_);
+                gotFrame = frameSource_->getLatestFrame(frame, frameIndex);
+            }
+            if (gotFrame) {
                 ByteBuffer packet = buildPacket(PacketType::VideoFrame, frame);
                 if (!sendAll(clientFd, packet.data(), packet.size())) {
                     break;
@@ -795,8 +863,15 @@ void NetServer::discoveryLoop() {
         response.inputPort = config_.inputPort;
         response.videoPort = config_.videoPort;
         response.audioPort = config_.audioPort;
-        response.system = config_.systemIdentity;
-        response.adapter = config_.adapterIdentity;
+        {
+            // Same reasoning as controlLoop()'s HelloAck above: reflect
+            // whatever setTarget() most recently set, so the
+            // host-selection list shows the current mode/identity even
+            // before a client attempts a handshake.
+            std::lock_guard<std::mutex> lock(targetMutex_);
+            response.system = currentSystemIdentity_;
+            response.adapter = currentAdapterIdentity_;
+        }
         ByteBuffer packet = buildDiscoveryResponsePacket(response);
         // Unicast back to the specific sender -- never a broadcast reply.
         ::sendto(discoveryFd_, packet.data(), packet.size(), 0,
