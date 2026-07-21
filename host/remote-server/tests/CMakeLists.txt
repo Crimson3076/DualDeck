@@ -3,6 +3,7 @@ add_executable(melonds_remote_host_tests
     test_adapter_bridge.cpp
     test_net_server_mode_switch.cpp
     test_host_control_adapter.cpp
+    test_mode_coordinator.cpp
 )
 
 target_include_directories(melonds_remote_host_tests PRIVATE
@@ -12,6 +13,7 @@ target_include_directories(melonds_remote_host_tests PRIVATE
 target_link_libraries(melonds_remote_host_tests PRIVATE
     melonds_remote_host
     melonds_remote_adapter_sdk_fakes
+    melonds_remote_adapter_sdk_synthetic
 )
 
 target_compile_features(melonds_remote_host_tests PRIVATE cxx_std_20)

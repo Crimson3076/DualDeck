@@ -2712,6 +2712,81 @@ uinput` environment. Full `ctest` suite passes with strict warnings
 (`-Wall -Wextra -Wpedantic -Wconversion -Wshadow`) enabled, including a
 clean compile of the real uinput ioctl sequence itself.
 
+## Host Service mode coordination + manual override (GitHub issue #4 Phase D)
+
+Completes the trio started by the three entries above (same GitHub
+issue #4): Phase A let an emulator connect out-of-process, Phase B let
+`NetServer` swap targets at runtime, Phase C built the host-control
+target itself. This phase is what actually *decides when* to swap --
+wiring `--adapter-ipc` mode's real startup sequence so a client no
+longer has to wait for an emulator before it can do anything at all.
+
+**What this implements**: `host/remote-server`'s `--adapter-ipc` mode no
+longer blocks waiting for an adapter to connect before starting
+`NetServer`. It now constructs a real `HostControlAdapter` and starts
+`NetServer` pointed at it immediately (`HostMode::HostControl`), then
+hands both that and an `AdapterBridge`-wrapped `AdapterIpcServer`
+(`HostMode::Emulation`) to a new `ModeCoordinator`, which polls (100ms)
+whether an adapter is currently connected and calls
+`NetServer::setTarget()` on every actual transition -- `HostMode::Emulation`
+(reporting the connected adapter's own identity, or `--system-id`/
+`--adapter-id` if explicitly given) whenever one is connected,
+`HostMode::HostControl` otherwise. The mode-decision itself is a pure
+function, `computeDesiredMode(adapterConnected, manualHostControlOverride)`,
+kept free of any I/O so it's testable in isolation.
+
+**Manual override**: an operator can type `hostcontrol` at this
+process's console to force `HostMode::HostControl` even while an
+adapter stays connected -- stepping back out to host navigation without
+having to disconnect the emulator adapter first -- `resume` to clear
+that override and let auto-detection resume immediately, or `mode` to
+check the current state. These share the exact same console-reading
+loop the existing `approve`/`deny`/`list` device-approval commands
+already use (renamed `consoleLoop`, was `approvalConsoleLoop`) rather
+than a second thread, since two threads both calling
+`std::getline(std::cin, ...)` concurrently would race on stdin.
+
+**Verified**: `host/remote-server/tests/test_mode_coordinator.cpp` (12
+new cases: 4 on `computeDesiredMode()` directly, 8 real end-to-end
+against a real `AdapterIpcServer`/`NetServer`/`ModeCoordinator`, with a
+real `SyntheticEmulatorAdapter` connecting and disconnecting over a real
+Unix-domain-socket `AdapterIpcClient` -- adapter-sdk's own established
+e2e style, no mocks of the network layer). Also verified end-to-end
+against the actual `melonds-remote-server` binary (not just the test
+suite): a real subprocess started in `--adapter-ipc` mode accepted a
+client handshake immediately, reporting `host-control`/`Host Control`
+identity, with no adapter connected at all; connecting a real
+`dualdeck-synthetic-adapter` subprocess auto-switched it to
+`synthetic-ipc`/`Synthetic IPC Adapter`; the `hostcontrol` console
+command forced it back to `host-control` identity while that adapter
+process was still connected; `resume` switched it back to
+`synthetic-ipc` with no reconnect needed; and terminating the adapter
+subprocess auto-switched it back to `host-control`.
+
+That real-binary verification surfaced a pre-existing, unrelated
+correctness lesson worth recording: `NetServer`'s connection-attempt
+rate limiter (spec section 13, predates this phase entirely) allows
+only a handful of new control connections per 10-second window from one
+address. A first version of the verification script re-connected and
+re-handshook every 100ms while polling for a mode change to take
+effect, which tripped that limiter itself and produced a misleading
+`ConnectionResetError` that had nothing to do with `ModeCoordinator`'s
+actual behavior (the server-side logs showed the mode change had
+already been applied correctly). Fixed in the script, not the product,
+by checking once per phase with a short fixed delay instead of polling
+in a tight loop -- `ModeCoordinator`'s own 100ms internal poll interval
+means a single check after 1 second is already generous.
+
+**Still open**: `HostControlAdapter`'s virtual gamepad remains
+unavailable in this sandbox (no `/dev/uinput`, see the Phase C entry) --
+this phase's coordination logic is exercised and confirmed correct
+regardless, since `ModeCoordinator` only cares about swapping targets
+correctly, not about what a real uinput device actually does once
+selected. GitHub issue #4 Phase E (client UI reacting to `ModeChanged`
+and actually using host-control mode) is still not built -- today's
+verification is entirely server-side/protocol-level, matching how each
+of Phases B-D has deliberately left the client untouched until Phase E.
+
 ## Atomic updates: Steam no longer needs to be closed to update
 
 **The problem, reported by the user**: applying an update ("Check for

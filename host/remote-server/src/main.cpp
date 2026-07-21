@@ -9,8 +9,10 @@
 #include <thread>
 
 #include "host/adapter_bridge.h"
+#include "host/host_control_adapter.h"
 #include "host/logging_input_sink.h"
 #include "host/logging_mic_audio_sink.h"
+#include "host/mode_coordinator.h"
 #include "host/net_server.h"
 #include "host/synthetic_frame_source.h"
 #include "melonds_remote/adapter/ipc/adapter_ipc_server.h"
@@ -25,11 +27,15 @@ void handleSignal(int) {
 // Reads "approve <id>" / "deny <id>" / "list" lines from stdin for as
 // long as it stays open, so an operator running this console binary
 // interactively can respond to device-approval requests without a GUI.
-// Runs detached: when stdin closes (EOF -- e.g. this process was started
-// without a terminal, or under CI) std::getline just returns false and
-// the thread exits on its own; there's nothing to clean up, so there's
-// no need to join it against shutdown.
-void approvalConsoleLoop(melonds_remote::host::NetServer& server) {
+// `coordinator` is non-null only in --adapter-ipc mode (GitHub issue #4
+// Phase D), adding "hostcontrol"/"resume"/"mode" manual-override
+// commands to the same loop -- deliberately one loop, not two: two
+// threads both calling std::getline(std::cin, ...) concurrently would
+// race on stdin. Runs detached: when stdin closes (EOF -- e.g. this
+// process was started without a terminal, or under CI) std::getline
+// just returns false and the thread exits on its own; there's nothing
+// to clean up, so there's no need to join it against shutdown.
+void consoleLoop(melonds_remote::host::NetServer& server, melonds_remote::host::ModeCoordinator* coordinator) {
     std::string line;
     while (std::getline(std::cin, line)) {
         std::istringstream iss(line);
@@ -58,23 +64,35 @@ void approvalConsoleLoop(melonds_remote::host::NetServer& server) {
                                 r.address.c_str());
                 }
             }
+        } else if (coordinator && cmd == "hostcontrol") {
+            coordinator->forceHostControl();
+            std::printf("[mode] forcing host-control mode (type 'resume' to let it follow the "
+                        "adapter connection again)\n");
+        } else if (coordinator && cmd == "resume") {
+            coordinator->clearOverride();
+            std::printf("[mode] override cleared -- mode now follows adapter connection state\n");
+        } else if (coordinator && cmd == "mode") {
+            std::printf("[mode] currently: %s%s\n",
+                        server.currentMode() == melonds_remote::HostMode::HostControl ? "host-control"
+                                                                                        : "emulation",
+                        coordinator->isOverridden() ? " (manually forced)" : "");
         } else if (!cmd.empty()) {
-            std::printf("[approval] unrecognized command '%s' -- try 'list', 'approve <id>', "
-                        "or 'deny <id>'\n",
-                        cmd.c_str());
+            std::printf("[console] unrecognized command '%s' -- try 'list', 'approve <id>', 'deny <id>'%s\n",
+                        cmd.c_str(), coordinator ? ", 'hostcontrol', 'resume', or 'mode'" : "");
         }
     }
 }
 
 // Shared by both the default (synthetic-stub) and --adapter-ipc code
-// paths in main() below: starts the approval console loop if
-// applicable, blocks until SIGINT/SIGTERM, then returns so the caller
-// can tear down whatever sink/frame-source objects it constructed.
-void runUntilStopped(melonds_remote::host::NetServer& server, const melonds_remote::host::NetServerConfig& config) {
+// paths in main() below: starts the console loop if applicable, blocks
+// until SIGINT/SIGTERM, then returns so the caller can tear down
+// whatever sink/frame-source objects it constructed.
+void runUntilStopped(melonds_remote::host::NetServer& server, const melonds_remote::host::NetServerConfig& config,
+                      melonds_remote::host::ModeCoordinator* coordinator = nullptr) {
     server.start();
 
-    if (config.authToken.empty()) {
-        std::thread(approvalConsoleLoop, std::ref(server)).detach();
+    if (config.authToken.empty() || coordinator) {
+        std::thread(consoleLoop, std::ref(server), coordinator).detach();
     }
 
     std::printf("melonds-remote-server running. Press Ctrl+C to stop.\n");
@@ -258,15 +276,22 @@ int main(int argc, char** argv) {
                 "adapter connected over a local Unix-domain-socket IPC channel (see\n"
                 "docs/adr/0001-host-service-and-adapter-architecture.md) -- e.g. the\n"
                 "dualdeck-synthetic-adapter binary, or eventually a real emulator\n"
-                "adapter. Waits indefinitely for an adapter to connect before this\n"
-                "host can accept a client (there is nothing to stream otherwise).\n"
-                "--adapter-socket PATH overrides the socket location (implies\n"
-                "--adapter-ipc); default is $XDG_RUNTIME_DIR/dualdeck/adapter.sock.\n"
+                "adapter. --adapter-socket PATH overrides the socket location\n"
+                "(implies --adapter-ipc); default is $XDG_RUNTIME_DIR/dualdeck/adapter.sock.\n"
                 "Microphone audio is not bridged through this path yet -- it is still\n"
                 "only ever logged, same as the default mode, regardless of --no-mic.\n"
                 "The client<->host wire protocol (kProtocolVersion) does not change\n"
                 "in this mode; only where this process gets its frames/sends its\n"
-                "input from/to internally changes.\n");
+                "input from/to internally changes.\n"
+                "\n"
+                "GitHub issue #4 Phase D: in --adapter-ipc mode this host no longer\n"
+                "waits for an adapter before a client can connect -- it starts in\n"
+                "host-control mode (a virtual gamepad, via Linux's uinput, for\n"
+                "navigating the host's own UI) and automatically switches to emulation\n"
+                "mode once an adapter connects, switching back on disconnect. Type\n"
+                "'hostcontrol' at this console to force host-control mode even while an\n"
+                "adapter is connected, 'resume' to clear that override, or 'mode' to\n"
+                "check the current mode.\n");
             return 0;
         } else {
             std::fprintf(stderr, "unrecognized argument: %s\n", arg.c_str());
@@ -286,25 +311,42 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        std::printf(
-            "waiting for an adapter to connect over the local IPC channel "
-            "(e.g. dualdeck-synthetic-adapter)...\n");
-        while (!g_stopRequested && !adapterServer.hasConnectedAdapter()) {
-            struct timespec ts{0, 100'000'000};
-            nanosleep(&ts, nullptr);
+        // GitHub issue #4 Phase D: no longer blocks here waiting for an
+        // adapter to connect before a client can do anything at all --
+        // NetServer starts immediately in host-control mode
+        // (HostControlAdapter, a virtual gamepad for navigating the
+        // host's own UI) and ModeCoordinator swaps to emulation mode
+        // automatically once an adapter connects over the IPC channel,
+        // swapping back on disconnect. See docs/adr/
+        // 0001-host-service-and-adapter-architecture.md sections 6-8.
+        melonds_remote::host::HostControlAdapter hostControlAdapter;
+        if (!hostControlAdapter.isDeviceReady()) {
+            std::fprintf(stderr,
+                          "warning: host-control mode's virtual gamepad is unavailable (see the "
+                          "HostControlAdapter message above) -- a client can still connect, but won't "
+                          "be able to navigate the host while no emulator is running.\n");
         }
-        if (g_stopRequested) {
-            adapterServer.stop();
-            return 0;
-        }
-        std::printf("adapter connected (%s/%s)\n", adapterServer.capabilities().system.systemName.c_str(),
-                    adapterServer.capabilities().adapter.adapterName.c_str());
-        if (!systemIdentityExplicit) config.systemIdentity = adapterServer.capabilities().system;
-        if (!adapterIdentityExplicit) config.adapterIdentity = adapterServer.capabilities().adapter;
-
         melonds_remote::host::AdapterBridge bridge(adapterServer);
-        melonds_remote::host::NetServer server(config, bridge, bridge, micSink);
-        runUntilStopped(server, config);
+
+        // config's own systemIdentity/adapterIdentity is irrelevant here
+        // beyond providing the --system-id/--adapter-id fallback values
+        // below -- ModeCoordinator::start() immediately overwrites
+        // NetServer's actual reported identity via the same setTarget()
+        // call every later mode transition uses, before any client could
+        // possibly connect.
+        melonds_remote::host::NetServer server(config, hostControlAdapter, hostControlAdapter, micSink);
+        melonds_remote::host::ModeCoordinator coordinator(
+            server, adapterServer, bridge, bridge, hostControlAdapter, hostControlAdapter,
+            systemIdentityExplicit, adapterIdentityExplicit, config.systemIdentity, config.adapterIdentity);
+        coordinator.start();
+
+        std::printf(
+            "starting in host-control mode -- waiting for an adapter to connect over the local "
+            "IPC channel (e.g. dualdeck-synthetic-adapter) to switch to emulation mode "
+            "automatically. Type 'hostcontrol' to force host-control mode even once one "
+            "connects, 'resume' to clear that override, or 'mode' to check the current mode.\n");
+        runUntilStopped(server, config, &coordinator);
+        coordinator.stop();
         adapterServer.stop();
     } else {
         melonds_remote::host::LoggingInputSink inputSink;

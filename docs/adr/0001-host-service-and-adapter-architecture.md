@@ -398,6 +398,35 @@ still open. See `docs/known-limitations.md`'s matching entry for the
 translation-logic test coverage and this sandbox's `/dev/uinput`
 limitation.
 
+### 9. ModeCoordinator answers section 8's open question (GitHub issue #4 Phase D)
+
+**Implemented**: `host/remote-server`'s `--adapter-ipc` mode now
+constructs a real `HostControlAdapter` and starts `NetServer` pointed at
+it immediately, instead of blocking until an adapter connects. A new
+`ModeCoordinator` polls `AdapterIpcServer::hasConnectedAdapter()` and
+calls `NetServer::setTarget()` on every transition -- `HostMode::Emulation`
+whenever an adapter is connected, `HostMode::HostControl` otherwise --
+answering section 8's deferred "when" question directly: at start-up
+(before any client could connect), on an adapter connecting, and on
+disconnect. A manual override (`hostcontrol`/`resume` console commands,
+sharing the same stdin-reading loop the existing device-approval
+commands already use) lets an operator force `HostMode::HostControl`
+even while an adapter stays connected, always winning over
+auto-detection -- the actual point of an override.
+
+This closes out the four-phase sequence sections 6-9 form together: an
+emulator can now connect out-of-process (6), `NetServer` can swap
+targets live (7), there is a real target to swap to before/after an
+emulator runs (8), and something now actually drives that swap
+automatically with a manual escape hatch (9). What remains
+unaddressed by all four: `HostControlAdapter`'s virtual gamepad has
+only ever been exercised via its pure translation function and a
+graceful-failure path in this sandbox (no `/dev/uinput`); and no client
+build reacts to any of this yet -- `ModeChanged` packets go out
+correctly (section 7) and the mode genuinely changes server-side, but
+issue #4 Phase E (client UI) is what would let a person actually *use*
+host-control mode end-to-end.
+
 ## Consequences
 
 **Positive**: a concrete, testable target contract exists for a future

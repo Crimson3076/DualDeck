@@ -6,6 +6,7 @@ add_library(melonds_remote_host STATIC
     src/logging_mic_audio_sink.cpp
     src/adapter_bridge.cpp
     src/host_control_adapter.cpp
+    src/mode_coordinator.cpp
 )
 
 target_include_directories(melonds_remote_host PUBLIC
