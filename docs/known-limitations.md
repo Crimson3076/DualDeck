@@ -2889,17 +2889,106 @@ and the graceful-degradation path (no `/dev/uinput` in this sandbox --
 see the Phase C entry), and there is still no CI-verified client build
 or real-hardware Steam Deck run for this specific screen (see "No
 CI-verified client build" below, pre-existing and unrelated to this
-phase). Separately -- not a gap in this phase's own scope, but the
-remaining piece of "does host-control mode work in the real shipped
-product": nothing in `scripts/build-release.sh`'s packaging or the
-host's launch scripts yet starts the standalone Host Service
-(`melonds-remote-server --adapter-ipc`) independently of melonDS itself
-and points melonDS at it via `MELONDS_REMOTE_OUT_OF_PROCESS=1` -- the
-real shipped flow today launches melonDS directly (its in-process
-`RemoteServerBridge`), so host-control mode has no way to ever trigger
-in the actual packaged product yet, only in this phase's and Phase D's
+phase). See the next entry (GitHub issue #4 Phase F) for the packaging
+gap that used to be here: nothing in the actual shipped release could
+trigger host-control mode at all, only this phase's and Phase D's
 scripted/manual verification against the standalone binaries directly.
-That orchestration gap is GitHub issue #4 Phase F's to close.
+
+## Host-control mode reaches the packaged release, as an opt-in "experimental" launch path (GitHub issue #4 Phase F)
+
+Closes the very last gap Phase E's entry above left open: everything
+through Phase E worked, and was verified working, but only against the
+standalone `melonds-remote-server`/`melonds-remote-client` binaries run
+by hand or by test scripts -- the actual downloadable release never
+shipped the standalone Host Service binary at all, and nothing in
+`scripts/build-release.sh`'s generated launch scripts ever started it.
+A user downloading a release and clicking the host launcher had no way
+to reach host-control mode, full stop.
+
+**What this implements**, all in `scripts/build-release.sh`'s generated
+scripts (no application code changed):
+
+- The standalone `melonds-remote-server` binary now ships in every
+  release, at `host/internal/melonds-remote-server`.
+- `melonds-remote-host.sh` gained a new menu choice, "Launch with
+  host-control mode (experimental)", alongside the existing "Launch
+  melonDS now". Deliberately **not** the default and deliberately
+  labeled experimental -- see "What this does not do" below for why.
+  Picking it prompts for a shared secret (kdialog input box, or a plain
+  terminal prompt without kdialog) and passes it through as
+  `MELONDS_REMOTE_AUTH_TOKEN`.
+- `host/internal/run-host.sh`, when `MELONDS_REMOTE_HOST_CONTROL=1` is
+  set, starts `melonds-remote-server --adapter-ipc` in the background
+  (a per-user Unix-domain socket under
+  `~/.config/melonds-remote/run/adapter.sock`), waits briefly for it to
+  bind, then launches melonDS with `MELONDS_REMOTE_OUT_OF_PROCESS=1` and
+  `MELONDS_REMOTE_ADAPTER_SOCKET` pointed at that socket -- exactly the
+  env-var contract `EmuInstance::startRemoteServer()` (Phase A) already
+  implements, just finally something in the packaged product actually
+  sets it. A shell `trap ... EXIT` kills the background Host Service
+  once melonDS exits, so nothing is left running behind it; getting this
+  right required *not* `exec`-ing melonDS in this branch (an `exec`
+  replaces the shell process image, traps and all, which would have
+  orphaned the Host Service instead of cleaning it up).
+- `host/internal/install-host-distrobox.sh` (the Bazzite/immutable-system
+  path) explicitly rejects `MELONDS_REMOTE_HOST_CONTROL=1` with a clear
+  error rather than silently falling back to ordinary in-process mode --
+  see "What this does not do" below.
+
+**What this does not do, and why**: this is deliberately *not* the
+default launch path, and deliberately requires a manually-entered shared
+secret instead of just working like every other launch. The reason is a
+real, pre-existing gap this phase does not attempt to solve under time
+pressure: melonDS's interactive device-approval dialog (the normal,
+default authentication flow) lives entirely inside melonDS's own process
+and has no bridge to a Host Service running in a *different* process --
+`docs/adr/0001-host-service-and-adapter-architecture.md`'s "What this
+ADR does not decide yet" section already flagged this
+("`RemoteServerBridge`'s ... `approveDevice()`/`denyDevice()` just
+return `false`" in out-of-process mode). A static auth token sidesteps
+that gap safely (the standalone server's `--auth-token` flag is the same
+mechanism the in-process flow already supports as an alternative to
+interactive approval), but building a real cross-process approval bridge
+is its own, separate, nontrivial piece of work -- flipping this to the
+default without one would have broken authentication for every existing
+user on every normal launch, which this phase was not going to risk.
+The Distrobox/Bazzite path is left out entirely for the same
+not-under-time-pressure reason: it would need the Host Service running
+*outside* the container with its socket shared *into* it, which hasn't
+been built or tested at all.
+
+**Verified**: `bash -n` on the full `scripts/build-release.sh` and on
+each of the three modified generated scripts extracted in isolation
+(`run-host.sh`, `install-host-distrobox.sh`, `melonds-remote-host.sh`).
+A real functional run of the extracted `run-host.sh` against the actual
+compiled `melonds-remote-server` binary and a stub `melonDS` executable
+in a fake `$HOME`: confirmed the Host Service actually starts, the
+adapter socket is created and is a real Unix socket by the time melonDS
+sees it, `MELONDS_REMOTE_ENABLE`/`MELONDS_REMOTE_OUT_OF_PROCESS`/
+`MELONDS_REMOTE_ADAPTER_SOCKET` all reach melonDS's environment
+correctly, and -- the part that actually needed a real test, not just
+reading the script -- the background Host Service process is genuinely
+gone (checked with `pgrep`, not just "the script exited 0") after the
+stub melonDS exits, proving the `EXIT` trap cleanup actually works and
+nothing gets left running. Also verified both error paths (missing
+`MELONDS_REMOTE_AUTH_TOKEN`, missing the packaged binary) exit non-zero
+with a clear message instead of a confusing failure further down, and
+that the Distrobox path's rejection fires correctly when
+`MELONDS_REMOTE_HOST_CONTROL=1` is set on a faked immutable system.
+
+**A real, if narrow, edge case this testing surfaced**: the adapter
+socket path (`~/.config/melonds-remote/run/adapter.sock`) is a Unix
+domain socket, which has a kernel-enforced path-length limit (`sun_path`,
+typically 108 bytes on Linux). The very first test run, against a fake
+`$HOME` nested many directories deep inside this sandbox's own scratch
+space, hit that limit and failed with a clear
+`AdapterIpcServer: socket path too long` error (an existing, correct
+check from Phase A/Phase 2 -- not something this phase had to add). A
+real installation's `$HOME` (e.g. `/home/deck/...` on a Steam Deck) is
+nowhere near long enough to hit this in practice, and the failure mode
+is a clear error rather than a crash or silent corruption either way,
+so this isn't fixed here -- just recorded in case an unusually deep or
+long `$HOME` path is ever reported as a real bug against this feature.
 
 ## Atomic updates: Steam no longer needs to be closed to update
 

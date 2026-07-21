@@ -91,6 +91,16 @@ chmod +x "${pkg_dir}/host/melonDS"
 ldd "${melonds_src}/build/melonDS" | awk '{print $1}' | sort -u \
     > "${pkg_dir}/host/internal/host-shared-library-dependencies.txt"
 
+# The standalone Host Service binary (GitHub issue #4): not used by the
+# default launch path (melonDS still runs its own in-process server, see
+# EmuInstance::startRemoteServer()), but required for run-host.sh's
+# opt-in "host-control mode" -- without shipping this, that mode could
+# never actually be used from a downloaded release, only from a source
+# build. Statically linked against melonds_remote_protocol/_host, so no
+# extra runtime library dependencies beyond libc/libstdc++/pthread.
+cp "${repo_build}/host/remote-server/melonds-remote-server" "${pkg_dir}/host/internal/melonds-remote-server"
+chmod +x "${pkg_dir}/host/internal/melonds-remote-server"
+
 cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/host/internal/ensure-packages.sh"
 cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/host/internal/steam_shortcut.py"
 
@@ -646,6 +656,58 @@ export MELONDS_REMOTE_ENABLE=1
 # archive root (or the central install directory's parent), matching
 # check-for-updates.sh's own VERSION lookup.
 export MELONDS_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+
+# Host-control mode (GitHub issue #4, experimental): set by
+# ../melonds-remote-host.sh's "Launch with host-control mode" menu
+# choice, not on by default. Starts the standalone melonds-remote-server
+# binary in --adapter-ipc mode *before* melonDS, then points melonDS at
+# it as an out-of-process adapter (MELONDS_REMOTE_OUT_OF_PROCESS=1) --
+# see host/melonds-patches/0001-remote-server-integration.patch's
+# EmuInstance::startRemoteServer() and docs/adr/
+# 0001-host-service-and-adapter-architecture.md section 10 for why this
+# has to be a separate process that outlives melonDS itself, rather than
+# something melonDS could do on its own: a client needs somewhere to
+# connect and navigate *before* an emulator has even started. Requires a
+# static auth token (MELONDS_REMOTE_AUTH_TOKEN) rather than the usual
+# interactive device-approval prompt -- approval is a melonDS Qt dialog,
+# and there is currently no cross-process bridge for it when melonDS
+# itself is only a connecting adapter rather than the process that owns
+# the client-facing server (see docs/known-limitations.md's matching
+# entry for the full explanation of that gap).
+if [[ "${MELONDS_REMOTE_HOST_CONTROL:-0}" == "1" ]]; then
+    if [[ -z "${MELONDS_REMOTE_AUTH_TOKEN:-}" ]]; then
+        echo "error: host-control mode requires MELONDS_REMOTE_AUTH_TOKEN to be set --" >&2
+        echo "interactive device-approval doesn't work across processes yet, so a" >&2
+        echo "shared secret is the only supported authentication for this mode." >&2
+        exit 1
+    fi
+    if [[ ! -x "${host_root}/internal/melonds-remote-server" ]]; then
+        echo "error: host/internal/melonds-remote-server is missing from this" >&2
+        echo "install -- re-download the release archive." >&2
+        exit 1
+    fi
+
+    run_dir="${HOME}/.config/melonds-remote/run"
+    mkdir -p "${run_dir}"
+    adapter_socket="${run_dir}/adapter.sock"
+    rm -f "${adapter_socket}"
+
+    echo "Starting the standalone Host Service (host-control mode, experimental) ..." >&2
+    "${host_root}/internal/melonds-remote-server" --adapter-ipc --adapter-socket "${adapter_socket}" \
+        --auth-token "${MELONDS_REMOTE_AUTH_TOKEN}" --app-version "${MELONDS_REMOTE_VERSION}" &
+    host_service_pid=$!
+    # Not exec'd below in this branch specifically so this trap can still
+    # run once melonDS exits -- exec would replace this shell (and its
+    # traps) with melonDS itself, leaving the Host Service orphaned.
+    trap 'kill "${host_service_pid}" 2>/dev/null || true' EXIT
+    sleep 0.5 # let the listener bind before melonDS tries to connect
+
+    export MELONDS_REMOTE_OUT_OF_PROCESS=1
+    export MELONDS_REMOTE_ADAPTER_SOCKET="${adapter_socket}"
+    "${host_root}/melonDS" "$@"
+    exit $?
+fi
+
 exec "${host_root}/melonDS" "$@"
 WRAP
 chmod +x "${pkg_dir}/host/internal/run-host.sh"
@@ -693,6 +755,23 @@ host_root="$(cd .. && pwd)"
 if [[ ! -f /run/ostree-booted ]] && ! command -v rpm-ostree >/dev/null 2>&1; then
     echo "This doesn't look like an immutable (rpm-ostree) system -- just run" >&2
     echo "./run-host.sh directly instead, no container needed." >&2
+    exit 1
+fi
+
+# Host-control mode (GitHub issue #4, experimental -- see run-host.sh's
+# matching comment for the full explanation) isn't wired up for the
+# Distrobox path yet: it would need the standalone melonds-remote-server
+# binary running *outside* the container (a client should be able to
+# reach it before melonDS/the container even starts) with a socket
+# shared into the container for melonDS to connect to, which hasn't been
+# built or tested. Fail loudly instead of silently falling back to
+# ordinary in-process mode, which would otherwise look like host-control
+# mode "worked" right up until a client tried to use it with no emulator
+# running.
+if [[ "${MELONDS_REMOTE_HOST_CONTROL:-0}" == "1" ]]; then
+    echo "error: host-control mode isn't supported yet on immutable/Distrobox" >&2
+    echo "systems (see host/internal/run-host.sh's comment) -- only the regular," >&2
+    echo "non-Distrobox launch path (./run-host.sh) supports it so far." >&2
     exit 1
 fi
 
@@ -916,6 +995,7 @@ choose_action() {
     if have_kdialog; then
         kdialog --title "melonDS Remote Host" --menu "What would you like to do?" \
             launch "Launch melonDS now" \
+            launch-host-control "Launch with host-control mode (experimental)" \
             steam-add "Add to Steam (Big Picture / Gaming Mode)" \
             steam-remove "Remove from Steam / uninstall" \
             update "Check for updates / update" \
@@ -929,19 +1009,37 @@ choose_action() {
         {
             echo "melonDS Remote Host"
             echo "  1) Launch melonDS now"
-            echo "  2) Add to Steam (Big Picture / Gaming Mode)"
-            echo "  3) Remove from Steam / uninstall"
-            echo "  4) Check for updates / update"
-            echo "  5) Exit"
+            echo "  2) Launch with host-control mode (experimental)"
+            echo "  3) Add to Steam (Big Picture / Gaming Mode)"
+            echo "  4) Remove from Steam / uninstall"
+            echo "  5) Check for updates / update"
+            echo "  6) Exit"
         } >&2
-        read -rp "Choice [1-5]: " choice
+        read -rp "Choice [1-6]: " choice
         case "${choice}" in
             1) echo "launch" ;;
-            2) echo "steam-add" ;;
-            3) echo "steam-remove" ;;
-            4) echo "update" ;;
+            2) echo "launch-host-control" ;;
+            3) echo "steam-add" ;;
+            4) echo "steam-remove" ;;
+            5) echo "update" ;;
             *) echo "cancel" ;;
         esac
+    fi
+}
+
+# Prompts for the shared auth token host-control mode needs (see
+# internal/run-host.sh's comment on MELONDS_REMOTE_AUTH_TOKEN for why
+# interactive device-approval doesn't apply here) and prints it to
+# stdout, or prints nothing if the user cancels. A client's --auth-token
+# (or the setup wizard's manual-entry step) needs to match this exactly.
+prompt_for_host_control_token() {
+    if have_kdialog; then
+        kdialog --title "melonDS Remote Host" \
+            --inputbox "Host-control mode needs a shared secret (since the usual per-device approval prompt doesn't work in this mode). Enter one -- the client will need to enter this same value to connect:" \
+            2>/dev/null || true
+    else
+        read -rp "Host-control mode shared secret (client must use the same value): " token >&2
+        echo "${token}"
     fi
 }
 
@@ -953,6 +1051,21 @@ case "${action}" in
         # same as launching melonDS any other way (Steam shortcut,
         # double-clicking internal/run-host.sh directly, etc.) -- no
         # menu process left hanging around behind it.
+        exec ./internal/launch-host.sh
+        ;;
+    launch-host-control)
+        token="$(prompt_for_host_control_token)"
+        if [[ -z "${token}" ]]; then
+            exit 0 # cancelled
+        fi
+        # Exported before the same launch-host.sh dispatch the plain
+        # "launch" case above uses -- MELONDS_REMOTE_HOST_CONTROL/
+        # MELONDS_REMOTE_AUTH_TOKEN are environment variables, so
+        # run-host.sh (or install-host-distrobox.sh's rejection check,
+        # on an immutable system) sees them either way without
+        # launch-host.sh itself needing to know this mode exists.
+        export MELONDS_REMOTE_HOST_CONTROL=1
+        export MELONDS_REMOTE_AUTH_TOKEN="${token}"
         exec ./internal/launch-host.sh
         ;;
     steam-add)

@@ -474,9 +474,15 @@ sandbox-unverifiable (uinput on real hardware, a real display).
 standalone Host Service independently of melonDS in the actual shipped
 release, so host-control mode has no trigger in the real product outside
 of this phase's own scripted verification against the standalone
-binaries. That is GitHub issue #4 Phase F's to close, alongside the
-usual docs-and-ship pass every other numbered issue on this project has
-gotten.
+binaries. GitHub issue #4 Phase F closes this, but deliberately as an
+opt-in, clearly-labeled-experimental launch path rather than the
+default -- see `docs/known-limitations.md`'s matching Phase F entry for
+why: it needs a static auth token because melonDS's interactive
+device-approval dialog has no bridge to a Host Service running in a
+different process, which is real, separate, unfinished work this ADR's
+"What this ADR does not decide yet" section already flagged
+(`approveDevice()`/`denyDevice()` returning `false` in out-of-process
+mode) and Phase F does not attempt to rush.
 
 ## Consequences
 
