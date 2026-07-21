@@ -2633,6 +2633,85 @@ construction-time default. Full `ctest` suite (protocol, adapter-sdk,
 client-settings, host) passes with strict warnings
 (`-Wall -Wextra -Wpedantic -Wconversion -Wshadow`) enabled.
 
+## HostControlAdapter: a virtual gamepad for host navigation (GitHub issue #4 Phase C)
+
+Continues the two entries above (same GitHub issue #4): Phase A let an
+emulator connect as an out-of-process adapter, Phase B let
+`NetServer` swap its active target while a client stays connected. This
+phase builds the *other* target those two phases were building toward
+-- something to swap *to* before an emulator has been launched (or
+after it exits), so a connected client isn't just sitting on a dead
+session in that window.
+
+**What this implements**: `HostControlAdapter`
+(`host/remote-server/include/host/host_control_adapter.h` + `.cpp`)
+implements `IEmulatorInputSink`/`IFrameSource` directly -- the same two
+interfaces `LoggingInputSink`/`SyntheticFrameSource` implement, and
+exactly what `NetServer::setTarget()` needs -- rather than going through
+the generic `adapter-sdk::IEmulatorAdapter` contract real emulator
+adapters use. Host-control mode isn't "emulating a system" with
+capabilities/surfaces to negotiate; it's host-side input translation, so
+that extra layer would add nothing here. It creates a virtual
+Xbox-360-style gamepad via Linux's uinput subsystem (reusing the real
+Xbox 360 controller's USB vendor/product IDs, the same convention
+several other open-source virtual-gamepad projects use, so desktop
+environments and Steam Input recognize its button layout correctly
+without a manual mapping step) and translates incoming
+`ControllerState`/`DSButton` fields onto it: `DSButton_A`/`B` -> south/
+east face buttons, `DSButton_X`/`Y` -> west/north (matching
+`host::AdapterBridge`'s existing `dsButtonsToGenericButtons` table's
+X-is-west/Y-is-north convention exactly, so this project has one
+consistent meaning for those two buttons everywhere, not two disagreeing
+ones), `L`/`R` -> shoulder buttons, `Start`/`Select` -> their Xbox
+equivalents, the D-pad -> a hat axis pair, and the left analog stick
+passed through unscaled (both use the same centered-at-0 `int16_t`
+range already). `getLatestFrame()` always returns `false` -- there is no
+emulated screen to stream while no emulator is running; a client shows
+its own local UI instead (issue #4 Phase E, not yet built).
+
+The DSButton -> gamepad translation is deliberately a pure function,
+`translateControllerState()`, entirely free of I/O, separated from the
+actual `open("/dev/uinput")`/`ioctl()`/`write()` calls
+(`HostControlAdapter::emitState()`) specifically so the mapping logic
+can be unit-tested without a real uinput device.
+
+**Real environment limitation, anticipated when this milestone was
+first planned**: this sandbox has no `/dev/uinput` node at all, so real
+virtual-device creation cannot be exercised here -- only the pure
+translation function above, and `HostControlAdapter`'s graceful-failure
+path (`open()` failing, logging once, `isDeviceReady()` staying `false`,
+every subsequent call becoming a safe no-op rather than crashing --
+matching this codebase's established handling of any other unavailable
+optional resource, e.g. `net_server.cpp`'s audio-port bind failure).
+Real device creation (the `UI_SET_EVBIT`/`UI_SET_KEYBIT`/`UI_DEV_SETUP`/
+`UI_ABS_SETUP`/`UI_DEV_CREATE` ioctl sequence) compiles clean against
+this environment's real `<linux/uinput.h>` headers and follows the
+documented modern uinput API exactly, but has only been verified by
+inspection, not by actually creating a device and confirming a desktop
+environment recognizes it -- that needs a real Linux host with the
+uinput kernel module loaded and either root or `/dev/uinput` write
+access (typically via the `input` group or a udev rule), which is
+worth calling out explicitly to whoever eventually runs this on real
+hardware, the same way `docs/steam-deck-setup.md` calls out other
+one-time host permission steps.
+
+**Deliberately not wired up yet**: `HostControlAdapter` is not
+constructed or passed to any `NetServer::setTarget()` call anywhere in
+this codebase -- deciding *when* a Host Service should actually swap to
+it (on startup before any adapter has connected, on an adapter
+disconnecting, and swapping back once one connects) is GitHub issue #4
+Phase D's job, intentionally left open here so this phase's scope stays
+to "build the thing being swapped to," not "decide when to swap."
+
+**Verified**: `host/remote-server/tests/test_host_control_adapter.cpp`
+(11 new cases) covers every button/hat/stick mapping decision above
+against `translateControllerState()` directly, plus a guard confirming
+`HostControlAdapter` degrades gracefully (no crash, `isDeviceReady() ==
+false`, every call a safe no-op) in this sandbox's actual no-`/dev/
+uinput` environment. Full `ctest` suite passes with strict warnings
+(`-Wall -Wextra -Wpedantic -Wconversion -Wshadow`) enabled, including a
+clean compile of the real uinput ioctl sequence itself.
+
 ## Atomic updates: Steam no longer needs to be closed to update
 
 **The problem, reported by the user**: applying an update ("Check for

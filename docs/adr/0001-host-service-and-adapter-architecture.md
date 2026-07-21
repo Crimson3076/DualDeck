@@ -375,6 +375,29 @@ notify -- works correctly under real concurrent socket traffic; see
 `docs/known-limitations.md`'s matching entry for the real end-to-end
 test suite that verifies it.
 
+### 8. HostControlAdapter: a virtual gamepad for host navigation (GitHub issue #4 Phase C)
+
+**Implemented**: `HostControlAdapter` is the target section 7's
+`setTarget()` will eventually swap *to* -- the thing a Host Service
+points `NetServer` at before an emulator has connected and after it
+disconnects. It implements `IEmulatorInputSink`/`IFrameSource` directly
+(the same interfaces `LoggingInputSink`/`SyntheticFrameSource` already
+implement), not the generic `adapter-sdk::IEmulatorAdapter` contract
+section 1-3 define for real emulator adapters -- host navigation isn't
+"emulating a system" with capabilities/surfaces to negotiate, so that
+layer would add nothing. It translates `ControllerState`/`DSButton`
+input onto a virtual Xbox-360-style gamepad created via Linux's uinput
+subsystem, and always reports no video frame available (there's nothing
+to stream while no emulator is running).
+
+This section explicitly does not decide *when* a Host Service actually
+constructs a `HostControlAdapter` and calls `setTarget()` with it --
+that coordination (start-up default, swap-out on an adapter connecting,
+swap-back on disconnect, and any manual override) is issue #4 Phase D,
+still open. See `docs/known-limitations.md`'s matching entry for the
+translation-logic test coverage and this sandbox's `/dev/uinput`
+limitation.
+
 ## Consequences
 
 **Positive**: a concrete, testable target contract exists for a future
