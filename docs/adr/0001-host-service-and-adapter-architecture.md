@@ -319,6 +319,35 @@ distinct, correctly-mapped colors (Red/Green/Blue respectively) via
 the double translation (wire `DSButton` → `GenericButton` → wire
 `DSButton` again) didn't scramble which physical button does what.
 
+### 6. melonDS as an opt-in out-of-process adapter (GitHub issue #4 Phase A)
+
+**Implemented**: section 5's "deliberately still in-process" deferral is
+now partially lifted -- `RemoteServerBridge` gained a second
+constructor that connects to an *already-running, standalone*
+`melonds-remote-server --adapter-ipc` process over `adapter-sdk/ipc/`,
+strictly opt-in via `MelonDSRemote.OutOfProcess` (default false, the
+in-process constructor stays the default path with zero behavior
+change). This is the prerequisite for GitHub issue #4 (host-side
+controls reaching the client before melonDS starts and after it
+closes): that needs a Host Service that outlives melonDS's process,
+which section 5's in-process design cannot provide by construction.
+
+Section 5's blocking concern -- `DeviceApprovalManager`'s pending-queue/
+`approveDevice()`/`denyDevice()` having no cross-process RPC surface --
+is **not** solved here, deliberately: out-of-process mode's
+`approveDevice()`/`denyDevice()` simply return `false`. A user opting
+into out-of-process mode today therefore needs an already-approved
+device (state-dir-persisted from a prior in-process run, or a static
+`--auth-token`) or Qt's own approval dialog is unreachable. Solving that
+properly is still deferred, same as section 5 left it; this phase just
+proves the IPC connection itself works reliably enough to build on,
+including surfacing and fixing two real concurrency/lifecycle bugs in
+`adapter-sdk/ipc/` along the way (reconnect-after-drop crash from an
+unjoined thread, and an adapter-side idle timeout when no client is
+connected yet) -- see `docs/known-limitations.md`'s matching entry for
+both fixes and the full real-pipeline verification, including a
+deliberate 7-second zero-input-traffic gap proving the second fix.
+
 ## Consequences
 
 **Positive**: a concrete, testable target contract exists for a future
@@ -333,13 +362,15 @@ zero regression risk to the working v0.1 system.
 side by side -- the production wire types in `protocol.h` (`DSButton`,
 `EmulatorAction`, `ControllerState`) and the generic contract types in
 `adapter-sdk/` (`GenericButton`, `GenericEmulatorAction`,
-`GenericInputState`). `AdapterBridge` now connects them, but only for
-the opt-in `--adapter-ipc` mode -- the default invocation still uses
-`LoggingInputSink`/`SyntheticFrameSource` directly, and melonDS's own
-patch (`RemoteServerBridge`) does not go through `AdapterBridge` at all
-yet. Anyone touching input-related code must still be careful not to
-conflate the two type sets; this ADR and the header comments on both
-sides call out the distinction explicitly to reduce that risk.
+`GenericInputState`). `AdapterBridge` now connects them for
+`host/remote-server`'s `--adapter-ipc` mode and, per sections 5-6,
+melonDS's own `RemoteServerBridge` in both its in-process and
+out-of-process forms -- but `host/remote-server`'s *default* invocation
+(no `--adapter-ipc`) still uses `LoggingInputSink`/`SyntheticFrameSource`
+directly, bypassing the contract entirely. Anyone touching
+input-related code must still be careful not to conflate the two type
+sets; this ADR and the header comments on both sides call out the
+distinction explicitly to reduce that risk.
 
 ## What this ADR does not decide yet
 
@@ -347,17 +378,17 @@ Explicitly deferred, tracked as later phases on issue #28 itself, not
 attempted here:
 
 - Actually extracting `NetServer`/discovery/auth/diagnostics out of the
-  melonDS-specific patch into a standalone Host Service process.
-  `host/remote-server` already builds and runs as its own binary
-  (`melonds-remote-server`) and can drive a real out-of-process adapter
-  via `--adapter-ipc`; melonDS's own patch now drives the exact same
-  `NetServer` through the generic contract too (section 5), but still
-  in-process -- `RemoteServerBridge` vendors its own copy of `NetServer`
-  rather than talking to a standalone Host Service over
-  `adapter-sdk/ipc/`. Making melonDS connect as a genuinely
-  out-of-process adapter is the natural next milestone, blocked on
-  deciding how device-approval's Qt dialog works across a process
-  boundary first (see section 5's "deliberately still in-process" note).
+  melonDS-specific patch into a standalone Host Service process *as the
+  default*. `host/remote-server` already builds and runs as its own
+  binary (`melonds-remote-server`) and can drive a real out-of-process
+  adapter via `--adapter-ipc`; melonDS's own patch can now connect to it
+  as a genuinely out-of-process adapter too (section 6), but only
+  opt-in -- `RemoteServerBridge`'s in-process constructor (vendoring its
+  own copy of `NetServer`, section 5) is still the default, unchanged
+  behavior. Section 6's opt-in mode also does not solve
+  device-approval's cross-process gap (its `approveDevice()`/
+  `denyDevice()` just return `false`); making out-of-process the
+  default, and giving it real device approval, are both still open.
 - A real 3DS or Wii U adapter (issue #28 Phases 4/5) -- the fake
   fixtures here are capability-shape test doubles only, built with no
   target emulator selected for either system.

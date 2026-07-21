@@ -6,8 +6,10 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <thread>
 #include <utility>
 
 #include "melonds_remote/adapter/ipc/ipc_protocol.h"
@@ -237,6 +239,37 @@ void AdapterIpcServer::serveConnection(int clientFd) {
     }
     clientFd_ = clientFd;
 
+    // Sends a periodic heartbeat to the connected adapter so its own
+    // recv() (5s SO_RCVTIMEO -- see AdapterIpcClient::readLoop()) never
+    // idle-times-out just because no real input happened to arrive
+    // recently. This server otherwise only ever sends anything to the
+    // adapter in direct response to real client traffic
+    // (applyGenericInput()/releaseAllInputs()), so with no client
+    // connected -- or a connected-but-quiet one -- there can genuinely
+    // be zero outbound bytes for 5+ seconds, which the adapter would
+    // otherwise wrongly read as a dead connection and tear the whole
+    // session down (GitHub issue #4's out-of-process melonDS mode is
+    // what first exercised this: melonDS reconnected in a loop with no
+    // client ever attached, since there was never anything to relay).
+    // Mirrors AdapterIpcClient::writeLoop()'s own heartbeat-when-idle
+    // logic, just in the other direction.
+    std::atomic<bool> heartbeatStop{false};
+    std::thread heartbeatThread([this, clientFd, &heartbeatStop]() {
+        while (!heartbeatStop.load()) {
+            for (int i = 0; i < 10 && !heartbeatStop.load(); ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            if (heartbeatStop.load()) break;
+            bool sent;
+            {
+                std::lock_guard<std::mutex> lock(writeMutex_);
+                sent = sendMessage(clientFd, IpcMessageType::Heartbeat, {});
+            }
+            if (!sent) break;
+        }
+    });
+
+    bool explicitDisconnect = false;
     while (running_.load()) {
         auto msg = recvMessage(clientFd);
         if (!msg) break; // disconnect, error, or malformed -- end this session
@@ -261,14 +294,16 @@ void AdapterIpcServer::serveConnection(int clientFd) {
             case IpcMessageType::Heartbeat:
                 break; // keeps the connection open, nothing else to do
             case IpcMessageType::Disconnect:
-                ::close(clientFd);
-                resetSessionLocked();
-                return;
+                explicitDisconnect = true;
+                break;
             default:
                 break; // unrecognized-but-parsed message type: ignore, stay connected
         }
+        if (explicitDisconnect) break;
     }
 
+    heartbeatStop = true;
+    if (heartbeatThread.joinable()) heartbeatThread.join();
     ::close(clientFd);
     resetSessionLocked();
 }
@@ -305,12 +340,14 @@ void AdapterIpcServer::applyGenericInput(const GenericInputState& state) {
     if (fd < 0) return; // no adapter connected -- safe no-op, matches NetClient::sendControllerState()
     melonds_remote::ByteBuffer payload;
     serializeGenericInputState(payload, state);
+    std::lock_guard<std::mutex> lock(writeMutex_);
     sendMessage(fd, IpcMessageType::InputState, payload);
 }
 
 void AdapterIpcServer::releaseAllInputs() {
     int fd = clientFd_.load();
     if (fd < 0) return; // safe no-op if nothing is connected to release
+    std::lock_guard<std::mutex> lock(writeMutex_);
     sendMessage(fd, IpcMessageType::ReleaseInputs, {});
 }
 

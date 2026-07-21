@@ -174,6 +174,95 @@ MDR_TEST(ipc_disconnect_then_reconnect_replaces_session) {
     server.stop();
 }
 
+MDR_TEST(ipc_client_reconnects_on_the_same_instance_after_connection_drop) {
+    // Regression test (GitHub issue #4's out-of-process melonDS mode): a
+    // caller that keeps a single AdapterIpcClient around and calls
+    // connect() again after the connection dropped on its own (the
+    // Host Service went away -- not via this object's own disconnect())
+    // used to terminate the process. readLoop()/writeLoop() clear
+    // connected_ themselves on a recv timeout or send failure, but
+    // connect() didn't join the resulting still-joinable thread objects
+    // before spawning new ones, so std::thread's move-assign called
+    // std::terminate(). See RemoteServerBridge's out-of-process
+    // reconnect loop (host/melonds-patches), the first real caller that
+    // reconnects on the same instance without ever calling disconnect()
+    // itself.
+    std::string path = uniqueSocketPath();
+    FakeDsAdapter adapter;
+    AdapterIpcClient client(adapter, path);
+
+    {
+        AdapterIpcServer server(path);
+        MDR_CHECK(server.start());
+        MDR_CHECK(client.connect());
+        MDR_CHECK(waitUntil([&] { return server.hasConnectedAdapter(); }));
+
+        // Stops the server out from under the still-connected client
+        // without ever calling client.disconnect() -- readLoop()'s
+        // blocking recv() observes the now-dead connection and clears
+        // connected_ by itself, leaving readThread_/writeThread_
+        // joinable but not joined (the exact pre-fix crash trigger).
+        server.stop();
+        MDR_CHECK(waitUntil([&] { return !client.isConnected(); }, 8000));
+    } // server destructed here, socket file cleaned up
+
+    // Same client instance, a fresh server on the same path -- this is
+    // the exact reconnect call that used to terminate the process.
+    AdapterIpcServer server2(path);
+    MDR_CHECK(server2.start());
+    MDR_CHECK(client.connect());
+    MDR_CHECK(waitUntil([&] { return server2.hasConnectedAdapter(); }));
+
+    client.disconnect();
+    server2.stop();
+}
+
+MDR_TEST(ipc_connection_survives_idle_gap_with_no_client_driven_traffic) {
+    // Regression test (GitHub issue #4's out-of-process melonDS mode):
+    // AdapterIpcServer::serveConnection() used to only ever write to the
+    // connected adapter in direct response to real client input arriving
+    // via applyGenericInput() -- with no client connected, or a client
+    // that pauses, the adapter's own AdapterIpcClient::readLoop() blocks
+    // on a recv() bounded by a 5s SO_RCVTIMEO, and with nothing arriving
+    // in that window it (wrongly) treated the timeout as a dead
+    // connection and tore the whole session down. This produced a
+    // reconnect-cycle and dropped input that arrived mid-teardown. Fixed
+    // by having serveConnection() run its own heartbeat-sender thread
+    // (~1s interval) independent of client-driven traffic, mirroring
+    // AdapterIpcClient::writeLoop()'s existing heartbeat-when-idle logic
+    // in the other direction. This test proves the connection survives a
+    // gap well past the 5s recv timeout with zero applyGenericInput()
+    // calls -- it must fail (via the isConnected()/hasConnectedAdapter()
+    // checks below) without the server-side heartbeat thread.
+    std::string path = uniqueSocketPath();
+    AdapterIpcServer server(path);
+    MDR_CHECK(server.start());
+
+    FakeDsAdapter ds;
+    AdapterIpcClient client(ds, path);
+    MDR_CHECK(client.connect());
+    MDR_CHECK(waitUntil([&] { return server.hasConnectedAdapter(); }));
+
+    // Longer than the 5s SO_RCVTIMEO on both sides' recv() calls, with
+    // no applyGenericInput()/frame/state traffic driving anything.
+    std::this_thread::sleep_for(std::chrono::milliseconds(6500));
+
+    MDR_CHECK(client.isConnected());
+    MDR_CHECK(server.hasConnectedAdapter());
+
+    // The connection must still be functional afterward, not just
+    // technically "connected" -- prove real traffic still flows.
+    GenericInputState state;
+    state.buttons = GenericButton_South;
+    state.sequence = 42;
+    server.applyGenericInput(state);
+    MDR_CHECK(waitUntil([&] { return !ds.isReleased(); }));
+    MDR_CHECK_EQ(ds.lastAppliedInput().sequence, 42u);
+
+    client.disconnect();
+    server.stop();
+}
+
 MDR_TEST(ipc_second_simultaneous_connection_not_served_until_first_leaves) {
     // AdapterIpcServer serves exactly one connection at a time (see its
     // class comment) -- while serveConnection() is blocked handling

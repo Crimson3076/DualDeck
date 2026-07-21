@@ -2448,6 +2448,121 @@ framing instead; fixing that stale script is tracked separately, not
 blocking here since `tests/smoke_test.py`'s handshake logic already
 covers the current wire format.)
 
+## melonDS as an opt-in out-of-process adapter (GitHub issue #4 Phase A)
+
+Issue #4 asks for host-side controls to reach the Steam Deck client
+*without* melonDS needing to already be running -- navigating/launching
+the host interface before melonDS starts and after it closes. That
+requires a Host Service that outlives melonDS's process, which is
+impossible under the in-process design the previous entry describes
+(`NetServer` lives inside melonDS itself, so there's no host process
+before melonDS starts or after it exits). Phase A is the prerequisite
+that makes that possible at all: letting melonDS connect to an
+*already-running, standalone* `melonds-remote-server --adapter-ipc`
+process as a genuine out-of-process adapter, strictly opt-in, with
+zero change to the in-process default any existing user is on.
+
+**What this implements**: `RemoteServerBridge` (in the patch) gained a
+second constructor taking just an adapter-socket path, alongside the
+existing in-process one -- both share the same `MelonDSAdapter`/
+`MelonDSMicAudioSink` members, so `pushBottomFrame()`,
+`latestControllerState()`, `drainMicAudio()` etc. need no branching at
+all; only `start()`/`stop()`/`approveDevice()`/`denyDevice()` check
+which of `server_` (in-process `NetServer`) or `ipcClient_`
+(`AdapterIpcClient`) is populated. `start()` in out-of-process mode
+spawns a reconnect-loop thread mirroring `client/src/main.cpp`'s own
+`NetClient` reconnect pattern (1s→5s exponential backoff, 100ms poll
+granularity for responsive shutdown). Two new opt-in settings —
+`MelonDSRemote.OutOfProcess` (bool, default false) and
+`MelonDSRemote.AdapterSocket` (string, default empty →
+`defaultAdapterSocketPath()`), plus matching
+`MELONDS_REMOTE_OUT_OF_PROCESS`/`MELONDS_REMOTE_ADAPTER_SOCKET` env
+overrides — gate this in `EmuInstance.cpp`'s `startRemoteServer()`,
+checked *before* any in-process setup so the existing default path is
+completely untouched when unset. `approveDevice()`/`denyDevice()`
+return `false` in this mode (documented limitation, not silently
+broken): device approval is `DeviceApprovalManager`'s in-process
+concern on the *Host Service* side now, same unresolved gap the
+previous entry flagged for full out-of-process operation.
+
+**Two real bugs found and fixed while getting this working end-to-end**
+(both in `adapter-sdk/ipc/`, the shared library the standalone
+`melonds-remote-server` binary and this vendored-into-melonDS client
+side both build from):
+
+1. **Reconnect-after-drop crash**: `AdapterIpcClient::disconnect()`
+   only joined `readThread_`/`writeThread_` when it itself had set
+   `connected_` false first. But those threads can *also* clear
+   `connected_` on their own (a recv timeout or send failure -- e.g.
+   the Host Service went away), leaving them joinable without the
+   caller ever knowing to call `disconnect()`. melonDS's new
+   reconnect loop calls `connect()` directly without a preceding
+   `disconnect()` -- the first real caller to do that — and
+   `std::thread`'s move-assign inside `connect()` terminates the
+   process if the target is still joinable. Fixed by making
+   `disconnect()` always join regardless of `wasConnected`, and by
+   having `connect()` itself defensively join any leftover joinable
+   threads at its start. Covered by a new regression test,
+   `ipc_client_reconnects_on_the_same_instance_after_connection_drop`
+   (`adapter-sdk/tests/test_adapter_ipc_end_to_end.cpp`), verified to
+   actually reproduce the pre-fix crash via a temporary revert.
+
+2. **Adapter-side idle timeout with no client connected**:
+   `AdapterIpcServer::serveConnection()` only ever sent bytes to the
+   connected adapter in direct response to real client input
+   (`applyGenericInput()`/`releaseAllInputs()`). With no client
+   connected yet -- or one that's just quiet -- that's genuinely zero
+   outbound traffic for 5+ seconds, which the adapter's own 5s
+   `SO_RCVTIMEO` on its `recv()` (`AdapterIpcClient::readLoop()`)
+   wrongly read as a dead connection, tearing the whole IPC session
+   down and reconnecting in a loop. Fixed by giving
+   `serveConnection()` its own ~1s heartbeat-sender thread, mirroring
+   `AdapterIpcClient::writeLoop()`'s existing heartbeat-when-idle
+   logic in the other direction. That heartbeat thread and
+   `applyGenericInput()`/`releaseAllInputs()` (called from a
+   different thread, in direct response to client UDP input) both
+   write to the same socket fd -- a `writeMutex_` was added to
+   serialize every send on `clientFd_`, since without it the two
+   threads racing could interleave message bytes on the wire and
+   corrupt the framing the other end's `recvMessage()` relies on
+   (silently garbling or dropping whatever message lost the race,
+   not crashing outright -- this is what a first, unsynchronized
+   version of the heartbeat fix actually did, caught during
+   real-pipeline verification below before landing the mutex).
+   Covered by a new regression test,
+   `ipc_connection_survives_idle_gap_with_no_client_driven_traffic`,
+   asserting the connection and real input delivery both survive a
+   6.5s gap with zero `applyGenericInput()` calls.
+
+**Verified**: real cross-process pipeline, matching the previous
+entry's rigor. A standalone `melonds-remote-server --adapter-ipc`
+process and a separately-launched, real, JIT-executing
+`tests/homebrew-test-rom/test.nds` melonDS instance (headless under
+Xvfb, `MELONDS_REMOTE_ENABLE=1 MELONDS_REMOTE_OUT_OF_PROCESS=1`) --
+two genuinely independent OS processes connected only over the
+adapter-IPC Unix socket. Confirmed: handshake + identity
+(`nds`/`Nintendo DS`, `melonds`/`melonDS`/`1.1`) round-trip correctly;
+held buttons (A/B/Up) produce the correct distinct, stable colors
+matching the wired mapping, exactly as the in-process entry above; and
+-- the actual point of this milestone's two bug fixes -- the whole
+session (adapter IPC connection *and* real button-driven video colors)
+survives a deliberate 7-second window with zero client-driven UDP
+input, proving the Bug 2 fix rather than just asserting it.
+
+That last check took three iterations to get right and is worth
+recording: the first version of the idle-gap probe also stopped
+*reading* the video socket during the gap, which correctly-by-design
+trips a completely separate, pre-existing 1-second `SO_SNDTIMEO` in
+`NetServer::videoLoop()` (a stalled/non-reading client's video
+connection is deliberately dropped rather than left to block that
+thread forever) -- not a bug, but it looked exactly like one from the
+symptom (colors staying black after the gap) until traced with
+targeted `recv()`/`inputLoop()` diagnostics on both the adapter-IPC and
+client-facing sides. The probe was fixed to keep draining video and
+sending control-channel heartbeats throughout the gap, same as any
+real client (which is always rendering) already does -- at which point
+the real fix was confirmed working cleanly on the first try.
+
 ## Atomic updates: Steam no longer needs to be closed to update
 
 **The problem, reported by the user**: applying an update ("Check for

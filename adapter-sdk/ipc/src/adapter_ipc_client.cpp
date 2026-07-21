@@ -93,6 +93,19 @@ bool AdapterIpcClient::connect() {
         return false;
     }
 
+    // A previous connection may have ended on its own -- readLoop()/
+    // writeLoop() clear connected_ themselves on a recv timeout or send
+    // failure -- without the caller ever calling disconnect(). Join any
+    // such leftover threads before spawning new ones below: std::thread's
+    // move-assign terminates the process if the target is still
+    // joinable, and a caller reconnecting on this same instance after a
+    // connection drop (see RemoteServerBridge's out-of-process mode,
+    // GitHub issue #4) is exactly a caller who wouldn't otherwise know
+    // to call disconnect() first. No-op on the first connect() call, or
+    // when the caller already did call disconnect().
+    if (readThread_.joinable()) readThread_.join();
+    if (writeThread_.joinable()) writeThread_.join();
+
     int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
         std::perror("AdapterIpcClient: socket");
@@ -146,24 +159,32 @@ bool AdapterIpcClient::connect() {
 }
 
 void AdapterIpcClient::disconnect() {
-    if (!connected_.exchange(false)) {
-        // Still make sure any half-started threads/fd from a failed
-        // connect() are cleaned up.
-        int fd = fd_.exchange(-1);
-        if (fd >= 0) ::close(fd);
-        return;
+    bool wasConnected = connected_.exchange(false);
+    if (wasConnected) {
+        int fd = fd_.load();
+        if (fd >= 0) {
+            sendMessage(fd, IpcMessageType::Disconnect, {});
+            ::shutdown(fd, SHUT_RDWR);
+        }
     }
 
-    int fd = fd_.load();
-    if (fd >= 0) {
-        sendMessage(fd, IpcMessageType::Disconnect, {});
-        ::shutdown(fd, SHUT_RDWR);
-    }
-
+    // Always join, regardless of wasConnected -- readLoop()/writeLoop()
+    // clear connected_ themselves on a recv timeout or send failure
+    // (e.g. the Host Service went away, or a heartbeat send failed), so
+    // by the time a caller notices via isConnected()==false and calls
+    // this, connected_ may already be false while the threads are still
+    // mid-exit. Skipping the join in that case (as an earlier version of
+    // this function did) left readThread_/writeThread_ still joinable;
+    // a caller that reconnects on this same instance (see
+    // RemoteServerBridge's out-of-process mode, GitHub issue #4) would
+    // then have connect() assign a new std::thread over one that's still
+    // joinable, which terminates the process (std::thread's move-assign
+    // requires the target not be joinable). Joining unconditionally here
+    // is what makes reconnecting on the same AdapterIpcClient safe.
     if (readThread_.joinable()) readThread_.join();
     if (writeThread_.joinable()) writeThread_.join();
 
-    fd = fd_.exchange(-1);
+    int fd = fd_.exchange(-1);
     if (fd >= 0) ::close(fd);
 }
 

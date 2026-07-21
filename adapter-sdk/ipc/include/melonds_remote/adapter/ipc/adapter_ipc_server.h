@@ -79,6 +79,18 @@ private:
     // capabilities()/currentState()/latestFrame() touch these.
     mutable std::mutex sessionMutex_;
     std::atomic<int> clientFd_{-1}; // separate from sessionMutex_: read/write happen without holding it
+
+    // Guards every send() on clientFd_ specifically. serveConnection()'s
+    // heartbeat thread and any caller thread invoking
+    // applyGenericInput()/releaseAllInputs() can both be writing to the
+    // same fd concurrently (the receive loop only ever reads); without
+    // this, two sendMessage() calls racing on the socket can interleave
+    // their bytes mid-message, corrupting the framing the other end's
+    // recvMessage() relies on -- silently garbling or dropping whatever
+    // message lost the race, rather than crashing outright. Separate
+    // from sessionMutex_ so a slow/blocking send() never holds up an
+    // unrelated capabilities()/currentState() read.
+    std::mutex writeMutex_;
     bool connected_ = false;
     AdapterCapabilities capabilities_;
     SessionState state_ = SessionState::Available;

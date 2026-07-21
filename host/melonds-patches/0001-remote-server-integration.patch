@@ -1,8 +1,8 @@
 diff --git a/src/frontend/qt_sdl/CMakeLists.txt b/src/frontend/qt_sdl/CMakeLists.txt
-index 31207f86..a19df056 100644
+index 31207f86..c56d44cb 100644
 --- a/src/frontend/qt_sdl/CMakeLists.txt
 +++ b/src/frontend/qt_sdl/CMakeLists.txt
-@@ -60,6 +60,22 @@ set(SOURCES_QT_SDL
+@@ -60,6 +60,25 @@ set(SOURCES_QT_SDL
  
      LANDialog.cpp
      NetplayDialog.cpp
@@ -19,13 +19,16 @@ index 31207f86..a19df056 100644
 +    remote_server/MelonDSAdapter.cpp
 +    remote_server/host/adapter_bridge.cpp
 +    remote_server/adapter_sdk/src/session_state.cpp
++    remote_server/adapter_sdk/src/ipc_protocol.cpp
++    remote_server/adapter_sdk/src/socket_path.cpp
++    remote_server/adapter_sdk/src/adapter_ipc_client.cpp
 +    remote_server/RemoteServerBridge.cpp
 +    remote_server/GLBottomScreenCapture.cpp
 +    remote_server/ManagementServer.cpp
  )
  
  option(USE_QT6 "Use Qt 6 instead of Qt 5" ON)
-@@ -185,6 +201,18 @@ target_include_directories(melonDS PUBLIC
+@@ -185,6 +204,18 @@ target_include_directories(melonDS PUBLIC
      "${CMAKE_CURRENT_SOURCE_DIR}"
      "${CMAKE_CURRENT_SOURCE_DIR}/..")
  
@@ -45,7 +48,7 @@ index 31207f86..a19df056 100644
      target_include_directories(melonDS PUBLIC ${Qt6Gui_PRIVATE_INCLUDE_DIRS})
  else()
 diff --git a/src/frontend/qt_sdl/Config.cpp b/src/frontend/qt_sdl/Config.cpp
-index 0d48ee16..05610f52 100644
+index 0d48ee16..cfd686ea 100644
 --- a/src/frontend/qt_sdl/Config.cpp
 +++ b/src/frontend/qt_sdl/Config.cpp
 @@ -72,6 +72,21 @@ DefaultList<int> DefaultInts =
@@ -70,7 +73,7 @@ index 0d48ee16..05610f52 100644
  };
  
  RangeList IntRanges =
-@@ -112,13 +127,42 @@ DefaultList<bool> DefaultBools =
+@@ -112,13 +127,57 @@ DefaultList<bool> DefaultBools =
  #endif
      {"DSi.DSP.HLE", true},
      {"Instance*.RTC.SyncToHost", true},
@@ -78,6 +81,14 @@ index 0d48ee16..05610f52 100644
 +    // melonds-remote integration -- see DefaultInts above.
 +    {"MelonDSRemote.Enable", false},
 +    {"MelonDSRemote.DiscoveryEnabled", true},
++
++    // GitHub issue #4: out-of-process adapter mode -- connects to an
++    // already-running standalone Host Service (melonds-remote-server
++    // --adapter-ipc) instead of owning a NetServer here. Off by default:
++    // it gives up melonDS's own Qt device-approval dialog (see
++    // RemoteServerBridge.h's out-of-process constructor comment), so an
++    // administrator must opt in deliberately, not get it by accident.
++    {"MelonDSRemote.OutOfProcess", false},
  };
  
  DefaultList<std::string> DefaultStrings =
@@ -95,6 +106,13 @@ index 0d48ee16..05610f52 100644
 +    {"MelonDSRemote.AuthToken",  ""},
 +    {"MelonDSRemote.StateDir",   ""},
 +    {"MelonDSRemote.HostName",   ""},
++
++    // GitHub issue #4: overrides the socket path an out-of-process
++    // adapter connects to (see MelonDSRemote.OutOfProcess above). Empty
++    // (default) uses melonds_remote::adapter::ipc::defaultAdapterSocketPath()
++    // -- $XDG_RUNTIME_DIR/dualdeck/adapter.sock -- the same default the
++    // standalone host's --adapter-socket flag falls back to.
++    {"MelonDSRemote.AdapterSocket", ""},
 +
 +    // Release version string sent in Hello/HelloAck for the
 +    // AppVersionMismatch check (see HelloPayload::appVersion) --
@@ -115,7 +133,7 @@ index 0d48ee16..05610f52 100644
  
  DefaultList<double> DefaultDoubles =
 diff --git a/src/frontend/qt_sdl/EmuInstance.cpp b/src/frontend/qt_sdl/EmuInstance.cpp
-index a8b10218..7f6a73d8 100755
+index a8b10218..2a8a7fb2 100755
 --- a/src/frontend/qt_sdl/EmuInstance.cpp
 +++ b/src/frontend/qt_sdl/EmuInstance.cpp
 @@ -20,15 +20,24 @@
@@ -205,7 +223,7 @@ index a8b10218..7f6a73d8 100755
      deleteAllWindows();
  
      emuThread->emuExit();
-@@ -175,6 +225,176 @@ EmuInstance::~EmuInstance()
+@@ -175,6 +225,197 @@ EmuInstance::~EmuInstance()
      }
  }
  
@@ -234,6 +252,27 @@ index a8b10218..7f6a73d8 100755
 +        if (v) return static_cast<uint16_t>(std::stoi(v));
 +        return static_cast<uint16_t>(globalCfg.GetInt(cfgKey));
 +    };
++
++    // GitHub issue #4: out-of-process adapter mode -- connects to an
++    // already-running standalone Host Service instead of melonDS owning
++    // its own NetServer, required for host-control mode (something must
++    // be listening before melonDS even starts). See
++    // RemoteServerBridge.h's out-of-process constructor for exactly what
++    // this changes and gives up (melonDS's own device-approval dialog no
++    // longer applies -- approval belongs entirely to that external
++    // process now). Off by default; env var wins if set, matching every
++    // other flag in this function.
++    bool outOfProcess = getenv("MELONDS_REMOTE_OUT_OF_PROCESS")
++        ? true : globalCfg.GetBool("MelonDSRemote.OutOfProcess");
++    if (outOfProcess)
++    {
++        remoteServer = std::make_unique<melonds_remote_bridge::RemoteServerBridge>(
++            envOr("MELONDS_REMOTE_ADAPTER_SOCKET", "MelonDSRemote.AdapterSocket"));
++        remoteServer->start();
++        Platform::Log(Platform::LogLevel::Info,
++                       "melonds-remote: remote server enabled (out-of-process adapter mode)\n");
++        return;
++    }
 +
 +    // Where approved device identities are remembered across restarts
 +    // (see host/device_approval_manager.h). Defaults under $HOME/.config
@@ -1817,13 +1856,15 @@ index 00000000..a00f345a
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
 new file mode 100644
-index 00000000..821992f8
+index 00000000..1e830a79
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,151 @@
 +#include "RemoteServerBridge.h"
 +
++#include <algorithm>
 +#include <chrono>
++#include <cstdio>
 +
 +// For MELONDS_VERSION, reported as this adapter's own version (GitHub
 +// issue #28's identity model -- distinct from NetServerConfig::appVersion,
@@ -1850,8 +1891,8 @@ index 00000000..821992f8
 +    std::function<void(std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest>)>
 +        onPendingRequestsChanged,
 +    bool discoveryEnabled, uint16_t discoveryPort, std::string hostName,
-+    std::function<void(bool)> onClientConnectionChanged, std::string appVersion, uint16_t audioPort)
-+    : bridge_(adapter_) {
++    std::function<void(bool)> onClientConnectionChanged, std::string appVersion, uint16_t audioPort) {
++    bridge_ = std::make_unique<melonds_remote::host::AdapterBridge>(adapter_);
 +    melonds_remote::host::NetServerConfig config;
 +    config.bindAddress = std::move(bindAddress);
 +    config.controlPort = controlPort;
@@ -1879,7 +1920,12 @@ index 00000000..821992f8
 +    config.systemIdentity = melonds_remote::SystemIdentity{"nds", "Nintendo DS"};
 +    config.adapterIdentity =
 +        melonds_remote::AdapterIdentity{"melonds", "melonDS", MELONDS_VERSION};
-+    server_ = std::make_unique<melonds_remote::host::NetServer>(config, bridge_, bridge_, micSink_);
++    server_ = std::make_unique<melonds_remote::host::NetServer>(config, *bridge_, *bridge_, micSink_);
++}
++
++RemoteServerBridge::RemoteServerBridge(std::string adapterSocketPath) {
++    ipcClient_ = std::make_unique<melonds_remote::adapter::ipc::AdapterIpcClient>(
++        adapter_, std::move(adapterSocketPath));
 +}
 +
 +RemoteServerBridge::~RemoteServerBridge() {
@@ -1887,11 +1933,52 @@ index 00000000..821992f8
 +}
 +
 +void RemoteServerBridge::start() {
-+    server_->start();
++    if (server_) {
++        server_->start();
++        return;
++    }
++
++    // Out-of-process mode: AdapterIpcClient::connect() is a single
++    // blocking, non-retrying attempt (see its own header comment) --
++    // this thread supplies the retry loop, mirroring
++    // client/src/main.cpp's own NetClient reconnect thread (same
++    // 1s-doubling-to-5s backoff, same 100ms poll granularity so stop()
++    // doesn't have to wait out a full backoff period to return).
++    stopRequested_ = false;
++    reconnectThread_ = std::thread([this]() {
++        uint32_t backoffMs = 1000;
++        constexpr uint32_t kMaxBackoffMs = 5000;
++        while (!stopRequested_.load()) {
++            if (!ipcClient_->isConnected()) {
++                std::fprintf(stderr,
++                              "melonds-remote: attempting to connect to the Host Service "
++                              "(adapter IPC)...\n");
++                if (ipcClient_->connect()) {
++                    std::fprintf(stderr, "melonds-remote: connected to Host Service\n");
++                    backoffMs = 1000;
++                } else {
++                    backoffMs = std::min(backoffMs * 2, kMaxBackoffMs);
++                }
++            }
++            for (uint32_t waited = 0; waited < backoffMs && !stopRequested_.load(); waited += 100) {
++                std::this_thread::sleep_for(std::chrono::milliseconds(100));
++            }
++        }
++    });
 +}
 +
 +void RemoteServerBridge::stop() {
-+    server_->stop();
++    if (server_) {
++        server_->stop();
++        return;
++    }
++    if (ipcClient_) {
++        stopRequested_ = true;
++        if (reconnectThread_.joinable()) {
++            reconnectThread_.join();
++        }
++        ipcClient_->disconnect();
++    }
 +}
 +
 +void RemoteServerBridge::pushBottomFrame(const void* bgraData, size_t sizeBytes) {
@@ -1912,20 +1999,24 @@ index 00000000..821992f8
 +}
 +
 +bool RemoteServerBridge::approveDevice(const std::string& deviceIdOrPrefix) {
-+    return server_->approveDevice(deviceIdOrPrefix);
++    if (server_) return server_->approveDevice(deviceIdOrPrefix);
++    // Out-of-process mode: nothing local to approve -- see this class's
++    // out-of-process constructor comment.
++    return false;
 +}
 +
 +bool RemoteServerBridge::denyDevice(const std::string& deviceIdOrPrefix) {
-+    return server_->denyDevice(deviceIdOrPrefix);
++    if (server_) return server_->denyDevice(deviceIdOrPrefix);
++    return false;
 +}
 +
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
 new file mode 100644
-index 00000000..3c8c99a1
+index 00000000..c89c42a8
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
-@@ -0,0 +1,116 @@
+@@ -0,0 +1,161 @@
 +#pragma once
 +
 +// Ties the standalone melonds-remote protocol/host networking code
@@ -1939,17 +2030,20 @@ index 00000000..3c8c99a1
 +// remoteActionsToHotkeyBits() in EmuInstanceInput.cpp for that mapping,
 +// kept next to the rest of the input-merging code it parallels.
 +
++#include <atomic>
 +#include <cstddef>
 +#include <cstdint>
 +#include <functional>
 +#include <memory>
 +#include <string>
++#include <thread>
 +#include <vector>
 +
 +#include "MelonDSAdapter.h"
 +#include "MelonDSMicAudioSink.h"
 +#include "host/adapter_bridge.h"
 +#include "host/net_server.h"
++#include "melonds_remote/adapter/ipc/adapter_ipc_client.h"
 +
 +namespace melonds_remote_bridge {
 +
@@ -1990,6 +2084,32 @@ index 00000000..3c8c99a1
 +        bool discoveryEnabled = true, uint16_t discoveryPort = 8763, std::string hostName = {},
 +        std::function<void(bool)> onClientConnectionChanged = {}, std::string appVersion = {},
 +        uint16_t audioPort = 8765);
++
++    // Out-of-process mode (GitHub issue #4: host-control requires
++    // something host-side running independently of melonDS, which means
++    // melonDS itself can no longer own the NetServer melonDS's Qt
++    // approval dialog above depends on). Connects to an already-running
++    // standalone Host Service (melonds-remote-server --adapter-ipc)
++    // instead of constructing a NetServer here -- MelonDSAdapter (the
++    // same class the in-process constructor above uses) is wrapped in an
++    // AdapterIpcClient and driven entirely by that external process.
++    // `adapterSocketPath` empty uses
++    // melonds_remote::adapter::ipc::defaultAdapterSocketPath(), matching
++    // the standalone host's own --adapter-socket default.
++    //
++    // Real, deliberate limitations of this mode, not yet solved (see
++    // docs/adr/0001-host-service-and-adapter-architecture.md and GitHub
++    // issue #4): device approval belongs entirely to the external Host
++    // Service now, so approveDevice()/denyDevice() below are no-ops here
++    // -- use that process's own console approve/deny/list commands or a
++    // static --auth-token instead of melonDS's Qt dialog, which has
++    // nothing to approve locally in this mode. Mic audio does not flow
++    // in this mode either (nothing feeds micSink_ here, since there is
++    // no local NetServer receiving UDP audio packets) -- the same
++    // already-documented "generic adapter contract doesn't carry mic
++    // audio yet" limitation as host/remote-server's --adapter-ipc mode.
++    explicit RemoteServerBridge(std::string adapterSocketPath);
++
 +    ~RemoteServerBridge();
 +
 +    RemoteServerBridge(const RemoteServerBridge&) = delete;
@@ -2019,7 +2139,10 @@ index 00000000..3c8c99a1
 +    bool hasActiveMicAudio() const;
 +
 +    // Forwarded to NetServer -- see host/net_server.h. Safe to call from
-+    // the Qt UI thread (e.g. a dialog's button-click slot).
++    // the Qt UI thread (e.g. a dialog's button-click slot). Always
++    // return false in out-of-process mode (see that constructor's
++    // comment) -- there is no local NetServer/DeviceApprovalManager to
++    // forward to.
 +    bool approveDevice(const std::string& deviceIdOrPrefix);
 +    bool denyDevice(const std::string& deviceIdOrPrefix);
 +
@@ -2035,10 +2158,23 @@ index 00000000..3c8c99a1
 +    // allowance). Mic audio is unaffected -- micSink_ is still handed to
 +    // NetServer directly, independent of the adapter contract, exactly
 +    // as before.
++    //
++    // Exactly one of (bridge_+server_) or ipcClient_ is populated,
++    // depending on which constructor ran -- see each constructor's own
++    // comment. adapter_/micSink_ are shared by both modes: adapter_ is
++    // what either an in-process AdapterBridge or an out-of-process
++    // AdapterIpcClient ultimately drives, and micSink_ simply never gets
++    // fed anything in out-of-process mode (see that constructor's
++    // comment), so pushBottomFrame()/latestControllerState()/
++    // drainMicAudio()/hasActiveMicAudio() need no mode-specific branches
++    // at all -- only start()/stop()/approveDevice()/denyDevice() do.
 +    MelonDSAdapter adapter_;
-+    melonds_remote::host::AdapterBridge bridge_;
 +    MelonDSMicAudioSink micSink_;
++    std::unique_ptr<melonds_remote::host::AdapterBridge> bridge_;
 +    std::unique_ptr<melonds_remote::host::NetServer> server_;
++    std::unique_ptr<melonds_remote::adapter::ipc::AdapterIpcClient> ipcClient_;
++    std::thread reconnectThread_;
++    std::atomic<bool> stopRequested_{false};
 +};
 +
 +} // namespace melonds_remote_bridge
@@ -2277,6 +2413,236 @@ index 00000000..1945b0b5
 +};
 +
 +} // namespace melonds_remote::adapter
+diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/adapter_ipc_client.h b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/adapter_ipc_client.h
+new file mode 100644
+index 00000000..692bf692
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/adapter_ipc_client.h
+@@ -0,0 +1,67 @@
++#pragma once
++
++// The adapter-process side of the local adapter IPC channel (GitHub
++// issue #28 Phase 2 / the ADR's IPC decision). Wraps any local
++// IEmulatorAdapter implementation and exposes it to a Host Service
++// (AdapterIpcServer) running elsewhere on the same machine, over a Unix
++// domain socket -- this is what turns an in-process fixture like
++// FakeDsAdapter, or a real emulator adapter, into something that can
++// run as its own out-of-process program.
++//
++// AdapterIpcClient does not implement IEmulatorAdapter itself -- it
++// drives one, in the other direction from AdapterIpcServer (which
++// receives IEmulatorAdapter calls and forwards them out; this class
++// receives IPC messages and forwards them into a local
++// IEmulatorAdapter).
++
++#include <atomic>
++#include <cstdint>
++#include <string>
++#include <thread>
++#include <unordered_map>
++
++#include "melonds_remote/adapter/adapter_contract.h"
++
++namespace melonds_remote::adapter::ipc {
++
++class AdapterIpcClient {
++public:
++    // `localAdapter` must outlive this object. `socketPath` defaults to
++    // defaultAdapterSocketPath() when empty.
++    explicit AdapterIpcClient(IEmulatorAdapter& localAdapter, std::string socketPath = {});
++    ~AdapterIpcClient();
++
++    AdapterIpcClient(const AdapterIpcClient&) = delete;
++    AdapterIpcClient& operator=(const AdapterIpcClient&) = delete;
++
++    // Connects, sends Hello with localAdapter's capabilities, and waits
++    // for HelloAck. Returns false on any failure (socket error,
++    // rejected handshake) -- does not retry; callers wanting
++    // auto-reconnect should call this again themselves (mirroring
++    // NetClient::connect()'s same non-retrying contract, and
++    // client/src/main.cpp's own reconnect-loop-on-a-background-thread
++    // pattern built on top of it).
++    bool connect();
++    void disconnect();
++    bool isConnected() const { return connected_.load(); }
++
++private:
++    void readLoop();  // blocking recv: InputState/ReleaseInputs/Heartbeat/Disconnect -> localAdapter
++    void writeLoop(); // periodic: localAdapter's frames/state -> Frame/StateChanged/Heartbeat messages
++
++    IEmulatorAdapter& localAdapter_;
++    std::string socketPath_;
++
++    std::atomic<int> fd_{-1};
++    std::atomic<bool> connected_{false};
++    std::thread readThread_;
++    std::thread writeThread_;
++
++    // Tracks the last frameIndex sent per surface, so writeLoop() only
++    // sends a Frame message when localAdapter_ actually produced a new
++    // one -- avoids re-sending an unchanged frame every poll tick.
++    std::unordered_map<std::string, uint64_t> lastSentFrameIndex_;
++    SessionState lastSentState_ = SessionState::Available;
++};
++
++} // namespace melonds_remote::adapter::ipc
+diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/ipc_protocol.h b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/ipc_protocol.h
+new file mode 100644
+index 00000000..67e8489a
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/ipc_protocol.h
+@@ -0,0 +1,115 @@
++#pragma once
++
++// Wire format for the Host-Service<->adapter local IPC channel (GitHub
++// issue #28 Phase 2, implementing the transport decided in
++// docs/adr/0001-host-service-and-adapter-architecture.md section 3).
++//
++// Deliberately mirrors protocol.h's own conventions closely (explicit
++// little-endian integers, length-prefixed strings via the same
++// appendString()/readString() helpers, a magic+version+type+size
++// header validated before any payload is trusted) -- this is a
++// different channel serving a different purpose (Host Service <->
++// local adapter, not client <-> host over a LAN), so it gets its own
++// magic number and its own kAdapterContractVersion (already declared in
++// adapter_contract.h), never melonds_remote::kPacketMagic/
++// kProtocolVersion. A message on the wrong channel is rejected exactly
++// like a foreign packet on protocol.h's channels is: by magic mismatch,
++// before anything else is parsed.
++//
++// This channel is local-machine-only (a Unix domain socket, see
++// socket_path.h) -- unlike the client<->host protocol, it never
++// crosses a network, so it has no equivalent of device-approval/auth
++// tokens. Access control is the socket's filesystem permissions plus a
++// same-UID peer-credential check (see adapter_ipc_server.h) -- see the
++// ADR for why that's sufficient here specifically.
++
++#include <cstddef>
++#include <cstdint>
++#include <optional>
++#include <vector>
++
++#include "melonds_remote/adapter/adapter_contract.h"
++#include "melonds_remote/adapter/generic_input.h"
++#include "melonds_remote/adapter/session_state.h"
++#include "melonds_remote/protocol.h" // ByteBuffer, appendString/readString, etc.
++
++namespace melonds_remote::adapter::ipc {
++
++// "DAI1" ("DualDeck Adapter IPC", version 1 of the byte layout below) --
++// distinct from melonds_remote::kPacketMagic ("DMR1") so a message from
++// the wrong channel is rejected immediately rather than partially
++// parsed.
++inline constexpr uint32_t kAdapterIpcMagic = 0x44414931;
++
++enum class IpcMessageType : uint16_t {
++    Hello         = 1, // adapter -> service: AdapterCapabilities + contract version
++    HelloAck      = 2, // service -> adapter: accepted/reason
++    InputState    = 3, // service -> adapter: GenericInputState
++    ReleaseInputs = 4, // service -> adapter: no payload
++    Frame         = 5, // adapter -> service: SurfaceFrame
++    StateChanged  = 6, // adapter -> service: SessionState
++    Heartbeat     = 7, // either direction: no payload
++    Disconnect    = 8, // either direction: no payload, graceful teardown
++};
++
++struct IpcHeader {
++    uint32_t magic = kAdapterIpcMagic;
++    uint16_t contractVersion = kAdapterContractVersion;
++    IpcMessageType type = IpcMessageType::Heartbeat;
++    uint32_t payloadSize = 0;
++};
++
++inline constexpr size_t kIpcHeaderWireSize = 4 + 2 + 2 + 4;
++
++void serializeIpcHeader(melonds_remote::ByteBuffer& out, const IpcHeader& header);
++std::optional<IpcHeader> parseIpcHeader(const uint8_t* data, size_t size);
++
++// Builds a complete message: header + payload. `payload` may be empty
++// for payload-less types (Heartbeat, Disconnect, ReleaseInputs).
++melonds_remote::ByteBuffer buildIpcMessage(IpcMessageType type, const melonds_remote::ByteBuffer& payload);
++
++// Upper bound on a single Frame message's pixel payload (16 MiB) --
++// comfortably above any surface this project defines today (the
++// largest fixture, Wii U's 1920x1080 BGRA8888 TV surface, is 1920 * 1080
++// * 4 = 8,294,400 bytes) while still bounding it before ever allocating,
++// per the same "validate every declared size before trusting it"
++// discipline protocol.h already documents.
++inline constexpr uint32_t kMaxIpcFramePixelBytes = 16u * 1024u * 1024u;
++
++// Upper bound on how many VideoSurfaceDescriptors one AdapterCapabilities
++// may declare -- generous for any real system (DS: 1, 3DS/Wii U: 2) while
++// still bounding a hostile/buggy adapter's declared count before ever
++// allocating for it.
++inline constexpr uint32_t kMaxIpcSurfaceCount = 16;
++
++enum class AdapterHelloAckReason : uint8_t {
++    None = 0,
++    ContractVersionMismatch = 1,
++    AlreadyRegistered = 2, // another adapter is already connected (one at a time, like NetServer's control channel)
++};
++
++struct AdapterHelloAckPayload {
++    uint8_t accepted = 0;
++    AdapterHelloAckReason reason = AdapterHelloAckReason::None;
++};
++
++void serializeAdapterCapabilities(melonds_remote::ByteBuffer& out, const AdapterCapabilities& caps);
++std::optional<AdapterCapabilities> parseAdapterCapabilities(const uint8_t* data, size_t size);
++
++void serializeAdapterHelloAckPayload(melonds_remote::ByteBuffer& out, const AdapterHelloAckPayload& ack);
++std::optional<AdapterHelloAckPayload> parseAdapterHelloAckPayload(const uint8_t* data, size_t size);
++
++void serializeGenericInputState(melonds_remote::ByteBuffer& out, const GenericInputState& state);
++std::optional<GenericInputState> parseGenericInputState(const uint8_t* data, size_t size);
++
++void serializeSurfaceFrame(melonds_remote::ByteBuffer& out, const SurfaceFrame& frame);
++// Rejects (returns std::nullopt) a declared pixel count over
++// kMaxIpcFramePixelBytes, or a size mismatch between the declared count
++// and what actually follows -- same validation discipline as
++// protocol.h's parseMicAudioFramePayload().
++std::optional<SurfaceFrame> parseSurfaceFrame(const uint8_t* data, size_t size);
++
++void serializeSessionState(melonds_remote::ByteBuffer& out, SessionState state);
++std::optional<SessionState> parseSessionState(const uint8_t* data, size_t size);
++
++} // namespace melonds_remote::adapter::ipc
+diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/socket_path.h b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/socket_path.h
+new file mode 100644
+index 00000000..6f99edf1
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/socket_path.h
+@@ -0,0 +1,30 @@
++#pragma once
++
++// Where the Host-Service<->adapter Unix domain socket lives (GitHub
++// issue #28 Phase 2 / the ADR's IPC decision). Ownership: created and
++// removed by the Host Service (the listening side, see
++// adapter_ipc_server.h); an adapter process only ever connects to an
++// existing path, never creates one.
++
++#include <string>
++
++namespace melonds_remote::adapter::ipc {
++
++// Returns "$XDG_RUNTIME_DIR/dualdeck/adapter.sock", or
++// "$HOME/.cache/dualdeck/adapter.sock" if XDG_RUNTIME_DIR is unset --
++// matching this codebase's existing fallback convention for
++// "$HOME/.config/melonds-remote*" paths elsewhere (plain env-var
++// lookups, no XDG library dependency). Returns an empty string if
++// neither XDG_RUNTIME_DIR nor HOME is set (nothing meaningful to return
++// -- callers should treat that as "IPC unavailable," the same way
++// device_identity.h's defaultDeviceIdentityStorePath()-style helpers
++// already treat a missing HOME).
++std::string defaultAdapterSocketPath();
++
++// Ensures the socket's parent directory exists with mode 0700 (only
++// the current user may read/traverse it -- GitHub issue #28: "How only
++// the current user may register an adapter"). Returns false on failure
++// (caller should not attempt to bind the socket in that case).
++bool ensureSocketDirectory(const std::string& socketPath);
++
++} // namespace melonds_remote::adapter::ipc
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/session_state.h b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/session_state.h
 new file mode 100644
 index 00000000..a5981817
@@ -2400,6 +2766,626 @@ index 00000000..a4412965
 +};
 +
 +} // namespace melonds_remote::adapter
+diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/src/adapter_ipc_client.cpp b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/adapter_ipc_client.cpp
+new file mode 100644
+index 00000000..d16d5d08
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/adapter_ipc_client.cpp
+@@ -0,0 +1,284 @@
++#include "melonds_remote/adapter/ipc/adapter_ipc_client.h"
++
++#include <sys/socket.h>
++#include <sys/time.h>
++#include <sys/un.h>
++#include <unistd.h>
++
++#include <chrono>
++#include <cstdio>
++#include <cstring>
++#include <thread>
++#include <utility>
++
++#include "melonds_remote/adapter/ipc/ipc_protocol.h"
++#include "melonds_remote/adapter/ipc/socket_path.h"
++
++namespace melonds_remote::adapter::ipc {
++
++namespace {
++
++// See adapter_ipc_server.cpp's identical constant/rationale -- applied
++// here so this side's own recv() calls (the HelloAck wait in connect(),
++// and every subsequent read in readLoop()) can't block forever either,
++// e.g. if the Host Service is still busy serving a previous adapter's
++// connection and never gets around to accepting this one (see
++// AdapterIpcServer's "one at a time" policy) or has otherwise stopped
++// responding.
++constexpr int kRecvTimeoutSeconds = 5;
++
++void setRecvTimeout(int fd, int seconds) {
++    timeval tv{};
++    tv.tv_sec = seconds;
++    tv.tv_usec = 0;
++    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
++}
++
++bool sendAll(int fd, const uint8_t* data, size_t size) {
++    size_t sent = 0;
++    while (sent < size) {
++        ssize_t n = ::send(fd, data + sent, size - sent, MSG_NOSIGNAL);
++        if (n <= 0) return false;
++        sent += static_cast<size_t>(n);
++    }
++    return true;
++}
++
++bool sendMessage(int fd, IpcMessageType type, const melonds_remote::ByteBuffer& payload) {
++    melonds_remote::ByteBuffer packet = buildIpcMessage(type, payload);
++    return sendAll(fd, packet.data(), packet.size());
++}
++
++// Mirrors adapter_ipc_server.cpp's recvMessage() exactly (same
++// bounded-read, reject-rather-than-resync policy) -- kept as a separate
++// copy rather than a shared header function since each side's error
++// handling differs slightly (the server drops the whole session on any
++// malformed message from a possibly-hostile local peer; the client
++// below does the same toward a Host Service it trusts by construction,
++// but keeping the logic duplicated once each keeps both files
++// independently readable without an extra shared internal header for
++// two ~15-line functions).
++std::optional<std::pair<IpcHeader, melonds_remote::ByteBuffer>> recvMessage(int fd) {
++    uint8_t headerBuf[kIpcHeaderWireSize];
++    ssize_t n = ::recv(fd, headerBuf, sizeof(headerBuf), MSG_WAITALL);
++    if (n != static_cast<ssize_t>(sizeof(headerBuf))) return std::nullopt;
++
++    auto header = parseIpcHeader(headerBuf, sizeof(headerBuf));
++    if (!header) return std::nullopt;
++
++    constexpr uint32_t kMaxPayloadSize = kMaxIpcFramePixelBytes + 256;
++    if (header->payloadSize > kMaxPayloadSize) return std::nullopt;
++
++    melonds_remote::ByteBuffer payload(header->payloadSize);
++    if (!payload.empty()) {
++        ssize_t got = ::recv(fd, payload.data(), payload.size(), MSG_WAITALL);
++        if (got != static_cast<ssize_t>(payload.size())) return std::nullopt;
++    }
++    return std::make_pair(*header, std::move(payload));
++}
++
++} // namespace
++
++AdapterIpcClient::AdapterIpcClient(IEmulatorAdapter& localAdapter, std::string socketPath)
++    : localAdapter_(localAdapter),
++      socketPath_(socketPath.empty() ? defaultAdapterSocketPath() : std::move(socketPath)) {}
++
++AdapterIpcClient::~AdapterIpcClient() {
++    disconnect();
++}
++
++bool AdapterIpcClient::connect() {
++    if (socketPath_.empty()) {
++        std::fprintf(stderr, "AdapterIpcClient: no usable socket path\n");
++        return false;
++    }
++
++    // A previous connection may have ended on its own -- readLoop()/
++    // writeLoop() clear connected_ themselves on a recv timeout or send
++    // failure -- without the caller ever calling disconnect(). Join any
++    // such leftover threads before spawning new ones below: std::thread's
++    // move-assign terminates the process if the target is still
++    // joinable, and a caller reconnecting on this same instance after a
++    // connection drop (see RemoteServerBridge's out-of-process mode,
++    // GitHub issue #4) is exactly a caller who wouldn't otherwise know
++    // to call disconnect() first. No-op on the first connect() call, or
++    // when the caller already did call disconnect().
++    if (readThread_.joinable()) readThread_.join();
++    if (writeThread_.joinable()) writeThread_.join();
++
++    int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
++    if (fd < 0) {
++        std::perror("AdapterIpcClient: socket");
++        return false;
++    }
++
++    sockaddr_un addr{};
++    addr.sun_family = AF_UNIX;
++    if (socketPath_.size() >= sizeof(addr.sun_path)) {
++        std::fprintf(stderr, "AdapterIpcClient: socket path too long: %s\n", socketPath_.c_str());
++        ::close(fd);
++        return false;
++    }
++    std::strncpy(addr.sun_path, socketPath_.c_str(), sizeof(addr.sun_path) - 1);
++
++    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
++        std::perror("AdapterIpcClient: connect");
++        ::close(fd);
++        return false;
++    }
++    setRecvTimeout(fd, kRecvTimeoutSeconds);
++
++    melonds_remote::ByteBuffer helloPayload;
++    serializeAdapterCapabilities(helloPayload, localAdapter_.capabilities());
++    if (!sendMessage(fd, IpcMessageType::Hello, helloPayload)) {
++        ::close(fd);
++        return false;
++    }
++
++    auto ackMsg = recvMessage(fd);
++    if (!ackMsg || ackMsg->first.type != IpcMessageType::HelloAck) {
++        std::fprintf(stderr, "AdapterIpcClient: no HelloAck received\n");
++        ::close(fd);
++        return false;
++    }
++    auto ack = parseAdapterHelloAckPayload(ackMsg->second.data(), ackMsg->second.size());
++    if (!ack || !ack->accepted) {
++        std::fprintf(stderr, "AdapterIpcClient: handshake rejected (reason=%d)\n",
++                      ack ? static_cast<int>(ack->reason) : -1);
++        ::close(fd);
++        return false;
++    }
++
++    fd_ = fd;
++    connected_ = true;
++    lastSentFrameIndex_.clear();
++    lastSentState_ = SessionState::Available;
++    readThread_ = std::thread(&AdapterIpcClient::readLoop, this);
++    writeThread_ = std::thread(&AdapterIpcClient::writeLoop, this);
++    return true;
++}
++
++void AdapterIpcClient::disconnect() {
++    bool wasConnected = connected_.exchange(false);
++    if (wasConnected) {
++        int fd = fd_.load();
++        if (fd >= 0) {
++            sendMessage(fd, IpcMessageType::Disconnect, {});
++            ::shutdown(fd, SHUT_RDWR);
++        }
++    }
++
++    // Always join, regardless of wasConnected -- readLoop()/writeLoop()
++    // clear connected_ themselves on a recv timeout or send failure
++    // (e.g. the Host Service went away, or a heartbeat send failed), so
++    // by the time a caller notices via isConnected()==false and calls
++    // this, connected_ may already be false while the threads are still
++    // mid-exit. Skipping the join in that case (as an earlier version of
++    // this function did) left readThread_/writeThread_ still joinable;
++    // a caller that reconnects on this same instance (see
++    // RemoteServerBridge's out-of-process mode, GitHub issue #4) would
++    // then have connect() assign a new std::thread over one that's still
++    // joinable, which terminates the process (std::thread's move-assign
++    // requires the target not be joinable). Joining unconditionally here
++    // is what makes reconnecting on the same AdapterIpcClient safe.
++    if (readThread_.joinable()) readThread_.join();
++    if (writeThread_.joinable()) writeThread_.join();
++
++    int fd = fd_.exchange(-1);
++    if (fd >= 0) ::close(fd);
++}
++
++void AdapterIpcClient::readLoop() {
++    int fd = fd_.load();
++    while (connected_.load()) {
++        auto msg = recvMessage(fd);
++        if (!msg) {
++            connected_ = false;
++            break;
++        }
++
++        switch (msg->first.type) {
++            case IpcMessageType::InputState: {
++                auto state = parseGenericInputState(msg->second.data(), msg->second.size());
++                if (state) {
++                    localAdapter_.applyGenericInput(*state);
++                }
++                break;
++            }
++            case IpcMessageType::ReleaseInputs:
++                localAdapter_.releaseAllInputs();
++                break;
++            case IpcMessageType::Heartbeat:
++                break;
++            case IpcMessageType::Disconnect:
++                connected_ = false;
++                return;
++            default:
++                break;
++        }
++    }
++}
++
++void AdapterIpcClient::writeLoop() {
++    // ~60Hz poll -- not tied to any one declared surface's own
++    // nominalFps/maxFps (an adapter may have surfaces at different
++    // rates); this just governs how often writeLoop() checks whether
++    // there's anything new to send, not how often frames actually
++    // change.
++    constexpr auto kPollInterval = std::chrono::milliseconds(16);
++    constexpr auto kHeartbeatInterval = std::chrono::seconds(1);
++    auto lastHeartbeat = std::chrono::steady_clock::now();
++
++    while (connected_.load()) {
++        int fd = fd_.load();
++        if (fd < 0) break;
++        bool sentSomething = false;
++
++        SessionState state = localAdapter_.currentState();
++        if (state != lastSentState_) {
++            melonds_remote::ByteBuffer payload;
++            serializeSessionState(payload, state);
++            if (!sendMessage(fd, IpcMessageType::StateChanged, payload)) {
++                connected_ = false;
++                break;
++            }
++            lastSentState_ = state;
++            sentSomething = true;
++        }
++
++        for (const auto& surface : localAdapter_.capabilities().surfaces) {
++            SurfaceFrame frame;
++            if (!localAdapter_.latestFrame(surface.surfaceId, frame)) continue;
++
++            auto it = lastSentFrameIndex_.find(surface.surfaceId);
++            if (it != lastSentFrameIndex_.end() && it->second == frame.frameIndex) {
++                continue; // nothing new for this surface since last tick
++            }
++
++            melonds_remote::ByteBuffer payload;
++            serializeSurfaceFrame(payload, frame);
++            if (!sendMessage(fd, IpcMessageType::Frame, payload)) {
++                connected_ = false;
++                break;
++            }
++            lastSentFrameIndex_[surface.surfaceId] = frame.frameIndex;
++            sentSomething = true;
++        }
++        if (!connected_.load()) break;
++
++        auto now = std::chrono::steady_clock::now();
++        if (!sentSomething && now - lastHeartbeat >= kHeartbeatInterval) {
++            if (!sendMessage(fd, IpcMessageType::Heartbeat, {})) {
++                connected_ = false;
++                break;
++            }
++        }
++        if (sentSomething || now - lastHeartbeat >= kHeartbeatInterval) {
++            lastHeartbeat = now;
++        }
++
++        std::this_thread::sleep_for(kPollInterval);
++    }
++}
++
++} // namespace melonds_remote::adapter::ipc
+diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/src/ipc_protocol.cpp b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/ipc_protocol.cpp
+new file mode 100644
+index 00000000..a8f49c74
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/ipc_protocol.cpp
+@@ -0,0 +1,324 @@
++#include "melonds_remote/adapter/ipc/ipc_protocol.h"
++
++using melonds_remote::ByteBuffer;
++using melonds_remote::appendAdapterIdentity;
++using melonds_remote::appendString;
++using melonds_remote::appendSystemIdentity;
++using melonds_remote::appendU16;
++using melonds_remote::appendU32;
++using melonds_remote::appendU64;
++using melonds_remote::readAdapterIdentity;
++using melonds_remote::readString;
++using melonds_remote::readSystemIdentity;
++using melonds_remote::readU16;
++using melonds_remote::readU32;
++using melonds_remote::readU64;
++
++namespace melonds_remote::adapter::ipc {
++
++namespace {
++void appendI16(ByteBuffer& out, int16_t v) {
++    appendU16(out, static_cast<uint16_t>(v));
++}
++int16_t readI16(const uint8_t* data, size_t offset) {
++    return static_cast<int16_t>(readU16(data, offset));
++}
++} // namespace
++
++void serializeIpcHeader(ByteBuffer& out, const IpcHeader& header) {
++    appendU32(out, header.magic);
++    appendU16(out, header.contractVersion);
++    appendU16(out, static_cast<uint16_t>(header.type));
++    appendU32(out, header.payloadSize);
++}
++
++std::optional<IpcHeader> parseIpcHeader(const uint8_t* data, size_t size) {
++    if (data == nullptr || size < kIpcHeaderWireSize) {
++        return std::nullopt;
++    }
++    IpcHeader header;
++    header.magic = readU32(data, 0);
++    if (header.magic != kAdapterIpcMagic) {
++        return std::nullopt;
++    }
++    header.contractVersion = readU16(data, 4);
++    header.type = static_cast<IpcMessageType>(readU16(data, 6));
++    header.payloadSize = readU32(data, 8);
++    return header;
++}
++
++ByteBuffer buildIpcMessage(IpcMessageType type, const ByteBuffer& payload) {
++    IpcHeader header;
++    header.type = type;
++    header.payloadSize = static_cast<uint32_t>(payload.size());
++
++    ByteBuffer out;
++    out.reserve(kIpcHeaderWireSize + payload.size());
++    serializeIpcHeader(out, header);
++    out.insert(out.end(), payload.begin(), payload.end());
++    return out;
++}
++
++namespace {
++
++void appendVideoSurfaceDescriptor(ByteBuffer& out, const VideoSurfaceDescriptor& s) {
++    appendString(out, s.surfaceId);
++    out.push_back(static_cast<uint8_t>(s.role));
++    appendU16(out, s.width);
++    appendU16(out, s.height);
++    out.push_back(static_cast<uint8_t>(s.pixelFormat));
++    out.push_back(static_cast<uint8_t>(s.orientation));
++    out.push_back(s.touchSupported ? 1 : 0);
++    appendU16(out, s.touchRangeX);
++    appendU16(out, s.touchRangeY);
++    out.push_back(s.required ? 1 : 0);
++    out.push_back(s.locallyDisplayed ? 1 : 0);
++    out.push_back(s.remotelyDisplayed ? 1 : 0);
++    out.push_back(s.selectable ? 1 : 0);
++    appendU16(out, s.nominalFps);
++    appendU16(out, s.maxFps);
++}
++
++// kFixedVideoSurfaceBytesAfterId: everything in appendVideoSurfaceDescriptor()
++// above except the leading length-prefixed surfaceId string.
++constexpr size_t kFixedVideoSurfaceBytesAfterId =
++    1 + 2 + 2 + 1 + 1 + 1 + 2 + 2 + 1 + 1 + 1 + 1 + 2 + 2;
++
++std::optional<VideoSurfaceDescriptor> readVideoSurfaceDescriptor(const uint8_t* data, size_t size,
++                                                                    size_t& offset) {
++    auto surfaceId = readString(data, size, offset);
++    if (!surfaceId) return std::nullopt;
++
++    if (offset + kFixedVideoSurfaceBytesAfterId > size) return std::nullopt;
++
++    VideoSurfaceDescriptor s;
++    s.surfaceId = std::move(*surfaceId);
++
++    uint8_t role = data[offset]; offset += 1;
++    if (role > static_cast<uint8_t>(SurfaceRole::Auxiliary)) return std::nullopt;
++    s.role = static_cast<SurfaceRole>(role);
++
++    s.width = readU16(data, offset); offset += 2;
++    s.height = readU16(data, offset); offset += 2;
++
++    uint8_t pixelFormat = data[offset]; offset += 1;
++    if (pixelFormat > static_cast<uint8_t>(PixelFormat::Bgra8888)) return std::nullopt;
++    s.pixelFormat = static_cast<PixelFormat>(pixelFormat);
++
++    uint8_t orientation = data[offset]; offset += 1;
++    if (orientation > static_cast<uint8_t>(Orientation::Portrait)) return std::nullopt;
++    s.orientation = static_cast<Orientation>(orientation);
++
++    uint8_t touchSupported = data[offset]; offset += 1;
++    if (touchSupported != 0 && touchSupported != 1) return std::nullopt;
++    s.touchSupported = touchSupported != 0;
++
++    s.touchRangeX = readU16(data, offset); offset += 2;
++    s.touchRangeY = readU16(data, offset); offset += 2;
++
++    uint8_t required = data[offset]; offset += 1;
++    if (required != 0 && required != 1) return std::nullopt;
++    s.required = required != 0;
++
++    uint8_t locallyDisplayed = data[offset]; offset += 1;
++    if (locallyDisplayed != 0 && locallyDisplayed != 1) return std::nullopt;
++    s.locallyDisplayed = locallyDisplayed != 0;
++
++    uint8_t remotelyDisplayed = data[offset]; offset += 1;
++    if (remotelyDisplayed != 0 && remotelyDisplayed != 1) return std::nullopt;
++    s.remotelyDisplayed = remotelyDisplayed != 0;
++
++    uint8_t selectable = data[offset]; offset += 1;
++    if (selectable != 0 && selectable != 1) return std::nullopt;
++    s.selectable = selectable != 0;
++
++    s.nominalFps = readU16(data, offset); offset += 2;
++    s.maxFps = readU16(data, offset); offset += 2;
++
++    return s;
++}
++
++} // namespace
++
++void serializeAdapterCapabilities(ByteBuffer& out, const AdapterCapabilities& caps) {
++    appendSystemIdentity(out, caps.system);
++    appendAdapterIdentity(out, caps.adapter);
++    appendU16(out, static_cast<uint16_t>(caps.surfaces.size()));
++    for (const auto& s : caps.surfaces) {
++        appendVideoSurfaceDescriptor(out, s);
++    }
++    out.push_back(caps.supportsMotion ? 1 : 0);
++    out.push_back(caps.supportsMicrophone ? 1 : 0);
++    out.push_back(caps.supportsAnalogTriggers ? 1 : 0);
++}
++
++std::optional<AdapterCapabilities> parseAdapterCapabilities(const uint8_t* data, size_t size) {
++    if (data == nullptr) return std::nullopt;
++
++    size_t offset = 0;
++    AdapterCapabilities caps;
++
++    auto system = readSystemIdentity(data, size, offset);
++    if (!system) return std::nullopt;
++    caps.system = std::move(*system);
++
++    auto adapter = readAdapterIdentity(data, size, offset);
++    if (!adapter) return std::nullopt;
++    caps.adapter = std::move(*adapter);
++
++    if (offset + 2 > size) return std::nullopt;
++    uint16_t surfaceCount = readU16(data, offset); offset += 2;
++    if (surfaceCount > kMaxIpcSurfaceCount) return std::nullopt;
++
++    caps.surfaces.reserve(surfaceCount);
++    for (uint16_t i = 0; i < surfaceCount; ++i) {
++        auto surface = readVideoSurfaceDescriptor(data, size, offset);
++        if (!surface) return std::nullopt;
++        caps.surfaces.push_back(std::move(*surface));
++    }
++
++    if (offset + 3 > size) return std::nullopt;
++    uint8_t motion = data[offset]; offset += 1;
++    uint8_t mic = data[offset]; offset += 1;
++    uint8_t triggers = data[offset]; offset += 1;
++    if ((motion != 0 && motion != 1) || (mic != 0 && mic != 1) || (triggers != 0 && triggers != 1)) {
++        return std::nullopt;
++    }
++    caps.supportsMotion = motion != 0;
++    caps.supportsMicrophone = mic != 0;
++    caps.supportsAnalogTriggers = triggers != 0;
++
++    if (offset != size) return std::nullopt; // trailing garbage
++    return caps;
++}
++
++void serializeAdapterHelloAckPayload(ByteBuffer& out, const AdapterHelloAckPayload& ack) {
++    out.push_back(ack.accepted ? 1 : 0);
++    out.push_back(static_cast<uint8_t>(ack.reason));
++}
++
++std::optional<AdapterHelloAckPayload> parseAdapterHelloAckPayload(const uint8_t* data, size_t size) {
++    if (data == nullptr || size != 2) return std::nullopt;
++
++    uint8_t accepted = data[0];
++    if (accepted != 0 && accepted != 1) return std::nullopt;
++
++    uint8_t reason = data[1];
++    if (reason > static_cast<uint8_t>(AdapterHelloAckReason::AlreadyRegistered)) return std::nullopt;
++
++    AdapterHelloAckPayload ack;
++    ack.accepted = accepted;
++    ack.reason = static_cast<AdapterHelloAckReason>(reason);
++    return ack;
++}
++
++void serializeGenericInputState(ByteBuffer& out, const GenericInputState& state) {
++    appendU32(out, state.sequence);
++    appendU64(out, state.clientTimestampUs);
++    appendU32(out, state.buttons);
++    appendI16(out, state.leftStickX);
++    appendI16(out, state.leftStickY);
++    appendI16(out, state.rightStickX);
++    appendI16(out, state.rightStickY);
++    out.push_back(state.leftTrigger);
++    out.push_back(state.rightTrigger);
++    appendU16(out, static_cast<uint16_t>(state.touches.size()));
++    for (const auto& t : state.touches) {
++        appendString(out, t.surfaceId);
++        appendU16(out, t.x);
++        appendU16(out, t.y);
++    }
++    out.push_back(state.micActive ? 1 : 0);
++    appendU32(out, state.emulatorActions);
++}
++
++std::optional<GenericInputState> parseGenericInputState(const uint8_t* data, size_t size) {
++    if (data == nullptr) return std::nullopt;
++
++    constexpr size_t kFixedPrefix = 4 + 8 + 4 + 2 + 2 + 2 + 2 + 1 + 1;
++    if (size < kFixedPrefix) return std::nullopt;
++
++    size_t offset = 0;
++    GenericInputState state;
++    state.sequence = readU32(data, offset); offset += 4;
++    state.clientTimestampUs = readU64(data, offset); offset += 8;
++    state.buttons = readU32(data, offset); offset += 4;
++    state.leftStickX = readI16(data, offset); offset += 2;
++    state.leftStickY = readI16(data, offset); offset += 2;
++    state.rightStickX = readI16(data, offset); offset += 2;
++    state.rightStickY = readI16(data, offset); offset += 2;
++    state.leftTrigger = data[offset]; offset += 1;
++    state.rightTrigger = data[offset]; offset += 1;
++
++    if (offset + 2 > size) return std::nullopt;
++    uint16_t touchCount = readU16(data, offset); offset += 2;
++    // Bounded generously -- a real client has at most a handful of
++    // simultaneous touch/stylus contacts across however many
++    // touch-capable surfaces an adapter declares; this rejects an
++    // absurd declared count before ever looping/allocating for it.
++    constexpr uint16_t kMaxTouchContacts = 64;
++    if (touchCount > kMaxTouchContacts) return std::nullopt;
++
++    state.touches.reserve(touchCount);
++    for (uint16_t i = 0; i < touchCount; ++i) {
++        auto surfaceId = readString(data, size, offset);
++        if (!surfaceId) return std::nullopt;
++        if (offset + 4 > size) return std::nullopt;
++        TouchContact contact;
++        contact.surfaceId = std::move(*surfaceId);
++        contact.x = readU16(data, offset); offset += 2;
++        contact.y = readU16(data, offset); offset += 2;
++        state.touches.push_back(std::move(contact));
++    }
++
++    if (offset + 1 > size) return std::nullopt;
++    uint8_t micActive = data[offset]; offset += 1;
++    if (micActive != 0 && micActive != 1) return std::nullopt;
++    state.micActive = micActive != 0;
++
++    if (offset + 4 > size) return std::nullopt;
++    state.emulatorActions = readU32(data, offset); offset += 4;
++
++    if (offset != size) return std::nullopt; // trailing garbage
++    return state;
++}
++
++void serializeSurfaceFrame(ByteBuffer& out, const SurfaceFrame& frame) {
++    appendString(out, frame.surfaceId);
++    appendU64(out, frame.frameIndex);
++    appendU32(out, static_cast<uint32_t>(frame.pixels.size()));
++    out.insert(out.end(), frame.pixels.begin(), frame.pixels.end());
++}
++
++std::optional<SurfaceFrame> parseSurfaceFrame(const uint8_t* data, size_t size) {
++    if (data == nullptr) return std::nullopt;
++
++    size_t offset = 0;
++    auto surfaceId = readString(data, size, offset);
++    if (!surfaceId) return std::nullopt;
++
++    if (offset + 8 + 4 > size) return std::nullopt;
++    SurfaceFrame frame;
++    frame.surfaceId = std::move(*surfaceId);
++    frame.frameIndex = readU64(data, offset); offset += 8;
++    uint32_t pixelCount = readU32(data, offset); offset += 4;
++
++    if (pixelCount > kMaxIpcFramePixelBytes) return std::nullopt;
++    if (offset + pixelCount != size) return std::nullopt; // declared size must match what actually follows
++
++    frame.pixels.assign(data + offset, data + offset + pixelCount);
++    return frame;
++}
++
++void serializeSessionState(ByteBuffer& out, SessionState state) {
++    out.push_back(static_cast<uint8_t>(state));
++}
++
++std::optional<SessionState> parseSessionState(const uint8_t* data, size_t size) {
++    if (data == nullptr || size != 1) return std::nullopt;
++    uint8_t value = data[0];
++    if (value > static_cast<uint8_t>(SessionState::Error)) return std::nullopt;
++    return static_cast<SessionState>(value);
++}
++
++} // namespace melonds_remote::adapter::ipc
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/src/session_state.cpp b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/session_state.cpp
 new file mode 100644
 index 00000000..dc101d2c
@@ -2447,6 +3433,67 @@ index 00000000..dc101d2c
 +}
 +
 +} // namespace melonds_remote::adapter
+diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/src/socket_path.cpp b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/socket_path.cpp
+new file mode 100644
+index 00000000..42214503
+--- /dev/null
++++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/socket_path.cpp
+@@ -0,0 +1,55 @@
++#include "melonds_remote/adapter/ipc/socket_path.h"
++
++#include <sys/stat.h>
++
++#include <cerrno>
++#include <cstdlib>
++
++namespace melonds_remote::adapter::ipc {
++
++std::string defaultAdapterSocketPath() {
++    if (const char* runtimeDir = std::getenv("XDG_RUNTIME_DIR"); runtimeDir && *runtimeDir) {
++        return std::string(runtimeDir) + "/dualdeck/adapter.sock";
++    }
++    if (const char* home = std::getenv("HOME"); home && *home) {
++        return std::string(home) + "/.cache/dualdeck/adapter.sock";
++    }
++    return {};
++}
++
++bool ensureSocketDirectory(const std::string& socketPath) {
++    if (socketPath.empty()) return false;
++
++    auto lastSlash = socketPath.find_last_of('/');
++    if (lastSlash == std::string::npos) return false;
++    std::string dir = socketPath.substr(0, lastSlash);
++    if (dir.empty()) return false;
++
++    // mkdir 0700: only the current user may read/traverse this
++    // directory (GitHub issue #28's "only the current user may
++    // register an adapter" requirement) -- the umask can only narrow
++    // this further, never widen it, since 0700 has no group/other bits
++    // to begin with.
++    if (::mkdir(dir.c_str(), 0700) != 0 && errno != EEXIST) {
++        return false;
++    }
++
++    // If the directory already existed (errno == EEXIST above, or it
++    // simply always did), re-assert the permission bits rather than
++    // trusting whatever created it -- a stale directory from a previous
++    // run, or one this process didn't create, should not silently be
++    // trusted at a wider mode.
++    struct stat st{};
++    if (::stat(dir.c_str(), &st) != 0) {
++        return false;
++    }
++    if ((st.st_mode & 0777) != 0700) {
++        if (::chmod(dir.c_str(), 0700) != 0) {
++            return false;
++        }
++    }
++
++    return true;
++}
++
++} // namespace melonds_remote::adapter::ipc
 diff --git a/src/frontend/qt_sdl/remote_server/host/adapter_bridge.cpp b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.cpp
 new file mode 100644
 index 00000000..2263a15a
