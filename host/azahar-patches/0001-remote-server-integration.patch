@@ -175,12 +175,13 @@ index 673c513..542d0f8 100644
      // The path to the game currently running
 diff --git a/src/citra_qt/remote_server/AzaharAdapter.cpp b/src/citra_qt/remote_server/AzaharAdapter.cpp
 new file mode 100644
-index 0000000..469c5bf
+index 0000000..7115d2f
 --- /dev/null
 +++ b/src/citra_qt/remote_server/AzaharAdapter.cpp
-@@ -0,0 +1,284 @@
+@@ -0,0 +1,313 @@
 +#include "citra_qt/remote_server/AzaharAdapter.h"
 +
++#include <algorithm>
 +#include <chrono>
 +#include <condition_variable>
 +
@@ -419,13 +420,28 @@ index 0000000..469c5bf
 +        std::mutex doneMutex;
 +        std::condition_variable doneCv;
 +        bool done = false;
-+        bool succeeded = false;
++        bool invertY = false;
 +
 +        system_.GPU().Renderer().RequestScreenshot(
 +            buffer.data(),
-+            [&](bool ok) {
++            // The bool here is NOT a success flag (a real bug in an
++            // earlier version of this function, only surfaced once a
++            // user actually ran this on real hardware with the Vulkan
++            // backend): it's invert_y, the same parameter
++            // GRenderWindow::CaptureScreenshot() (bootmanager.cpp)
++            // passes straight to GetMirroredImage() before saving a
++            // screenshot. OpenGL's RenderScreenshot() always passes
++            // true (glReadPixels() returns bottom-up rows), Vulkan's
++            // always passes false (its rows are already top-down) --
++            // treating "false" as "failed" meant every Vulkan frame
++            // was silently dropped, while OpenGL frames were kept
++            // without ever actually being flipped. The callback firing
++            // at all (barring RequestScreenshot() ignoring an
++            // already-in-flight request, see renderer_base.cpp) is the
++            // real success signal.
++            [&](bool invert_y) {
 +                std::lock_guard lock(doneMutex);
-+                succeeded = ok;
++                invertY = invert_y;
 +                done = true;
 +                doneCv.notify_one();
 +            },
@@ -442,7 +458,20 @@ index 0000000..469c5bf
 +            doneCv.wait_for(lock, std::chrono::milliseconds(500), [&] { return done; });
 +        }
 +
-+        if (done && succeeded) {
++        if (done) {
++            if (invertY) {
++                // Flip rows in place so latestFrame_ is always top-down
++                // regardless of which renderer backend captured it --
++                // see the comment above on why this is needed for
++                // OpenGL specifically.
++                constexpr size_t rowBytes = static_cast<size_t>(kBottomScreenWidth) * 4;
++                for (int row = 0; row < kBottomScreenHeight / 2; ++row) {
++                    const int mirrorRow = kBottomScreenHeight - 1 - row;
++                    std::swap_ranges(buffer.begin() + static_cast<size_t>(row) * rowBytes,
++                                      buffer.begin() + static_cast<size_t>(row + 1) * rowBytes,
++                                      buffer.begin() + static_cast<size_t>(mirrorRow) * rowBytes);
++                }
++            }
 +            std::lock_guard<std::mutex> frameLock(frameMutex_);
 +            latestFrame_ = buffer;
 +            ++frameIndex_;

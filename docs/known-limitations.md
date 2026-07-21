@@ -3690,6 +3690,60 @@ exit 1, other exit codes, abnormal termination) and passes under
 only be verified by hand on a real KDE desktop, which this sandbox
 doesn't have -- not yet confirmed against a real Steam Deck.
 
+## Azahar video never displays on the Vulkan renderer backend (real bug, found from real-hardware testing)
+
+**The problem, reported by the user**: on a real Steam Deck, controls and
+touch worked correctly through Azahar/DualDeck, but the client showed no
+video at all. The user had already switched Azahar's graphics API to
+Vulkan because OpenGL didn't render on their system (a real, separate,
+and out-of-scope compatibility issue with OpenGL on their specific
+hardware/driver stack).
+
+**Root cause**: `AzaharAdapter::captureLoop()`
+(`src/citra_qt/remote_server/AzaharAdapter.cpp`) misread the meaning of
+`VideoCore::RendererBase::RequestScreenshot()`'s completion-callback
+bool. It is **not** a success flag -- reading
+`GRenderWindow::CaptureScreenshot()` (`bootmanager.cpp`, the built-in
+"save a screenshot" feature that also calls `RequestScreenshot()`) shows
+the bool is `invert_y`, passed straight to `GetMirroredImage()` before
+saving. `RendererOpenGL::RenderScreenshot()`
+(`renderer_opengl.cpp`) always calls the callback with `true` (OpenGL's
+`glReadPixels()` returns bottom-up rows, needing a flip), while
+`RendererVulkan::RenderScreenshot()` (`renderer_vulkan.cpp`) always
+calls it with `false` (Vulkan's rows are already top-down -- no bug
+there, it's correct for its own purpose). `captureLoop()` had been
+storing that bool directly into a variable named `succeeded` and gating
+the whole "keep this frame" branch on it (`if (done && succeeded)`) --
+so on Vulkan, every single captured frame was silently discarded, while
+on OpenGL every frame was kept but never actually had the needed
+vertical flip applied to it, since nothing consumed the bool for that
+purpose either. This was never caught earlier because this is the first
+time anyone has run Azahar through DualDeck on real display/GPU
+hardware -- every note prior to this in this doc about `AzaharAdapter`'s
+video path says as much explicitly.
+
+**The fix**: `captureLoop()` now treats the callback simply firing at
+all as success (the one real failure case, `RequestScreenshot()`
+silently ignoring an already-in-flight request, is still caught by the
+existing bounded `doneCv.wait_for()` timing out with `done == false`).
+The bool is renamed to `invertY` and used for its actual purpose: when
+true, the captured BGRA buffer's rows are flipped in place before being
+stored as `latestFrame_`, so the frame delivered to the client is
+top-down regardless of which renderer backend captured it. This also
+means OpenGL-backed video, if anyone had gotten a full end-to-end test
+of it working, may have been upside-down until now -- this fix corrects
+both the missing-video-on-Vulkan bug and that latent orientation bug in
+one change, since they share the same root cause.
+
+**Verified**: the regenerated `host/azahar-patches/0001-remote-server-integration.patch`
+applies cleanly (`git apply --check`) against a fresh checkout of the
+pinned Azahar commit, and the full `azahar` binary (CMake target
+`citra_meta`) rebuilds successfully with the fix, confirmed via a real
+incremental build in this sandbox. Not yet re-verified against real
+Steam Deck hardware with either renderer backend -- this sandbox has no
+display/GPU stack to actually render a 3DS game and inspect the
+resulting video frames end-to-end.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
