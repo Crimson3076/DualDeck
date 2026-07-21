@@ -4,12 +4,15 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_set>
 
 #include "host/adapter_bridge.h"
 #include "host/host_control_adapter.h"
+#include "host/kdialog_approval_prompt.h"
 #include "host/logging_input_sink.h"
 #include "host/logging_mic_audio_sink.h"
 #include "host/mode_coordinator.h"
@@ -82,6 +85,82 @@ void consoleLoop(melonds_remote::host::NetServer& server, melonds_remote::host::
         }
     }
 }
+
+// Bridges DeviceApprovalManager's pending-request notifications (via
+// NetServerConfig::onPendingRequestsChanged) to a kdialog Yes/No popup, so
+// approving a device works with just a mouse/controller click -- no typing,
+// and no visible console needed (see kdialog_approval_prompt.h). This is
+// what lets host-control mode and out-of-process adapters (e.g. Azahar)
+// use the same zero-typing approval flow melonDS's own in-process
+// integration already has, instead of requiring a static shared secret.
+//
+// Tracks which device ids have already been prompted so a dialog isn't
+// re-popped on every retry from the same still-pending client -- only a
+// genuinely new arrival (or a re-arrival after this host forgot about it,
+// e.g. after a restart) gets a fresh prompt.
+class KdialogApprovalHook {
+public:
+    void setServer(melonds_remote::host::NetServer* server) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        server_ = server;
+    }
+
+    void onPendingRequestsChanged(
+        std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest> pending) {
+        std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest> newlyPending;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            std::unordered_set<std::string> stillPending;
+            for (const auto& req : pending) {
+                stillPending.insert(req.deviceId);
+                if (prompted_.insert(req.deviceId).second) {
+                    newlyPending.push_back(req);
+                }
+            }
+            for (auto it = prompted_.begin(); it != prompted_.end();) {
+                if (!stillPending.count(*it)) {
+                    it = prompted_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        for (const auto& req : newlyPending) {
+            std::thread([this, req]() { promptAndDecide(req); }).detach();
+        }
+    }
+
+private:
+    void promptAndDecide(const melonds_remote::host::DeviceApprovalManager::PendingRequest& req) {
+        auto result = melonds_remote::host::promptDeviceApprovalViaKdialog(req.clientName, req.address);
+
+        // approveDevice()/denyDevice() synchronously invoke
+        // DeviceApprovalManager's notifyChangedLocked(), which re-enters
+        // onPendingRequestsChanged() (and thus this same object) on this
+        // same thread -- so server_ must be read into a local and mutex_
+        // released *before* calling either, or that reentrant call would
+        // deadlock trying to re-lock mutex_ (a plain, non-recursive mutex).
+        melonds_remote::host::NetServer* server;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            server = server_;
+        }
+        if (server == nullptr) {
+            return;
+        }
+        if (result == melonds_remote::host::KdialogPromptResult::Approved) {
+            server->approveDevice(req.deviceId);
+        } else if (result == melonds_remote::host::KdialogPromptResult::Denied) {
+            server->denyDevice(req.deviceId);
+        }
+        // Unavailable: leave pending -- the console ("list"/"approve <id>"/
+        // "deny <id>") path documented in --help still works regardless.
+    }
+
+    std::mutex mutex_;
+    melonds_remote::host::NetServer* server_ = nullptr;
+    std::unordered_set<std::string> prompted_;
+};
 
 // Shared by both the default (synthetic-stub) and --adapter-ipc code
 // paths in main() below: starts the console loop if applicable, blocks
@@ -212,6 +291,10 @@ int main(int argc, char** argv) {
                 "reliably come up in Gaming Mode -- see docs/known-limitations.md).\n"
                 "Once approved, that same device reconnects silently forever, no\n"
                 "reprompting, unless the host's approved-device state is deleted.\n"
+                "The same request also pops a kdialog Yes/No prompt on this host's own\n"
+                "desktop if kdialog is available, so approving/denying works with a\n"
+                "mouse/controller click even with no visible console (e.g. Steam Gaming\n"
+                "Mode) -- see kdialog_approval_prompt.h.\n"
                 "\n"
                 "--state-dir PATH persists approved device identities (as\n"
                 "PATH/approved_devices.txt) so they stay approved across host restarts.\n"
@@ -302,6 +385,19 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, handleSignal);
     std::signal(SIGTERM, handleSignal);
 
+    // Device-approval mode (the default, when --auth-token is omitted) has
+    // no console in Steam Gaming Mode to type approve/deny into, so this
+    // hook pops a kdialog Yes/No prompt on the host's own desktop instead --
+    // giving Azahar/host-control the same zero-typing approval flow
+    // melonDS's in-process Qt integration already has.
+    KdialogApprovalHook approvalHook;
+    if (config.authToken.empty()) {
+        config.onPendingRequestsChanged =
+            [&approvalHook](std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest> pending) {
+                approvalHook.onPendingRequestsChanged(std::move(pending));
+            };
+    }
+
     melonds_remote::host::LoggingMicAudioSink micSink; // unchanged either way -- see --help's note above
 
     if (useAdapterIpc) {
@@ -335,6 +431,7 @@ int main(int argc, char** argv) {
         // call every later mode transition uses, before any client could
         // possibly connect.
         melonds_remote::host::NetServer server(config, hostControlAdapter, hostControlAdapter, micSink);
+        approvalHook.setServer(&server);
         melonds_remote::host::ModeCoordinator coordinator(
             server, adapterServer, bridge, bridge, hostControlAdapter, hostControlAdapter,
             systemIdentityExplicit, adapterIdentityExplicit, config.systemIdentity, config.adapterIdentity);
@@ -354,6 +451,7 @@ int main(int argc, char** argv) {
         frameSource.start();
 
         melonds_remote::host::NetServer server(config, inputSink, frameSource, micSink);
+        approvalHook.setServer(&server);
         runUntilStopped(server, config);
         frameSource.stop();
     }

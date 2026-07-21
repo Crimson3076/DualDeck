@@ -37,10 +37,10 @@ mode only (no emulator, browse the host's own UI from the client
 instead -- also experimental), or a custom emulator you've already
 patched yourself with `scripts/patch-existing-emulator.sh`, for anyone
 who doesn't want a separate DualDeck-managed copy. The 3DS and
-host-control-only choices both need a shared secret instead of the
-usual per-device approval prompt -- picking either generates one for
-you automatically (reused every time, no typing required), and shows it
-so you can copy it into the client's `--auth-token`. Add to Steam (Big Picture/Gaming Mode), Remove from Steam, and
+host-control-only choices get the same zero-typing device-approval
+prompt as melonDS's own in-process dialog -- a `kdialog` Yes/No popup on
+the host's own desktop the first time an unrecognized device connects,
+no shared secret to type or copy anywhere. Add to Steam (Big Picture/Gaming Mode), Remove from Steam, and
 Check for updates (which offers to install one automatically if it
 finds one) round out the rest of the menu, so there's nothing else in
 either `host/` or `client/` you need to open directly; the rest of

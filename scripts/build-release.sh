@@ -687,8 +687,8 @@ cat > "${pkg_dir}/host/internal/run-host.sh" <<'WRAP'
 # want a specific one to open immediately, e.g.
 # ./run-host.sh --boot always /path/to/your/game.nds -- see melonDS's
 # own --help for the rest.
-# Omit MELONDS_REMOTE_AUTH_TOKEN to use device-approval authentication
-# instead of a static shared secret.
+# Omit MELONDS_REMOTE_AUTH_TOKEN (the default) to use zero-typing
+# device-approval authentication instead of a static shared secret.
 # Normally launched via ../../melonds-remote-host.sh's "Launch now" menu
 # choice, not directly.
 set -euo pipefail
@@ -732,20 +732,14 @@ export MELONDS_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/
 # 0001-host-service-and-adapter-architecture.md section 10 for why this
 # has to be a separate process that outlives melonDS itself, rather than
 # something melonDS could do on its own: a client needs somewhere to
-# connect and navigate *before* an emulator has even started. Requires a
-# static auth token (MELONDS_REMOTE_AUTH_TOKEN) rather than the usual
-# interactive device-approval prompt -- approval is a melonDS Qt dialog,
-# and there is currently no cross-process bridge for it when melonDS
-# itself is only a connecting adapter rather than the process that owns
-# the client-facing server (see docs/known-limitations.md's matching
-# entry for the full explanation of that gap).
+# connect and navigate *before* an emulator has even started. Uses the
+# same zero-typing device-approval flow as melonDS's own in-process
+# dialog -- a kdialog Yes/No popup on the host's own desktop (see
+# kdialog_approval_prompt.h) -- unless MELONDS_REMOTE_AUTH_TOKEN is set,
+# in which case that static shared secret is used instead.
+# --state-dir points at the same directory melonDS's own device-approval
+# uses, so a device approved once is approved for every emulator.
 if [[ "${MELONDS_REMOTE_HOST_CONTROL:-0}" == "1" ]]; then
-    if [[ -z "${MELONDS_REMOTE_AUTH_TOKEN:-}" ]]; then
-        echo "error: host-control mode requires MELONDS_REMOTE_AUTH_TOKEN to be set --" >&2
-        echo "interactive device-approval doesn't work across processes yet, so a" >&2
-        echo "shared secret is the only supported authentication for this mode." >&2
-        exit 1
-    fi
     if [[ ! -x "${host_root}/internal/melonds-remote-server" ]]; then
         echo "error: host/internal/melonds-remote-server is missing from this" >&2
         echo "install -- re-download the release archive." >&2
@@ -757,9 +751,15 @@ if [[ "${MELONDS_REMOTE_HOST_CONTROL:-0}" == "1" ]]; then
     adapter_socket="${run_dir}/adapter.sock"
     rm -f "${adapter_socket}"
 
+    auth_token_args=()
+    if [[ -n "${MELONDS_REMOTE_AUTH_TOKEN:-}" ]]; then
+        auth_token_args=(--auth-token "${MELONDS_REMOTE_AUTH_TOKEN}")
+    fi
+
     echo "Starting the standalone Host Service (host-control mode, experimental) ..." >&2
     "${host_root}/internal/melonds-remote-server" --adapter-ipc --adapter-socket "${adapter_socket}" \
-        --auth-token "${MELONDS_REMOTE_AUTH_TOKEN}" --app-version "${MELONDS_REMOTE_VERSION}" &
+        --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
+        --app-version "${MELONDS_REMOTE_VERSION}" &
     host_service_pid=$!
     # Not exec'd below in this branch specifically so this trap can still
     # run once melonDS exits -- exec would replace this shell (and its
@@ -785,14 +785,15 @@ cat > "${pkg_dir}/host/internal/run-host-azahar.sh" <<'WRAP'
 # in the DualDeck repository this was built from.
 #
 # Unlike run-host.sh's melonDS, Azahar's integration has only ever been
-# built as an out-of-process adapter -- there is no interactive
-# per-device approval dialog for it yet (see AzaharAdapter's own
-# comment, and docs/known-limitations.md's matching entry for why).
-# This script always starts the standalone Host Service in the
-# background first, the same way run-host.sh's opt-in host-control mode
-# does, and requires AZAHAR_REMOTE_AUTH_TOKEN as a static shared secret
-# instead. Normally launched via ../melonds-remote-host.sh's "Launch..."
-# menu, which prompts for that token, not directly.
+# built as an out-of-process adapter -- Azahar itself has no in-process
+# approval dialog. This script always starts the standalone Host Service
+# in the background first, the same way run-host.sh's opt-in
+# host-control mode does; it pops the same zero-typing kdialog Yes/No
+# approval prompt melonDS's in-process dialog gives you (see
+# kdialog_approval_prompt.h), unless AZAHAR_REMOTE_AUTH_TOKEN is set, in
+# which case that static shared secret is used instead. Normally
+# launched via ../melonds-remote-host.sh's "Launch..." menu, not
+# directly.
 #
 # Pick a ROM through Azahar's own game list / File > Load File once it
 # opens, same as any other Azahar launch.
@@ -816,12 +817,6 @@ if [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1; then
     echo "present on the base image." >&2
 fi
 
-if [[ -z "${AZAHAR_REMOTE_AUTH_TOKEN:-}" ]]; then
-    echo "error: running Azahar through DualDeck requires AZAHAR_REMOTE_AUTH_TOKEN to" >&2
-    echo "be set -- there is no interactive device-approval for this emulator yet," >&2
-    echo "only a shared secret (see docs/known-limitations.md)." >&2
-    exit 1
-fi
 if [[ ! -x "${host_root}/internal/melonds-remote-server" ]]; then
     echo "error: host/internal/melonds-remote-server is missing from this install --" >&2
     echo "re-download the release archive." >&2
@@ -842,9 +837,15 @@ rm -f "${adapter_socket}"
 # central VERSION file, read the same way.
 export AZAHAR_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
 
+auth_token_args=()
+if [[ -n "${AZAHAR_REMOTE_AUTH_TOKEN:-}" ]]; then
+    auth_token_args=(--auth-token "${AZAHAR_REMOTE_AUTH_TOKEN}")
+fi
+
 echo "Starting the standalone Host Service ..." >&2
 "${host_root}/internal/melonds-remote-server" --adapter-ipc --adapter-socket "${adapter_socket}" \
-    --auth-token "${AZAHAR_REMOTE_AUTH_TOKEN}" --app-version "${AZAHAR_REMOTE_VERSION}" &
+    --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
+    --app-version "${AZAHAR_REMOTE_VERSION}" &
 host_service_pid=$!
 # Not exec'd below, same reason as run-host.sh's host-control branch:
 # this trap needs to still be able to run once Azahar exits.
@@ -917,36 +918,6 @@ prompt_type() {
     fi
 }
 
-# Same approach as melonds-remote-host.sh's get_or_create_shared_token
-# (duplicated rather than shared, matching this project's existing
-# no-shared-snippet convention for small self-contained pieces standalone
-# scripts need independently) -- generates a random token rather than
-# asking the user to type one, since a hand-typed value tends to be
-# short and guessable, especially on a controller-only Steam Deck.
-generate_token() {
-    if command -v python3 >/dev/null 2>&1; then
-        python3 -c "import secrets; print(secrets.token_hex(16))"
-    elif command -v openssl >/dev/null 2>&1; then
-        openssl rand -hex 16
-    else
-        od -An -tx1 -N16 /dev/urandom | tr -d ' \n'
-    fi
-}
-
-show_token() {
-    local token="$1"
-    local message="Shared secret for this emulator (required for a 3DS-based custom emulator, since interactive per-device approval isn't available for it). One was generated for you -- enter this exact value in the client's --auth-token (its Steam shortcut's Launch Options, or when running it manually):
-
-${token}"
-    if have_kdialog; then
-        kdialog --title "melonDS Remote Host" --msgbox "${message}" 2>/dev/null || true
-    else
-        echo >&2
-        echo "${message}" >&2
-        echo >&2
-    fi
-}
-
 if [[ "${1:-}" == "--reconfigure" ]]; then
     rm -f "${config_file}"
     shift
@@ -963,14 +934,9 @@ if [[ ! -f "${config_file}" ]]; then
         echo "error: no system type chosen." >&2
         exit 1
     fi
-    token=""
-    if [[ "${type}" == "n3ds" ]]; then
-        token="$(generate_token)"
-    fi
     {
         echo "type=${type}"
         echo "path=${path}"
-        echo "token=${token}"
     } > "${config_file}"
     chmod 600 "${config_file}"
 fi
@@ -982,13 +948,6 @@ if [[ ! -x "${path}" ]]; then
     echo "error: ${path} no longer exists or isn't executable -- run this again with" >&2
     echo "--reconfigure to point at a different binary." >&2
     exit 1
-fi
-
-# Shown every run, not just when first generated -- a random token
-# can't be "remembered" the way a hand-typed one might be, so there has
-# to be a way to retrieve it again for the client's --auth-token.
-if [[ "${type}" == "n3ds" ]]; then
-    show_token "${token}"
 fi
 
 case "${type}" in
@@ -1013,8 +972,18 @@ case "${type}" in
         rm -f "${adapter_socket}"
 
         export AZAHAR_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+        # No --auth-token by default: an unrecognized device pops the same
+        # zero-typing kdialog Yes/No approval prompt melonDS's in-process
+        # dialog gives you (see kdialog_approval_prompt.h). ${token:-} only
+        # exists for config files written by older releases that generated
+        # one automatically.
+        auth_token_args=()
+        if [[ -n "${token:-}" ]]; then
+            auth_token_args=(--auth-token "${token}")
+        fi
         "${host_root}/internal/melonds-remote-server" --adapter-ipc --adapter-socket "${adapter_socket}" \
-            --auth-token "${token}" --app-version "${AZAHAR_REMOTE_VERSION}" &
+            --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
+            --app-version "${AZAHAR_REMOTE_VERSION}" &
         host_service_pid=$!
         trap 'kill "${host_service_pid}" 2>/dev/null || true' EXIT
         sleep 0.5
@@ -1352,10 +1321,10 @@ choose_action() {
 # GitHub issue "rework the host launcher so it does not boot into
 # melonDS": picks which system/emulator to actually launch, instead of
 # always going straight to melonDS. Azahar (3DS) and "host control only"
-# both need a shared secret (see get_or_create_shared_token below) since
-# neither has an interactive per-device approval dialog the way
-# melonDS's own in-process default does -- see
-# docs/known-limitations.md's AzaharAdapter entry for why.
+# use the standalone Host Service's own kdialog-based device-approval
+# popup (see internal/run-host-azahar.sh's comment and
+# kdialog_approval_prompt.h) -- the same zero-typing flow melonDS's own
+# in-process dialog already has.
 choose_emulator() {
     local custom_conf="${HOME}/.config/melonds-remote/custom-emulator.conf"
     local custom_label="Custom (patch my own emulator)"
@@ -1392,62 +1361,6 @@ choose_emulator() {
     fi
 }
 
-# Generates a 32-hex-character random token. python3 is already a hard
-# runtime dependency elsewhere in this file (steam_shortcut.py), so it's
-# the primary path; openssl and /dev/urandom are fallbacks for the rare
-# case it's missing.
-generate_shared_token() {
-    if command -v python3 >/dev/null 2>&1; then
-        python3 -c "import secrets; print(secrets.token_hex(16))"
-    elif command -v openssl >/dev/null 2>&1; then
-        openssl rand -hex 16
-    else
-        od -An -tx1 -N16 /dev/urandom | tr -d ' \n'
-    fi
-}
-
-# Shared auth token host-control mode and the Azahar (3DS) adapter both
-# need (see internal/run-host.sh's comment on MELONDS_REMOTE_AUTH_TOKEN,
-# and internal/run-host-azahar.sh's on AZAHAR_REMOTE_AUTH_TOKEN, for why
-# interactive device-approval doesn't apply to either). Generated once
-# automatically (GitHub issue: "generate a random token for the user"
-# -- typing a good one by hand on a controller-only Steam Deck is bad
-# UX, and users would otherwise be tempted to type something short and
-# guessable) and persisted at shared_token_file so it survives across
-# relaunches -- without persistence, every relaunch would silently
-# invalidate whatever a client already has configured in its
-# --auth-token. One token covers both modes; they're not meant to run
-# at the same time, so there's no need to keep them separate. Prints
-# the token to stdout for the caller to export, and always shows it
-# (kdialog msgbox, or a terminal echo) so it can be copied into the
-# client's --auth-token / Launch Options -- unlike a value the user
-# picked themselves, a random one can't be "remembered", so it has to
-# be shown every time, not just the first.
-shared_token_file="${HOME}/.config/melonds-remote/shared-token.conf"
-get_or_create_shared_token() {
-    local context="$1"
-    mkdir -p "$(dirname "${shared_token_file}")"
-    local token=""
-    if [[ -f "${shared_token_file}" ]]; then
-        token="$(cat "${shared_token_file}")"
-    fi
-    if [[ -z "${token}" ]]; then
-        token="$(generate_shared_token)"
-        ( umask 077; printf '%s\n' "${token}" > "${shared_token_file}" )
-    fi
-    local message="${context} needs a shared secret (since the usual per-device approval prompt isn't available for it). One was generated for you and is reused every time -- enter this exact value in the client's --auth-token (its Steam shortcut's Launch Options, or when running it manually):
-
-${token}"
-    if have_kdialog; then
-        kdialog --title "melonDS Remote Host" --msgbox "${message}" 2>/dev/null || true
-    else
-        echo >&2
-        echo "${message}" >&2
-        echo >&2
-    fi
-    echo "${token}"
-}
-
 action="$(choose_action)"
 
 case "${action}" in
@@ -1463,8 +1376,12 @@ case "${action}" in
                 exec ./internal/launch-host.sh
                 ;;
             n3ds)
-                export AZAHAR_REMOTE_AUTH_TOKEN="$(get_or_create_shared_token "Nintendo 3DS (Azahar)")"
-                # Azahar has no Distrobox launch path yet (see
+                # No auth token exported: an unrecognized device pops a
+                # kdialog Yes/No approval prompt on this desktop instead
+                # (see internal/run-host-azahar.sh's comment and
+                # kdialog_approval_prompt.h) -- the same zero-typing flow
+                # melonDS's own in-process dialog already has. Azahar has
+                # no Distrobox launch path yet (see
                 # internal/run-host-azahar.sh's own comment) -- called
                 # directly, not through launch-host.sh's melonDS-specific
                 # Distrobox-vs-plain dispatch.
@@ -1472,14 +1389,14 @@ case "${action}" in
                 ;;
             hostcontrol)
                 # Exported before the same launch-host.sh dispatch the
-                # "ds" case above uses -- MELONDS_REMOTE_HOST_CONTROL/
-                # MELONDS_REMOTE_AUTH_TOKEN are environment variables, so
-                # run-host.sh (or install-host-distrobox.sh's rejection
-                # check, on an immutable system) sees them either way
-                # without launch-host.sh itself needing to know this
-                # mode exists.
+                # "ds" case above uses -- MELONDS_REMOTE_HOST_CONTROL is
+                # an environment variable, so run-host.sh (or
+                # install-host-distrobox.sh's rejection check, on an
+                # immutable system) sees it either way without
+                # launch-host.sh itself needing to know this mode
+                # exists. No auth token exported here either, same
+                # zero-typing kdialog approval as the n3ds case above.
                 export MELONDS_REMOTE_HOST_CONTROL=1
-                export MELONDS_REMOTE_AUTH_TOKEN="$(get_or_create_shared_token "Host control mode")"
                 exec ./internal/launch-host.sh
                 ;;
             custom)

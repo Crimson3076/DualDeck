@@ -7,6 +7,7 @@ add_library(melonds_remote_host STATIC
     src/adapter_bridge.cpp
     src/host_control_adapter.cpp
     src/mode_coordinator.cpp
+    src/kdialog_approval_prompt.cpp
 )
 
 target_include_directories(melonds_remote_host PUBLIC

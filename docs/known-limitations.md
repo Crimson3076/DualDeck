@@ -3617,6 +3617,79 @@ against a real Azahar/melonDS instance here), but the message logic
 itself is a straightforward, low-risk `switch`-arm addition mirroring
 code that's already shipped and working on the wizard screen.
 
+## The shared secret is gone: Azahar/host-control/custom-3DS now get the same zero-typing kdialog approval melonDS's own dialog has
+
+**The problem, from the user directly**: "it should be as seamless as
+possible, I should not need to type on the steamdeck, can we make the
+string the same based on the network SSID or something?" -- a direct
+follow-up to the still-open gap recorded throughout this doc (Phase F,
+AzaharAdapter, and the auto-generated-token section above): Azahar,
+host-control mode, and custom 3DS emulators all required a static shared
+secret (`AZAHAR_REMOTE_AUTH_TOKEN`/`MELONDS_REMOTE_AUTH_TOKEN`) because
+their standalone Host Service process had no GUI surface to show an
+approve/deny prompt on -- only a console (`approve <id>`/`deny <id>`/
+`list` typed at stdin), invisible in Steam Gaming Mode.
+
+Deriving the token from the network SSID was considered and rejected: it
+isn't a real secret (anyone on the same Wi-Fi network already knows the
+SSID), so it would have made authentication cosmetic rather than
+removing the actual gap.
+
+**The real fix**: `NetServerConfig::onPendingRequestsChanged` (an
+existing hook, already used by melonDS's own in-process Qt Approve/Deny
+dialog and by the console) is now also wired, in the standalone
+`melonds-remote-server` binary itself
+(`host/remote-server/src/main.cpp`), to a new
+`KdialogApprovalHook`/`promptDeviceApprovalViaKdialog()`
+(`host/remote-server/src/kdialog_approval_prompt.{h,cpp}`) that pops a
+`kdialog --yesno` prompt on the host's own desktop the first time an
+unrecognized device connects. Approving or denying calls the exact same
+`NetServer::approveDevice()`/`denyDevice()` the console path already
+used. This is wired up automatically whenever `--auth-token` is omitted
+(device-approval mode, already the code's own documented default) --
+`--auth-token` still works as an explicit opt-out for anyone who prefers
+a static secret. `--state-dir` now points every mode
+(`run-host.sh`'s host-control branch, `run-host-azahar.sh`,
+`launch-custom-emulator.sh`'s 3DS case) at the same
+`~/.config/melonds-remote/` directory melonDS's own in-process approval
+already uses, so approving a device once covers every emulator, not just
+the one it first connected through. `scripts/build-release.sh`'s
+now-dead `generate_shared_token()`/`get_or_create_shared_token()`/
+`generate_token()`/`show_token()` helpers and their forced-token prompts
+were removed from the picker and launch scripts entirely.
+
+**Why `fork()`+`execlp()`, never `system()`/`popen()`**: the prompt's
+message embeds `clientName`/`address`, both attacker-controlled --
+arbitrary strings the connecting device claims about itself. Passing the
+formatted message as a single `execlp()` argument, with no shell in
+between, means it can never be interpreted as a shell command regardless
+of content. kdialog only (no zenity/GTK fallback), matching this
+project's established convention -- SteamOS Desktop Mode and Bazzite are
+both KDE Plasma.
+
+**A real reentrancy deadlock caught before shipping**: the first draft
+of `KdialogApprovalHook::promptAndDecide()` held its own `mutex_` while
+calling `server_->approveDevice()`/`denyDevice()`. Those calls
+synchronously invoke `DeviceApprovalManager::notifyChangedLocked()`,
+which re-enters `onPendingRequestsChanged()` -- and thus tries to
+re-lock the same, non-recursive `mutex_` -- on the very same thread.
+Fixed by reading `server_` into a local and releasing the lock before
+calling either method.
+
+**What this does not do**: if `kdialog` isn't installed or isn't
+reachable (headless SSH session, no `$DISPLAY`), the prompt result is
+`Unavailable` and the request is left pending -- the console
+`approve`/`deny`/`list` commands documented in `--help` still work as a
+fallback, same as before this feature existed.
+
+**Verified**: `interpretKdialogExitStatus()`'s pure exit-status logic is
+unit-tested (`test_kdialog_approval_prompt.cpp`, all four cases: exit 0,
+exit 1, other exit codes, abnormal termination) and passes under
+`ctest`. The subprocess wrapper itself
+(`promptDeviceApprovalViaKdialog()`) and the real end-to-end popup can
+only be verified by hand on a real KDE desktop, which this sandbox
+doesn't have -- not yet confirmed against a real Steam Deck.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
