@@ -1556,14 +1556,16 @@ cat > "${pkg_dir}/host/internal/install-steam-shortcut.sh" <<'WRAP'
 # entry-point script and binary, plus this internal/ directory) into a
 # fixed central location (~/.config/melonds-remote/install/ -- the same
 # directory install-host-distrobox.sh already uses on immutable
-# systems) and points the shortcut at internal/launch-host.sh there,
-# not at melonDS or run-host.sh directly: that one entry point picks
-# Distrobox or a direct launch depending on whether this is an
-# immutable system, so the same shortcut works either way. Re-running
-# this from a newer release's extracted archive updates the same
-# shortcut in place instead of leaving a stale duplicate pointing at a
-# since-deleted download folder (same reasoning as the client's
-# cross-release-directory fix).
+# systems) and points the shortcut at melonds-remote-host.sh there --
+# the same single entry point a double-click normally runs, showing its
+# "Which system?" picker (DS/melonDS, 3DS/Azahar, host-control-only, or
+# a custom emulator) -- not at melonDS, run-host.sh, or
+# internal/launch-host.sh directly, so a Steam-launched session gets
+# the same choice a manually-launched one does instead of always
+# booting straight into melonDS. Re-running this from a newer release's
+# extracted archive updates the same shortcut in place instead of
+# leaving a stale duplicate pointing at a since-deleted download folder
+# (same reasoning as the client's cross-release-directory fix).
 #
 # A failed update can't break a working install: on an immutable system,
 # staging the files AND installing the container's packages is entirely
@@ -1645,7 +1647,7 @@ if [[ "${dry_run}" -eq 0 ]]; then
 fi
 
 python3 ./steam_shortcut.py \
-    --exe "${central_install_dir}/internal/launch-host.sh" \
+    --exe "${central_install_dir}/melonds-remote-host.sh" \
     --name "melonDS Remote Host" \
     --launch-options "${launch_options}" \
     "${extra_args[@]}" && shortcut_exit=0 || shortcut_exit=$?
@@ -1742,7 +1744,7 @@ if [[ -z "${steam_shortcut_py}" ]]; then
 fi
 
 python3 "${steam_shortcut_py}" \
-    --exe "${central_install_dir}/internal/launch-host.sh" \
+    --exe "${central_install_dir}/melonds-remote-host.sh" \
     --name "melonDS Remote Host" \
     --remove \
     "$@"

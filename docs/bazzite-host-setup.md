@@ -139,8 +139,12 @@ Host"** entry to your Steam library, mirroring
 the same stage-then-swap update safety and error-log/`kdialog` failure
 visibility.
 
-This registers the shortcut's `Exe` as `internal/launch-host.sh`, a
-small entry point that picks the right launch path for you:
+This registers the shortcut's `Exe` as `melonds-remote-host.sh` itself
+-- the same menu you get from double-clicking it, including its
+"Which system?" picker (DS/melonDS, 3DS/Azahar, host-control-only, or a
+custom emulator via `scripts/patch-existing-emulator.sh`). Picking
+"Nintendo DS (melonDS)" there dispatches to `internal/launch-host.sh`,
+which in turn:
 
 - **On an immutable system** (Bazzite, etc.): behaves like
   `install-host-distrobox.sh` -- prepares (or reuses) the Distrobox

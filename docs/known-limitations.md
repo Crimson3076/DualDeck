@@ -3230,6 +3230,71 @@ detects a change is needed and writes. `bash -n` on the full
 individually, plus `python3 -m py_compile` on `steam_shortcut.py`, all
 pass.
 
+## Fix: the Steam shortcut still booted straight into melonDS, bypassing the new launcher
+
+**The problem, reported by the user**: after the AzaharAdapter/launcher
+rework above shipped (v0.1.37), the host's Steam Big Picture/Gaming
+Mode shortcut still launched straight into melonDS with no "Which
+system?" picker at all -- as if that rework had never happened for the
+Steam-launched path specifically. Double-clicking
+`host/melonds-remote-host.sh` directly showed the new picker correctly;
+only the Steam shortcut didn't.
+
+**Root cause**: the rework changed `melonds-remote-host.sh`'s own
+"Launch..." menu choice to call the picker, but never touched what the
+Steam shortcut's `Exe` actually points at. `install-steam-shortcut.sh`
+(`scripts/build-release.sh`'s packaged heredoc) was still registering
+`Exe` as `internal/launch-host.sh` -- an older, melonDS-only entry point
+that predates the picker and has no knowledge of it at all (it just
+picks Distrobox-vs-direct-launch for melonDS specifically). Since
+`Exe` is what Steam actually runs, every Steam-launched session skipped
+the picker entirely, regardless of what `melonds-remote-host.sh` itself
+now did.
+
+**The fix**: both `install-steam-shortcut.sh` and
+`uninstall-steam-shortcut.sh` (in `scripts/build-release.sh`'s packaged
+heredocs) now register/match `Exe` as `melonds-remote-host.sh` itself --
+the same entry point a double-click runs -- instead of
+`internal/launch-host.sh`. Picking "Nintendo DS (melonDS)" from the
+resulting picker still dispatches to `internal/launch-host.sh` exactly
+as before, so the Distrobox-vs-direct-launch logic for melonDS itself is
+unchanged; only what Steam's shortcut points *at* changed.
+
+**Why this genuinely requires one Steam restart, and always will for a
+change like this**: `scripts/lib/steam_shortcut.py`'s `find_matching_entry()`
+matches an existing shortcut by `Exe` *or* `AppName` (see "Atomic
+updates" above), so an already-installed shortcut (`AppName` = "melonDS
+Remote Host", stale `Exe`) is found via the `AppName` fallback and its
+`Exe` is corrected in place automatically the next time "Add to Steam"
+or "Check for updates" runs -- no manual remove/re-add needed. But
+that's a genuine field change, not a no-op, so it correctly falls
+outside the no-restart-needed case the "Atomic updates" fix above
+covers: Steam only reads `shortcuts.vdf` from disk at its own startup
+and can silently overwrite an in-place edit from its in-memory cache
+otherwise, so picking up *any* real `Exe`/`AppName`/`LaunchOptions`
+change -- this one included -- has always needed a Steam restart (or
+switch to Gaming Mode) and still does; nothing about that is fixable
+from this project's side. This is a one-time cost for anyone who
+already had the shortcut installed before this fix: once their `Exe` is
+corrected, routine version updates go back to needing no restart at all,
+same as before.
+
+**Verified**: manual testing against a fake `$HOME` and fake Steam
+userdata directory, same convention as the other `steam_shortcut.py`
+entries in this file. A fresh install registers `Exe` as
+`.../install/melonds-remote-host.sh` directly (not `internal/launch-host.sh`).
+Simulating a pre-fix install (`AppName` = "melonDS Remote Host", `Exe` =
+`.../install/internal/launch-host.sh`) and then re-running
+`install-steam-shortcut.sh` correctly detects the change via the
+`AppName` fallback, corrects `Exe` in place (still one entry, not a
+duplicate), and is correctly refused without `--force` while a
+same-named `steam` process is running -- succeeding once `--force` is
+passed, matching every other genuine-change case already covered by the
+"Atomic updates" fix. `bash -n` on the full `scripts/build-release.sh`
+passes. Not yet tested against a real Steam client's Big Picture/Gaming
+Mode UI in this sandbox (no Steam installation available here) -- same
+caveat as every other Steam-shortcut entry in this file.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
