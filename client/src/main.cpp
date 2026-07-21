@@ -209,6 +209,32 @@ void renderConnecting(SDL_Renderer* renderer, const std::string& hostAddress) {
     SDL_RenderPresent(renderer);
 }
 
+// GitHub issue #4 Phase E: shown in place of the video texture whenever
+// net.hostMode() == HostMode::HostControl -- there is no video to show
+// (HostControlAdapter::getLatestFrame() always returns false, see
+// host/remote-server/src/host_control_adapter.cpp), but ControllerState
+// packets are still being sent every frame exactly as in Emulation mode
+// (the render loop below doesn't gate that on mode), so a controller
+// plugged into a real host will already be navigating that host's own UI
+// via HostControlAdapter's virtual gamepad while this screen is up.
+void renderHostControlScreen(SDL_Renderer* renderer, const std::string& identity) {
+    SDL_SetRenderDrawColor(renderer, 20, 24, 20, 255);
+    SDL_RenderClear(renderer);
+    renderCenteredBitmapText(renderer, "HOST CONTROL", static_cast<float>(kWindowHeight) / 2.0f - 60.0f, 4,
+                              SDL_Color{120, 210, 150, 255});
+    renderCenteredBitmapText(renderer, "USE YOUR CONTROLLER TO NAVIGATE THE HOST",
+                              static_cast<float>(kWindowHeight) / 2.0f, 2, SDL_Color{200, 200, 200, 255});
+    renderCenteredBitmapText(renderer, "AN EMULATION SESSION WILL APPEAR HERE AUTOMATICALLY WHEN ONE STARTS",
+                              static_cast<float>(kWindowHeight) / 2.0f + 34.0f, 2, SDL_Color{140, 140, 140, 255});
+    if (!identity.empty()) {
+        renderCenteredBitmapText(renderer, identity, static_cast<float>(kWindowHeight) / 2.0f + 80.0f, 2,
+                                  SDL_Color{150, 170, 210, 255});
+    }
+    renderCenteredBitmapText(renderer, kMenuComboHint, static_cast<float>(kWindowHeight) - 80.0f, 2,
+                              SDL_Color{140, 140, 140, 255});
+    SDL_RenderPresent(renderer);
+}
+
 void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHost>& hosts,
                           int selectedIndex) {
     SDL_SetRenderDrawColor(renderer, 20, 20, 24, 255);
@@ -1524,6 +1550,12 @@ int main(int argc, char** argv) {
         // why this exists: detects the disconnected->connected edge
         // rather than re-reading net.host*Identity() every frame.
         bool wasConnected = false;
+        // Tracks the same edge for net.hostMode() (GitHub issue #4 Phase
+        // E) -- a host can flip modes mid-session (an adapter connecting/
+        // disconnecting, or a manual override), each transition carrying
+        // a fresh identity via ModeChanged that the block below should
+        // pick up the same way it already does for the initial connect.
+        HostMode lastHostMode = HostMode::Emulation;
         bool touchActive = false;
         uint16_t touchX = 0;
         uint16_t touchY = 0;
@@ -1945,18 +1977,33 @@ int main(int argc, char** argv) {
             // over whatever discovery guessed beforehand, in the rare
             // case a host's active adapter changed between the discovery
             // scan and this connection. Only on the disconnected->connected
-            // edge, not every frame, since hostSystemIdentity()/
+            // edge (or a mode transition, issue #4 Phase E -- a
+            // ModeChanged packet carries its own fresh identity, e.g.
+            // switching from a real adapter's identity to
+            // kHostControlSystemIdentity/kHostControlAdapterIdentity or
+            // back), not every frame, since hostSystemIdentity()/
             // hostAdapterIdentity() each take a mutex; sessionSystemName/
             // sessionAdapterName are deliberately left alone otherwise
             // (see their declaration above for why they survive a drop).
             bool nowConnected = net.isConnected();
-            if (nowConnected && !wasConnected) {
+            HostMode nowHostMode = net.hostMode();
+            if (nowConnected && (!wasConnected || nowHostMode != lastHostMode)) {
                 SystemIdentity hostSystem = net.hostSystemIdentity();
                 AdapterIdentity hostAdapter = net.hostAdapterIdentity();
                 if (!hostSystem.systemName.empty()) sessionSystemName = hostSystem.systemName;
                 if (!hostAdapter.adapterName.empty()) sessionAdapterName = hostAdapter.adapterName;
+                if (nowConnected && wasConnected) {
+                    // A mode transition mid-session, not the initial
+                    // connect (which reconnectThread already logs) --
+                    // worth its own line for the same "Gaming Mode has no
+                    // visible terminal, stdout is what we've got" reason
+                    // as every other status line in this loop.
+                    std::fprintf(stderr, "[net] host mode changed to %s\n",
+                                  nowHostMode == HostMode::HostControl ? "HOST CONTROL" : "EMULATION");
+                }
             }
             wasConnected = nowConnected;
+            lastHostMode = nowHostMode;
 
             // Microphone capture/send (GitHub issue #2): runs every frame
             // regardless of which screen is showing -- the host keeps the
@@ -2036,6 +2083,18 @@ int main(int argc, char** argv) {
                 state.touchY = touchY;
                 net.sendControllerState(state);
                 lastInputSendUs = nowUs;
+            }
+
+            // GitHub issue #4 Phase E: while the host is in HostControl
+            // mode there is no video to show (see renderHostControlScreen()'s
+            // comment) -- ControllerState was just sent above unconditionally,
+            // same as in Emulation mode, so a real host's HostControlAdapter
+            // is already receiving input; only the on-screen presentation
+            // differs. Falls through to the normal texture path the instant
+            // nowHostMode flips back to Emulation (e.g. an adapter connects).
+            if (nowConnected && nowHostMode == HostMode::HostControl) {
+                renderHostControlScreen(renderer, identityLine());
+                continue;
             }
 
             const uint8_t* pixels = testPattern.data();

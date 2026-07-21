@@ -59,8 +59,10 @@ void NetClient::closePartialConnection() {
     if (udpAudioFd_ >= 0) { ::close(udpAudioFd_); udpAudioFd_ = -1; }
     sessionId_ = 0;
     hostMicSupported_ = false;
+    hostMode_ = HostMode::Emulation;
 
     if (videoThread_.joinable()) videoThread_.join();
+    if (controlThread_.joinable()) controlThread_.join();
     if (heartbeatThread_.joinable()) heartbeatThread_.join();
 }
 
@@ -199,6 +201,7 @@ bool NetClient::connect() {
     }
     sessionId_ = ack->sessionId;
     hostMicSupported_ = ack->micSupported != 0;
+    hostMode_ = ack->mode;
 
     // Video channel: a second TCP connection dedicated to frame streaming
     // (see docs/protocol.md -- Stage 1 keeps control and video separate
@@ -245,6 +248,7 @@ bool NetClient::connect() {
 
     connected_ = true;
     videoThread_ = std::thread(&NetClient::videoReceiveLoop, this);
+    controlThread_ = std::thread(&NetClient::controlReceiveLoop, this);
     heartbeatThread_ = std::thread(&NetClient::heartbeatLoop, this);
     return true;
 }
@@ -275,6 +279,14 @@ void NetClient::heartbeatLoop() {
 
     while (connected_.load()) {
         if (!sendAll(controlFd_, heartbeat.data(), heartbeat.size())) {
+            // A send failure here (broken pipe, reset connection) means
+            // the link is dead even if controlReceiveLoop()/
+            // videoReceiveLoop() haven't noticed yet (e.g. in
+            // HostMode::HostControl, where no video frames ever arrive
+            // to surface a dropped connection on that thread) -- without
+            // this, the caller's isConnected() would keep reporting true
+            // indefinitely with a socket that can never recover.
+            connected_ = false;
             break;
         }
         for (uint32_t waited = 0; waited < config_.heartbeatIntervalMs && connected_.load(); waited += 50) {
@@ -345,6 +357,59 @@ void NetClient::videoReceiveLoop() {
         std::lock_guard<std::mutex> lock(frameMutex_);
         latestFrame_.swap(payloadBuf);
         hasFrame_ = true;
+    }
+
+    connected_ = false;
+}
+
+// GitHub issue #4 Phase E: the control channel is no longer write-only
+// from the client's side. This is the client-side counterpart to the
+// host's controlLoop() (host/remote-server/src/net_server.cpp) tolerant-
+// parsing convention: keep the connection open for any recognized-but-
+// unhandled packet type, and only drop the connection on a real
+// transport failure or a header/payload that fails to parse at all
+// (which -- unlike an unrecognized *type* -- means the two sides have
+// lost byte-alignment on the stream and cannot safely continue).
+void NetClient::controlReceiveLoop() {
+    std::vector<uint8_t> headerBuf(kPacketHeaderWireSize);
+    std::vector<uint8_t> payloadBuf;
+
+    while (connected_.load()) {
+        if (!recvExact(controlFd_, headerBuf.data(), headerBuf.size())) {
+            break;
+        }
+        auto header = parseHeader(headerBuf.data(), headerBuf.size());
+        // Same bound the host's own controlLoop() applies to an incoming
+        // control-channel payload (spec section 13: validate declared
+        // sizes before allocating for them) -- ModeChanged is the
+        // largest payload ever expected here (mode byte + two identity
+        // structs), well under this.
+        if (!header || header->payloadSize > 512) {
+            std::fprintf(stderr, "control: dropping malformed packet, closing connection\n");
+            break;
+        }
+
+        payloadBuf.resize(header->payloadSize);
+        if (!payloadBuf.empty() && !recvExact(controlFd_, payloadBuf.data(), payloadBuf.size())) {
+            break;
+        }
+
+        if (header->type == PacketType::ModeChanged) {
+            auto modeChanged = parseModeChangedPayload(payloadBuf.data(), payloadBuf.size());
+            if (!modeChanged) {
+                std::fprintf(stderr, "control: dropping malformed ModeChanged packet\n");
+                continue;
+            }
+            hostMode_ = modeChanged->mode;
+            {
+                std::lock_guard<std::mutex> lock(handshakeResultMutex_);
+                hostSystemIdentity_ = modeChanged->system;
+                hostAdapterIdentity_ = modeChanged->adapter;
+            }
+        }
+        // Anything else (a Heartbeat echoed back, or a future packet
+        // type this client build predates) is simply ignored -- the
+        // connection stays open either way.
     }
 
     connected_ = false;

@@ -87,6 +87,7 @@ MDR_TEST(hello_ack_payload_round_trip_accepted) {
     ack.micSupported = 1;
     ack.system = {"nds", "Nintendo DS"};
     ack.adapter = {"melonds", "melonDS", "1.0"};
+    ack.mode = HostMode::HostControl;
 
     ByteBuffer buf;
     serializeHelloAckPayload(buf, ack);
@@ -104,6 +105,28 @@ MDR_TEST(hello_ack_payload_round_trip_accepted) {
     MDR_CHECK(parsed->adapter.adapterId == "melonds");
     MDR_CHECK(parsed->adapter.adapterName == "melonDS");
     MDR_CHECK(parsed->adapter.adapterVersion == "1.0");
+    MDR_CHECK(parsed->mode == HostMode::HostControl);
+}
+
+MDR_TEST(hello_ack_payload_mode_defaults_to_emulation) {
+    HelloAckPayload ack;
+    ack.accepted = 1;
+
+    ByteBuffer buf;
+    serializeHelloAckPayload(buf, ack);
+    auto parsed = parseHelloAckPayload(buf.data(), buf.size());
+    MDR_CHECK(parsed.has_value());
+    MDR_CHECK(parsed->mode == HostMode::Emulation);
+}
+
+MDR_TEST(hello_ack_payload_rejects_invalid_mode) {
+    HelloAckPayload ack;
+    ack.accepted = 1;
+    ByteBuffer buf;
+    serializeHelloAckPayload(buf, ack);
+    buf.back() = 200; // mode is always the last byte
+
+    MDR_CHECK(!parseHelloAckPayload(buf.data(), buf.size()).has_value());
 }
 
 MDR_TEST(hello_ack_payload_identity_defaults_to_empty) {
@@ -129,7 +152,7 @@ MDR_TEST(hello_ack_payload_rejects_truncated_identity) {
 
     ByteBuffer buf;
     serializeHelloAckPayload(buf, ack);
-    buf.resize(buf.size() - 1); // chop off the last byte of adapterVersion
+    buf.resize(buf.size() - 1); // chop off the trailing mode byte
     MDR_CHECK(!parseHelloAckPayload(buf.data(), buf.size()).has_value());
 }
 

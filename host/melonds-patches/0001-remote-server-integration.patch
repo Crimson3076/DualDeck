@@ -4093,10 +4093,10 @@ index 00000000..34cb8a58
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.cpp b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
 new file mode 100644
-index 00000000..85d313db
+index 00000000..5b5e2fae
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
-@@ -0,0 +1,882 @@
+@@ -0,0 +1,883 @@
 +#include "host/net_server.h"
 +
 +#include <arpa/inet.h>
@@ -4562,6 +4562,7 @@ index 00000000..85d313db
 +            std::lock_guard<std::mutex> lock(targetMutex_);
 +            ack.system = currentSystemIdentity_;
 +            ack.adapter = currentAdapterIdentity_;
++            ack.mode = currentMode_;
 +        }
 +        ByteBuffer ackPacket = buildHelloAckPacket(ack);
 +        sendAll(clientFd, ackPacket.data(), ackPacket.size());
@@ -5397,10 +5398,10 @@ index 00000000..48014b9b
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
 new file mode 100644
-index 00000000..bbab4888
+index 00000000..1d29126c
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
-@@ -0,0 +1,480 @@
+@@ -0,0 +1,492 @@
 +#pragma once
 +
 +// melonDS Remote wire protocol definitions.
@@ -5424,7 +5425,7 @@ index 00000000..bbab4888
 +namespace melonds_remote {
 +
 +// Bumped whenever the wire format changes incompatibly.
-+inline constexpr uint16_t kProtocolVersion = 6;
++inline constexpr uint16_t kProtocolVersion = 7;
 +
 +// Sentinel at the start of every packet so malformed/foreign traffic on the
 +// same port can be rejected cheaply before any further parsing.
@@ -5666,6 +5667,18 @@ index 00000000..bbab4888
 +    // for the full compatibility decision.
 +    SystemIdentity system;
 +    AdapterIdentity adapter;
++    // Which mode the host is in right now (GitHub issue #4 Phase E),
++    // sent regardless of accepted/rejectReason -- same convention as
++    // appVersion/system/adapter above, so a client that connects (or
++    // reconnects) while the host is already in HostControl mode knows
++    // that immediately from the handshake, without having to wait for a
++    // ModeChanged packet that will never come (ModeChanged is only sent
++    // on a *transition* that happens after a client is already
++    // connected and authenticated -- see NetServer::setTarget()). A host
++    // predating this field is simply a different kProtocolVersion (see
++    // above) and gets rejected before either side's payload is parsed,
++    // so there is no separate "field absent" case to handle.
++    HostMode mode = HostMode::Emulation;
 +};
 +
 +// DiscoveryRequest (client -> host) has no payload: a bare packet header
@@ -6032,10 +6045,10 @@ index 00000000..a1aff532
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
 new file mode 100644
-index 00000000..19c96612
+index 00000000..b3d05bdc
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
-@@ -0,0 +1,475 @@
+@@ -0,0 +1,486 @@
 +#include "melonds_remote/protocol.h"
 +
 +#include <cstring>
@@ -6305,6 +6318,7 @@ index 00000000..19c96612
 +    out.push_back(ack.micSupported ? 1 : 0);
 +    appendSystemIdentity(out, ack.system);
 +    appendAdapterIdentity(out, ack.adapter);
++    out.push_back(static_cast<uint8_t>(ack.mode));
 +}
 +
 +std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t size) {
@@ -6353,6 +6367,16 @@ index 00000000..19c96612
 +    auto adapter = readAdapterIdentity(data, size, offset);
 +    if (!adapter) return std::nullopt;
 +    ack.adapter = std::move(*adapter);
++
++    if (offset + 1 > size) {
++        // mode missing entirely: reject rather than silently ignore
++        return std::nullopt;
++    }
++    uint8_t mode = data[offset]; offset += 1;
++    if (mode > static_cast<uint8_t>(HostMode::HostControl)) {
++        return std::nullopt;
++    }
++    ack.mode = static_cast<HostMode>(mode);
 +
 +    if (offset != size) {
 +        // trailing garbage: reject rather than silently ignore

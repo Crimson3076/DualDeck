@@ -21,7 +21,7 @@
 namespace melonds_remote {
 
 // Bumped whenever the wire format changes incompatibly.
-inline constexpr uint16_t kProtocolVersion = 6;
+inline constexpr uint16_t kProtocolVersion = 7;
 
 // Sentinel at the start of every packet so malformed/foreign traffic on the
 // same port can be rejected cheaply before any further parsing.
@@ -263,6 +263,18 @@ struct HelloAckPayload {
     // for the full compatibility decision.
     SystemIdentity system;
     AdapterIdentity adapter;
+    // Which mode the host is in right now (GitHub issue #4 Phase E),
+    // sent regardless of accepted/rejectReason -- same convention as
+    // appVersion/system/adapter above, so a client that connects (or
+    // reconnects) while the host is already in HostControl mode knows
+    // that immediately from the handshake, without having to wait for a
+    // ModeChanged packet that will never come (ModeChanged is only sent
+    // on a *transition* that happens after a client is already
+    // connected and authenticated -- see NetServer::setTarget()). A host
+    // predating this field is simply a different kProtocolVersion (see
+    // above) and gets rejected before either side's payload is parsed,
+    // so there is no separate "field absent" case to handle.
+    HostMode mode = HostMode::Emulation;
 };
 
 // DiscoveryRequest (client -> host) has no payload: a bare packet header

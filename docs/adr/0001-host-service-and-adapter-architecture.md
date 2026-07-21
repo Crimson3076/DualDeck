@@ -418,14 +418,65 @@ This closes out the four-phase sequence sections 6-9 form together: an
 emulator can now connect out-of-process (6), `NetServer` can swap
 targets live (7), there is a real target to swap to before/after an
 emulator runs (8), and something now actually drives that swap
-automatically with a manual escape hatch (9). What remains
-unaddressed by all four: `HostControlAdapter`'s virtual gamepad has
-only ever been exercised via its pure translation function and a
-graceful-failure path in this sandbox (no `/dev/uinput`); and no client
-build reacts to any of this yet -- `ModeChanged` packets go out
-correctly (section 7) and the mode genuinely changes server-side, but
-issue #4 Phase E (client UI) is what would let a person actually *use*
-host-control mode end-to-end.
+automatically with a manual escape hatch (9). What remained
+unaddressed by all four, at the time this section was written:
+`HostControlAdapter`'s virtual gamepad had only ever been exercised via
+its pure translation function and a graceful-failure path in this
+sandbox (no `/dev/uinput`); and no client build reacted to any of this
+yet -- `ModeChanged` packets went out correctly (section 7) and the mode
+genuinely changed server-side, but nothing consumed it. See section 10
+for how that second gap was closed.
+
+### 10. NetClient reads the control channel; a client UI actually uses host-control mode (GitHub issue #4 Phase E)
+
+**Implemented**: the client half of the gap section 9 left open. Two
+things had to exist before a client UI could react to anything: a way
+for the client to receive `ModeChanged` at all (it never read the
+control channel post-handshake before this), and a way for a client
+connecting while the host was *already* in `HostControl` mode to learn
+that immediately, since `ModeChanged` only reaches an already-connected
+client (section 7) and so can never be the sole mechanism.
+
+`NetClient` gained `controlReceiveLoop()`, a background thread paired
+with the pre-existing `videoReceiveLoop()`, that parses everything
+arriving on the control socket and reacts to `ModeChanged` while
+tolerantly ignoring anything else it doesn't specifically handle --
+deliberately the same tolerant-parsing posture `NetServer::controlLoop()`
+already has, so a future packet type doesn't need every existing client
+build to be reactively patched. `HelloAckPayload` gained a `mode` field
+(protocol v7) for the "already in HostControl before I connected" case,
+following the exact precedent section 4's protocol-migration policy set
+for `micSupported`/`system`/`adapter`: a new negotiated field bumps
+`kProtocolVersion`, whereas `ModeChanged` itself (section 7) deliberately
+did not, because it isn't part of the version-gated handshake.
+
+`client/src/main.cpp` reacts to the resulting `NetClient::hostMode()` by
+showing a dedicated screen in place of the video texture -- there is
+nothing to show, since `HostControlAdapter::getLatestFrame()` always
+returns `false` -- while continuing to send `ControllerState` on the
+same unconditional per-frame cadence it always has, since input was
+never the part of this that needed gating on mode; only the picture was.
+
+This closes the loop sections 6-9 opened: an emulator can connect
+out-of-process (6) and disconnect again, `NetServer` swaps targets live
+and announces it (7), `HostControlAdapter` is a real target to swap to
+(8), `ModeCoordinator` drives the swap automatically with a manual
+override (9), and now a client can actually be sitting in front of a
+person while all of that happens, transparently, without a reconnect.
+See `docs/known-limitations.md`'s matching entry for what was verified
+(a real `NetClient`-against-real-`NetServer` test suite, and a full
+real-binary run of the actual client executable against the actual
+server and synthetic-adapter binaries) and what remains
+sandbox-unverifiable (uinput on real hardware, a real display).
+
+**What section 10 does not close**: the product-packaging gap noted in
+`docs/known-limitations.md`'s Phase E entry -- nothing yet starts the
+standalone Host Service independently of melonDS in the actual shipped
+release, so host-control mode has no trigger in the real product outside
+of this phase's own scripted verification against the standalone
+binaries. That is GitHub issue #4 Phase F's to close, alongside the
+usual docs-and-ship pass every other numbered issue on this project has
+gotten.
 
 ## Consequences
 

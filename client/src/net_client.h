@@ -119,8 +119,24 @@ public:
     SystemIdentity hostSystemIdentity() const;
     AdapterIdentity hostAdapterIdentity() const;
 
+    // Which mode the host is currently in (GitHub issue #4 Phase E):
+    // Emulation (streaming a real session, the only mode that ever
+    // existed before issue #4) or HostControl (no emulator running --
+    // the client should show a host-control screen instead of the video
+    // texture, while still sending ControllerState as normal so
+    // HostControlAdapter's virtual gamepad on the host side works).
+    // Reflects the host's most recent HelloAck right after connect(),
+    // and is kept live afterward by controlReceiveLoop() reacting to
+    // ModeChanged packets -- callers should poll this every frame rather
+    // than only reading it once per connection, since the host can
+    // switch modes mid-session (an adapter connecting/disconnecting, or
+    // a manual override at the host). Defaults to Emulation when not
+    // connected, matching every pre-issue-#4 host's only behavior.
+    HostMode hostMode() const { return hostMode_.load(); }
+
 private:
     void videoReceiveLoop();
+    void controlReceiveLoop();
     void heartbeatLoop();
     void closePartialConnection();
 
@@ -135,6 +151,7 @@ private:
     std::atomic<int> udpAudioFd_{-1};
     std::atomic<uint32_t> sessionId_{0};
     std::atomic<bool> hostMicSupported_{false};
+    std::atomic<HostMode> hostMode_{HostMode::Emulation};
 
     // Serializes connect()/disconnect() against each other -- callers may
     // run reconnect-on-a-background-thread while the main thread can
@@ -146,6 +163,7 @@ private:
 
     std::atomic<bool> connected_{false};
     std::thread videoThread_;
+    std::thread controlThread_;
     std::thread heartbeatThread_;
 
     std::mutex frameMutex_;

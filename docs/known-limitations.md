@@ -2782,10 +2782,124 @@ unavailable in this sandbox (no `/dev/uinput`, see the Phase C entry) --
 this phase's coordination logic is exercised and confirmed correct
 regardless, since `ModeCoordinator` only cares about swapping targets
 correctly, not about what a real uinput device actually does once
-selected. GitHub issue #4 Phase E (client UI reacting to `ModeChanged`
-and actually using host-control mode) is still not built -- today's
-verification is entirely server-side/protocol-level, matching how each
-of Phases B-D has deliberately left the client untouched until Phase E.
+selected. See the next entry (GitHub issue #4 Phase E) for the client
+side of this, which was left untouched through Phases B-D deliberately.
+
+## Client UI for host-control mode, and the control channel it needed (GitHub issue #4 Phase E)
+
+Closes out the client side of GitHub issue #4, started by the four
+entries above: Phases A-D built a host that can run with no emulator
+attached at all and tell a connected client about it via `ModeChanged`
+-- but until this phase, nothing on the client ever read that packet.
+Answering the "how many more phases until a working build?" gap
+analysis from partway through this issue: the client had no
+control-channel read loop at all, so host-control mode could never
+actually be *used*, only exercised server-side.
+
+**What this implements**:
+
+- **`NetClient::controlReceiveLoop()`** (`client/src/net_client.{h,cpp}`),
+  a new background thread alongside the pre-existing `videoReceiveLoop()`/
+  `heartbeatLoop()`, started the moment `connect()` succeeds. Reads and
+  parses each packet off the control socket; `ModeChanged` updates a new
+  `hostMode()`/`hostSystemIdentity()`/`hostAdapterIdentity()` triple
+  (the latter two already existed for the initial handshake -- this
+  phase makes them live for the rest of the session too). Anything else
+  recognized-but-unhandled is tolerantly ignored rather than dropping
+  the connection, mirroring the host's own `NetServer::controlLoop()`
+  convention exactly (`docs/protocol.md`'s "ModeChanged payload" section
+  describes why this matters for forward compatibility). Before this,
+  the control socket was write-only from the client's side -- unsolicited
+  host->client packets simply sat unread in the TCP receive buffer
+  forever.
+- **`HelloAckPayload.mode`** (protocol v7, bumping from v6): a fresh
+  handshake now reports the host's *current* mode directly, since
+  `ModeChanged` is only ever sent to an already-connected client and so
+  would never arrive for a client that connects (or reconnects) while
+  the host is already in `HostControl` mode -- see `docs/protocol.md`'s
+  "HelloAck payload" section. `host/remote-server/src/net_server.cpp`'s
+  handshake response now fills this from `currentMode_` under the same
+  lock it already takes for `system`/`adapter`.
+- **A dedicated "HOST CONTROL" screen** (`client/src/main.cpp`'s
+  `renderHostControlScreen()`), shown in place of the video texture
+  whenever `net.hostMode() == HostMode::HostControl`. `ControllerState`
+  packets keep being sent every frame exactly as in `Emulation` mode --
+  input isn't gated on which screen is showing -- so a real host's
+  `HostControlAdapter` virtual gamepad is already receiving input the
+  instant this screen appears; only the on-screen presentation differs
+  (there is no video to show: `HostControlAdapter::getLatestFrame()`
+  always returns `false`). Falls back to the ordinary video-texture path
+  the instant the mode flips to `Emulation`, and the identity line
+  (already tracked for GitHub issue #28) refreshes on every mode
+  transition, not just the initial connect, so it reflects e.g. "HOST
+  MENU" while in host-control mode and the real system/adapter identity
+  once an emulator connects.
+- **A latent heartbeat-failure bug this phase's own testing surfaced**:
+  `heartbeatLoop()` used to just `break` out of its loop on a `send()`
+  failure without ever setting `connected_ = false`. In `Emulation` mode
+  this was usually masked, since a dead connection also stops video
+  frames from arriving and `videoReceiveLoop()`'s own `recv()` failure
+  would eventually notice. In `HostControl` mode, no video frames were
+  ever going to arrive in the first place, so a control-channel-only
+  failure (e.g. the host process dying) could leave `isConnected()`
+  reporting `true` forever with a socket that could never recover.
+  `controlReceiveLoop()` closes the more direct gap (a `recv()` failure
+  on the control channel itself now sets `connected_ = false`, same as
+  `videoReceiveLoop()` already did), and `heartbeatLoop()`'s `send()`
+  failure path was fixed the same way while this file was open, since it
+  was the exact scenario that motivated the fix in the first place.
+
+**Verified**:
+
+- `client/tests/test_net_client.cpp` (5 new cases, real sockets, no
+  mocking of either side -- a real `NetClient` against a real
+  `host::NetServer`, matching this project's established e2e test
+  style): a fresh handshake reports `HostMode::Emulation` by default and
+  `HostMode::HostControl` when the server was already switched before
+  the client ever connected; a live `setTarget()` call while connected
+  updates `hostMode()`/identity in both directions without dropping the
+  connection; and stopping the server is actually detected
+  (`isConnected()` becomes `false`) rather than hanging forever, which
+  is precisely the gap this phase closed.
+- A full real-binary, real-process, no-mocking end-to-end run: the
+  actual `melonds-remote-client` binary (`SDL_VIDEODRIVER=dummy`/
+  `SDL_AUDIODRIVER=dummy`, no real display available in this sandbox --
+  see "No CI-verified client build" below for that pre-existing,
+  unrelated limitation) connected to a real `melonds-remote-server
+  --adapter-ipc` subprocess, stayed alive showing the host-control
+  screen, observed a real `dualdeck-synthetic-adapter` subprocess
+  connecting (`[net] host mode changed to EMULATION`, no crash),
+  observed it disconnecting again (`[net] host mode changed to HOST
+  CONTROL`, no crash) -- proving the client-side wiring in `main.cpp`
+  actually works end-to-end, not just `NetClient` in isolation.
+- Protocol round-trip/rejection tests for the new `mode` field
+  (`protocol/tests/test_handshake.cpp`), plus `mode` assertions added to
+  the existing Phase B/D host-side handshake tests
+  (`test_net_server_mode_switch.cpp`, `test_mode_coordinator.cpp`) to
+  confirm the field is actually populated from `currentMode_`, not just
+  parseable.
+- `tests/smoke_test.py`/`tests/device_approval_smoke_test.py` updated
+  for protocol v7 and re-run against the real `melonds-remote-server`
+  binary -- both still pass.
+
+**Still open**: The real-hardware gaps already on record for Phases A-D
+carry over unchanged and are not re-verified here: `HostControlAdapter`'s
+uinput device has still only ever been exercised via pure-logic tests
+and the graceful-degradation path (no `/dev/uinput` in this sandbox --
+see the Phase C entry), and there is still no CI-verified client build
+or real-hardware Steam Deck run for this specific screen (see "No
+CI-verified client build" below, pre-existing and unrelated to this
+phase). Separately -- not a gap in this phase's own scope, but the
+remaining piece of "does host-control mode work in the real shipped
+product": nothing in `scripts/build-release.sh`'s packaging or the
+host's launch scripts yet starts the standalone Host Service
+(`melonds-remote-server --adapter-ipc`) independently of melonDS itself
+and points melonDS at it via `MELONDS_REMOTE_OUT_OF_PROCESS=1` -- the
+real shipped flow today launches melonDS directly (its in-process
+`RemoteServerBridge`), so host-control mode has no way to ever trigger
+in the actual packaged product yet, only in this phase's and Phase D's
+scripted/manual verification against the standalone binaries directly.
+That orchestration gap is GitHub issue #4 Phase F's to close.
 
 ## Atomic updates: Steam no longer needs to be closed to update
 

@@ -13,7 +13,7 @@ same fixed-size header.
 | Offset | Size | Field            | Notes                                   |
 |-------:|-----:|------------------|------------------------------------------|
 | 0      | 4    | `magic`          | Always `0x444D5231` ("DMR1"). Packets with any other value are rejected before further parsing. |
-| 4      | 2    | `protocolVersion`| Currently `6` (bumped from `5` when `HelloAckPayload.system`/`.adapter` and `DiscoveryResponsePayload.system`/`.adapter` were added for the emulator identity model, GitHub issue #28 -- see "Emulator identity model" below; `5` itself had bumped from `4` when `HelloAckPayload.micSupported` and `DiscoveryResponsePayload.audioPort` were added for microphone support, GitHub issue #2 -- see "MicAudioFrame payload" below; `4` itself had bumped from `3` when `HelloPayload.appVersion`/`HelloAckPayload.appVersion` were added and `HelloRejectReason::AppVersionMismatch` was introduced -- see "App version mismatch" below; `3` itself had bumped from `2` when `HelloAckPayload.pairingToken` was removed and `HelloRejectReason::PairingRequired` was renamed to `ApprovalRequired`, moving from a typed-code pairing flow to device-approval; `2` itself had bumped from `1` when those pairing-code fields were first added). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
+| 4      | 2    | `protocolVersion`| Currently `7` (bumped from `6` when `HelloAckPayload.mode` was added, GitHub issue #4 Phase E -- see "HelloAck payload" below; `6` itself had bumped from `5` when `HelloAckPayload.system`/`.adapter` and `DiscoveryResponsePayload.system`/`.adapter` were added for the emulator identity model, GitHub issue #28 -- see "Emulator identity model" below; `5` itself had bumped from `4` when `HelloAckPayload.micSupported` and `DiscoveryResponsePayload.audioPort` were added for microphone support, GitHub issue #2 -- see "MicAudioFrame payload" below; `4` itself had bumped from `3` when `HelloPayload.appVersion`/`HelloAckPayload.appVersion` were added and `HelloRejectReason::AppVersionMismatch` was introduced -- see "App version mismatch" below; `3` itself had bumped from `2` when `HelloAckPayload.pairingToken` was removed and `HelloRejectReason::PairingRequired` was renamed to `ApprovalRequired`, moving from a typed-code pairing flow to device-approval; `2` itself had bumped from `1` when those pairing-code fields were first added). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
 | 6      | 2    | `packetType`     | See table below.                        |
 | 8      | 4    | `payloadSize`    | Size of the payload that follows, in bytes. Receivers must verify this matches the number of bytes actually available before parsing the payload. |
 
@@ -219,10 +219,14 @@ compatibility concern the way a new *field* on `HelloPayload`/
 during the version-gated handshake itself). `ModeChanged` is sent later,
 mid-session, unsolicited, to a client that already completed its
 handshake against whatever `protocolVersion` it negotiated -- an older
-client build that doesn't yet read anything from the control channel
-after the handshake simply never consumes these bytes; they sit
-harmlessly unread in its TCP receive buffer rather than causing any
-parse error.
+client build (predating GitHub issue #4 Phase E, which is the first
+client build to read anything from the control channel post-handshake)
+simply never consumes these bytes; they sit harmlessly unread in its TCP
+receive buffer rather than causing any parse error. A Phase-E-or-later
+client's control-channel read loop (`client/src/net_client.cpp`'s
+`controlReceiveLoop()`) tolerates any packet type it doesn't specifically
+handle the same way, so this stays forward-compatible with future packet
+types too.
 
 | Offset | Size | Field   | Notes |
 |-------:|-----:|---------|-------|
@@ -235,10 +239,12 @@ byte) means a client UI can show e.g. "Host Menu" or "Nintendo DS ·
 melonDS" the instant this arrives, without a second round-trip or a
 stale value left over from the last handshake.
 
-As of this writing, no client build actually reads this packet yet
-(GitHub issue #4 Phase E, client UI for host-control mode, is later
-work) -- this section documents the wire format `NetServer` already
-sends, ahead of a client that consumes it.
+A Phase-E-or-later client build (see `HelloAck payload` above for how it
+learns the *initial* mode before any `ModeChanged` could ever arrive)
+reads this packet via `NetClient::controlReceiveLoop()` and shows a
+distinct "HOST CONTROL" screen in place of the video texture while
+`mode == HostControl` -- see `docs/known-limitations.md`'s matching
+entry for what that UI does and doesn't do.
 
 ## Emulator identity model
 
@@ -321,7 +327,7 @@ Emulated-system/adapter identity *is* now negotiated too (GitHub issue
 the same reason -- there is nothing for the client to negotiate here, it
 only ever consumes what the host reports.
 
-## HelloAck payload (10 fixed bytes, a trailing length-prefixed string, 1 more fixed byte, then 5 more length-prefixed strings)
+## HelloAck payload (10 fixed bytes, a trailing length-prefixed string, 1 more fixed byte, 5 more length-prefixed strings, then 1 final fixed byte)
 
 | Offset | Size | Field          | Notes |
 |-------:|-----:|----------------|-------|
@@ -333,6 +339,7 @@ only ever consumes what the host reports.
 | 10     | length-prefixed string | `appVersion` | The host's own release version, sent regardless of `accepted`/`rejectReason` -- lets the client show e.g. "host is on vX, you're on vY" even on a rejection. Empty if the host doesn't know its own version. |
 | var.   | 1    | `micSupported` | 0 or 1, added in protocol v5. Whether this host build/config can accept and inject microphone audio (GitHub issue #2) -- the client should not bother opening a capture device or sending `MicAudioFrame` packets unless this is 1. Sent regardless of `accepted`/`rejectReason`, same as `appVersion`. |
 | var.   | var. | `system.systemId`, `system.systemName`, `adapter.adapterId`, `adapter.adapterName`, `adapter.adapterVersion` | Five length-prefixed strings, added in protocol v6 (GitHub issue #28) -- see "Emulator identity model" below. Sent regardless of `accepted`/`rejectReason`, same as `appVersion`/`micSupported`. |
+| var.   | 1    | `mode`         | 0 = `Emulation`, 1 = `HostControl` (`HostMode`, see "ModeChanged payload" below). Added in protocol v7, GitHub issue #4 Phase E. Sent regardless of `accepted`/`rejectReason`, same as everything above. This is what tells a client connecting (or reconnecting) *while the host is already in `HostControl` mode* that fact immediately -- `ModeChanged` is only ever sent to a client that is already connected and authenticated (see "ModeChanged payload" below), so a fresh handshake would otherwise never learn it. |
 
 (Protocol v2 added a trailing length-prefixed `pairingToken` string here,
 for the 6-digit-pairing-code flow described below under "History: the
@@ -341,7 +348,9 @@ making `HelloAckPayload` a fixed 10 bytes for one version. Protocol v4
 added the trailing `appVersion` string described above, making it
 variable-length again. Protocol v5 appended the single `micSupported`
 byte described above, after `appVersion`. Protocol v6 appended the five
-identity strings described above, after `micSupported`.)
+identity strings described above, after `micSupported`. Protocol v7
+appended the single `mode` byte described above, after the identity
+strings.)
 
 `HelloRejectReason`: `0` = none (accepted), `1` = protocol version
 mismatch, `2` = authentication failed, `3` = host busy (reserved, not
@@ -354,7 +363,7 @@ protocol v4).
 
 ## App version mismatch
 
-`kProtocolVersion` (currently 5) only guards *wire-format* compatibility
+`kProtocolVersion` (currently 7) only guards *wire-format* compatibility
 -- two builds can share a wire format while being different releases
 with different features/fixes. `appVersion` (both payloads above) is a
 separate, exact-string check for that: if the host was started with a

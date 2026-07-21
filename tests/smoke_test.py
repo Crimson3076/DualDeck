@@ -27,7 +27,7 @@ import sys
 import time
 
 MAGIC = 0x444D5231
-VERSION = 6
+VERSION = 7
 
 PT_HELLO = 1
 PT_HELLO_ACK = 2
@@ -99,7 +99,9 @@ def do_handshake(control_port: int, token: str, app_version: str = ""):
     ctrl, accepted, reject_reason, host_app_version, mic_supported,
     system_id, system_name, adapter_id, adapter_name, adapter_version
     (GitHub issue #28's identity fields, appended to HelloAckPayload after
-    micSupported -- see docs/protocol.md's "Emulator identity model")."""
+    micSupported -- see docs/protocol.md's "Emulator identity model"), and
+    mode (GitHub issue #4 Phase E's HostMode field, appended after adapter
+    identity -- 0=Emulation, 1=HostControl)."""
     ctrl = socket.create_connection(("127.0.0.1", control_port), timeout=3)
     payload = hello_payload("smoke-test-client", "linux", 1280, 800, token, app_version)
     ctrl.sendall(header(PT_HELLO, len(payload)) + payload)
@@ -119,6 +121,8 @@ def do_handshake(control_port: int, token: str, app_version: str = ""):
     adapter_id, offset = read_lp_string(ack_payload, offset)
     adapter_name, offset = read_lp_string(ack_payload, offset)
     adapter_version, offset = read_lp_string(ack_payload, offset)
+    (mode,) = struct.unpack_from("<B", ack_payload, offset)
+    offset += 1
     assert offset == len(ack_payload), "trailing bytes left unparsed in HelloAck payload"
     return {
         "ctrl": ctrl,
@@ -131,6 +135,7 @@ def do_handshake(control_port: int, token: str, app_version: str = ""):
         "adapter_id": adapter_id,
         "adapter_name": adapter_name,
         "adapter_version": adapter_version,
+        "mode": mode,
     }
 
 
@@ -239,6 +244,10 @@ def run(server_path: str) -> int:
         assert good["adapter_version"] == adapter_version, (
             f"expected adapter version {adapter_version!r}, got {good['adapter_version']!r}"
         )
+        # This standalone (non --adapter-ipc) code path has no
+        # ModeCoordinator wired in -- see host/remote-server/src/main.cpp
+        # -- so it always reports Emulation (GitHub issue #4 Phase E).
+        assert good["mode"] == 0, f"expected mode=Emulation(0) from the standalone host, got {good['mode']}"
         print("[ok] control handshake with correct auth token, host advertises micSupported and identity")
 
         udp.sendto(header(PT_CONTROLLER_STATE, len(payload)) + payload, ("127.0.0.1", input_port))

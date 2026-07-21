@@ -126,5 +126,9 @@ MDR_TEST(system_then_adapter_identity_share_offset_correctly) {
 // rejection itself (already covered by the existing whole-packet
 // version-mismatch handling that predates this change).
 MDR_TEST(protocol_version_was_bumped_for_identity_fields) {
-    MDR_CHECK_EQ(kProtocolVersion, 6);
+    // Landed at 6 for the identity fields described above; issue #4 Phase
+    // E's HelloAckPayload::mode field bumped it again to 7 (see
+    // test_handshake.cpp's hello_ack_payload_* tests) -- this guard only
+    // needs "did not silently revert below the identity-fields bump."
+    MDR_CHECK(kProtocolVersion >= 6);
 }

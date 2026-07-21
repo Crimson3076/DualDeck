@@ -267,6 +267,7 @@ void serializeHelloAckPayload(ByteBuffer& out, const HelloAckPayload& ack) {
     out.push_back(ack.micSupported ? 1 : 0);
     appendSystemIdentity(out, ack.system);
     appendAdapterIdentity(out, ack.adapter);
+    out.push_back(static_cast<uint8_t>(ack.mode));
 }
 
 std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t size) {
@@ -315,6 +316,16 @@ std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t 
     auto adapter = readAdapterIdentity(data, size, offset);
     if (!adapter) return std::nullopt;
     ack.adapter = std::move(*adapter);
+
+    if (offset + 1 > size) {
+        // mode missing entirely: reject rather than silently ignore
+        return std::nullopt;
+    }
+    uint8_t mode = data[offset]; offset += 1;
+    if (mode > static_cast<uint8_t>(HostMode::HostControl)) {
+        return std::nullopt;
+    }
+    ack.mode = static_cast<HostMode>(mode);
 
     if (offset != size) {
         // trailing garbage: reject rather than silently ignore

@@ -353,6 +353,7 @@ MDR_TEST(hello_ack_reflects_identity_from_a_set_target_call_made_before_any_clie
     MDR_CHECK(fixture.connectClient(client));
     MDR_CHECK(client.ack.system.systemId == "host");
     MDR_CHECK(client.ack.adapter.adapterId == "host-control");
+    MDR_CHECK(client.ack.mode == HostMode::HostControl);
 
     client.close();
 }

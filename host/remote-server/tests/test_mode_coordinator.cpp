@@ -263,6 +263,7 @@ MDR_TEST(fresh_handshake_reports_host_control_identity_before_any_adapter_connec
     MDR_CHECK(handshakeAndGetAck(fixture.config.controlPort, ack));
     MDR_CHECK(ack.system.systemId == kHostControlSystemIdentity.systemId);
     MDR_CHECK(ack.adapter.adapterId == kHostControlAdapterIdentity.adapterId);
+    MDR_CHECK(ack.mode == HostMode::HostControl);
 }
 
 MDR_TEST(fresh_handshake_reports_the_connected_adapters_own_identity_in_emulation_mode) {
@@ -277,6 +278,7 @@ MDR_TEST(fresh_handshake_reports_the_connected_adapters_own_identity_in_emulatio
     MDR_CHECK(handshakeAndGetAck(fixture.config.controlPort, ack));
     MDR_CHECK(ack.system.systemId == "synthetic");
     MDR_CHECK(ack.adapter.adapterId == "synthetic-ipc");
+    MDR_CHECK(ack.mode == HostMode::Emulation);
 
     client.disconnect();
 }

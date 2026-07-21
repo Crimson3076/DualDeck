@@ -7,8 +7,8 @@
 // melonds_remote::adapter::IEmulatorAdapter (in-process, or
 // out-of-process via adapter-sdk/ipc's AdapterIpcServer -- this class
 // doesn't know or care which). This is what lets NetServer, and the
-// live client<->host wire protocol it speaks (kProtocolVersion 6,
-// unchanged by this class), be driven by any adapter implementing the
+// live client<->host wire protocol it speaks (kProtocolVersion, unchanged
+// by this class), be driven by any adapter implementing the
 // generic contract instead of only the built-in
 // LoggingInputSink/SyntheticFrameSource stand-ins -- without the wire
 // protocol itself needing to become surface/generic-input-aware yet.

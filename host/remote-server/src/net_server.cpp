@@ -463,6 +463,7 @@ void NetServer::controlLoop() {
             std::lock_guard<std::mutex> lock(targetMutex_);
             ack.system = currentSystemIdentity_;
             ack.adapter = currentAdapterIdentity_;
+            ack.mode = currentMode_;
         }
         ByteBuffer ackPacket = buildHelloAckPacket(ack);
         sendAll(clientFd, ackPacket.data(), ackPacket.size());
