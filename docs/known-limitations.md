@@ -3744,6 +3744,92 @@ Steam Deck hardware with either renderer backend -- this sandbox has no
 display/GPU stack to actually render a 3DS game and inspect the
 resulting video frames end-to-end.
 
+## The real cause of "no Azahar video": the wire protocol was never generalized past DS's fixed 256x192, not a renderer-backend bug
+
+**The problem, from the user, across two follow-ups**: after the
+Vulkan `invert_y` fix above shipped (v0.1.45), video still didn't show
+-- and, more tellingly, the user reported the Software renderer (their
+only other option, since OpenGL doesn't render at all on their
+hardware) *also* produced no video, despite being a completely
+different code path. That second data point ruled out the renderer
+backend as the real cause: something common to all three backends was
+wrong, and it wasn't `AzaharAdapter`'s own capture logic at all.
+
+**Root cause, found by reading the whole pipeline, not guessing
+further**: this project's wire protocol, `IFrameSource` interface, and
+client were never actually generalized past DS's fixed 256x192 bottom
+screen, despite `AdapterBridge`'s own header already documenting this
+as a known, deliberate limitation ("the wire protocol this feeds is
+still fixed at the native 256x192 DS resolution") from before Azahar/3DS
+existed. Concretely, three separate hardcoded assumptions, each on its
+own enough to silently drop every 3DS frame regardless of what
+`AzaharAdapter` correctly captured:
+
+1. `host/remote-server/include/host/frame_source.h`'s `IFrameSource` had
+   no concept of width/height at all -- `kFrameWidth`/`kFrameHeight`
+   (256/192) were free-standing constants, not queryable per-source.
+2. `net_server.cpp` never set `HelloAckPayload::nativeWidth/nativeHeight`
+   (a field that already existed and was already serialized/parsed --
+   just never populated), so it always defaulted to 256/192 in every
+   HelloAck sent to every client, Azahar included.
+3. The client had two independent, separately hardcoded 256x192
+   assumptions: `net_client.cpp`'s `videoReceiveLoop()` rejected (and
+   **closed the video connection entirely**) any packet whose size
+   wasn't exactly `256*192*4` bytes, and `main.cpp` created its SDL
+   texture once at a fixed 256x192 and never resized it.
+
+A 3DS frame from `AzaharAdapter` is `320*240*4 = 307200` bytes --
+completely different from DS's `196608` bytes -- so it failed check #3
+on every single frame, regardless of which renderer backend produced
+it, which is exactly why Vulkan, OpenGL (as far as it could be tested),
+and Software all showed the identical symptom. Touch/controls worked
+throughout because they were already correctly generalized in an
+earlier phase (issue #28): `mapPointToDSCoords()` outputs a normalized
+0..1-equivalent position via `kTouchMaxX/Y`, and `AzaharAdapter::
+applyGenericInput()` already rescales that to its own surface's real
+`touchRangeX/Y` -- video was simply never given the same treatment.
+
+**The fix**: `IFrameSource` gained a `frameDimensions()` virtual
+(default 256x192, so every pre-existing source needs no changes);
+`AdapterBridge` overrides it with the target surface's actual declared
+width/height (from `AdapterCapabilities`, already correctly populated by
+`AzaharAdapter` all along -- nothing there needed to change);
+`net_server.cpp` now populates `HelloAckPayload::nativeWidth/nativeHeight`
+from it. On the client, `NetClient` gained `hostNativeWidth()`/
+`hostNativeHeight()` (atomics, since `videoReceiveLoop()` reads them on
+every packet); its payload-size check is now computed from those instead
+of a fixed constant; `main.cpp`'s main session loop recreates its SDL
+texture (and the matching test-pattern filler buffer) at the host's
+actual reported dimensions the moment a connect edge is detected,
+instead of assuming DS forever.
+
+**What's still not covered**: the setup wizard's own connectivity-test
+screen (`wizardVideoTest()` in `main.cpp`) still checks against a fixed
+`kDSWidth`/`kDSHeight` and was deliberately left alone in this fix --
+it's a first-run/reconfiguration flow, not the primary gameplay screen,
+and generalizing it would mean threading a resizable texture through
+`runSetupWizard()`'s whole call chain (`SDL_Texture*` passed by value
+today, not by reference) for a screen that's rarely the one actually
+being debugged. If a user's very first connection is to a 3DS host, the
+wizard's own "NO VIDEO YET" screen will incorrectly stay stuck even once
+a real frame is arriving -- the main session afterward is unaffected.
+
+**Verified**: full `ctest` suite passes, including two new host-side
+tests (`adapter_bridge_frame_dimensions_matches_ds_surface`/
+`_matches_3ds_surface`, using the existing `FakeThreeDsAdapter` fixture's
+real 320x240 declaration) and two new real end-to-end client-side tests
+(`net_client_reports_host_native_dimensions_from_hello_ack`,
+`net_client_receives_a_non_ds_sized_video_frame` -- a real `NetClient`
+against a real `NetServer` over loopback sockets, proving a 320x240,
+307200-byte frame is now actually delivered through
+`NetClient::getLatestFrame()` end to end, where before this fix it would
+have been silently dropped and the video connection closed). The SDL
+texture-resize logic itself (`main.cpp`) has no automated test coverage
+-- this sandbox has no display to actually run the client against --
+so it's been read carefully and matches the same edge-detection pattern
+the pre-existing, working identity-refresh code right next to it already
+uses, but is not yet confirmed against a real Steam Deck.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

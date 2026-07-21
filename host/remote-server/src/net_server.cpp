@@ -464,6 +464,11 @@ void NetServer::controlLoop() {
             ack.system = currentSystemIdentity_;
             ack.adapter = currentAdapterIdentity_;
             ack.mode = currentMode_;
+            // See IFrameSource::frameDimensions()'s comment -- reports the
+            // connected source's real dimensions (e.g. AzaharAdapter's
+            // 320x240) instead of always claiming DS's 256x192, so the
+            // client can size its receive buffer/texture correctly.
+            frameSource_->frameDimensions(ack.nativeWidth, ack.nativeHeight);
         }
         ByteBuffer ackPacket = buildHelloAckPacket(ack);
         sendAll(clientFd, ackPacket.data(), ackPacket.size());

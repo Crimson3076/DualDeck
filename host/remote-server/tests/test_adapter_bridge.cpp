@@ -167,3 +167,29 @@ MDR_TEST(adapter_bridge_get_latest_frame_proxies_pushed_frame) {
     MDR_CHECK(outFrame == std::vector<uint8_t>({5, 6, 7, 8}));
     MDR_CHECK_EQ(outIndex, 1u);
 }
+
+// Real bug this covers: AzaharAdapter reports its bottom surface as
+// 320x240, but AdapterBridge::frameDimensions() used to not exist at
+// all -- net_server.cpp's HelloAck always claimed DS's fixed 256x192
+// regardless of what was actually connected, so every 3DS video frame
+// was silently rejected by the client's own size check. Never caught
+// until a user ran Azahar on real hardware.
+MDR_TEST(adapter_bridge_frame_dimensions_matches_ds_surface) {
+    FakeDsAdapter ds;
+    AdapterBridge bridge(ds);
+
+    uint16_t width = 0, height = 0;
+    bridge.frameDimensions(width, height);
+    MDR_CHECK_EQ(width, 256);
+    MDR_CHECK_EQ(height, 192);
+}
+
+MDR_TEST(adapter_bridge_frame_dimensions_matches_3ds_surface) {
+    FakeThreeDsAdapter ds3;
+    AdapterBridge bridge(ds3);
+
+    uint16_t width = 0, height = 0;
+    bridge.frameDimensions(width, height);
+    MDR_CHECK_EQ(width, 320);
+    MDR_CHECK_EQ(height, 240);
+}

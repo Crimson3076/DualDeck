@@ -33,6 +33,20 @@ public:
     // are produced compute how many frames it skipped (spec section 14:
     // log dropped frames), without needing the frames themselves.
     virtual bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) = 0;
+
+    // The pixel dimensions of frames this source produces, reported to a
+    // connecting client in HelloAck (see net_server.cpp) so it can size its
+    // receive buffer/texture correctly instead of assuming DS's fixed
+    // 256x192 -- a real gap found when AzaharAdapter (320x240, GitHub
+    // issue #28's 3DS follow-on) was first run on real hardware: every
+    // frame it produced was silently rejected downstream because nothing
+    // ever told the client it wasn't DS-sized. Defaults to
+    // kFrameWidth/kFrameHeight so every pre-existing source (DS-only, and
+    // genuinely fixed at that resolution) keeps working unchanged.
+    virtual void frameDimensions(uint16_t& outWidth, uint16_t& outHeight) const {
+        outWidth = static_cast<uint16_t>(kFrameWidth);
+        outHeight = static_cast<uint16_t>(kFrameHeight);
+    }
 };
 
 } // namespace melonds_remote::host

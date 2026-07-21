@@ -42,6 +42,45 @@ public:
     bool getLatestFrame(std::vector<uint8_t>&, uint64_t&) override { return false; }
 };
 
+// Real bug this exists to catch: AzaharAdapter's actual 320x240 bottom
+// screen used to have no way to tell a connecting client it wasn't DS's
+// fixed 256x192, so every frame it produced was silently dropped by the
+// client's own hardcoded size check -- see net_client.cpp's
+// videoReceiveLoop() and net_server.cpp's HelloAck construction.
+// Declares an arbitrary non-DS size and can optionally hand back a real
+// frame of exactly that size, to prove the whole pipeline (HelloAck's
+// nativeWidth/nativeHeight -> NetClient's hostNativeWidth_/Height_ ->
+// videoReceiveLoop()'s payload-size check) actually delivers a
+// non-DS-sized frame end to end, not just that the reported dimensions
+// look right in isolation.
+class SizedFrameSource : public IFrameSource {
+public:
+    SizedFrameSource(uint16_t width, uint16_t height) : width_(width), height_(height) {}
+
+    void frameDimensions(uint16_t& outWidth, uint16_t& outHeight) const override {
+        outWidth = width_;
+        outHeight = height_;
+    }
+
+    bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) override {
+        if (!hasFrame_) return false;
+        outFrame = frame_;
+        outFrameIndex = 0;
+        return true;
+    }
+
+    void setFrame(std::vector<uint8_t> frame) {
+        frame_ = std::move(frame);
+        hasFrame_ = true;
+    }
+
+private:
+    uint16_t width_;
+    uint16_t height_;
+    std::vector<uint8_t> frame_;
+    bool hasFrame_ = false;
+};
+
 uint16_t freePort() {
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr{};
@@ -168,6 +207,44 @@ MDR_TEST(net_client_receives_mode_changed_back_to_emulation) {
     MDR_CHECK(waitUntil([&] { return client.hostMode() == HostMode::Emulation; }));
     MDR_CHECK(client.hostSystemIdentity().systemId == "nds");
     MDR_CHECK(client.hostAdapterIdentity().adapterId == "melonds");
+
+    client.disconnect();
+}
+
+MDR_TEST(net_client_reports_host_native_dimensions_from_hello_ack) {
+    ServerFixture fixture;
+    // Swap in a non-DS-sized source before any client connects -- a
+    // fresh handshake's HelloAck must reflect it directly, matching
+    // net_client_reports_host_control_mode_from_a_fresh_handshake above.
+    SizedFrameSource threeDsFrame(320, 240);
+    fixture.server.setTarget(fixture.sinkA, threeDsFrame, HostMode::Emulation,
+                              SystemIdentity{"n3ds", "Nintendo 3DS"}, AdapterIdentity{"azahar", "Azahar", "1.0"});
+
+    NetClient client(fixture.clientConfig());
+    MDR_CHECK(client.connect());
+    MDR_CHECK_EQ(client.hostNativeWidth(), 320);
+    MDR_CHECK_EQ(client.hostNativeHeight(), 240);
+    client.disconnect();
+}
+
+MDR_TEST(net_client_receives_a_non_ds_sized_video_frame) {
+    ServerFixture fixture;
+    SizedFrameSource threeDsFrame(320, 240);
+    std::vector<uint8_t> realFrame(static_cast<size_t>(320) * 240 * 4, 0x7A);
+    threeDsFrame.setFrame(realFrame);
+    fixture.server.setTarget(fixture.sinkA, threeDsFrame, HostMode::Emulation,
+                              SystemIdentity{"n3ds", "Nintendo 3DS"}, AdapterIdentity{"azahar", "Azahar", "1.0"});
+
+    NetClient client(fixture.clientConfig());
+    MDR_CHECK(client.connect());
+
+    // Before the fix, videoReceiveLoop() always expected a 256x192-sized
+    // (196608-byte) payload -- a 320x240 (307200-byte) frame would fail
+    // that check, log "dropping unexpected packet", and close the video
+    // connection entirely, so getLatestFrame() would never return true.
+    std::vector<uint8_t> received;
+    MDR_CHECK(waitUntil([&] { return client.getLatestFrame(received) && received == realFrame; }));
+    MDR_CHECK(client.isConnected());
 
     client.disconnect();
 }

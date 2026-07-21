@@ -1382,6 +1382,16 @@ int main(int argc, char** argv) {
         SDL_Quit();
         return 1;
     }
+    // Starts at DS's native size (matching the texture just created above)
+    // and is recreated at the connected host's own reported native
+    // dimensions once a real HelloAck arrives -- see the "nowConnected &&
+    // !wasConnected" block below. Not every host is DS-sized: AzaharAdapter
+    // (3DS) reports 320x240, and a video frame that size used to always be
+    // silently dropped since this texture, and every size check against
+    // it, stayed hardcoded at kDSWidth/kDSHeight regardless of what the
+    // host actually streamed.
+    int textureWidth = kDSWidth;
+    int textureHeight = kDSHeight;
 
     SDL_Gamepad* gamepad = nullptr;
     int gamepadCount = 0;
@@ -1570,7 +1580,10 @@ int main(int argc, char** argv) {
         bool mouseTouchDown = false;
 
         std::vector<uint8_t> frame;
-        std::vector<uint8_t> testPattern(static_cast<size_t>(kDSWidth) * kDSHeight * 4, 0x40);
+        // Matches texture's current dimensions (textureWidth/textureHeight),
+        // whatever they are at this point -- correct as long as every
+        // recreation of texture below also resizes this alongside it.
+        std::vector<uint8_t> testPattern(static_cast<size_t>(textureWidth) * textureHeight * 4, 0x40);
 
         const uint64_t inputIntervalUs = 1'000'000 / 120; // spec section 6.3
         uint64_t lastInputSendUs = SDL_GetTicksNS() / 1000;
@@ -2001,6 +2014,41 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr, "[net] host mode changed to %s\n",
                                   nowHostMode == HostMode::HostControl ? "HOST CONTROL" : "EMULATION");
                 }
+
+                // Recreate the video texture (and its matching test-pattern
+                // filler) at whatever native size this HelloAck actually
+                // reported, if it differs from what's currently allocated --
+                // e.g. connecting to an Azahar/3DS host (320x240) after a
+                // melonDS/DS one (256x192), or vice versa. Same edge as the
+                // identity refresh above, for the same reason: this is a
+                // real (if occasional) resize, not per-frame work.
+                int newWidth = net.hostNativeWidth();
+                int newHeight = net.hostNativeHeight();
+                if (newWidth != textureWidth || newHeight != textureHeight) {
+                    SDL_DestroyTexture(texture);
+                    texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGRA32,
+                                                 SDL_TEXTUREACCESS_STREAMING, newWidth, newHeight);
+                    if (!texture) {
+                        // Extremely unlikely (the original creation at
+                        // startup already proved the renderer can make
+                        // textures at all) -- fall back to the old
+                        // dimensions rather than leaving texture null and
+                        // crashing the next SDL_UpdateTexture/RenderTexture
+                        // call below.
+                        std::fprintf(stderr,
+                                      "SDL_CreateTexture failed while resizing for new host "
+                                      "dimensions: %s\n",
+                                      SDL_GetError());
+                        texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGRA32,
+                                                     SDL_TEXTUREACCESS_STREAMING, textureWidth, textureHeight);
+                    } else {
+                        textureWidth = newWidth;
+                        textureHeight = newHeight;
+                        testPattern.assign(static_cast<size_t>(textureWidth) * textureHeight * 4, 0x40);
+                        std::fprintf(stderr, "[video] texture resized to %dx%d for this host\n", textureWidth,
+                                      textureHeight);
+                    }
+                }
             }
             wasConnected = nowConnected;
             lastHostMode = nowHostMode;
@@ -2102,7 +2150,7 @@ int main(int argc, char** argv) {
                 frame.size() == testPattern.size()) {
                 pixels = frame.data();
             }
-            SDL_UpdateTexture(texture, nullptr, pixels, kDSWidth * 4);
+            SDL_UpdateTexture(texture, nullptr, pixels, textureWidth * 4);
 
             SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
             SDL_RenderClear(renderer);

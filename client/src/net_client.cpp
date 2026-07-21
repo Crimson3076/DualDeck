@@ -13,11 +13,6 @@ namespace melonds_remote::client {
 
 namespace {
 
-// 256 * 192 * 4, kept in sync with host::kFrameSizeBytes by
-// docs/protocol.md's fixed Stage-1 video format rather than a shared
-// header, since the client does not link against host/remote-server.
-constexpr size_t kExpectedFrameBytes = 256u * 192u * 4u;
-
 bool sendAll(int fd, const uint8_t* data, size_t size) {
     size_t sent = 0;
     while (sent < size) {
@@ -182,6 +177,14 @@ bool NetClient::connect() {
         hostSystemIdentity_ = ack->system;
         hostAdapterIdentity_ = ack->adapter;
     }
+    // Stored even on a rejected handshake, same availability convention
+    // as hostAppVersion_/hostSystemIdentity_ above -- and unconditionally
+    // (not inside the `if (!ack->accepted)` early-return below), so
+    // videoReceiveLoop()'s payload-size check always reflects the most
+    // recent HelloAck this host actually sent, not a stale value from
+    // a previous, possibly different, host.
+    hostNativeWidth_ = ack->nativeWidth;
+    hostNativeHeight_ = ack->nativeHeight;
     if (!ack->accepted) {
         if (ack->rejectReason == HelloRejectReason::ApprovalRequired) {
             std::fprintf(stderr,
@@ -327,6 +330,14 @@ AdapterIdentity NetClient::hostAdapterIdentity() const {
     return hostAdapterIdentity_;
 }
 
+uint16_t NetClient::hostNativeWidth() const {
+    return hostNativeWidth_.load();
+}
+
+uint16_t NetClient::hostNativeHeight() const {
+    return hostNativeHeight_.load();
+}
+
 bool NetClient::getLatestFrame(std::vector<uint8_t>& outFrame) {
     std::lock_guard<std::mutex> lock(frameMutex_);
     if (!hasFrame_) return false;
@@ -342,9 +353,17 @@ void NetClient::videoReceiveLoop() {
         if (!recvExact(videoFd_, headerBuf.data(), headerBuf.size())) {
             break;
         }
+        // Compared against this connection's own HelloAck-reported
+        // dimensions (see hostNativeWidth_/hostNativeHeight_ above), not a
+        // fixed DS-sized constant -- a 320x240 3DS frame from
+        // AzaharAdapter used to always fail this check and silently kill
+        // the video connection, since the host previously never reported
+        // its real dimensions either (see net_server.cpp's matching fix).
+        const uint32_t expectedFrameBytes =
+            static_cast<uint32_t>(hostNativeWidth_.load()) * hostNativeHeight_.load() * 4u;
         auto header = parseHeader(headerBuf.data(), headerBuf.size());
         if (!header || header->type != PacketType::VideoFrame ||
-            header->payloadSize != kExpectedFrameBytes) {
+            header->payloadSize != expectedFrameBytes) {
             std::fprintf(stderr, "video: dropping unexpected packet, closing connection\n");
             break;
         }

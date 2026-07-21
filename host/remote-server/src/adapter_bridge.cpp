@@ -12,6 +12,23 @@ std::string pickTargetSurface(const melonds_remote::adapter::AdapterCapabilities
     return {};
 }
 
+// Looks up targetId's own declared width/height among caps.surfaces,
+// falling back to DS's native 256x192 only if it's genuinely not found
+// (e.g. an adapter with zero surfaces) -- never silently assumes DS for
+// an adapter that clearly declared something else.
+void lookupTargetDimensions(const melonds_remote::adapter::AdapterCapabilities& caps,
+                            const std::string& targetId, uint16_t& outWidth, uint16_t& outHeight) {
+    for (const auto& s : caps.surfaces) {
+        if (s.surfaceId == targetId) {
+            outWidth = s.width;
+            outHeight = s.height;
+            return;
+        }
+    }
+    outWidth = 256;
+    outHeight = 192;
+}
+
 // Explicit bit-by-bit table rather than a raw bitmask cast: DSButton's
 // and GenericButton's low bits happen to agree for A/B/X/Y/D-pad/L/R
 // (both were designed with the same physical-button ordering) but
@@ -41,7 +58,9 @@ uint32_t dsButtonsToGenericButtons(uint16_t dsButtons) {
 } // namespace
 
 AdapterBridge::AdapterBridge(melonds_remote::adapter::IEmulatorAdapter& adapter) : adapter_(adapter) {
-    targetSurfaceId_ = pickTargetSurface(adapter_.capabilities());
+    const auto caps = adapter_.capabilities();
+    targetSurfaceId_ = pickTargetSurface(caps);
+    lookupTargetDimensions(caps, targetSurfaceId_, targetWidth_, targetHeight_);
 }
 
 void AdapterBridge::applyControllerState(const ControllerState& state) {
@@ -77,6 +96,11 @@ bool AdapterBridge::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& out
     outFrame = std::move(frame.pixels);
     outFrameIndex = frame.frameIndex;
     return true;
+}
+
+void AdapterBridge::frameDimensions(uint16_t& outWidth, uint16_t& outHeight) const {
+    outWidth = targetWidth_;
+    outHeight = targetHeight_;
 }
 
 } // namespace melonds_remote::host

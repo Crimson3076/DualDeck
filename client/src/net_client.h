@@ -119,6 +119,17 @@ public:
     SystemIdentity hostSystemIdentity() const;
     AdapterIdentity hostAdapterIdentity() const;
 
+    // The host's own reported native video dimensions (GitHub issue: "no
+    // video on real hardware" for Azahar/3DS -- the host used to always
+    // default to DS's 256x192 in HelloAck regardless of what it actually
+    // streamed, so a 320x240 3DS frame was silently rejected by both this
+    // class's own payload-size check and main.cpp's fixed-size texture).
+    // Same availability convention as hostSystemIdentity() above: default
+    // 256x192 if no HelloAck has been received yet, matching every
+    // pre-this-fix host's only behavior.
+    uint16_t hostNativeWidth() const;
+    uint16_t hostNativeHeight() const;
+
     // Which mode the host is currently in (GitHub issue #4 Phase E):
     // Emulation (streaming a real session, the only mode that ever
     // existed before issue #4) or HostControl (no emulator running --
@@ -152,6 +163,13 @@ private:
     std::atomic<uint32_t> sessionId_{0};
     std::atomic<bool> hostMicSupported_{false};
     std::atomic<HostMode> hostMode_{HostMode::Emulation};
+    // Read on every received video packet by videoReceiveLoop() (see
+    // hostNativeWidth()/hostNativeHeight() below), so atomic like
+    // sessionId_/hostMode_ above rather than mutex-guarded like
+    // hostSystemIdentity_/hostAdapterIdentity_, which main.cpp only reads
+    // once per connect edge.
+    std::atomic<uint16_t> hostNativeWidth_{256};
+    std::atomic<uint16_t> hostNativeHeight_{192};
 
     // Serializes connect()/disconnect() against each other -- callers may
     // run reconnect-on-a-background-thread while the main thread can
