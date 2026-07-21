@@ -3563,6 +3563,60 @@ or similar) whether `DontUseNativeDialog` is actually taking effect at
 runtime, since at this point empirical confirmation on the affected
 machine is more valuable than another theory from here.
 
+**Update: confirmed fixed.** The user tested v0.1.42 and confirmed the
+Load File dialog no longer crashes and a ROM boots successfully. The
+`DontUseNativeDialog` option was indeed the missing piece.
+
+## Client silently hangs on "CONNECTING TO..." for a shared-secret auth failure
+
+**The problem, reported by the user**: after successfully booting a
+game in Azahar (the crash fix above), connecting the client got stuck
+indefinitely on "CONNECTING TO xxx.xxx..." despite discovery correctly
+showing the host's IP/hostname/emulator identity.
+
+**Root cause**: discovery info (IP, hostname, system/adapter identity)
+comes from the lightweight UDP broadcast response, which requires no
+authentication at all -- seeing it doesn't mean the real TCP handshake
+will succeed. `HelloRejectReason` already has a distinct
+`AuthenticationFailed` value (`net_server.cpp` sets it via
+`constantTimeEquals(hello->authToken, config_.authToken)` whenever the
+host requires a static shared secret -- true for 3DS/host-control mode
+-- and the client's token doesn't match, including the default case of
+not passing `--auth-token` at all, which is what most likely happened
+here since there's currently no in-app prompt for it). The client's
+first-run setup wizard screen already had a distinct, correct message
+for this (`"AUTHENTICATION FAILED"`, added when that wizard was built);
+the *other* screen -- the normal discovery/reconnect loop most users
+actually go through -- never got the same treatment. Its `switch`
+only special-cased `ApprovalRequired` and `AppVersionMismatch`,
+falling through to the generic "CONNECTING TO..." for every other
+reject reason including `AuthenticationFailed`, `HostBusy`, and
+`ProtocolVersionMismatch` -- indistinguishable from a genuine network
+hang, and retrying forever wouldn't have fixed it since the token
+itself needed to change, not the timing.
+
+**The fix**: `client/src/main.cpp`'s main reconnect-loop status
+`switch` now matches the wizard screen's cases:
+`AuthenticationFailed` -> "AUTHENTICATION FAILED WITH \<host\> - CHECK
+YOUR --auth-token", `ProtocolVersionMismatch` -> a distinct message
+(previously fell through to the generic default), `HostBusy` -> "HOST
+\<host\> IS BUSY - RETRYING...". `ApprovalRequired`/`AppVersionMismatch`
+were already correct and unchanged.
+
+**What the user needs to do right now** (until the client gains an
+in-app way to enter this): pass the token shown by the host's picker
+via `--auth-token <token>` when launching the client -- either as the
+Steam shortcut's Launch Options, or as an argument to
+`client/internal/run-client.sh` directly.
+
+**Verified**: compiles cleanly and links (`melonds-remote-client`
+target, real rebuild via CMake), full `ctest` suite passes (no
+regressions). Not yet verified against a real host requiring
+authentication in this sandbox (no way to run two networked processes
+against a real Azahar/melonDS instance here), but the message logic
+itself is a straightforward, low-risk `switch`-arm addition mirroring
+code that's already shipped and working on the wizard screen.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

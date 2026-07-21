@@ -2131,6 +2131,23 @@ int main(int argc, char** argv) {
                         status = "VERSION MISMATCH WITH " + netConfig.hostAddress + " (HOST IS " +
                                   net.hostAppVersion() + ") - UPDATE TO MATCH";
                         break;
+                    case HelloRejectReason::ProtocolVersionMismatch:
+                        status = "PROTOCOL VERSION MISMATCH WITH " + netConfig.hostAddress +
+                                  " - UPDATE THE APP OR HOST";
+                        break;
+                    // The host requires a shared secret for this mode (3DS/
+                    // host-control) and this client's --auth-token doesn't
+                    // match it (or wasn't given one at all) -- retrying
+                    // forever won't help, unlike a genuine network hang,
+                    // which this would otherwise look identical to (GitHub
+                    // issue: "stuck on connecting" turned out to be this).
+                    case HelloRejectReason::AuthenticationFailed:
+                        status = "AUTHENTICATION FAILED WITH " + netConfig.hostAddress +
+                                  " - CHECK YOUR --auth-token";
+                        break;
+                    case HelloRejectReason::HostBusy:
+                        status = "HOST " + netConfig.hostAddress + " IS BUSY - RETRYING...";
+                        break;
                     default:
                         status = "CONNECTING TO " + netConfig.hostAddress + "...";
                         break;
