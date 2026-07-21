@@ -104,7 +104,7 @@ if [[ ! -d "${source_dir}" ]]; then
     echo "error: ${source_dir} does not exist." >&2
     exit 1
 fi
-if [[ ! -d "${source_dir}/.git" ]]; then
+if [[ ! -e "${source_dir}/.git" ]]; then
     echo "error: ${source_dir} doesn't look like a git checkout (.git missing) --" >&2
     echo "the patch is generated as a git diff and needs a real git repo to apply" >&2
     echo "cleanly against." >&2
