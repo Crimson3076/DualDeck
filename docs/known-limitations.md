@@ -1559,6 +1559,21 @@ runner image with SDL3 pre-installed has been wired up. A follow-up should
 either install SDL3 in CI or add a client-specific job once a known-good
 SDL3 version is pinned.
 
+Narrower than it used to be, though: `client/tests/melonds_remote_net_client_tests`
+(GitHub issue #4 Phase E, added alongside `NetClient::controlReceiveLoop()`
+-- see that phase's entry above) is a real end-to-end test suite for
+`net_client.cpp`/`net_client.h` against a real `host::NetServer`, and it
+needs no SDL3 at all -- `add_subdirectory(client/tests)` in the top-level
+`CMakeLists.txt` is gated only by `MELONDS_REMOTE_BUILD_TESTS`, not
+`MELONDS_REMOTE_BUILD_CLIENT`, so it already builds and runs as part of
+`ci.yml`'s existing `protocol-and-host` job (confirmed by reproducing
+that job's exact `cmake`/`-Werror` configuration locally) with no
+workflow changes needed. `main.cpp`'s SDL3-dependent rendering/input/menu
+code -- including the new host-control screen itself -- is still
+untested by CI and still needs a real display or run to exercise, as
+this phase's own real-binary verification (`SDL_VIDEODRIVER=dummy`, done
+by hand, not in CI) had to do.
+
 ## First-run setup wizard (GitHub issue #19)
 
 Added a linear, gamepad-navigable setup wizard to the client
