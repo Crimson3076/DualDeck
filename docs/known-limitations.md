@@ -3295,6 +3295,99 @@ passes. Not yet tested against a real Steam client's Big Picture/Gaming
 Mode UI in this sandbox (no Steam installation available here) -- same
 caveat as every other Steam-shortcut entry in this file.
 
+## The shared secret (3DS/host-control/custom-3DS) is now auto-generated instead of hand-typed
+
+**The problem, reported by the user**: the AzaharAdapter and
+host-control-mode shared-secret prompts (`get_or_create_shared_token`,
+formerly `prompt_for_shared_token`) originally just asked the user to
+type a value with no guidance -- fine for a keyboard, bad for a
+controller-only Steam Deck, and nothing stopped someone from typing
+something short and easily guessed.
+
+**The fix**: `melonds-remote-host.sh`'s "Launch..." picker no longer
+prompts for a value at all when Nintendo 3DS or host-control mode is
+chosen. It generates a random 32-character hex token
+(`python3 -c "import secrets; print(secrets.token_hex(16))"`, with an
+`openssl rand -hex 16` / `/dev/urandom` fallback chain in case python3
+is somehow missing) the first time either mode is used, and persists it
+at `~/.config/melonds-remote/shared-token.conf` (`chmod 600`) so it
+survives across relaunches -- without persistence, every relaunch would
+silently invalidate whatever a client already had configured in its
+`--auth-token`. One token covers both modes, since they're not meant to
+run at the same time. Every time either mode is launched, the current
+token is shown (a `kdialog` message box, or a plain terminal echo)
+so it can be copied into the client's `--auth-token` (Launch Options or
+a manual invocation) -- necessary precisely because a random value
+can't be memorized the way a hand-picked one might be.
+
+`scripts/build-release.sh`'s `launch-custom-emulator.sh` (the "patch my
+own emulator" feature) got the same treatment for its 3DS case: it used
+to prompt for a token once and store it in `custom-emulator.conf`
+alongside the binary path/type; it now generates one the same way,
+still persisted in the same config file, and shows it on every launch
+rather than only when first configured (the config file itself is still
+loaded silently thereafter for the path/type fields, same as before --
+only the token gained the "show every time" behavior, since it's the
+one field of that file a user actually needs to go copy elsewhere).
+
+**Verified**: extracted both heredocs from `scripts/build-release.sh`
+and ran their token-handling logic directly against a fake `$HOME`.
+Confirmed the generated value is exactly 32 lowercase hex characters,
+that a second call (simulating host-control mode being launched right
+after 3DS mode, or the host being relaunched later) returns the
+byte-identical token rather than generating a new one, and that the
+persisted file is `chmod 600`. `bash -n` on the full
+`scripts/build-release.sh` and both extracted heredocs passes.
+
+## Azahar crashing when browsing files to pick a ROM (mitigation applied, not conclusively verified)
+
+**The problem, reported by the user**: Azahar kept crashing specifically
+when browsing for a ROM (File > Load File's native file-picker dialog).
+
+**Diagnosis**: reading Azahar's own source
+(`src/citra_qt/citra_qt.cpp`'s `OnMenuLoadFile()`) confirms this uses
+Qt's standard `QFileDialog::getOpenFileName`, code this project's patch
+never touches at all -- the AzaharAdapter/RemoteServerBridge hooks only
+run from `BootGame()`/`ShutdownGame()`, after a ROM is already chosen,
+so this isn't a regression introduced by the DualDeck patch itself.
+Researching the symptom turned up a well-documented, broader class of
+bug affecting Qt6 applications on Linux generally (not Azahar-specific):
+native file dialogs crashing due to a GTK3 platform-theme integration
+bug in how Qt and GTK hand off dialog window parenting -- see the Qt
+Forum/Arch Linux threads linked below. This matches the reported
+symptom closely enough to be the leading explanation, though it has
+**not** been reproduced or conclusively confirmed here, since this
+sandbox has no display or GPU to actually run Azahar's GUI at all.
+
+**Mitigation applied**: `internal/run-host-azahar.sh` and
+`internal/launch-custom-emulator.sh`'s Azahar-based ("n3ds") case now
+export `QT_QPA_PLATFORMTHEME=""` before launching Azahar, which disables
+Qt's native GTK3 platform-theme integration and falls back to Qt's own
+built-in (non-native) file dialog implementation -- the standard,
+widely-documented workaround for this exact bug class. The only
+downside is cosmetic: file dialogs render in Qt's own style rather than
+matching the desktop's native GTK theme.
+
+**Still open**: this has only been verified by `bash -n` on the
+modified scripts and reading Azahar's source for the dialog call site
+-- it has **not** been confirmed to actually fix the crash on real
+hardware, since reproducing it requires a real display/GPU this sandbox
+doesn't have. If it recurs after this fix, the next things worth trying
+are: capturing a terminal/journal backtrace at the moment of the crash
+(run `host/melonds-remote-host.sh` from a terminal rather than
+double-clicking it, so stderr isn't lost), checking whether it's
+specific to Wayland/gamescope (SteamOS's compositor) vs. a plain X11/
+KDE Plasma desktop, and checking whether `xdg-desktop-portal` (a
+separate possible cause, if the desktop routes GTK's portal integration
+through it) is installed and running.
+
+Sources consulted (Qt6-on-Linux native file dialog + GTK crash reports,
+not Azahar-specific):
+- [Qt Forum: QFileDialog::getOpenFileName causing program to crash](https://forum.qt.io/topic/143116/qfiledialog-getopenfilename-causing-program-to-crash)
+- [Qt Forum: QFileDialog "The program has unexpectedly finished"](https://forum.qt.io/topic/76909/qfiledialog-the-program-has-unexpectedly-finished)
+- [Arch Linux Forums: Qt file dialogues unusable since update](https://bbs.archlinux.org/viewtopic.php?id=279464)
+- [Arch Linux ARM Forum: Qt6 program crashes when activating the file dialog](https://archlinuxarm.org/forum/viewtopic.php?f=15&t=17202)
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

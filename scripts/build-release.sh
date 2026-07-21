@@ -835,6 +835,18 @@ sleep 0.5 # let the listener bind before Azahar tries to connect
 
 export AZAHAR_REMOTE_ENABLE=1
 export AZAHAR_REMOTE_ADAPTER_SOCKET="${adapter_socket}"
+
+# Works around a known class of Qt6-on-Linux crash (reported for many
+# Qt6 apps, not specific to Azahar): a GTK3 platform-theme bug in
+# window parenting can crash the process the moment a native file
+# dialog opens -- exactly the "crashes when browsing files to pick a
+# ROM" symptom this project's own user hit with File > Load File. An
+# empty QT_QPA_PLATFORMTHEME disables that native GTK integration
+# entirely, so Qt falls back to its own built-in (non-native) file
+# dialog implementation, which isn't affected. The only downside is
+# cosmetic: dialogs render in Qt's own style instead of matching the
+# desktop's native GTK theme.
+export QT_QPA_PLATFORMTHEME=""
 "${host_root}/azahar" "$@"
 WRAP
 chmod +x "${pkg_dir}/host/internal/run-host-azahar.sh"
@@ -887,14 +899,33 @@ prompt_type() {
     fi
 }
 
-prompt_token() {
-    if have_kdialog; then
-        kdialog --title "melonDS Remote Host" \
-            --inputbox "Shared secret for this emulator (client must use the same value) -- required for a 3DS-based custom emulator, since interactive per-device approval isn't available for it:" \
-            2>/dev/null || true
+# Same approach as melonds-remote-host.sh's get_or_create_shared_token
+# (duplicated rather than shared, matching this project's existing
+# no-shared-snippet convention for small self-contained pieces standalone
+# scripts need independently) -- generates a random token rather than
+# asking the user to type one, since a hand-typed value tends to be
+# short and guessable, especially on a controller-only Steam Deck.
+generate_token() {
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c "import secrets; print(secrets.token_hex(16))"
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 16
     else
-        read -rp "Shared secret (client must use the same value): " t >&2
-        echo "${t}"
+        od -An -tx1 -N16 /dev/urandom | tr -d ' \n'
+    fi
+}
+
+show_token() {
+    local token="$1"
+    local message="Shared secret for this emulator (required for a 3DS-based custom emulator, since interactive per-device approval isn't available for it). One was generated for you -- enter this exact value in the client's --auth-token (its Steam shortcut's Launch Options, or when running it manually):
+
+${token}"
+    if have_kdialog; then
+        kdialog --title "melonDS Remote Host" --msgbox "${message}" 2>/dev/null || true
+    else
+        echo >&2
+        echo "${message}" >&2
+        echo >&2
     fi
 }
 
@@ -916,11 +947,7 @@ if [[ ! -f "${config_file}" ]]; then
     fi
     token=""
     if [[ "${type}" == "n3ds" ]]; then
-        token="$(prompt_token)"
-        if [[ -z "${token}" ]]; then
-            echo "error: a shared secret is required for a 3DS-based custom emulator." >&2
-            exit 1
-        fi
+        token="$(generate_token)"
     fi
     {
         echo "type=${type}"
@@ -937,6 +964,13 @@ if [[ ! -x "${path}" ]]; then
     echo "error: ${path} no longer exists or isn't executable -- run this again with" >&2
     echo "--reconfigure to point at a different binary." >&2
     exit 1
+fi
+
+# Shown every run, not just when first generated -- a random token
+# can't be "remembered" the way a hand-typed one might be, so there has
+# to be a way to retrieve it again for the client's --auth-token.
+if [[ "${type}" == "n3ds" ]]; then
+    show_token "${token}"
 fi
 
 case "${type}" in
@@ -969,6 +1003,11 @@ case "${type}" in
 
         export AZAHAR_REMOTE_ENABLE=1
         export AZAHAR_REMOTE_ADAPTER_SOCKET="${adapter_socket}"
+        # See internal/run-host-azahar.sh's identical comment: works
+        # around a known Qt6-on-Linux native-file-dialog crash by
+        # disabling the GTK3 platform theme integration that triggers
+        # it (cosmetic-only downside).
+        export QT_QPA_PLATFORMTHEME=""
         "${path}" "$@"
         ;;
     *)
@@ -1295,7 +1334,7 @@ choose_action() {
 # GitHub issue "rework the host launcher so it does not boot into
 # melonDS": picks which system/emulator to actually launch, instead of
 # always going straight to melonDS. Azahar (3DS) and "host control only"
-# both need a shared secret (see prompt_for_shared_token below) since
+# both need a shared secret (see get_or_create_shared_token below) since
 # neither has an interactive per-device approval dialog the way
 # melonDS's own in-process default does -- see
 # docs/known-limitations.md's AzaharAdapter entry for why.
@@ -1335,24 +1374,60 @@ choose_emulator() {
     fi
 }
 
-# Prompts for the shared auth token host-control mode and the Azahar
-# (3DS) adapter both need (see internal/run-host.sh's comment on
-# MELONDS_REMOTE_AUTH_TOKEN, and internal/run-host-azahar.sh's on
-# AZAHAR_REMOTE_AUTH_TOKEN, for why interactive device-approval doesn't
-# apply to either) and prints it to stdout, or prints nothing if the
-# user cancels. A client's --auth-token (or the setup wizard's
-# manual-entry step) needs to match this exactly. `context` is shown in
-# the prompt so it's clear which mode is asking.
-prompt_for_shared_token() {
-    local context="$1"
-    if have_kdialog; then
-        kdialog --title "melonDS Remote Host" \
-            --inputbox "${context} needs a shared secret (since the usual per-device approval prompt isn't available for it). Enter one -- the client will need to enter this same value to connect:" \
-            2>/dev/null || true
+# Generates a 32-hex-character random token. python3 is already a hard
+# runtime dependency elsewhere in this file (steam_shortcut.py), so it's
+# the primary path; openssl and /dev/urandom are fallbacks for the rare
+# case it's missing.
+generate_shared_token() {
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c "import secrets; print(secrets.token_hex(16))"
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 16
     else
-        read -rp "${context} shared secret (client must use the same value): " token >&2
-        echo "${token}"
+        od -An -tx1 -N16 /dev/urandom | tr -d ' \n'
     fi
+}
+
+# Shared auth token host-control mode and the Azahar (3DS) adapter both
+# need (see internal/run-host.sh's comment on MELONDS_REMOTE_AUTH_TOKEN,
+# and internal/run-host-azahar.sh's on AZAHAR_REMOTE_AUTH_TOKEN, for why
+# interactive device-approval doesn't apply to either). Generated once
+# automatically (GitHub issue: "generate a random token for the user"
+# -- typing a good one by hand on a controller-only Steam Deck is bad
+# UX, and users would otherwise be tempted to type something short and
+# guessable) and persisted at shared_token_file so it survives across
+# relaunches -- without persistence, every relaunch would silently
+# invalidate whatever a client already has configured in its
+# --auth-token. One token covers both modes; they're not meant to run
+# at the same time, so there's no need to keep them separate. Prints
+# the token to stdout for the caller to export, and always shows it
+# (kdialog msgbox, or a terminal echo) so it can be copied into the
+# client's --auth-token / Launch Options -- unlike a value the user
+# picked themselves, a random one can't be "remembered", so it has to
+# be shown every time, not just the first.
+shared_token_file="${HOME}/.config/melonds-remote/shared-token.conf"
+get_or_create_shared_token() {
+    local context="$1"
+    mkdir -p "$(dirname "${shared_token_file}")"
+    local token=""
+    if [[ -f "${shared_token_file}" ]]; then
+        token="$(cat "${shared_token_file}")"
+    fi
+    if [[ -z "${token}" ]]; then
+        token="$(generate_shared_token)"
+        ( umask 077; printf '%s\n' "${token}" > "${shared_token_file}" )
+    fi
+    local message="${context} needs a shared secret (since the usual per-device approval prompt isn't available for it). One was generated for you and is reused every time -- enter this exact value in the client's --auth-token (its Steam shortcut's Launch Options, or when running it manually):
+
+${token}"
+    if have_kdialog; then
+        kdialog --title "melonDS Remote Host" --msgbox "${message}" 2>/dev/null || true
+    else
+        echo >&2
+        echo "${message}" >&2
+        echo >&2
+    fi
+    echo "${token}"
 }
 
 action="$(choose_action)"
@@ -1370,11 +1445,7 @@ case "${action}" in
                 exec ./internal/launch-host.sh
                 ;;
             n3ds)
-                token="$(prompt_for_shared_token "Nintendo 3DS (Azahar)")"
-                if [[ -z "${token}" ]]; then
-                    exit 0 # cancelled
-                fi
-                export AZAHAR_REMOTE_AUTH_TOKEN="${token}"
+                export AZAHAR_REMOTE_AUTH_TOKEN="$(get_or_create_shared_token "Nintendo 3DS (Azahar)")"
                 # Azahar has no Distrobox launch path yet (see
                 # internal/run-host-azahar.sh's own comment) -- called
                 # directly, not through launch-host.sh's melonDS-specific
@@ -1382,10 +1453,6 @@ case "${action}" in
                 exec ./internal/run-host-azahar.sh
                 ;;
             hostcontrol)
-                token="$(prompt_for_shared_token "Host control mode")"
-                if [[ -z "${token}" ]]; then
-                    exit 0 # cancelled
-                fi
                 # Exported before the same launch-host.sh dispatch the
                 # "ds" case above uses -- MELONDS_REMOTE_HOST_CONTROL/
                 # MELONDS_REMOTE_AUTH_TOKEN are environment variables, so
@@ -1394,7 +1461,7 @@ case "${action}" in
                 # without launch-host.sh itself needing to know this
                 # mode exists.
                 export MELONDS_REMOTE_HOST_CONTROL=1
-                export MELONDS_REMOTE_AUTH_TOKEN="${token}"
+                export MELONDS_REMOTE_AUTH_TOKEN="$(get_or_create_shared_token "Host control mode")"
                 exec ./internal/launch-host.sh
                 ;;
             custom)
