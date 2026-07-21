@@ -36,7 +36,7 @@ index 91d8e13..c8876b4 100644
    target_sources(citra_qt PUBLIC
      qt_swizzle.h
 diff --git a/src/citra_qt/citra_qt.cpp b/src/citra_qt/citra_qt.cpp
-index f08a7ea..78d22af 100644
+index f08a7ea..fa63c9a 100644
 --- a/src/citra_qt/citra_qt.cpp
 +++ b/src/citra_qt/citra_qt.cpp
 @@ -3,12 +3,14 @@
@@ -96,7 +96,7 @@ index f08a7ea..78d22af 100644
      if (ui->action_Fullscreen->isChecked()) {
          HideFullscreen();
      }
-@@ -2302,8 +2325,36 @@ void GMainWindow::OnMenuLoadFile() {
+@@ -2302,8 +2325,43 @@ void GMainWindow::OnMenuLoadFile() {
      const QString file_filter = tr("3DS Executable (%1);;All Files (*.*)",
                                     "%1 is an identifier for the 3DS executable file extensions.")
                                      .arg(extensions);
@@ -111,18 +111,25 @@ index f08a7ea..78d22af 100644
 +    // thumbnail generation (KIO::FilePreviewJob) and crashes inside
 +    // Qt's OpenSSL-backed QCryptographicHash. See DualDeck's
 +    // docs/known-limitations.md for the diagnosis -- setting
-+    // QT_QPA_PLATFORMTHEME did not avoid this, since Qt's own theme
-+    // fallback chain reaches the same KDE integration regardless of
-+    // what's explicitly requested. Forcing the icon provider here
-+    // bypasses that fallback entirely, independent of which theme Qt
-+    // ends up selecting. QFileIconProvider isn't a QObject, so
-+    // setIconProvider() can't be assumed to take ownership -- kept as a
-+    // stack variable declared before `dialog` so it's guaranteed to
-+    // outlive it (destroyed in reverse declaration order).
++    // QT_QPA_PLATFORMTHEME did not avoid this, and neither did the
++    // first attempt at this fix (setIconProvider() alone): constructing
++    // a QFileDialog object directly, without also setting
++    // DontUseNativeDialog, still lets Qt substitute KDE's own native
++    // dialog helper (a real KFileWidget wrapping KIO's preview system)
++    // underneath it -- that native helper has its own separate,
++    // KIO-based icon/preview mechanism entirely, which doesn't consult
++    // QFileDialog::setIconProvider() at all. DontUseNativeDialog forces
++    // Qt's fully generic, non-native dialog implementation instead,
++    // which has no KDE/KIO integration to route through in the first
++    // place. QFileIconProvider isn't a QObject, so setIconProvider()
++    // can't be assumed to take ownership -- kept as a stack variable
++    // declared before `dialog` so it's guaranteed to outlive it
++    // (destroyed in reverse declaration order).
 +    QFileIconProvider icon_provider;
 +    QFileDialog dialog(this, tr("Load File"), UISettings::values.roms_path, file_filter);
 +    dialog.setFileMode(QFileDialog::ExistingFile);
 +    dialog.setAcceptMode(QFileDialog::AcceptOpen);
++    dialog.setOption(QFileDialog::DontUseNativeDialog, true);
 +    dialog.setIconProvider(&icon_provider);
 +    if (dialog.exec() != QDialog::Accepted) {
 +        return;

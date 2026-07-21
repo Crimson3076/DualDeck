@@ -3512,6 +3512,57 @@ tested does **not** actually contain the `QFileIconProvider` crash fix
 built after this caching fix is the first one that will actually
 contain it.
 
+## Azahar Load-File crash, continued: `setIconProvider()` alone wasn't enough
+
+**The problem**: the user tested v0.1.41 (the first release confirmed
+to genuinely contain the `QFileIconProvider` fix above, per a real
+`md5sum` diff against the stale v0.1.39/v0.1.40 binary) -- it still
+crashed identically. A real backtrace + coredump analysis (this time
+independently cross-checked by the user against a second AI's review)
+also conclusively ruled out the SELinux angle from the earlier entry:
+the AVC denials present (`systemd_coredump_t`, `sd-parse-elf`,
+`mounton`) are `systemd-coredump`'s own sandboxing while it processes
+the crash dump *after* the crash already happened, not something
+blocking Azahar itself.
+
+**Why the first code fix didn't work**: constructing a `QFileDialog`
+object directly and calling `.exec()` on it does **not**, by itself,
+force Qt's fully generic dialog implementation -- Qt still substitutes
+a native platform dialog helper unless `QFileDialog::DontUseNativeDialog`
+is explicitly set as an option. On this system, that native helper is a
+real `KFileWidget` (KDE's own native file browser widget, wrapping KIO's
+preview system directly), which has its own separate, KIO-based
+icon/preview mechanism entirely -- it doesn't consult
+`QFileDialog::setIconProvider()` at all, since that call only affects
+Qt's own generic dialog model, not the substituted native widget. So
+the previous fix's `setIconProvider()` call was silently having no
+effect: Qt was still handing the user a KDE-native dialog underneath,
+identical to the unpatched behavior.
+
+**The fix**: `OnMenuLoadFile()` now also calls
+`dialog.setOption(QFileDialog::DontUseNativeDialog, true)` before
+`.exec()`, in addition to the existing `setIconProvider()` call. This
+forces Qt's own generic, non-native dialog widget, which has no
+KDE/KIO integration to substitute in at all -- eliminating the
+`KFileWidget`/`KIO::FilePreviewJob` code path entirely rather than
+merely asking it (ineffectively) to use a different icon provider.
+
+**Verified**: same discipline as the previous attempt -- confirmed via
+a real incremental rebuild (`0` compiler errors, the new
+`DontUseNativeDialog` reference and other symbols present in the
+resulting binary via `nm`), and the regenerated patch still applies
+cleanly to a fresh, pristine checkout of the pinned commit. **Not yet
+confirmed to fix the crash on real hardware** -- same fundamental
+limitation as every attempt before it: this sandbox has no display or
+GPU, so there's no way to actually open Azahar's GUI and click "Load
+File" here. This is the second attempt at a code-level fix for the same
+symptom; if it still doesn't work, the next thing worth trying is
+having the user run Azahar under `gdb` with a breakpoint on
+`QFileDialog::exec` to directly inspect (via `p dialog.testOption(...)`
+or similar) whether `DontUseNativeDialog` is actually taking effect at
+runtime, since at this point empirical confirmation on the affected
+machine is more valuable than another theory from here.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
