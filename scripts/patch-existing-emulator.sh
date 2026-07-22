@@ -12,8 +12,14 @@
 #
 # Without --build, only applies the patch (git apply) and prints the
 # commands to build it yourself. With --build, also configures and
-# builds it the same way scripts/build-release.sh does for its own
-# bundled copies (plain `cmake --build`, not a full release package).
+# builds it -- not a full release package, and, unlike
+# scripts/build-release.sh's official release build, tuned for fast
+# local iteration: it auto-detects and uses ccache/Ninja/mold-or-lld
+# when installed, and (Azahar only) turns off LTO and a few unrelated
+# features, since none of that matters while testing a patch. See the
+# "Speed-up flags" comment further down for the full rationale. Install
+# ccache/ninja-build/mold beforehand (e.g. `sudo dnf install ccache
+# ninja-build mold` on Fedora) for the biggest wins.
 #
 # Once built, point host/melonds-remote-host.sh's "Launch..." -> "Custom"
 # menu choice at the resulting binary -- see
@@ -137,10 +143,91 @@ else
     exit 1
 fi
 
+# Speed-up flags for local dev iteration only (never used by
+# scripts/build-release.sh's official release build, which keeps LTO on
+# for the best user-facing runtime performance). All of these trade a
+# bit of runtime performance or diagnostics you don't need while
+# iterating on a patch for a lot of wall-clock build time -- Azahar in
+# particular is a large Qt+Vulkan codebase where a from-scratch build
+# can otherwise take the better part of an hour:
+#   - ccache: caches object files by content hash, so rebuilding after
+#     `git clean`/`rm -rf build` (which this repo's own scripts do on
+#     every patch iteration) only pays full cost once; later rebuilds of
+#     unchanged files are near-instant.
+#   - Ninja: schedules the build graph more efficiently than the default
+#     Makefiles generator, especially in combination with ccache.
+#   - mold, falling back to lld: both link substantially faster than the
+#     default bfd/gold linker, which matters a lot for a Qt-heavy target
+#     like citra_qt.
+#   - ENABLE_LTO=OFF (Azahar only -- melonDS's CMakeLists has no such
+#     option): link-time optimization is the single biggest link-time
+#     cost in a Release Azahar build and only pays off as a runtime perf
+#     win, which you don't need while testing a patch.
+#   - ENABLE_WEB_SERVICE/ENABLE_SCRIPTING/ENABLE_GDBSTUB=OFF (Azahar
+#     only): telemetry, the scripting RPC server, and the GDB stub are
+#     all irrelevant to testing the remote-server patch and reduce the
+#     amount of code compiled and linked.
+# All auto-detected -- nothing here is required; if none of ccache,
+# Ninja, mold, or lld are installed, this just falls back to the plain
+# command this script has always printed.
+cmake_configure_args=(-DCMAKE_BUILD_TYPE=Release)
+speedup_notes=()
+
+if command -v ccache >/dev/null 2>&1; then
+    cmake_configure_args+=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
+    speedup_notes+=("ccache (object cache across rebuilds)")
+fi
+
+generator_args=()
+if command -v ninja >/dev/null 2>&1; then
+    generator_args+=(-G Ninja)
+    speedup_notes+=("Ninja generator")
+fi
+
+if command -v mold >/dev/null 2>&1; then
+    cmake_configure_args+=(-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=mold -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=mold)
+    speedup_notes+=("mold linker")
+elif command -v ld.lld >/dev/null 2>&1; then
+    cmake_configure_args+=(-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld)
+    speedup_notes+=("lld linker")
+fi
+
+if [[ "${system}" == "3ds" ]]; then
+    cmake_configure_args+=(-DENABLE_LTO=OFF -DENABLE_WEB_SERVICE=OFF -DENABLE_SCRIPTING=OFF -DENABLE_GDBSTUB=OFF)
+    speedup_notes+=("LTO/web-service/scripting/GDB-stub disabled")
+fi
+
+# Cap parallelism by available RAM as well as core count -- a Qt+Vulkan
+# translation unit can use 2-3GB, and letting a job count sized only for
+# core count run on a memory-constrained machine causes swapping, which
+# is slower than just running fewer jobs at once.
+job_count="$(nproc)"
+if [[ -r /proc/meminfo ]]; then
+    mem_kib="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
+    mem_capped_jobs=$(( mem_kib / 1024 / 1024 / 2 ))
+    if [[ "${mem_capped_jobs}" -lt 1 ]]; then
+        mem_capped_jobs=1
+    fi
+    if [[ "${mem_capped_jobs}" -lt "${job_count}" ]]; then
+        job_count="${mem_capped_jobs}"
+        speedup_notes+=("parallelism capped to ${job_count} jobs by available RAM")
+    fi
+fi
+
 echo
 echo "Patch applied to ${source_dir}. To build it yourself:"
-echo "  cmake -S \"${source_dir}\" -B \"${source_dir}/build\" -DCMAKE_BUILD_TYPE=Release"
-echo "  cmake --build \"${source_dir}/build\" -j\$(nproc)"
+echo "  cmake -S \"${source_dir}\" -B \"${source_dir}/build\" ${generator_args[*]} ${cmake_configure_args[*]}"
+echo "  cmake --build \"${source_dir}/build\" -j${job_count}"
+if [[ "${#speedup_notes[@]}" -gt 0 ]]; then
+    notes_joined="${speedup_notes[0]}"
+    for note in "${speedup_notes[@]:1}"; do
+        notes_joined="${notes_joined}, ${note}"
+    done
+    echo
+    echo "Detected and will use: ${notes_joined}."
+    echo "(install ccache/ninja-build/mold via your package manager for more of these --"
+    echo "e.g. on Fedora: sudo dnf install ccache ninja-build mold)"
+fi
 echo
 echo "Once built, the binary you want is expected at:"
 echo "  ${source_dir}/${binary_hint}"
@@ -148,10 +235,30 @@ echo "(confirm with e.g. \`find \"${source_dir}/build\" -name '*${emulator_name,
 echo "if it isn't there -- build layouts occasionally shift between upstream releases.)"
 
 if [[ "${do_build}" -eq 1 ]]; then
+    # CMake refuses to reconfigure an existing build dir with a
+    # different generator than it was first configured with (e.g. a
+    # build dir from a previous run of this script before ninja was
+    # installed). Detect that up front and wipe it, rather than letting
+    # `cmake -S -B` fail confusingly mid-run.
+    desired_generator="Unix Makefiles"
+    if [[ " ${generator_args[*]} " == *" Ninja "* ]]; then
+        desired_generator="Ninja"
+    fi
+    cache_file="${source_dir}/build/CMakeCache.txt"
+    if [[ -f "${cache_file}" ]]; then
+        existing_generator="$(awk -F= '/^CMAKE_GENERATOR:INTERNAL=/ {print $2}' "${cache_file}")"
+        if [[ -n "${existing_generator}" && "${existing_generator}" != "${desired_generator}" ]]; then
+            echo "Existing build dir was configured with '${existing_generator}', not" >&2
+            echo "'${desired_generator}' -- removing ${source_dir}/build to reconfigure cleanly" >&2
+            echo "(this only removes CMake's build output, not your source checkout or its" >&2
+            echo "applied patch)." >&2
+            rm -rf "${source_dir}/build"
+        fi
+    fi
     echo
     echo "Building now (--build was passed) ..."
-    cmake -S "${source_dir}" -B "${source_dir}/build" -DCMAKE_BUILD_TYPE=Release
-    cmake --build "${source_dir}/build" -j"$(nproc)"
+    cmake -S "${source_dir}" -B "${source_dir}/build" "${generator_args[@]}" "${cmake_configure_args[@]}"
+    cmake --build "${source_dir}/build" -j"${job_count}"
     echo "Build complete."
     if [[ -x "${source_dir}/${binary_hint}" ]]; then
         echo "Binary confirmed at: ${source_dir}/${binary_hint}"
