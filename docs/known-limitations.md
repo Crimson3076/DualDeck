@@ -4426,6 +4426,56 @@ hardware at a non-default `AZAHAR_REMOTE_CAPTURE_SCALE` value, and the
 display-scaling fix hasn't been confirmed on a real ROG Ally/other
 non-Deck device (only simulated via Xvfb at a matching resolution).
 
+## 2026-07-22: Cemu (Nintendo Wii U) integration -- patch written, not yet build-verified
+
+`host/cemu-patches/0001-remote-server-integration.patch` adds a third
+real `IEmulatorAdapter` (Cemu, Nintendo Wii U) alongside melonDS and
+Azahar -- see `host/cemu-patches/README.md` for the full breakdown of
+what the patch does. Two things distinguish this pass from the other
+two emulators' integrations, both explicit, user-confirmed trade-offs:
+
+1. **Auto-injected controller mapping**: unlike melonDS/Azahar (which
+   register their own input engine directly), Cemu requires a real
+   controller-to-VPAD-button mapping to exist. Rather than requiring the
+   user to open Controller Settings and configure this by hand, the
+   patch calls `add_controller()` + `set_default_mapping()` directly
+   against VPAD player 1 the moment a session starts, reusing (as a
+   second `case` label, not a new table) the exact mapping table
+   `VPADController::set_default_mapping()` already uses for XInput pads.
+2. **No local build verification.** Cemu's dependency graph resolves to
+   roughly 108 vcpkg packages, most requiring downloads from hosts this
+   project's development sandbox cannot reach (only apt mirrors and the
+   git-protocol mirror are reliably reachable there -- see this file's
+   earlier vcpkg-tool-bootstrap entries for the underlying network
+   constraint). Continuing to work around that dependency-by-dependency,
+   as was done to bootstrap `vcpkg-tool` itself, was judged not worth it
+   for ~100 more packages. This patch was instead written entirely from
+   careful reading of Cemu's actual source at the pinned commit (the
+   exact video-capture hook, the exact input-provider registration
+   timing, the exact add_controller/set_default_mapping ordering
+   requirement), with verification deferred to this project's GitHub
+   Actions CI pipeline, which runs on a normal, unrestricted-network
+   runner. **No compiler has seen this code yet.**
+
+Also new: `Renderer::CaptureSurfaceBGRA()`, a small virtual added to
+Cemu's own `Renderer` base class (default no-op, real OpenGL and Vulkan
+implementations) for continuous, throttled (`CEMU_REMOTE_CAPTURE_FPS`,
+default 30) frame capture -- deliberately separate from Cemu's existing
+`HandleScreenshotRequest()`, which is a one-shot, user-triggered
+screenshot-to-file feature, not reused or altered by this patch.
+
+Wii U GamePad touchscreen input is out of scope: confirmed by reading
+`Cafe/OS/libs/vpad/vpad.cpp`'s `VPADRead()` that Cemu hard-codes
+GamePad touch validity to invalid regardless of which controller is
+mapped -- no existing Cemu input backend can inject GamePad touch
+today, so there's no plumbing for this adapter to hook into without
+inventing an entirely new Cemu-side touch pipeline.
+
+See `host/cemu-patches/README.md`'s "What is *not* verified yet"
+section for the full, explicit list of what remains unconfirmed
+(compilation, the launcher/build-release.sh packaging, and any real
+end-to-end run against a Wii U game).
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
