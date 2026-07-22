@@ -36,7 +36,7 @@ index 91d8e13..c8876b4 100644
    target_sources(citra_qt PUBLIC
      qt_swizzle.h
 diff --git a/src/citra_qt/citra_qt.cpp b/src/citra_qt/citra_qt.cpp
-index f08a7ea..3aba745 100644
+index f08a7ea..87fd4fe 100644
 --- a/src/citra_qt/citra_qt.cpp
 +++ b/src/citra_qt/citra_qt.cpp
 @@ -3,12 +3,14 @@
@@ -76,7 +76,7 @@ index f08a7ea..3aba745 100644
 +        const char* version_env = std::getenv("AZAHAR_REMOTE_VERSION");
 +        remote_server_bridge = std::make_unique<CitraQt::RemoteServer::RemoteServerBridge>(
 +            system, version_env ? std::string(version_env) : std::string(),
-+            socket_path_env ? std::string(socket_path_env) : std::string());
++            socket_path_env ? std::string(socket_path_env) : std::string(), this);
 +        remote_server_bridge->start();
 +        // AzaharAdapter's constructor (run synchronously just above, inside
 +        // RemoteServerBridge's own constructor) calls registerInputEngine(),
@@ -161,8 +161,50 @@ index f08a7ea..3aba745 100644
  
      if (filename.isEmpty()) {
          return;
+@@ -2665,6 +2742,41 @@ void GMainWindow::OnPauseContinueGame() {
+     }
+ }
+ 
++void GMainWindow::OnRemoteClientConnectionChanged(bool connected) {
++    // Per SPEC.md's "Wii U GamePad" model: the bottom screen is going to
++    // the client, so showing it here too locally is redundant -- matches
++    // melonDS's own EmuInstance::startRemoteServer() behavior for the
++    // same reason. Sequence (set layout_option, SyncMenuUISettings(),
++    // ApplySettings(), UpdateSecondaryWindowVisibility()) mirrors
++    // ChangeScreenLayout() above exactly, since that's this codebase's
++    // own real, working "the layout changed live" path -- not invented
++    // fresh here. swap_screen is saved/forced too, not just
++    // layout_option: SingleScreen alone still shows whichever screen
++    // swap_screen says is primary, and forcing only layout_option would
++    // show the *bottom* screen locally instead of the top if the user
++    // had swap_screen on, which is exactly the redundant case this
++    // exists to avoid.
++    if (connected) {
++        Settings::LayoutOption current = Settings::values.layout_option.GetValue();
++        bool currentSwap = Settings::values.swap_screen.GetValue();
++        if (current != Settings::LayoutOption::SingleScreen || currentSwap) {
++            remote_client_previous_layout_option = static_cast<int>(current);
++            remote_client_previous_swap_screen = currentSwap;
++            remote_client_have_saved_layout = true;
++        }
++        Settings::values.layout_option = Settings::LayoutOption::SingleScreen;
++        Settings::values.swap_screen = false;
++    } else if (remote_client_have_saved_layout) {
++        Settings::values.layout_option = static_cast<Settings::LayoutOption>(remote_client_previous_layout_option);
++        Settings::values.swap_screen = remote_client_previous_swap_screen;
++        remote_client_have_saved_layout = false;
++    }
++
++    SyncMenuUISettings();
++    system.ApplySettings();
++    UpdateSecondaryWindowVisibility();
++}
++
+ void GMainWindow::OnStopGame() {
+     SetTurboEnabled(false);
+ 
 diff --git a/src/citra_qt/citra_qt.h b/src/citra_qt/citra_qt.h
-index 673c513..542d0f8 100644
+index 673c513..f3f6884 100644
 --- a/src/citra_qt/citra_qt.h
 +++ b/src/citra_qt/citra_qt.h
 @@ -7,6 +7,14 @@
@@ -180,7 +222,20 @@ index 673c513..542d0f8 100644
  #ifdef __unix__
  #include <QDBusObjectPath>
  #endif
-@@ -382,6 +390,11 @@ private:
+@@ -237,6 +245,12 @@ private slots:
+     void OnPauseGame();
+     void OnPauseContinueGame();
+     void OnStopGame();
++    // DualDeck remote-server integration: fired (via QMetaObject::
++    // invokeMethod, see RemoteServerBridge.cpp) whenever a remote client
++    // connects to or disconnects from this session, mirroring melonDS's
++    // own EmuInstance::startRemoteServer() "show top screen only while
++    // streaming" behavior for Azahar's own local window.
++    void OnRemoteClientConnectionChanged(bool connected);
+     void OnSaveState();
+     void OnLoadState();
+     /// Called whenever a user selects a game in the game list widget.
+@@ -382,6 +396,19 @@ private:
      // Whether emulation is currently running in Citra.
      bool emulation_running = false;
      std::unique_ptr<EmuThread> emu_thread;
@@ -189,15 +244,23 @@ index 673c513..542d0f8 100644
 +    // AZAHAR_REMOTE_ENABLE env var is set (see RemoteServerBridge.h's
 +    // top comment for why this is opt-in and out-of-process only).
 +    std::unique_ptr<CitraQt::RemoteServer::RemoteServerBridge> remote_server_bridge;
++    // OnRemoteClientConnectionChanged()'s saved layout, restored on
++    // disconnect -- stored as the enum's plain underlying value (not
++    // Settings::LayoutOption itself) so this header doesn't need
++    // common/settings.h just for these two fields; cast back in the
++    // .cpp, which already includes it.
++    int remote_client_previous_layout_option = 0;
++    bool remote_client_previous_swap_screen = false;
++    bool remote_client_have_saved_layout = false;
      // The title of the game currently running
      QString game_title;
      // The path to the game currently running
 diff --git a/src/citra_qt/remote_server/AzaharAdapter.cpp b/src/citra_qt/remote_server/AzaharAdapter.cpp
 new file mode 100644
-index 0000000..6d68483
+index 0000000..c009492
 --- /dev/null
 +++ b/src/citra_qt/remote_server/AzaharAdapter.cpp
-@@ -0,0 +1,356 @@
+@@ -0,0 +1,382 @@
 +#include "citra_qt/remote_server/AzaharAdapter.h"
 +
 +#include <algorithm>
@@ -317,9 +380,11 @@ index 0000000..6d68483
 +
 +} // namespace
 +
-+AzaharAdapter::AzaharAdapter(Core::System& system, std::string azaharVersion)
-+    : system_(system), azaharVersion_(std::move(azaharVersion)),
-+      inputStatus_(std::make_shared<RemoteInputStatus>()), captureInterval_(resolveCaptureInterval()) {
++AzaharAdapter::AzaharAdapter(Core::System& system, std::string azaharVersion,
++                             std::function<void()> onQuitSession, std::function<void()> onQuitApplication)
++    : system_(system), azaharVersion_(std::move(azaharVersion)), onQuitSession_(std::move(onQuitSession)),
++      onQuitApplication_(std::move(onQuitApplication)), inputStatus_(std::make_shared<RemoteInputStatus>()),
++      captureInterval_(resolveCaptureInterval()) {
 +    registerInputEngine();
 +    running_ = true;
 +    captureThread_ = std::thread(&AzaharAdapter::captureLoop, this);
@@ -393,34 +458,58 @@ index 0000000..6d68483
 +}
 +
 +void AzaharAdapter::applyGenericInput(const melonds_remote::adapter::GenericInputState& state) {
-+    std::lock_guard guard(inputStatus_->mutex);
-+    inputStatus_->buttons = state.buttons;
-+    inputStatus_->leftStickX = state.leftStickX;
-+    inputStatus_->leftStickY = state.leftStickY;
-+    inputStatus_->rightStickX = state.rightStickX;
-+    inputStatus_->rightStickY = state.rightStickY;
-+    if (!state.touches.empty()) {
-+        // Only the first touch contact -- the 3DS bottom screen (like
-+        // the DS's) only ever has one touch point, matching
-+        // protocol.h's ControllerState.touchX/Y single-contact model
-+        // this state was translated from (see host/adapter_bridge.cpp).
-+        const auto& touch = state.touches.front();
-+        // protocol.h's touchX/Y are 0..kTouchMaxX/kTouchMaxY (the DS's
-+        // native touch range, 255x191) regardless of which adapter is
-+        // actually driving the session -- reinterpreted here as a
-+        // proportional 0..1 position within whatever surface it's
-+        // actually addressed to, not literally "DS pixel space". See
-+        // AzaharAdapter.h's RemoteTouchDevice comment for the 0..1
-+        // convention src/core/hle/service/hid/hid.cpp's touch handling
-+        // itself expects.
-+        inputStatus_->touchX =
-+            static_cast<float>(touch.x) / static_cast<float>(melonds_remote::kTouchMaxX);
-+        inputStatus_->touchY =
-+            static_cast<float>(touch.y) / static_cast<float>(melonds_remote::kTouchMaxY);
-+        inputStatus_->touchActive = true;
-+    } else {
-+        inputStatus_->touchActive = false;
++    {
++        std::lock_guard guard(inputStatus_->mutex);
++        inputStatus_->buttons = state.buttons;
++        inputStatus_->leftStickX = state.leftStickX;
++        inputStatus_->leftStickY = state.leftStickY;
++        inputStatus_->rightStickX = state.rightStickX;
++        inputStatus_->rightStickY = state.rightStickY;
++        if (!state.touches.empty()) {
++            // Only the first touch contact -- the 3DS bottom screen (like
++            // the DS's) only ever has one touch point, matching
++            // protocol.h's ControllerState.touchX/Y single-contact model
++            // this state was translated from (see host/adapter_bridge.cpp).
++            const auto& touch = state.touches.front();
++            // protocol.h's touchX/Y are 0..kTouchMaxX/kTouchMaxY (the DS's
++            // native touch range, 255x191) regardless of which adapter is
++            // actually driving the session -- reinterpreted here as a
++            // proportional 0..1 position within whatever surface it's
++            // actually addressed to, not literally "DS pixel space". See
++            // AzaharAdapter.h's RemoteTouchDevice comment for the 0..1
++            // convention src/core/hle/service/hid/hid.cpp's touch handling
++            // itself expects.
++            inputStatus_->touchX =
++                static_cast<float>(touch.x) / static_cast<float>(melonds_remote::kTouchMaxX);
++            inputStatus_->touchY =
++                static_cast<float>(touch.y) / static_cast<float>(melonds_remote::kTouchMaxY);
++            inputStatus_->touchActive = true;
++        } else {
++            inputStatus_->touchActive = false;
++        }
 +    }
++
++    // GitHub issue #25 (as implemented for melonDS's own
++    // EmuInstanceInput.cpp): client-side "exit emulation" menu, letting
++    // the user eject the ROM (QuitSession) or close Azahar entirely
++    // (QuitApplication) without needing to be at the host. Edge-detected
++    // against lastEmulatorActions_, not "bit is set this frame" -- the
++    // client resends its confirmed choice for a short window to survive
++    // UDP loss, not just one packet (see client/src/main.cpp's
++    // pendingEmulatorAction), so a naive "is the bit set" check here
++    // would fire the callback repeatedly for one menu confirmation.
++    // Outside inputStatus_'s lock, and via the injected callbacks (never
++    // called directly) since this runs on AdapterIpcClient's readLoop()
++    // thread, not Qt's UI thread -- see AzaharAdapter.h's constructor
++    // comment and RemoteServerBridge.cpp's QMetaObject::invokeMethod use.
++    uint32_t risingEdge = state.emulatorActions & ~lastEmulatorActions_;
++    if ((risingEdge & melonds_remote::adapter::GenericAction_QuitSession) && onQuitSession_) {
++        onQuitSession_();
++    }
++    if ((risingEdge & melonds_remote::adapter::GenericAction_QuitApplication) && onQuitApplication_) {
++        onQuitApplication_();
++    }
++    lastEmulatorActions_ = state.emulatorActions;
 +}
 +
 +void AzaharAdapter::releaseAllInputs() {
@@ -556,10 +645,10 @@ index 0000000..6d68483
 +} // namespace CitraQt::RemoteServer
 diff --git a/src/citra_qt/remote_server/AzaharAdapter.h b/src/citra_qt/remote_server/AzaharAdapter.h
 new file mode 100644
-index 0000000..bee24d3
+index 0000000..4b389fd
 --- /dev/null
 +++ b/src/citra_qt/remote_server/AzaharAdapter.h
-@@ -0,0 +1,181 @@
+@@ -0,0 +1,198 @@
 +#pragma once
 +
 +// DualDeck's IEmulatorAdapter implementation for Azahar (Nintendo 3DS).
@@ -594,6 +683,7 @@ index 0000000..bee24d3
 +#include <array>
 +#include <atomic>
 +#include <chrono>
++#include <functional>
 +#include <memory>
 +#include <mutex>
 +#include <thread>
@@ -703,8 +793,15 @@ index 0000000..bee24d3
 +    // BootGame(), destroyed at the top of ShutdownGame(), see that
 +    // file). `azaharVersion` is this build's own version string (for
 +    // AdapterCapabilities::adapter.adapterVersion), read once at
-+    // construction.
-+    AzaharAdapter(Core::System& system, std::string azaharVersion);
++    // construction. `onQuitSession`/`onQuitApplication`, if set, are
++    // invoked (from whatever thread applyGenericInput() is called on --
++    // never Qt's UI thread, see RemoteServerBridge.cpp) on a
++    // GenericAction_QuitSession/_QuitApplication rising edge, mirroring
++    // melonDS's own EmuInstanceInput.cpp handling of the client's
++    // "exit emulation" menu (GitHub issue #25).
++    AzaharAdapter(Core::System& system, std::string azaharVersion,
++                  std::function<void()> onQuitSession = {},
++                  std::function<void()> onQuitApplication = {});
 +    ~AzaharAdapter() override;
 +
 +    AzaharAdapter(const AzaharAdapter&) = delete;
@@ -725,6 +822,15 @@ index 0000000..bee24d3
 +
 +    Core::System& system_;
 +    std::string azaharVersion_;
++    std::function<void()> onQuitSession_;
++    std::function<void()> onQuitApplication_;
++    // Rising-edge tracking for the two callbacks above -- see
++    // applyGenericInput()'s use of this, mirroring melonDS's own
++    // EmuInstanceInput.cpp's lastRemoteEmulatorActions member and the
++    // reasoning in its comment (the client resends its confirmed choice
++    // for a short window to survive UDP loss, so a naive "is the bit
++    // set" check would fire the callback repeatedly for one menu pick).
++    uint32_t lastEmulatorActions_ = 0;
 +
 +    std::shared_ptr<RemoteInputStatus> inputStatus_;
 +
@@ -743,25 +849,52 @@ index 0000000..bee24d3
 +} // namespace CitraQt::RemoteServer
 diff --git a/src/citra_qt/remote_server/RemoteServerBridge.cpp b/src/citra_qt/remote_server/RemoteServerBridge.cpp
 new file mode 100644
-index 0000000..7b01fb0
+index 0000000..646019a
 --- /dev/null
 +++ b/src/citra_qt/remote_server/RemoteServerBridge.cpp
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,91 @@
 +#include "citra_qt/remote_server/RemoteServerBridge.h"
 +
 +#include <algorithm>
 +#include <chrono>
 +#include <cstdio>
 +
++#include <QMetaObject>
++
++#include "citra_qt/citra_qt.h"
 +#include "citra_qt/remote_server/AzaharAdapter.h"
 +
 +namespace CitraQt::RemoteServer {
 +
 +RemoteServerBridge::RemoteServerBridge(Core::System& system, std::string azaharVersion,
-+                                       std::string adapterSocketPath) {
-+    adapter_ = std::make_unique<AzaharAdapter>(system, std::move(azaharVersion));
++                                       std::string adapterSocketPath, GMainWindow* mainWindow) {
++    // Both callbacks below fire from a non-Qt thread (AzaharAdapter's
++    // from whatever thread applyGenericInput() runs on, AdapterIpcClient's
++    // connection-state one from its own readLoop() thread) -- marshaled
++    // onto Qt's UI thread via QMetaObject::invokeMethod's queued
++    // connection, same pattern melonDS's own EmuInstance.cpp uses for its
++    // pending-approval dialog and screen-layout-change callback. "close"
++    // is QWidget's own public slot (no GMainWindow-specific declaration
++    // needed); OnStopGame/OnRemoteClientConnectionChanged are
++    // GMainWindow's -- Qt's meta-object system can invoke a private slot
++    // by name regardless of C++ access control, same as melonDS's
++    // onEjectCart()/onQuit() invocations.
++    adapter_ = std::make_unique<AzaharAdapter>(
++        system, std::move(azaharVersion),
++        [mainWindow]() {
++            if (mainWindow) QMetaObject::invokeMethod(mainWindow, "OnStopGame", Qt::QueuedConnection);
++        },
++        [mainWindow]() {
++            if (mainWindow) QMetaObject::invokeMethod(mainWindow, "close", Qt::QueuedConnection);
++        });
 +    ipcClient_ = std::make_unique<melonds_remote::adapter::ipc::AdapterIpcClient>(
 +        *adapter_, std::move(adapterSocketPath));
++    ipcClient_->setConnectionStateCallback([mainWindow](bool connected) {
++        if (mainWindow) {
++            QMetaObject::invokeMethod(mainWindow, "OnRemoteClientConnectionChanged", Qt::QueuedConnection,
++                                       Q_ARG(bool, connected));
++        }
++    });
 +}
 +
 +RemoteServerBridge::~RemoteServerBridge() {
@@ -813,10 +946,10 @@ index 0000000..7b01fb0
 +} // namespace CitraQt::RemoteServer
 diff --git a/src/citra_qt/remote_server/RemoteServerBridge.h b/src/citra_qt/remote_server/RemoteServerBridge.h
 new file mode 100644
-index 0000000..a4c42e4
+index 0000000..e4dde1c
 --- /dev/null
 +++ b/src/citra_qt/remote_server/RemoteServerBridge.h
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,59 @@
 +#pragma once
 +
 +// Owns an AzaharAdapter and connects it out to an already-running
@@ -839,6 +972,8 @@ index 0000000..a4c42e4
 +class System;
 +}
 +
++class GMainWindow;
++
 +namespace CitraQt::RemoteServer {
 +
 +class AzaharAdapter;
@@ -849,8 +984,15 @@ index 0000000..a4c42e4
 +    // melonds_remote::adapter::ipc::defaultAdapterSocketPath(), matching
 +    // the standalone host's own --adapter-socket default -- same
 +    // convention melonDS's out-of-process mode already uses.
++    // `mainWindow` must outlive this object (BootGame()'s caller, same
++    // lifetime as `system`) -- used only to marshal the exit-menu and
++    // remote-client-connection-changed callbacks below onto Qt's UI
++    // thread via QMetaObject::invokeMethod, since AzaharAdapter's own
++    // callbacks fire from AdapterIpcClient's background thread. May be
++    // nullptr (e.g. in a future headless/test context), in which case
++    // those callbacks are simply skipped.
 +    RemoteServerBridge(Core::System& system, std::string azaharVersion,
-+                       std::string adapterSocketPath);
++                       std::string adapterSocketPath, GMainWindow* mainWindow);
 +    ~RemoteServerBridge();
 +
 +    RemoteServerBridge(const RemoteServerBridge&) = delete;
@@ -1104,10 +1246,10 @@ index 0000000..1945b0b
 +} // namespace melonds_remote::adapter
 diff --git a/src/citra_qt/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/adapter_ipc_client.h b/src/citra_qt/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/adapter_ipc_client.h
 new file mode 100644
-index 0000000..692bf69
+index 0000000..5afcace
 --- /dev/null
 +++ b/src/citra_qt/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/adapter_ipc_client.h
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,77 @@
 +#pragma once
 +
 +// The adapter-process side of the local adapter IPC channel (GitHub
@@ -1126,6 +1268,7 @@ index 0000000..692bf69
 +
 +#include <atomic>
 +#include <cstdint>
++#include <functional>
 +#include <string>
 +#include <thread>
 +#include <unordered_map>
@@ -1155,8 +1298,15 @@ index 0000000..692bf69
 +    void disconnect();
 +    bool isConnected() const { return connected_.load(); }
 +
++    // Optional -- if set, invoked from readLoop()'s own thread (never
++    // the caller's) whenever a ClientConnectionChanged message arrives.
++    // Set this before connect() so an early message right after the
++    // handshake isn't missed. No-op (message is just dropped) if unset,
++    // same as any other message type this adapter doesn't care about.
++    void setConnectionStateCallback(std::function<void(bool)> callback);
++
 +private:
-+    void readLoop();  // blocking recv: InputState/ReleaseInputs/Heartbeat/Disconnect -> localAdapter
++    void readLoop();  // blocking recv: InputState/ReleaseInputs/ClientConnectionChanged/Heartbeat/Disconnect -> localAdapter
 +    void writeLoop(); // periodic: localAdapter's frames/state -> Frame/StateChanged/Heartbeat messages
 +
 +    IEmulatorAdapter& localAdapter_;
@@ -1172,15 +1322,17 @@ index 0000000..692bf69
 +    // one -- avoids re-sending an unchanged frame every poll tick.
 +    std::unordered_map<std::string, uint64_t> lastSentFrameIndex_;
 +    SessionState lastSentState_ = SessionState::Available;
++
++    std::function<void(bool)> connectionStateCallback_;
 +};
 +
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/citra_qt/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/ipc_protocol.h b/src/citra_qt/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/ipc_protocol.h
 new file mode 100644
-index 0000000..67e8489
+index 0000000..02a923d
 --- /dev/null
 +++ b/src/citra_qt/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/ipc_protocol.h
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,126 @@
 +#pragma once
 +
 +// Wire format for the Host-Service<->adapter local IPC channel (GitHub
@@ -1233,6 +1385,14 @@ index 0000000..67e8489
 +    StateChanged  = 6, // adapter -> service: SessionState
 +    Heartbeat     = 7, // either direction: no payload
 +    Disconnect    = 8, // either direction: no payload, graceful teardown
++    // service -> adapter: 1 byte, 1 = a remote client is now connected
++    // and streaming, 0 = disconnected. Lets an out-of-process adapter's
++    // own frontend (e.g. Azahar's Qt window) mirror melonDS's in-process
++    // "show only the top screen locally while a client is streaming"
++    // behavior, even though the adapter's own process has no other way
++    // to know a client is connected -- that state lives entirely in the
++    // separate Host Service process (NetServer), not here.
++    ClientConnectionChanged = 9,
 +};
 +
 +struct IpcHeader {
@@ -1294,6 +1454,9 @@ index 0000000..67e8489
 +
 +void serializeSessionState(melonds_remote::ByteBuffer& out, SessionState state);
 +std::optional<SessionState> parseSessionState(const uint8_t* data, size_t size);
++
++void serializeClientConnectionChanged(melonds_remote::ByteBuffer& out, bool connected);
++std::optional<bool> parseClientConnectionChanged(const uint8_t* data, size_t size);
 +
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/citra_qt/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/socket_path.h b/src/citra_qt/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/socket_path.h
@@ -1955,10 +2118,10 @@ index 0000000..b9ffdc7
 +} // namespace melonds_remote
 diff --git a/src/citra_qt/remote_server/adapter_sdk/src/adapter_ipc_client.cpp b/src/citra_qt/remote_server/adapter_sdk/src/adapter_ipc_client.cpp
 new file mode 100644
-index 0000000..716e84c
+index 0000000..2db237e
 --- /dev/null
 +++ b/src/citra_qt/remote_server/adapter_sdk/src/adapter_ipc_client.cpp
-@@ -0,0 +1,290 @@
+@@ -0,0 +1,301 @@
 +#include "melonds_remote/adapter/ipc/adapter_ipc_client.h"
 +
 +#include <sys/socket.h>
@@ -2046,6 +2209,10 @@ index 0000000..716e84c
 +
 +AdapterIpcClient::~AdapterIpcClient() {
 +    disconnect();
++}
++
++void AdapterIpcClient::setConnectionStateCallback(std::function<void(bool)> callback) {
++    connectionStateCallback_ = std::move(callback);
 +}
 +
 +bool AdapterIpcClient::connect() {
@@ -2169,6 +2336,13 @@ index 0000000..716e84c
 +            case IpcMessageType::ReleaseInputs:
 +                localAdapter_.releaseAllInputs();
 +                break;
++            case IpcMessageType::ClientConnectionChanged: {
++                auto connected = parseClientConnectionChanged(msg->second.data(), msg->second.size());
++                if (connected && connectionStateCallback_) {
++                    connectionStateCallback_(*connected);
++                }
++                break;
++            }
 +            case IpcMessageType::Heartbeat:
 +                break;
 +            case IpcMessageType::Disconnect:
@@ -2251,10 +2425,10 @@ index 0000000..716e84c
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/citra_qt/remote_server/adapter_sdk/src/ipc_protocol.cpp b/src/citra_qt/remote_server/adapter_sdk/src/ipc_protocol.cpp
 new file mode 100644
-index 0000000..a8f49c7
+index 0000000..2abaf55
 --- /dev/null
 +++ b/src/citra_qt/remote_server/adapter_sdk/src/ipc_protocol.cpp
-@@ -0,0 +1,324 @@
+@@ -0,0 +1,333 @@
 +#include "melonds_remote/adapter/ipc/ipc_protocol.h"
 +
 +using melonds_remote::ByteBuffer;
@@ -2576,6 +2750,15 @@ index 0000000..a8f49c7
 +    uint8_t value = data[0];
 +    if (value > static_cast<uint8_t>(SessionState::Error)) return std::nullopt;
 +    return static_cast<SessionState>(value);
++}
++
++void serializeClientConnectionChanged(ByteBuffer& out, bool connected) {
++    out.push_back(connected ? 1 : 0);
++}
++
++std::optional<bool> parseClientConnectionChanged(const uint8_t* data, size_t size) {
++    if (data == nullptr || size != 1) return std::nullopt;
++    return data[0] != 0;
 +}
 +
 +} // namespace melonds_remote::adapter::ipc

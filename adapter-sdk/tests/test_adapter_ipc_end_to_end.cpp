@@ -106,6 +106,49 @@ MDR_TEST(ipc_input_relayed_from_server_to_adapter) {
     server.stop();
 }
 
+MDR_TEST(ipc_client_connection_changed_relayed_from_server_to_adapter) {
+    std::string path = uniqueSocketPath();
+    AdapterIpcServer server(path);
+    MDR_CHECK(server.start());
+
+    FakeDsAdapter ds;
+    AdapterIpcClient client(ds, path);
+    std::atomic<int> callbackCount{0};
+    std::atomic<bool> lastConnected{false};
+    client.setConnectionStateCallback([&](bool connected) {
+        lastConnected = connected;
+        ++callbackCount;
+    });
+    MDR_CHECK(client.connect());
+    MDR_CHECK(waitUntil([&] { return server.hasConnectedAdapter(); }));
+
+    // notifyClientConnectionChanged() is a Host-Service-facing call
+    // (mirrors applyGenericInput()/releaseAllInputs() above) -- must
+    // reach AdapterIpcClient's callback on the other side of the socket.
+    server.notifyClientConnectionChanged(true);
+    MDR_CHECK(waitUntil([&] { return callbackCount.load() == 1; }));
+    MDR_CHECK(lastConnected.load());
+
+    server.notifyClientConnectionChanged(false);
+    MDR_CHECK(waitUntil([&] { return callbackCount.load() == 2; }));
+    MDR_CHECK(!lastConnected.load());
+
+    client.disconnect();
+    server.stop();
+}
+
+MDR_TEST(ipc_notify_client_connection_changed_is_safe_noop_with_no_adapter) {
+    std::string path = uniqueSocketPath();
+    AdapterIpcServer server(path);
+    MDR_CHECK(server.start());
+
+    // No adapter ever connects -- must not crash or block.
+    server.notifyClientConnectionChanged(true);
+    server.notifyClientConnectionChanged(false);
+
+    server.stop();
+}
+
 MDR_TEST(ipc_frame_relayed_from_adapter_to_server) {
     std::string path = uniqueSocketPath();
     AdapterIpcServer server(path);

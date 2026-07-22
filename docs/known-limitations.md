@@ -4274,6 +4274,87 @@ but the fix hasn't been visually confirmed against the original repro),
 and whether the Azahar joystick fix restores movement in an actual
 game session on real controller hardware.
 
+## Azahar catches up to melonDS: top-screen-only-while-streaming, exit menu, real analog stick (2026-07-22)
+
+Three more real-usage gaps, all specific to Azahar (3DS) sessions --
+each one either melonDS already handled correctly, or the client
+already had the wire support for but never actually used.
+
+**Azahar's local window didn't show top-screen-only while a client was
+streaming.** melonDS has done this since early on (`EmuInstance::
+startRemoteServer()`'s connected-callback forces `ScreenSizing::TopOnly`
+locally, restoring whatever was configured before on disconnect) --
+Azahar never got the equivalent. The reason it was missing, not just an
+oversight: melonDS runs its own `NetServer` in-process, so it directly
+knows when a client connects. Azahar's adapter (`AzaharAdapter`) always
+runs out-of-process, connected to a *separate* Host Service over the
+adapter IPC channel -- the process actually running Azahar's Qt window
+has no way to know a client connected at all, since that state lives
+entirely in the other process's `NetServer`. Fixed by adding a new
+message to the adapter IPC protocol itself
+(`IpcMessageType::ClientConnectionChanged`, service -> adapter,
+1-byte bool payload), wired end to end: `NetServerConfig::
+onClientConnectionChanged` (already existed, was simply never
+connected to anything) -> `main.cpp` now forwards it to
+`AdapterIpcServer::notifyClientConnectionChanged()` (new) ->
+`AdapterIpcClient::setConnectionStateCallback()` (new) ->
+`RemoteServerBridge` marshals it onto Qt's UI thread via
+`QMetaObject::invokeMethod` -> a new `GMainWindow::
+OnRemoteClientConnectionChanged(bool)` slot that mirrors melonDS's
+save-current-layout/force-`SingleScreen`/restore-on-disconnect sequence
+exactly (also saving/forcing `swap_screen`, since `SingleScreen` alone
+still shows whichever screen that flag says is primary).
+
+**"Exit ROM"/"Exit Azahar Entirely" from the client's menu did
+nothing.** The wire protocol and `GenericEmulatorAction` bitmask
+(`GenericAction_QuitSession`/`GenericAction_QuitApplication`) were
+already there and already reaching `AzaharAdapter::applyGenericInput()`
+correctly (confirmed by reading the whole chain, not assumed) --
+`applyGenericInput()` simply never read those two bits at all, only
+buttons/sticks/touch. Fixed by adding the same rising-edge-detected
+dispatch melonDS's `EmuInstanceInput.cpp` already does for this exact
+purpose: `AzaharAdapter` takes two new optional constructor callbacks
+(`onQuitSession`/`onQuitApplication`), invoked on a bit's rising edge
+(not "is it set this frame", since the client resends its confirmed
+choice for a short window to survive UDP loss) via
+`QMetaObject::invokeMethod` into `OnStopGame`/`close` respectively --
+wired up in `RemoteServerBridge`'s constructor, which now also takes a
+`GMainWindow*` for exactly this and the previous fix's marshaling.
+
+**The client's analog stick was never actually sent as analog data --
+only as a digital D-pad substitute.** `protocol.h`'s `ControllerState`
+has had `leftStickX/Y`/`rightStickX/Y` fields all along, and
+`host/adapter_bridge.cpp` already forwards them into `GenericInputState`
+for whichever adapter is connected -- but `client/src/main.cpp` never
+populated them. Instead, `buildButtonsFromGamepad()`'s "left stick as an
+alternate D-pad" (spec 7.3, a real DS-era convenience -- DS has no
+analog stick at all) ran unconditionally, so tilting the stick during a
+3DS/Azahar session pressed the physical D-Pad instead of moving the
+Circle Pad, since `AzaharAdapter::registerInputEngine()` binds those to
+two independent 3DS inputs. Fixed by: (1) always sending real stick data
+(`leftStickX/Y` from `SDL_GAMEPAD_AXIS_LEFTX/Y`, `rightStickX/Y` from
+`RIGHTX/Y`, Y negated to match `hid.cpp`'s `GetStickDirectionState()`
+convention of positive-Y-is-up, confirmed by reading it -- SDL's raw
+axis convention is the opposite), and (2) gating the D-pad-emulation
+fallback to DS sessions only (`sessionSystemId == "nds"`, an explicit
+allow-list rather than excluding "3ds" specifically, so a future system
+with its own real stick, e.g. Wii U, doesn't inherit it by accident).
+
+**Verified**: full `ctest` suite passes, including two new adapter-sdk
+IPC tests for `ClientConnectionChanged` (a real end-to-end
+server<->client round trip over a real Unix socket, plus a
+no-connected-adapter no-op case) and two new `ipc_protocol` serialize/
+parse unit tests. The Azahar patch was regenerated via the established
+scratch-clone workflow: diffed against the previously-committed patch
+to confirm only these three features' lines changed, applied cleanly to
+a pristine checkout at the pinned commit, and `citra_qt` rebuilt clean
+with all three. **Not yet verified**: none of the three have been
+confirmed against real hardware/a real client-host session yet --
+specifically, whether the local screen actually switches to top-only on
+connect (and correctly restores on disconnect), whether Exit ROM/Exit
+Azahar Entirely actually take effect, and whether the Circle
+Pad/C-Stick now move correctly instead of the D-Pad.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

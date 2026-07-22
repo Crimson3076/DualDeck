@@ -351,6 +351,15 @@ void AdapterIpcServer::releaseAllInputs() {
     sendMessage(fd, IpcMessageType::ReleaseInputs, {});
 }
 
+void AdapterIpcServer::notifyClientConnectionChanged(bool connected) {
+    int fd = clientFd_.load();
+    if (fd < 0) return; // no adapter connected -- safe no-op, matches releaseAllInputs()'s same pattern
+    melonds_remote::ByteBuffer payload;
+    serializeClientConnectionChanged(payload, connected);
+    std::lock_guard<std::mutex> lock(writeMutex_);
+    sendMessage(fd, IpcMessageType::ClientConnectionChanged, payload);
+}
+
 bool AdapterIpcServer::latestFrame(const std::string& surfaceId, SurfaceFrame& outFrame) {
     std::lock_guard<std::mutex> lock(sessionMutex_);
     auto it = latestFrames_.find(surfaceId);

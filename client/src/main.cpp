@@ -136,6 +136,13 @@ const ButtonMapping kButtonMappings[] = {
 
 constexpr int16_t kStickDeadzone = 8000;
 
+// Plain `-axis` overflows int16_t's range at the negative extreme
+// (-(-32768) doesn't fit in 16 bits) -- clamps to the wire's own
+// documented -32768..32767 range instead of relying on wraparound.
+int16_t negateStickAxis(int16_t axis) {
+    return axis == INT16_MIN ? INT16_MAX : static_cast<int16_t>(-axis);
+}
+
 // Shown on the discovery and connecting screens (spec request: tell the
 // user how to open the menu up front, not only once it's already open --
 // the pause menu's own "L3+R3 TO CLOSE" hint doesn't help someone
@@ -154,7 +161,18 @@ uint64_t wallClockNowUs() {
     return static_cast<uint64_t>(duration_cast<microseconds>(system_clock::now().time_since_epoch()).count());
 }
 
-uint16_t buildButtonsFromGamepad(SDL_Gamepad* gamepad) {
+// `stickEmulatesDpad` (spec section 7.3's "left stick as an alternate
+// D-pad") defaults to on since it's harmless local visual feedback for
+// the setup wizard's controller test, the only other caller. The real
+// per-frame gameplay call site below passes false for a 3DS/Azahar
+// session: that stick has a genuine analog Circle Pad of its own (sent
+// separately, see buildControllerState()), and folding the same stick
+// tilt into the physical D-Pad's digital bits too would fire both at
+// once for one physical motion -- confirmed via AzaharAdapter.cpp's
+// registerInputEngine(), which binds the D-Pad's four native buttons to
+// GenericButton_Dpad* independently of the Circle Pad's own analog
+// engine binding, so a game watching either one would see it.
+uint16_t buildButtonsFromGamepad(SDL_Gamepad* gamepad, bool stickEmulatesDpad = true) {
     if (!gamepad) return 0;
 
     uint16_t buttons = 0;
@@ -164,13 +182,14 @@ uint16_t buildButtonsFromGamepad(SDL_Gamepad* gamepad) {
         }
     }
 
-    // Optional: left stick as an alternate D-pad (spec section 7.3).
-    int16_t leftX = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX);
-    int16_t leftY = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY);
-    if (leftX > kStickDeadzone) buttons |= DSButton_Right;
-    if (leftX < -kStickDeadzone) buttons |= DSButton_Left;
-    if (leftY > kStickDeadzone) buttons |= DSButton_Down;
-    if (leftY < -kStickDeadzone) buttons |= DSButton_Up;
+    if (stickEmulatesDpad) {
+        int16_t leftX = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX);
+        int16_t leftY = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY);
+        if (leftX > kStickDeadzone) buttons |= DSButton_Right;
+        if (leftX < -kStickDeadzone) buttons |= DSButton_Left;
+        if (leftY > kStickDeadzone) buttons |= DSButton_Down;
+        if (leftY < -kStickDeadzone) buttons |= DSButton_Up;
+    }
 
     return buttons;
 }
@@ -1477,6 +1496,12 @@ int main(int argc, char** argv) {
     // "Change Host" since a fresh discovery selection overwrites it.
     std::string sessionSystemName;
     std::string sessionAdapterName;
+    // Machine-comparable systemId ("nds", "3ds", ...), tracked alongside
+    // sessionSystemName/sessionAdapterName for the same reasons (primed
+    // from discovery, refreshed from HelloAck) -- used to gate the
+    // stick-as-alternate-d-pad convenience below to DS sessions only, see
+    // its use site's comment.
+    std::string sessionSystemId;
     auto identityLine = [&]() -> std::string {
         if (sessionSystemName.empty() && sessionAdapterName.empty()) return "";
         if (sessionAdapterName.empty()) return sessionSystemName;
@@ -1536,6 +1561,7 @@ int main(int argc, char** argv) {
             // last reported.
             sessionSystemName = selected->system.systemName;
             sessionAdapterName = selected->adapter.adapterName;
+            sessionSystemId = selected->system.systemId;
             // Acknowledge the button press before saving the selection or
             // starting any socket work. The previous synchronous connect
             // left the picker frozen until the host responded, making a
@@ -2050,6 +2076,7 @@ int main(int argc, char** argv) {
                 AdapterIdentity hostAdapter = net.hostAdapterIdentity();
                 if (!hostSystem.systemName.empty()) sessionSystemName = hostSystem.systemName;
                 if (!hostAdapter.adapterName.empty()) sessionAdapterName = hostAdapter.adapterName;
+                if (!hostSystem.systemId.empty()) sessionSystemId = hostSystem.systemId;
                 if (nowConnected && wasConnected) {
                     // A mode transition mid-session, not the initial
                     // connect (which reconnectThread already logs) --
@@ -2168,7 +2195,34 @@ int main(int argc, char** argv) {
                 ControllerState state;
                 state.sequence = sequence++;
                 state.clientTimestampUs = wallClockNowUs();
-                state.dsButtons = buildButtonsFromGamepad(gamepad);
+                // Stick-as-alternate-D-pad (spec 7.3) only makes sense for
+                // a system with no analog stick of its own -- DS is the
+                // only one of those. Every other system's stick is sent
+                // as real analog data below instead (never both at once
+                // for one physical motion -- see buildButtonsFromGamepad's
+                // comment); an explicit allow-list rather than excluding
+                // "3ds" specifically, so a future system (e.g. Wii U,
+                // whose GamePad has two real analog sticks already)
+                // doesn't inherit DS's convenience by accident.
+                state.dsButtons = buildButtonsFromGamepad(gamepad, sessionSystemId == "nds");
+
+                // Real analog stick data (protocol.h's leftStickX/Y,
+                // rightStickX/Y) -- always sent regardless of session
+                // system; host/adapter_bridge.cpp forwards it straight
+                // into GenericInputState for whichever adapter is
+                // connected, and an adapter with no analog input (DS)
+                // simply never reads it. SDL's gamepad Y axis is positive
+                // = down; negated here to match the positive = up
+                // convention src/core/hle/service/hid/hid.cpp's
+                // GetStickDirectionState() uses for the 3DS circle pad
+                // (confirmed by reading it, not assumed) -- X needs no
+                // flip since positive = right agrees on both sides.
+                if (gamepad) {
+                    state.leftStickX = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX);
+                    state.leftStickY = negateStickAxis(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY));
+                    state.rightStickX = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTX);
+                    state.rightStickY = negateStickAxis(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTY));
+                }
                 // See pendingEmulatorAction's declaration above for why this
                 // resends for a window instead of just the one packet that
                 // set it.

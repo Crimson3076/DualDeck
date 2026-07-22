@@ -50,6 +50,14 @@ enum class IpcMessageType : uint16_t {
     StateChanged  = 6, // adapter -> service: SessionState
     Heartbeat     = 7, // either direction: no payload
     Disconnect    = 8, // either direction: no payload, graceful teardown
+    // service -> adapter: 1 byte, 1 = a remote client is now connected
+    // and streaming, 0 = disconnected. Lets an out-of-process adapter's
+    // own frontend (e.g. Azahar's Qt window) mirror melonDS's in-process
+    // "show only the top screen locally while a client is streaming"
+    // behavior, even though the adapter's own process has no other way
+    // to know a client is connected -- that state lives entirely in the
+    // separate Host Service process (NetServer), not here.
+    ClientConnectionChanged = 9,
 };
 
 struct IpcHeader {
@@ -111,5 +119,8 @@ std::optional<SurfaceFrame> parseSurfaceFrame(const uint8_t* data, size_t size);
 
 void serializeSessionState(melonds_remote::ByteBuffer& out, SessionState state);
 std::optional<SessionState> parseSessionState(const uint8_t* data, size_t size);
+
+void serializeClientConnectionChanged(melonds_remote::ByteBuffer& out, bool connected);
+std::optional<bool> parseClientConnectionChanged(const uint8_t* data, size_t size);
 
 } // namespace melonds_remote::adapter::ipc

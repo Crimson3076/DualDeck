@@ -87,6 +87,10 @@ AdapterIpcClient::~AdapterIpcClient() {
     disconnect();
 }
 
+void AdapterIpcClient::setConnectionStateCallback(std::function<void(bool)> callback) {
+    connectionStateCallback_ = std::move(callback);
+}
+
 bool AdapterIpcClient::connect() {
     if (socketPath_.empty()) {
         std::fprintf(stderr, "AdapterIpcClient: no usable socket path\n");
@@ -208,6 +212,13 @@ void AdapterIpcClient::readLoop() {
             case IpcMessageType::ReleaseInputs:
                 localAdapter_.releaseAllInputs();
                 break;
+            case IpcMessageType::ClientConnectionChanged: {
+                auto connected = parseClientConnectionChanged(msg->second.data(), msg->second.size());
+                if (connected && connectionStateCallback_) {
+                    connectionStateCallback_(*connected);
+                }
+                break;
+            }
             case IpcMessageType::Heartbeat:
                 break;
             case IpcMessageType::Disconnect:

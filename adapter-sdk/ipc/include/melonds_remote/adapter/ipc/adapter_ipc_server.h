@@ -54,6 +54,14 @@ public:
     // currently connected (not yet disconnected/timed out).
     bool hasConnectedAdapter() const;
 
+    // Forwards a ClientConnectionChanged message to whatever adapter is
+    // currently connected, letting an out-of-process adapter's own
+    // frontend mirror melonDS's "top screen only while streaming"
+    // behavior -- see ipc_protocol.h's ClientConnectionChanged comment.
+    // Safe no-op if no adapter is currently connected (same pattern as
+    // applyGenericInput()/releaseAllInputs() below).
+    void notifyClientConnectionChanged(bool connected);
+
     // IEmulatorAdapter -- proxied to whatever adapter is currently
     // connected, or a safe no-op/empty-default answer when none is.
     AdapterCapabilities capabilities() const override;

@@ -225,3 +225,18 @@ MDR_TEST(session_state_rejects_out_of_range_value) {
     ByteBuffer buf{200};
     MDR_CHECK(!parseSessionState(buf.data(), buf.size()).has_value());
 }
+
+MDR_TEST(client_connection_changed_round_trip) {
+    for (bool connected : {true, false}) {
+        ByteBuffer buf;
+        serializeClientConnectionChanged(buf, connected);
+        auto parsed = parseClientConnectionChanged(buf.data(), buf.size());
+        MDR_CHECK(parsed.has_value());
+        MDR_CHECK(*parsed == connected);
+    }
+}
+
+MDR_TEST(client_connection_changed_rejects_wrong_size) {
+    ByteBuffer buf{1, 1};
+    MDR_CHECK(!parseClientConnectionChanged(buf.data(), buf.size()).has_value());
+}

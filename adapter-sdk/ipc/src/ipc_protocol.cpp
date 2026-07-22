@@ -321,4 +321,13 @@ std::optional<SessionState> parseSessionState(const uint8_t* data, size_t size) 
     return static_cast<SessionState>(value);
 }
 
+void serializeClientConnectionChanged(ByteBuffer& out, bool connected) {
+    out.push_back(connected ? 1 : 0);
+}
+
+std::optional<bool> parseClientConnectionChanged(const uint8_t* data, size_t size) {
+    if (data == nullptr || size != 1) return std::nullopt;
+    return data[0] != 0;
+}
+
 } // namespace melonds_remote::adapter::ipc

@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -45,8 +46,15 @@ public:
     void disconnect();
     bool isConnected() const { return connected_.load(); }
 
+    // Optional -- if set, invoked from readLoop()'s own thread (never
+    // the caller's) whenever a ClientConnectionChanged message arrives.
+    // Set this before connect() so an early message right after the
+    // handshake isn't missed. No-op (message is just dropped) if unset,
+    // same as any other message type this adapter doesn't care about.
+    void setConnectionStateCallback(std::function<void(bool)> callback);
+
 private:
-    void readLoop();  // blocking recv: InputState/ReleaseInputs/Heartbeat/Disconnect -> localAdapter
+    void readLoop();  // blocking recv: InputState/ReleaseInputs/ClientConnectionChanged/Heartbeat/Disconnect -> localAdapter
     void writeLoop(); // periodic: localAdapter's frames/state -> Frame/StateChanged/Heartbeat messages
 
     IEmulatorAdapter& localAdapter_;
@@ -62,6 +70,8 @@ private:
     // one -- avoids re-sending an unchanged frame every poll tick.
     std::unordered_map<std::string, uint64_t> lastSentFrameIndex_;
     SessionState lastSentState_ = SessionState::Available;
+
+    std::function<void(bool)> connectionStateCallback_;
 };
 
 } // namespace melonds_remote::adapter::ipc

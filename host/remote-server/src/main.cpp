@@ -424,6 +424,17 @@ int main(int argc, char** argv) {
         }
         melonds_remote::host::AdapterBridge bridge(adapterServer);
 
+        // Lets an out-of-process adapter's own frontend (e.g. Azahar's Qt
+        // window) mirror melonDS's in-process "show top screen only while
+        // a client is streaming" behavior, even though that adapter's own
+        // process has no other way to learn a client connected -- see
+        // ipc_protocol.h's ClientConnectionChanged comment. Set before
+        // NetServer is constructed below since NetServerConfig is copied
+        // in, not referenced.
+        config.onClientConnectionChanged = [&adapterServer](bool connected) {
+            adapterServer.notifyClientConnectionChanged(connected);
+        };
+
         // config's own systemIdentity/adapterIdentity is irrelevant here
         // beyond providing the --system-id/--adapter-id fallback values
         // below -- ModeCoordinator::start() immediately overwrites
