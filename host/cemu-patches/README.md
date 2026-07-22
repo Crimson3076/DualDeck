@@ -74,10 +74,15 @@ Nintendo Wii U.
    `Vulkan/VulkanRenderer.{h,cpp}`) -- the new `CaptureSurfaceBGRA()`
    virtual, default no-op (so an unimplemented backend like Metal simply
    never produces a frame rather than failing to build), with real
-   OpenGL (`glGetTexImage(..., GL_BGRA, ...)`, direct byte order, no
-   sRGB correction) and Vulkan (blit-to-RGBA8-if-needed + copy-to-buffer +
-   submit + wait, structurally mirroring `HandleScreenshotRequest()`'s
-   existing one-shot screenshot path) implementations.
+   OpenGL (`glGetTexImage(..., GL_BGRA, ...)`, direct byte order) and
+   Vulkan (blit-to-RGBA8-if-needed + copy-to-buffer + submit + wait,
+   structurally mirroring `HandleScreenshotRequest()`'s existing one-shot
+   screenshot path) implementations. Both apply the same
+   srcUsesSRGB/dstUsesSRGB correction (via the existing
+   `Renderer::SRGBComponentToRGB`/`RGBComponentToSRGB`) that
+   `HandleScreenshotRequest()` itself applies -- see "First real
+   end-to-end run findings" below for why this was added after the
+   first successful boot, not in the original pass.
 7. `src/input/api/InputAPI.h` -- new `InputAPI::DualDeckRemote` enum
    value + `to_string()`/`from_string()` cases.
 8. `src/input/emulated/VPADController.cpp` -- `set_default_mapping()`
@@ -183,12 +188,60 @@ own directory happens to be `gui/wxgui/` itself. Fixed by adding
 `target_include_directories(CemuRemoteServer PUBLIC "../gui/wxgui")` to
 `src/remote_server/CMakeLists.txt`.
 
-Concretely, still unverified:
-- **A full, successful compile.** As of this third fix, it hasn't been
-  through CI yet -- the previous attempt got to 530/546 files before
-  failing on the last of the four new `remote_server/` `.cpp` files.
-- **No real Wii U game has been run.** Video capture, the auto-injected
-  VPAD mapping, and the wx GUI quit-session/quit-application wiring have
-  all been read and reasoned about but never observed taking effect.
-- End-to-end verification against a real DualDeck client is still
-  pending.
+The fourth CI build attempt (after the third fix above) succeeded, and a
+real end-to-end session followed: a Wii U game booted, a DualDeck client
+connected, video streamed, and the auto-wired VPAD player-1 mapping
+worked.
+
+## First real end-to-end run findings
+
+Testing the successful build surfaced three issues:
+
+1. **GamePad touchscreen input doesn't register.** Expected, not a bug --
+   see "No GamePad touchscreen support" above and
+   `docs/known-limitations.md`. Cemu has no touch-injection plumbing for
+   any input backend today; fixing this would mean building an entirely
+   new Cemu-side touch pipeline, out of scope for this pass.
+2. **Aspect ratio on the GamePad screen was wrong.** Root cause was on
+   the *client* side, not this patch: `computeAspectFitRect()`
+   (`protocol/src/touch_mapping.cpp`) hardcoded a 4:3 content aspect
+   ratio internally, which happened to be correct for melonDS (256x192)
+   and Azahar (320x240) but not for the Wii U GamePad's 854x480 (16:9)
+   output -- the first non-4:3 surface any adapter has ever streamed.
+   Fixed by adding an optional `contentAspect` parameter (default
+   `4.0/3.0`, preserving every existing caller) and passing the real
+   connected host's aspect ratio through at the client's one real
+   gameplay-loop call site (`client/src/main.cpp`), which already tracked
+   the actual reported dimensions via `textureWidth`/`textureHeight` --
+   no protocol or patch changes needed.
+3. **Colors came out slightly darker than Cemu's own window.** Root
+   cause: `CaptureSurfaceBGRA()`'s original implementation (both
+   backends) read back raw pixel bytes with no color-space correction,
+   on the reasoning that it was "cosmetic-only" compared to
+   `HandleScreenshotRequest()`'s existing sRGB<->linear handling. That
+   reasoning was wrong for a *live, continuously-displayed* stream (as
+   opposed to a one-off saved screenshot): when a render target's GX2
+   surface format is flagged sRGB but the buffer it's ultimately
+   composited into isn't (or vice versa -- exactly the
+   `srcUsesSRGB`/`dstUsesSRGB` mismatch `HandleScreenshotRequest()`
+   already checks for), the raw captured bytes are in the wrong gamma
+   space and read visibly darker/lighter once displayed remotely, even
+   though Cemu's own window looks correct (its normal present path
+   handles the conversion). Fixed by having both `CaptureSurfaceBGRA()`
+   implementations apply the exact same `srcUsesSRGB`/`dstUsesSRGB`
+   comparison and per-channel `SRGBComponentToRGB`/`RGBComponentToSRGB`
+   correction `HandleScreenshotRequest()` already uses, which required
+   adding a `padView` parameter to the virtual (to know which of
+   `LatteGPUState.tvBufferUsesSRGB`/`drcBufferUsesSRGB` applies) --
+   threaded through from `CemuAdapter::onSurfaceRendered()`'s existing
+   `isPadView` argument.
+
+Fixes 2 and 3 haven't been through a fifth CI build yet (fix 2 is a
+client-only change needing no Cemu rebuild at all; fix 3 needs one,
+since it lives inside this patch). Still unverified:
+- **A CI build of the fix-3 patch changes.** Not yet re-run through CI
+  since the third fix's successful build.
+- **Real confirmation that fix 3 actually resolves the color
+  difference against real Wii U game content in practice** (the fix
+  mirrors Cemu's own established correctness logic exactly, but hasn't
+  been re-tested against the same game/scene that showed the darkening).

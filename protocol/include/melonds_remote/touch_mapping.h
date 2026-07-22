@@ -22,10 +22,14 @@ struct RenderRect {
     double height = 0;
 };
 
-// Computes the largest 4:3 rectangle that fits within `surfaceWidth` x
-// `surfaceHeight`, centered on the surface. This is the "aspect-correct
-// fit" display mode and is the default per spec section 7.4.
-RenderRect computeAspectFitRect(double surfaceWidth, double surfaceHeight);
+// Computes the largest `contentAspect` (width/height) rectangle that fits
+// within `surfaceWidth` x `surfaceHeight`, centered on the surface. This is
+// the "aspect-correct fit" display mode and is the default per spec section
+// 7.4. `contentAspect` defaults to 4:3, the DS/3DS bottom-screen ratio;
+// callers streaming a differently-shaped surface (e.g. the Wii U GamePad's
+// 854x480 output) must pass its real aspect ratio instead.
+RenderRect computeAspectFitRect(double surfaceWidth, double surfaceHeight,
+                                 double contentAspect = 4.0 / 3.0);
 
 // Converts a raw touch/pointer position (in the same coordinate space as
 // `rect`, e.g. window pixels) into normalized DS touchscreen coordinates.

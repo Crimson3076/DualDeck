@@ -1777,7 +1777,14 @@ int main(int argc, char** argv) {
 
         bool runningInner = true;
         while (runningInner) {
-            RenderRect dsRect = computeAspectFitRect(kWindowWidth, kWindowHeight);
+            // Use the connected host's actual reported aspect ratio, not the
+            // DS/3DS-only 4:3 default -- textureWidth/textureHeight are
+            // updated to the real HelloAck-reported dimensions per host
+            // (e.g. Cemu's 854x480 GamePad surface), so a fixed 4:3 here
+            // would letterbox/stretch anything else incorrectly.
+            RenderRect dsRect = computeAspectFitRect(
+                kWindowWidth, kWindowHeight,
+                static_cast<double>(textureWidth) / static_cast<double>(textureHeight));
 
             SDL_Event event;
             while (SDL_PollEvent(&event)) {

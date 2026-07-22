@@ -4,19 +4,18 @@
 
 namespace melonds_remote {
 
-RenderRect computeAspectFitRect(double surfaceWidth, double surfaceHeight) {
-    if (surfaceWidth <= 0 || surfaceHeight <= 0) {
+RenderRect computeAspectFitRect(double surfaceWidth, double surfaceHeight,
+                                 double contentAspect) {
+    if (surfaceWidth <= 0 || surfaceHeight <= 0 || contentAspect <= 0) {
         return RenderRect{0, 0, 0, 0};
     }
 
-    constexpr double kAspect = 4.0 / 3.0;
-
     double width = surfaceWidth;
-    double height = width / kAspect;
+    double height = width / contentAspect;
 
     if (height > surfaceHeight) {
         height = surfaceHeight;
-        width = height * kAspect;
+        width = height * contentAspect;
     }
 
     RenderRect rect;

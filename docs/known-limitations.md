@@ -4486,6 +4486,48 @@ Azahar's) are all wired up. Still not build-verified locally for the
 same sandbox-network reason as before; the next `release.yml` run is
 the actual first real build attempt.
 
+## 2026-07-22: Cemu integration -- first successful build + end-to-end run, three findings
+
+Following the entry above, CI eventually produced a successful Cemu
+build (after three rounds of CMake include-path/precompiled-header
+fixes documented in `host/cemu-patches/README.md`), and a real
+end-to-end session followed: a Wii U game booted, a DualDeck client
+connected, video streamed, and the auto-wired VPAD player-1 mapping
+worked. That session surfaced three issues:
+
+1. **GamePad touchscreen input doesn't register.** Confirmed expected,
+   not a bug -- see the "Wii U GamePad touchscreen input is out of
+   scope" note above, unchanged by this entry.
+2. **Aspect ratio on the GamePad screen was wrong** (client-side bug,
+   not specific to this patch). `computeAspectFitRect()`
+   (`protocol/src/touch_mapping.cpp`) hardcoded a 4:3 content aspect
+   ratio, correct for melonDS/Azahar's 4:3-shaped screens but not the
+   Wii U GamePad's 854x480 (16:9) output -- the first non-4:3 surface
+   any adapter has streamed. Fixed with an optional `contentAspect`
+   parameter (default 4:3, so melonDS/Azahar/existing tests are
+   unaffected) and passing the connected host's real aspect ratio
+   through at the client's gameplay-loop call site.
+3. **Colors came out slightly darker than Cemu's own window.**
+   `Renderer::CaptureSurfaceBGRA()`'s original implementation
+   deliberately skipped the sRGB<->linear correction
+   `HandleScreenshotRequest()` already applies (`SRGBComponentToRGB`/
+   `RGBComponentToSRGB`, gated on a `srcUsesSRGB`/`dstUsesSRGB`
+   mismatch), reasoning it was cosmetic-only. That reasoning didn't
+   hold for a continuously-displayed live stream: a mismatched
+   sRGB/linear render target reads visibly darker/lighter once the raw
+   bytes are displayed remotely, even though Cemu's own window looks
+   right (its normal present path already handles the conversion).
+   Fixed by applying the same correction in both `CaptureSurfaceBGRA()`
+   implementations (OpenGL and Vulkan), which required adding a
+   `padView` parameter to the virtual so it can tell which of
+   `LatteGPUState.tvBufferUsesSRGB`/`drcBufferUsesSRGB` applies.
+
+The aspect-ratio fix is client-only and needs no Cemu rebuild. The
+color fix lives inside `host/cemu-patches/0001-remote-server-integration.patch`
+and hasn't been through a CI build yet as of this writing -- see
+`host/cemu-patches/README.md`'s "First real end-to-end run findings"
+section for the exact unverified-vs-verified breakdown.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
