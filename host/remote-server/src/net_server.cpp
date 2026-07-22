@@ -794,6 +794,43 @@ void NetServer::videoLoop() {
         sendTimeout.tv_usec = 0;
         ::setsockopt(clientFd, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, sizeof(sendTimeout));
 
+        // Bounds how many whole frames the OS can buffer ahead of what's
+        // actually gone out over the wire. Without this, a link too slow to
+        // keep up with the raw (uncompressed) frame rate doesn't drop
+        // frames -- TCP's in-order guarantee means every frame this loop
+        // successfully hands to send() below still gets delivered
+        // eventually, just increasingly late, since each new frame queues
+        // up behind whatever stale ones are still sitting in the kernel's
+        // send buffer. The loop below already only ever fetches the single
+        // truest-latest frame each tick (see its own comment), so nothing
+        // backs up at the application level -- but a large default
+        // SO_SNDBUF (typically hundreds of KB to a few MB) can still let
+        // several frames' worth of now-outdated bytes sit queued in the
+        // kernel, and growing latency under a bandwidth-constrained link
+        // (e.g. handheld Wi-Fi) is exactly what that produces. Sizing the
+        // buffer to roughly two frames' worth means the kernel can accept
+        // at most one frame ahead of what's in flight; once that fills,
+        // send() blocks (bounded by SO_SNDTIMEO above) until the network
+        // actually drains it, and by the time it does, the next loop
+        // iteration reaches for whatever's truly latest rather than
+        // whatever was queued -- so latency stays bounded to roughly one
+        // frame's transmission time instead of growing without limit.
+        {
+            uint16_t frameWidth = 0;
+            uint16_t frameHeight = 0;
+            {
+                std::lock_guard<std::mutex> lock(targetMutex_);
+                frameSource_->frameDimensions(frameWidth, frameHeight);
+            }
+            // 4 bytes/pixel: PixelFormat::Bgra8888 is the only pixel format
+            // any adapter in this project uses.
+            const size_t frameBytes = static_cast<size_t>(frameWidth) * frameHeight * 4;
+            if (frameBytes > 0) {
+                int sndBuf = static_cast<int>(std::min<size_t>(frameBytes * 2, 0x7fffffff));
+                ::setsockopt(clientFd, SOL_SOCKET, SO_SNDBUF, &sndBuf, sizeof(sndBuf));
+            }
+        }
+
         std::vector<uint8_t> frame;
         std::optional<uint64_t> lastSentFrameIndex;
         while (running_.load()) {

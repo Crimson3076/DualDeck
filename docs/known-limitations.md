@@ -4611,6 +4611,54 @@ See `host/cemu-patches/README.md`'s "Fourth real end-to-end run
 findings" section for the full writeup. Not yet re-verified through a
 CI build as of this writing.
 
+## 2026-07-22: Video streaming latency under a bandwidth-constrained link (all adapters)
+
+Reported against the Cemu integration (whose 854x480 GamePad surface is
+meaningfully bigger than melonDS's 256x192 or Azahar's 320x240 --
+roughly 5-8x more bytes per uncompressed frame), but the underlying
+issue and fix are project-wide, not Cemu-specific: switching which
+machine acted as host (including moving the host onto wired Ethernet)
+only partly helped, and switching client hardware (Steam Deck LCD ->
+ROG Ally X) also only partly helped -- neither eliminated it, which
+points at the shared network link's actual throughput rather than
+either endpoint's CPU/GPU.
+
+Root cause: video frames are sent over a plain TCP socket
+(`NetServer::videoLoop()`, `host/remote-server/src/net_server.cpp`),
+completely uncompressed. `videoLoop()` always fetches the single
+truest-latest frame each tick (no application-level queue), but TCP's
+own in-order delivery guarantee means every frame that actually gets
+handed to `send()` still has to be delivered in order -- so on a link
+too slow to keep up with the raw frame rate, frames don't get dropped,
+they queue up in the *kernel's* TCP send buffer (typically hundreds of
+KB to a few MB by OS default, enough to hold several whole frames) and
+get delivered increasingly late. Latency grows over time under
+sustained congestion rather than settling at a fixed one-frame delay --
+consistent with "noticeable lag" that persisted across otherwise-faster
+hardware on both ends.
+
+Fixed by sizing each video connection's `SO_SNDBUF` to roughly two
+frames' worth of bytes (computed from the connected adapter's actual
+`frameDimensions()`, so it's correctly sized per-adapter rather than a
+fixed constant). This bounds how many stale frames the kernel can
+buffer ahead of what's actually reached the network to about one, so
+once a slow link's queue fills, `send()` blocks (bounded by the
+existing 1-second `SO_SNDTIMEO`) until it actually drains, and the next
+loop iteration reaches for whatever's truly latest rather than whatever
+was queued -- keeping added latency bounded to roughly one frame's
+transmission time instead of growing without limit. Does not eliminate
+lag caused by a link that's *persistently* too slow for the raw frame
+rate (see "Still out of scope" below) -- only the unbounded growth a
+plain default-sized TCP buffer allowed on top of that.
+
+Still out of scope for this fix: real frame compression. The video
+pipeline has never compressed frames (raw BGRA end to end) -- viable
+for DS/3DS-sized surfaces, increasingly relevant for anything Cemu-
+sized or larger on a genuinely bandwidth-limited link (e.g. weaker
+Wi-Fi). Adding compression is a protocol-level change (affecting every
+adapter, the wire format, and both client and host) big enough to need
+its own separate design pass, not folded into this fix.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
