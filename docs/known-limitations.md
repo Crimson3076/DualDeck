@@ -4558,6 +4558,29 @@ so the streamed `"tv"`/`"gamepad"` surfaces now always correspond to
 the Wii U's actual TV/GamePad outputs.
 
 See `host/cemu-patches/README.md`'s "Second real end-to-end run
+findings" section for the full writeup. This went through a CI build
+(v0.1.62), which succeeded -- but real testing found it made GamePad
+mirroring *worse*, not better: video stopped streaming entirely,
+regardless of whether the local GamePad View window was open or
+closed.
+
+## 2026-07-22: Cemu integration -- v0.1.62 regression fixed (stale texture read)
+
+Root cause: `LatteRenderTarget_copyToBackbuffer()` (where the capture
+hook used to live) always calls `LatteTexture_UpdateDataToLatest()` and
+`LatteTC_MarkTextureStillInUse()` before touching its texture --
+every other consumer of a Latte texture view in this codebase relies on
+that having already happened. The relocated hook, in
+`LatteRenderTarget_itHLECopyColorBufferToScanBuffer()`, runs earlier in
+the pipeline and did neither, so `CaptureSurfaceBGRA()` could be
+reading a texture Cemu's on-demand texture cache hadn't resolved or
+uploaded yet -- plausibly an effectively-empty or wrong-layout GPU
+texture straight out of `LatteTC_GetTextureSliceViewOrTryCreate()`,
+which would explain a hard "nothing streams" failure rather than a
+softer staleness/lag symptom. Fixed by adding both calls immediately
+before the capture hook, mirroring `copyToBackbuffer()`'s own preamble.
+
+See `host/cemu-patches/README.md`'s "Third real end-to-end run
 findings" section for the full writeup. Not yet re-verified through a
 CI build as of this writing.
 

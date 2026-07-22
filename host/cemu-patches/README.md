@@ -281,6 +281,35 @@ one more issue:
    toggling, so `"tv"`/`"gamepad"` now always correspond to the actual
    Wii U TV/GamePad outputs regardless of local window state.
 
+This went through a sixth CI build (v0.1.62), which succeeded -- but
+real testing found it made things *worse*: GamePad video stopped
+streaming entirely, regardless of whether the local GamePad View window
+was open or closed.
+
+## Third real end-to-end run findings
+
+Root cause of the v0.1.62 regression: `LatteRenderTarget_copyToBackbuffer()`
+(the function the hook used to live in) always calls
+`LatteTexture_UpdateDataToLatest(textureView->baseTexture)` and
+`LatteTC_MarkTextureStillInUse(textureView->baseTexture)` *before*
+touching the texture in any way -- see its own leading comment
+("make sure texture is updated to latest data in cache"). Every other
+consumer of a `LatteTextureView*` in this codebase
+(`HandleScreenshotRequest`, `DrawBackbufferQuad`) relies on
+`copyToBackbuffer` having already done this first. The relocated hook
+runs earlier in the pipeline, in
+`LatteRenderTarget_itHLECopyColorBufferToScanBuffer()`, which does
+neither call itself -- so `CaptureSurfaceBGRA()` was reading a texture
+that Cemu's own on-demand texture cache (`LatteTC`) hadn't necessarily
+resolved/uploaded yet, likely an empty or wrong-layout GPU texture
+object fresh out of `LatteTC_GetTextureSliceViewOrTryCreate()`. Fixed
+by adding both calls immediately before the capture hook, mirroring
+`copyToBackbuffer()`'s own preamble exactly. Calling them twice per
+frame (once here, once again later in `copyToBackbuffer()` when that
+path also runs) is expected and harmless -- the function's job is
+specifically to make the cache idempotently current, not a one-shot
+action.
+
 Concretely, still unverified: **a CI build of this fix and real
-confirmation that GamePad streaming now works with the local GamePad
-View window closed** -- not yet re-run through CI.
+confirmation that GamePad streaming now works, with and without the
+local GamePad View window open** -- not yet re-run through CI.

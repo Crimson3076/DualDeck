@@ -107,7 +107,7 @@ index e52b8a7..90cca83 100644
  		Latte_Stop();
  		// reset Cafe OS userspace modules
 diff --git a/src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp b/src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp
-index 79b2d69..2eab168 100644
+index 79b2d69..a289ba6 100644
 --- a/src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp
 +++ b/src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp
 @@ -16,6 +16,8 @@
@@ -140,7 +140,7 @@ index 79b2d69..2eab168 100644
  	if (!g_renderer->ImguiBegin(!isPadView))
  		return;
  	swkbd_render(!isPadView);
-@@ -980,6 +996,25 @@ void LatteRenderTarget_itHLECopyColorBufferToScanBuffer(MPTR colorBufferPtr, uin
+@@ -980,6 +996,33 @@ void LatteRenderTarget_itHLECopyColorBufferToScanBuffer(MPTR colorBufferPtr, uin
  		return;
  	}
  
@@ -157,6 +157,14 @@ index 79b2d69..2eab168 100644
 +	// in which case both surfaces correctly capture the same content.
 +	if (auto* dualDeckAdapter = DualDeck::RemoteServer::RemoteServerBridge::currentAdapter())
 +	{
++		// LatteRenderTarget_copyToBackbuffer() below always does this
++		// pair of calls before touching its texture (see its own
++		// comment there) -- this function runs earlier in the pipeline
++		// and doesn't otherwise do either, so without them here,
++		// CaptureSurfaceBGRA() can read a texture that isn't actually
++		// synced/current yet, producing stale or incomplete frames.
++		LatteTexture_UpdateDataToLatest(texView->baseTexture);
++		LatteTC_MarkTextureStillInUse(texView->baseTexture);
 +		if (renderTarget & RENDER_TARGET_TV)
 +			dualDeckAdapter->onSurfaceRendered(texView, false);
 +		if (renderTarget & RENDER_TARGET_DRC)
