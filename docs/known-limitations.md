@@ -3876,6 +3876,73 @@ issue tracker for known `RequestScreenshot()`/screenshot-capture bugs
 independent of this project, since at that point it would no longer be
 this project's own integration code at fault.
 
+## Found it: AdapterBridge cached its target surface at construction, before any adapter had ever connected
+
+**The data that cracked it**: with both diagnostics from the previous
+entry live, the user's next test run showed the full picture at once:
+`ModeCoordinator: switching to Emulation mode (system=Nintendo 3DS,
+adapter=Azahar)` (mode switch confirmed working) immediately followed
+by `AzaharAdapter: capture stats -- attempts=601 succeeded=601
+timed_out=0` (Azahar's own Vulkan capture at a **perfect 100% success
+rate** -- the invert_y fix holds up completely) -- yet
+`NetServer: stats -- ... video: sent=0 (0.0 fps) dropped=0 ...`
+unchanged for the whole session. Real frames, successfully captured,
+correctly routed to Emulation mode, and still zero ever left the host.
+
+**Root cause**: `AdapterBridge`'s constructor picked and cached its
+target surface ID (and, since the earlier dimension fix, its
+width/height) from `adapter.capabilities()` a single time, at
+construction. Its own header comment even documented this as a real
+precondition: *"`adapter` must already have valid capabilities() ...
+by the time this constructor runs."* That was true for the mode this
+class was originally written for (issue #28 Phase 2's `--adapter-socket`
+direct mode, where a local adapter connects before the bridge is ever
+built) -- but issue #4 Phase A/D's `--adapter-ipc` coordinator flow
+(what host-control mode and Azahar both actually use) constructs
+`AdapterBridge` unconditionally at process startup
+(`host/remote-server/src/main.cpp`, right after
+`melonds_remote::host::AdapterBridge bridge(adapterServer);`), long
+before any real adapter has connected over IPC. At that moment
+`adapterServer.capabilities()` has an empty `surfaces` list, so
+`pickTargetSurface()` returned `""` and `AdapterBridge::targetSurfaceId_`
+was locked to that empty string **forever** -- there was no mechanism to
+ever re-pick it once a real adapter (with a real surface ID like
+`"bottom"`) actually connected later.
+
+`getLatestFrame()` then always called `adapter_.latestFrame("", frame)`
+-- an empty string that could never match `AdapterIpcServer`'s
+`latestFrames_["bottom"]` map, so it always returned false, regardless
+of how successfully Azahar was capturing. Input/buttons kept working
+because they don't depend on surface ID at all; touch was subtly also
+broken the same way (every touch contact was tagged with surface ID
+`""` instead of `"bottom"`), just not something a manual test would
+easily notice with only one surface in play.
+
+**The fix**: `AdapterBridge` no longer caches anything from
+`capabilities()` at construction. `targetSurfaceId()`,
+`getLatestFrame()`, and `frameDimensions()` all re-resolve the target
+surface fresh from `adapter_.capabilities()` on every call -- cheap
+(a mutex-guarded struct copy, not an IPC round-trip, since
+`AdapterIpcServer::capabilities()` already just returns its own
+locally-cached copy) and correct regardless of when, or whether, an
+adapter has connected yet.
+
+**Verified**: a new fake (`LateConnectingAdapter` in
+`test_adapter_bridge.cpp`) starts with zero surfaces and only gets a
+real "bottom" surface via an explicit `connectNow()` call made *after*
+`AdapterBridge` is constructed -- deliberately reproducing the exact
+issue #4 `--adapter-ipc` startup ordering that
+`FakeDsAdapter`/`FakeThreeDsAdapter` (both fully populated from their
+own construction) never could have caught. Three new tests
+(`adapter_bridge_resolves_surface_after_late_adapter_connection`,
+`_frame_dimensions_after_late_adapter_connection`,
+`_touch_uses_live_surface_id_after_late_connection`) all pass against
+the fix -- and, confirmed directly by temporarily reverting the fix and
+re-running, all three fail against the original code, proving they
+really do catch this exact bug rather than passing vacuously. Full
+`ctest` suite passes with the fix in place. Not yet confirmed against
+real Azahar/Steam Deck hardware -- pending the user's next test.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

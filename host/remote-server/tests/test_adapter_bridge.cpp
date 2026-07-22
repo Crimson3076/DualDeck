@@ -15,6 +15,59 @@ using namespace melonds_remote::host;
 using namespace melonds_remote::adapter;
 using namespace melonds_remote::adapter::fake;
 
+namespace {
+
+// Reproduces the exact shape of the real, shipped bug found via
+// AzaharAdapter's capture-loop diagnostics (100% successful captures on
+// the Azahar side, yet zero frames ever reaching NetServer for the
+// entire session): in --adapter-ipc mode (GitHub issue #4), AdapterBridge
+// is constructed at process startup, long before any real adapter has
+// connected over the IPC channel -- capabilities() has an empty surfaces
+// list at that point, and only gets populated later once a real adapter
+// (e.g. Azahar) actually connects. FakeDsAdapter/FakeThreeDsAdapter both
+// have real capabilities from construction, so they couldn't have caught
+// this -- this fake starts empty and only gets populated via connectNow().
+class LateConnectingAdapter : public IEmulatorAdapter {
+public:
+    AdapterCapabilities capabilities() const override { return caps_; }
+    SessionState currentState() const override { return SessionState::Available; }
+    void applyGenericInput(const GenericInputState& state) override { lastInput_ = state; }
+    void releaseAllInputs() override { released_ = true; }
+    bool latestFrame(const std::string& surfaceId, SurfaceFrame& outFrame) override {
+        if (surfaceId != frame_.surfaceId || !hasFrame_) return false;
+        outFrame = frame_;
+        return true;
+    }
+
+    void connectNow() {
+        VideoSurfaceDescriptor bottom;
+        bottom.surfaceId = "bottom";
+        bottom.width = 320;
+        bottom.height = 240;
+        bottom.remotelyDisplayed = true;
+        caps_.surfaces = {bottom};
+    }
+
+    void pushFrame(std::string surfaceId, std::vector<uint8_t> pixels) {
+        frame_.surfaceId = std::move(surfaceId);
+        frame_.pixels = std::move(pixels);
+        frame_.frameIndex = hasFrame_ ? frame_.frameIndex + 1 : 0;
+        hasFrame_ = true;
+    }
+
+    const GenericInputState& lastInput() const { return lastInput_; }
+    bool isReleased() const { return released_; }
+
+private:
+    AdapterCapabilities caps_;
+    SurfaceFrame frame_;
+    bool hasFrame_ = false;
+    GenericInputState lastInput_;
+    bool released_ = false;
+};
+
+} // namespace
+
 MDR_TEST(adapter_bridge_picks_the_remotely_displayed_surface) {
     // FakeDsAdapter has exactly one surface ("bottom"), remotely
     // displayed -- the unambiguous case.
@@ -192,4 +245,57 @@ MDR_TEST(adapter_bridge_frame_dimensions_matches_3ds_surface) {
     bridge.frameDimensions(width, height);
     MDR_CHECK_EQ(width, 320);
     MDR_CHECK_EQ(height, 240);
+}
+
+// Reproduces the real, shipped bug: AdapterBridge constructed while the
+// wrapped adapter has zero surfaces (capabilities().surfaces empty --
+// exactly --adapter-ipc mode's shape at process startup, before any
+// real adapter has connected), then the adapter "connects" (surfaces
+// become non-empty) sometime after. getLatestFrame() must succeed once
+// connected, not stay permanently broken because targetSurfaceId_ was
+// cached as "" at construction time.
+MDR_TEST(adapter_bridge_resolves_surface_after_late_adapter_connection) {
+    LateConnectingAdapter adapter;
+    AdapterBridge bridge(adapter); // constructed BEFORE connectNow()
+
+    std::vector<uint8_t> outFrame;
+    uint64_t outIndex = 0;
+    MDR_CHECK(!bridge.getLatestFrame(outFrame, outIndex)); // nothing yet, correctly
+
+    adapter.connectNow();
+    adapter.pushFrame("bottom", {10, 20, 30, 40});
+
+    MDR_CHECK(bridge.getLatestFrame(outFrame, outIndex));
+    MDR_CHECK(outFrame == std::vector<uint8_t>({10, 20, 30, 40}));
+    MDR_CHECK(bridge.targetSurfaceId() == "bottom");
+}
+
+MDR_TEST(adapter_bridge_frame_dimensions_after_late_adapter_connection) {
+    LateConnectingAdapter adapter;
+    AdapterBridge bridge(adapter);
+
+    uint16_t width = 0, height = 0;
+    bridge.frameDimensions(width, height);
+    MDR_CHECK_EQ(width, 256); // no surfaces yet -- falls back to DS default
+    MDR_CHECK_EQ(height, 192);
+
+    adapter.connectNow();
+    bridge.frameDimensions(width, height);
+    MDR_CHECK_EQ(width, 320); // now reflects the late-connected adapter's real surface
+    MDR_CHECK_EQ(height, 240);
+}
+
+MDR_TEST(adapter_bridge_touch_uses_live_surface_id_after_late_connection) {
+    LateConnectingAdapter adapter;
+    AdapterBridge bridge(adapter);
+
+    ControllerState state{};
+    state.touchActive = true;
+    state.touchX = 100;
+    state.touchY = 50;
+    adapter.connectNow();
+    bridge.applyControllerState(state);
+
+    MDR_CHECK_EQ(adapter.lastInput().touches.size(), static_cast<size_t>(1));
+    MDR_CHECK(adapter.lastInput().touches[0].surfaceId == "bottom");
 }

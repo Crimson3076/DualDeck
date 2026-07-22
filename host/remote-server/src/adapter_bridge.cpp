@@ -57,10 +57,8 @@ uint32_t dsButtonsToGenericButtons(uint16_t dsButtons) {
 
 } // namespace
 
-AdapterBridge::AdapterBridge(melonds_remote::adapter::IEmulatorAdapter& adapter) : adapter_(adapter) {
-    const auto caps = adapter_.capabilities();
-    targetSurfaceId_ = pickTargetSurface(caps);
-    lookupTargetDimensions(caps, targetSurfaceId_, targetWidth_, targetHeight_);
+std::string AdapterBridge::targetSurfaceId() const {
+    return pickTargetSurface(adapter_.capabilities());
 }
 
 void AdapterBridge::applyControllerState(const ControllerState& state) {
@@ -74,7 +72,7 @@ void AdapterBridge::applyControllerState(const ControllerState& state) {
     generic.rightStickY = state.rightStickY;
     if (state.touchActive) {
         generic.touches.push_back(
-            melonds_remote::adapter::TouchContact{targetSurfaceId_, state.touchX, state.touchY});
+            melonds_remote::adapter::TouchContact{targetSurfaceId(), state.touchX, state.touchY});
     }
     // Bit layout is intentionally identical between EmulatorAction
     // (protocol.h) and GenericEmulatorAction (generic_input.h) -- see
@@ -90,7 +88,7 @@ void AdapterBridge::releaseAll() {
 
 bool AdapterBridge::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) {
     melonds_remote::adapter::SurfaceFrame frame;
-    if (!adapter_.latestFrame(targetSurfaceId_, frame)) {
+    if (!adapter_.latestFrame(targetSurfaceId(), frame)) {
         return false;
     }
     outFrame = std::move(frame.pixels);
@@ -99,8 +97,8 @@ bool AdapterBridge::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& out
 }
 
 void AdapterBridge::frameDimensions(uint16_t& outWidth, uint16_t& outHeight) const {
-    outWidth = targetWidth_;
-    outHeight = targetHeight_;
+    const auto caps = adapter_.capabilities();
+    lookupTargetDimensions(caps, pickTargetSurface(caps), outWidth, outHeight);
 }
 
 } // namespace melonds_remote::host
