@@ -36,7 +36,7 @@ index 91d8e13..c8876b4 100644
    target_sources(citra_qt PUBLIC
      qt_swizzle.h
 diff --git a/src/citra_qt/citra_qt.cpp b/src/citra_qt/citra_qt.cpp
-index f08a7ea..acc5ef4 100644
+index f08a7ea..3aba745 100644
 --- a/src/citra_qt/citra_qt.cpp
 +++ b/src/citra_qt/citra_qt.cpp
 @@ -3,12 +3,14 @@
@@ -62,7 +62,7 @@ index f08a7ea..acc5ef4 100644
  #include "citra_qt/compatibility_list.h"
  #include "citra_qt/configuration/config.h"
  #include "citra_qt/configuration/configure_dialog.h"
-@@ -1572,6 +1575,20 @@ void GMainWindow::BootGame(const QString& filename) {
+@@ -1572,6 +1575,39 @@ void GMainWindow::BootGame(const QString& filename) {
      emit EmulationStarting(emu_thread.get());
      emu_thread->start();
  
@@ -78,12 +78,31 @@ index f08a7ea..acc5ef4 100644
 +            system, version_env ? std::string(version_env) : std::string(),
 +            socket_path_env ? std::string(socket_path_env) : std::string());
 +        remote_server_bridge->start();
++        // AzaharAdapter's constructor (run synchronously just above, inside
++        // RemoteServerBridge's own constructor) calls registerInputEngine(),
++        // which overwrites Settings::values.current_input_profile to route
++        // through the "melonds_remote" input engine -- but HID::Module (and
++        // APT::AppletManager, IR_USER, IR_RST) already read the *old*
++        // profile and built their Input::ButtonDevice/AnalogDevice objects
++        // from it back when LoadROM() above powered the system on, well
++        // before this adapter existed. Without forcing a reload here, every
++        // one of those services keeps using whatever local input backend
++        // was configured before a remote client ever connected, so circle
++        // pad/button input from the client is silently discarded -- movement
++        // doesn't work even though registerInputEngine() itself ran fine.
++        // System::ApplySettings() is exactly the existing, idempotent
++        // "settings changed, rebuild input devices" entry point already
++        // used when a user edits input config live in Configure Input --
++        // see its ReloadInputDevices() calls for HID/APT/IR_USER/IR_RST in
++        // core.cpp. Calling it a second time here (system.ApplySettings()
++        // already ran once above, before LoadROM()) is safe and cheap.
++        system.ApplySettings();
 +    }
 +
      connect(render_window, &GRenderWindow::Closed, this, &GMainWindow::OnStopGame);
      connect(render_window, &GRenderWindow::MouseActivity, this, &GMainWindow::OnMouseActivity);
      connect(secondary_window, &GRenderWindow::Closed, this, &GMainWindow::OnStopGame);
-@@ -1624,6 +1641,12 @@ void GMainWindow::ShutdownGame() {
+@@ -1624,6 +1660,12 @@ void GMainWindow::ShutdownGame() {
          return;
      }
  
@@ -96,7 +115,7 @@ index f08a7ea..acc5ef4 100644
      if (ui->action_Fullscreen->isChecked()) {
          HideFullscreen();
      }
-@@ -2302,8 +2325,43 @@ void GMainWindow::OnMenuLoadFile() {
+@@ -2302,8 +2344,43 @@ void GMainWindow::OnMenuLoadFile() {
      const QString file_filter = tr("3DS Executable (%1);;All Files (*.*)",
                                     "%1 is an identifier for the 3DS executable file extensions.")
                                      .arg(extensions);

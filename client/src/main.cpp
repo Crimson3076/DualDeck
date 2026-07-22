@@ -1182,8 +1182,18 @@ WizardSimpleResult wizardTouchTest(SDL_Renderer* renderer, SDL_Gamepad*& gamepad
 bool runSetupWizard(SDL_Window* window, SDL_Renderer* renderer, SDL_Texture* texture, SDL_Gamepad*& gamepad,
                     uint16_t discoveryPort, NetClientConfig baseNetConfig,
                     const std::string& discoveryStorePath) {
-    enum class Step { Welcome, ChooseMethod, ManualEntry, FindHost, Connect, VideoTest, ControllerTest,
-                       TouchTest, Done };
+    // Order deliberately puts ControllerTest/TouchTest (both purely
+    // local -- no NetClient involved at all, see their signatures)
+    // before any network step, so a user can check their gamepad/touch
+    // mapping without needing a host reachable, approved, and running a
+    // ROM yet. Only Connect/VideoTest, right at the end, actually need
+    // a live connection. Previously Connect+VideoTest came first, which
+    // meant VideoTest's "NO VIDEO YET" state (correct on its own terms
+    // -- it really does need a running ROM) blocked reaching the
+    // controller test at all if the user just wanted to confirm their
+    // gamepad worked before bothering to set up the host side.
+    enum class Step { Welcome, ControllerTest, TouchTest, ChooseMethod, ManualEntry, FindHost, Connect,
+                       VideoTest, Done };
     Step step = Step::Welcome;
     WizardConnectionMethod method = WizardConnectionMethod::Auto;
     NetClientConfig netConfig = baseNetConfig;
@@ -1194,6 +1204,26 @@ bool runSetupWizard(SDL_Window* window, SDL_Renderer* renderer, SDL_Texture* tex
             case Step::Welcome: {
                 auto r = wizardWelcome(renderer, gamepad);
                 if (r == WizardStepResult::Exit) return false;
+                step = Step::ControllerTest;
+                break;
+            }
+            case Step::ControllerTest: {
+                auto r = wizardControllerTest(renderer, gamepad);
+                if (r == WizardSimpleResult::Exit) return false;
+                if (r == WizardSimpleResult::Back) {
+                    step = Step::Welcome;
+                    break;
+                }
+                step = Step::TouchTest;
+                break;
+            }
+            case Step::TouchTest: {
+                auto r = wizardTouchTest(renderer, gamepad);
+                if (r == WizardSimpleResult::Exit) return false;
+                if (r == WizardSimpleResult::Back) {
+                    step = Step::ControllerTest;
+                    break;
+                }
                 step = Step::ChooseMethod;
                 break;
             }
@@ -1201,7 +1231,7 @@ bool runSetupWizard(SDL_Window* window, SDL_Renderer* renderer, SDL_Texture* tex
                 auto r = wizardChooseMethod(renderer, gamepad, method);
                 if (r == WizardStepResult::Exit) return false;
                 if (r == WizardStepResult::Back) {
-                    step = Step::Welcome;
+                    step = Step::TouchTest;
                     break;
                 }
                 step = method == WizardConnectionMethod::Auto ? Step::FindHost : Step::ManualEntry;
@@ -1250,26 +1280,6 @@ bool runSetupWizard(SDL_Window* window, SDL_Renderer* renderer, SDL_Texture* tex
                     net->disconnect();
                     net.reset();
                     step = method == WizardConnectionMethod::Auto ? Step::FindHost : Step::ManualEntry;
-                    break;
-                }
-                step = Step::ControllerTest;
-                break;
-            }
-            case Step::ControllerTest: {
-                auto r = wizardControllerTest(renderer, gamepad);
-                if (r == WizardSimpleResult::Exit) return false;
-                if (r == WizardSimpleResult::Back) {
-                    step = Step::VideoTest;
-                    break;
-                }
-                step = Step::TouchTest;
-                break;
-            }
-            case Step::TouchTest: {
-                auto r = wizardTouchTest(renderer, gamepad);
-                if (r == WizardSimpleResult::Exit) return false;
-                if (r == WizardSimpleResult::Back) {
-                    step = Step::ControllerTest;
                     break;
                 }
                 step = Step::Done;
@@ -1383,6 +1393,25 @@ int main(int argc, char** argv) {
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         SDL_Quit();
+        return 1;
+    }
+    // Opaque video feed, not a translucent overlay -- SDL3 defaults a
+    // texture's blend mode to SDL_BLENDMODE_BLEND whenever its pixel
+    // format carries an alpha channel (SDL_PIXELFORMAT_BGRA32 does), so
+    // without this, any frame byte whose alpha isn't exactly 0xFF gets
+    // alpha-composited against the window's black background instead of
+    // drawn as-is. Some Azahar 3D content (confirmed via renderer_vulkan.cpp:
+    // ApplySecondLayerOpacity's constant-alpha blend pipeline, used by
+    // DrawScreens for every screen blit) can leave a captured frame's alpha
+    // channel at less than 0xFF -- invisible on the host's own window
+    // (compositors generally treat a normal window surface as opaque
+    // regardless of its alpha channel) but very visible here once streamed,
+    // matching the "3D content renders too dark" reports. Forcing NONE here
+    // makes the alpha byte inert, which is correct for every source (DS and
+    // 3DS alike) since this texture only ever holds an already-composited
+    // screen capture that was never meant to be translucent.
+    if (!SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_NONE)) {
+        std::fprintf(stderr, "SDL_SetTextureBlendMode failed: %s\n", SDL_GetError());
         return 1;
     }
     // Starts at DS's native size (matching the texture just created above)
@@ -2063,6 +2092,14 @@ int main(int argc, char** argv) {
                         testPattern.assign(static_cast<size_t>(textureWidth) * textureHeight * 4, 0x40);
                         std::fprintf(stderr, "[video] texture resized to %dx%d for this host\n", textureWidth,
                                       textureHeight);
+                    }
+                    // Every fresh texture needs the same opaque blend mode
+                    // as the startup one above (see its comment) -- SDL3
+                    // resets blend mode to its own per-format default on
+                    // each new SDL_CreateTexture call, it isn't inherited
+                    // from the destroyed texture.
+                    if (texture && !SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_NONE)) {
+                        std::fprintf(stderr, "SDL_SetTextureBlendMode failed: %s\n", SDL_GetError());
                     }
                 }
             }

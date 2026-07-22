@@ -4191,6 +4191,89 @@ new build -- the fixture proves the migration logic is correct in
 isolation, but hasn't been exercised via a real `apply-update.sh` run
 against a real prior release archive.
 
+## Three real-usage bug fixes: setup wizard ordering, Azahar input, 3D darkness (2026-07-22)
+
+Three bugs reported together from real Steam Deck + Fedora-host usage,
+after the DualDeck rebrand shipped.
+
+**Setup wizard required a live host connection before controls could be
+tested.** `runSetupWizard()`'s step machine (`client/src/main.cpp`) ran
+`ChooseMethod -> ManualEntry/FindHost -> Connect -> VideoTest` *before*
+`ControllerTest`/`TouchTest`, even though both of those steps are purely
+local (confirmed by their signatures: neither takes a `NetClient` at
+all). A user who just wanted to confirm their gamepad/touch mapping
+worked had to first get a host reachable, approved, and streaming --
+and `VideoTest`'s "NO VIDEO YET" state, correct on its own terms, blocked
+ever reaching the controller test. Fixed by reordering the `Step` enum
+and switch statement to `Welcome -> ControllerTest -> TouchTest ->
+ChooseMethod -> ManualEntry/FindHost -> Connect -> VideoTest -> Done`,
+so only the two steps that actually need a connection are gated behind
+one.
+
+**Azahar (3DS) joystick/circle-pad input did nothing.** Root-caused via
+direct code trace, not guesswork: `AzaharAdapter`'s constructor calls
+`registerInputEngine()`, which correctly overwrites
+`Settings::values.current_input_profile` to route through the
+`"melonds_remote"` input engine -- but `HID::Module` (and
+`APT::AppletManager`, `IR_USER`, `IR_RST`) had already read the *old*
+profile and built their `Input::ButtonDevice`/`AnalogDevice` objects
+from it, back when `LoadROM()` powered the system on, before the adapter
+was constructed at all (confirmed by reading `hid.cpp`'s
+`LoadInputDevices()`, called once from the `Module` constructor). The
+override landed in the settings struct but nothing ever re-read it.
+Fixed with one line in `citra_qt.cpp`'s `BootGame()`: an extra
+`system.ApplySettings()` call right after `remote_server_bridge->start()`
+-- the same existing, idempotent "settings changed, rebuild input
+devices" entry point already used when a user edits input config live,
+which internally calls `ReloadInputDevices()`/`ReloadCameraDevices()` on
+all four services (see `core.cpp`).
+
+**3D-rendered bottom-screen content (e.g. Pokemon Alpha Sapphire's
+Kyogre intro) rendered too dark, while 2D content was fine.** Two
+hypotheses were formed and disproven by reading the actual renderer
+code: a `render_3d_mode` pipeline mismatch (disproven --
+`FramebufferLayout::render_3d_mode` always defaults to the live
+setting), and a cross-thread GPU-state race between the capture thread
+and the main render thread (disproven -- `RequestScreenshot()` only
+sets flags from the background thread, and `SwapBuffers()` calls
+`RenderScreenshot()` synchronously immediately before its own
+`RenderToWindow()`, both on the same per-frame thread). The real cause
+was on the client: SDL3 defaults a texture's blend mode to
+`SDL_BLENDMODE_BLEND` whenever its pixel format carries an alpha channel
+(`SDL_PIXELFORMAT_BGRA32` does; confirmed by reading SDL3's own
+`SDL_CreateTexture()` source), and `client/src/main.cpp` never called
+`SDL_SetTextureBlendMode()` at all. Azahar's Vulkan renderer captures
+the raw presentation image byte-for-byte, alpha channel included,
+whereas melonDS's own screenshot path forces an alpha-less `GL_RGB8`
+renderbuffer (OpenGL spec guarantees reads back as opaque). Azahar's own
+screen-blit pipeline (`ApplySecondLayerOpacity` in
+`renderer_vulkan.cpp`, used by every `DrawScreens()` call) has a real
+constant-alpha blend path, so a captured 3D frame can carry non-`0xFF`
+alpha in places -- invisible on the host's own window (a normal window
+surface is generally composited as opaque regardless of its alpha byte)
+but very visible once streamed and blended by the client against its
+window's black background. Fixed by calling
+`SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_NONE)` right after each
+of the client's three `SDL_CreateTexture()` call sites (startup, and
+both branches of the host-resize path) -- this texture only ever holds
+an already-composited screen capture, never something meant to be
+translucent, so forcing the alpha byte inert is correct for every
+source (DS and 3DS alike), not just the specific case that surfaced it.
+
+**Verified**: full `ctest` suite passes; the client rebuilds clean with
+the reordered wizard and the blend-mode fix. The Azahar patch was
+regenerated via the established scratch-clone workflow -- diffed against
+the previously-committed patch to confirm only the intended
+`system.ApplySettings()` addition (plus its comment) changed, applied
+cleanly to a pristine checkout at the pinned commit, and `citra_qt`
+rebuilt clean with it. **Not yet verified**: none of the three fixes
+have been confirmed against real hardware yet -- specifically, whether
+the 3D-darkness fix actually resolves the reported Kyogre-intro symptom
+(the root cause traced through SDL3's and Azahar's own source is solid,
+but the fix hasn't been visually confirmed against the original repro),
+and whether the Azahar joystick fix restores movement in an actual
+game session on real controller hardware.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
