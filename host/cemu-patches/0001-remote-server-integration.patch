@@ -290,10 +290,10 @@ index 77d588b..11758b8 100644
  												bool padView, bool clearBackground) = 0;
  	virtual bool BeginFrame(bool mainWindow) = 0;
 diff --git a/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.cpp b/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.cpp
-index 4ff2faa..1eb0597 100644
+index 4ff2faa..3241e02 100644
 --- a/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.cpp
 +++ b/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.cpp
-@@ -1074,6 +1074,303 @@ void VulkanRenderer::HandleScreenshotRequest(LatteTextureView* texView, bool pad
+@@ -1074,6 +1074,313 @@ void VulkanRenderer::HandleScreenshotRequest(LatteTextureView* texView, bool pad
  		SaveScreenshot(rgb_data, width, height, !padView);
  }
  
@@ -455,7 +455,15 @@ index 4ff2faa..1eb0597 100644
 +			range.mipLevel = 0;
 +			range.baseArrayLayer = texViewVk->firstSlice;
 +			range.layerCount = 1;
-+			barrier_image<TRANSFER_READ, TRANSFER_WRITE | IMAGE_WRITE>(baseImageTex, range, baseImageTex->GetDefaultLayout());
++			// DualDeck: LatteTextureVk has no GetDefaultLayout() in this
++			// Cemu version (a later addition) -- VK_IMAGE_LAYOUT_GENERAL
++			// is the literal, hardcoded restore target
++			// HandleScreenshotRequest() above already uses for this exact
++			// same "done reading a render target via blit, put it back"
++			// step (see its own barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL
++			// / newLayout = VK_IMAGE_LAYOUT_GENERAL pair around its own
++			// blit), not a value read from `baseImageTex` at all.
++			barrier_image<TRANSFER_READ, TRANSFER_WRITE | IMAGE_WRITE>(baseImageTex, range, VK_IMAGE_LAYOUT_GENERAL);
 +		}
 +
 +		format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -515,7 +523,9 @@ index 4ff2faa..1eb0597 100644
 +	vkCmdCopyImageToBuffer(m_state.currentCommandBuffer, dumpImage, VK_IMAGE_LAYOUT_GENERAL, buffer, 1, &region);
 +	if (dumpImage == baseImage)
 +	{
-+		barrier_image<TRANSFER_READ, TRANSFER_WRITE | IMAGE_WRITE>(baseImageTex, region.imageSubresource, baseImageTex->GetDefaultLayout());
++		// DualDeck: see the identical comment above this function's other
++		// GetDefaultLayout() replacement -- same reasoning, same fix.
++		barrier_image<TRANSFER_READ, TRANSFER_WRITE | IMAGE_WRITE>(baseImageTex, region.imageSubresource, VK_IMAGE_LAYOUT_GENERAL);
 +	}
 +
 +	SubmitCommandBuffer();

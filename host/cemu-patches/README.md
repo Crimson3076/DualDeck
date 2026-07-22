@@ -479,9 +479,28 @@ doesn't depend on any Cemu-internal version-string API (`m_cemuVersion`
 is purely an external string passed in via `CEMU_REMOTE_VERSION`, set
 by this project's own launcher script, never read from Cemu itself).
 
-**Still unverified**: this is the first time the `v2.6`-based patch has
-been through an actual compiler, let alone CI or real hardware -- same
-caveat that applied to every earlier round of this integration, now
-applying again to a new base. Expect this to need at least one or two
-rounds of real build-error troubleshooting, the same as every previous
-base-commit/major-change round of this patch has.
+**First `v2.6` CI build attempt**: got to 305/544 files before failing
+-- `VulkanRenderer::CaptureSurfaceBGRA()` called
+`baseImageTex->GetDefaultLayout()` (carried over unchanged from the
+dev-branch patch) to restore a render target's Vulkan image layout
+after reading it via blit; `LatteTextureVk` has no such method in
+`v2.6` (`error: 'class LatteTextureVk' has no member named
+'GetDefaultLayout'; did you mean 'GetImageLayout'?`) -- a later
+addition, not present at this base. `GetImageLayout()` (`v2.6`'s real
+API, requiring a subresource argument) isn't a drop-in replacement,
+since it *queries* current layout rather than naming a fixed "resting"
+one. Root-caused by reading `HandleScreenshotRequest()`'s own
+unmodified, already-compiling code earlier in the same file, which
+does the exact same "done reading a render target via blit, put it
+back" step for the exact same kind of texture, hardcoding
+`VK_IMAGE_LAYOUT_GENERAL` on both sides of the transition (not derived
+from the texture at all). Fixed by replacing both
+`GetDefaultLayout()` calls with the literal `VK_IMAGE_LAYOUT_GENERAL`,
+matching what this Cemu version's own working code already does.
+
+**Still unverified**: whether this was the only build error at this
+base -- only one file had failed when the build stopped, so anything
+past `CaptureSurfaceBGRA()`'s file (`VulkanRenderer.cpp`, the 305th of
+544) hasn't been compiled yet as of this fix. Expect this to need at
+least one more round of real build-error troubleshooting, the same as
+every previous base-commit/major-change round of this patch has.

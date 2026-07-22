@@ -4698,9 +4698,21 @@ confined to new files plus small, targeted hook points in existing
 ones, same discipline as the melonDS and Azahar patches.
 
 See `host/cemu-patches/README.md`'s "Rebase to the v2.6 stable
-release" section for the full file-by-file breakdown. Not yet
-build-verified -- this is the first time the `v2.6`-based patch has
-been through an actual compiler.
+release" section for the full file-by-file breakdown.
+
+**First `v2.6` CI build attempt**: got to 305/544 files before
+failing -- `VulkanRenderer::CaptureSurfaceBGRA()` called
+`baseImageTex->GetDefaultLayout()` (carried over unchanged from the
+dev-branch patch) to restore a render target's Vulkan image layout
+after reading it via blit; `LatteTextureVk` has no such method at
+`v2.6` (a later addition). Root-caused by reading
+`HandleScreenshotRequest()`'s own unmodified code earlier in the same
+file, which does the exact same "done reading a render target via
+blit, put it back" step by hardcoding `VK_IMAGE_LAYOUT_GENERAL` on
+both sides of the transition, not deriving it from the texture at all.
+Fixed by replacing both `GetDefaultLayout()` calls with that same
+literal constant. Still unverified: whether this was the only issue at
+this base -- the build hadn't gotten past this file when it stopped.
 
 ## Things intentionally out of scope for v0.1
 
