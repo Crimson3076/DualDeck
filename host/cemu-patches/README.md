@@ -310,6 +310,50 @@ path also runs) is expected and harmless -- the function's job is
 specifically to make the cache idempotently current, not a one-shot
 action.
 
+This went through a seventh CI build (v0.1.63), which succeeded, and
+real testing confirmed it: GamePad mirroring now works (with the local
+GamePad View window either open or closed), and the earlier aspect
+ratio and color fixes both hold up against real game content -- video
+now looks correct. Two issues remained:
+
+1. **Touch still doesn't register.** Re-confirmed expected, unchanged
+   from the "No GamePad touchscreen support" note above.
+2. **Face buttons were all swapped**: Steam Deck's "A" landed on Wii
+   U's A, "B" on B, "X" on X, "Y" on Y -- i.e. by *label*, not by
+   *physical position*, even though Xbox-style and Nintendo-style pads
+   put those labels in different physical spots (Xbox: A bottom, B
+   right, X left, Y top; Nintendo: B bottom, A right, Y left, X top).
+
+## Fourth real end-to-end run findings
+
+Root cause of the button-mapping bug: `RemoteController::raw_state()`
+(`src/remote_server/RemoteController.cpp`) fed `GenericButton_South`
+(Steam Deck's physical south/"A" button) into `kButton13`, reasoning
+(per its own now-incorrect comment) that `kButtonId_A <- kButton13` in
+`VPADController::set_default_mapping()`'s shared XInput/DualDeckRemote
+table meant "kButton13 is the slot that produces Wii U A". That table
+was written for, and is shared verbatim with, *real* XInput
+controllers -- and it already performs the Xbox-layout ->
+Nintendo-layout physical-position correction those need, given raw
+XInput hardware bit positions as input (confirmed by reading
+`XInputController.cpp`, which populates `kButton12..15` directly from
+`XINPUT_GAMEPAD_A/B/X/Y`'s own bit values -- bits 12/13/14/15
+respectively -- not from which Wii U button they end up driving).
+Wiring `GenericButton_South` straight to `kButton13` (the slot that
+happens to drive Wii U A) applied that same correction a *second* time
+on top of the client's already-physical-position button identity,
+cancelling it out -- so physical south ended up back on Wii U A instead
+of the physically-correct Wii U B.
+
+Fixed by mapping each face button to the raw XInput bit position it
+physically corresponds to instead (`GenericButton_South -> kButton12`,
+`_East -> kButton13`, `_West -> kButton14`, `_North -> kButton15`,
+matching `XINPUT_GAMEPAD_A/B/X/Y`'s real bit assignments exactly), so
+the shared table's correction is applied exactly once, end to end.
+D-pad and shoulder/stick-click/start-select mappings were already
+correct (verified against the same real XInput bit layout) and needed
+no change -- only the four face buttons were affected.
+
 Concretely, still unverified: **a CI build of this fix and real
-confirmation that GamePad streaming now works, with and without the
-local GamePad View window open** -- not yet re-run through CI.
+confirmation that face buttons now land in the physically-correct
+position.**

@@ -4581,6 +4581,33 @@ softer staleness/lag symptom. Fixed by adding both calls immediately
 before the capture hook, mirroring `copyToBackbuffer()`'s own preamble.
 
 See `host/cemu-patches/README.md`'s "Third real end-to-end run
+findings" section for the full writeup. This went through a CI build
+(v0.1.63), which succeeded, and real testing confirmed the fix: GamePad
+mirroring now works (window open or closed), and the earlier aspect
+ratio and color fixes both hold up against real game content. Touch
+still doesn't register (unchanged, expected). One new issue surfaced:
+face buttons (A/B/X/Y) were all swapped by *label* rather than
+*physical position* -- Steam Deck's south-face "A" landed on Wii U's A,
+when Xbox-layout south physically corresponds to Nintendo-layout B
+(and so on for B/X/Y).
+
+## 2026-07-22: Cemu integration -- face button mapping fixed (Xbox/Nintendo layout swap)
+
+Root cause: `RemoteController::raw_state()` fed each face button
+directly into the *Wii U button it was meant to end up on*, but the
+shared `VPADController::set_default_mapping()` table it feeds into
+already performs the Xbox-layout -> Nintendo-layout physical-position
+correction real XInput controllers need (confirmed by reading
+`XInputController.cpp`, which populates its raw button slots directly
+from `XINPUT_GAMEPAD_A/B/X/Y`'s own hardware bit positions, not from
+the destination Wii U button). Feeding the correction's *output* back
+in as if it were raw input applied the swap a second time and
+cancelled it out. Fixed by mapping each face button to the raw XInput
+bit position it physically corresponds to instead, letting the shared
+table's correction apply exactly once. D-pad, shoulders, stick clicks,
+and start/select were already correct and untouched.
+
+See `host/cemu-patches/README.md`'s "Fourth real end-to-end run
 findings" section for the full writeup. Not yet re-verified through a
 CI build as of this writing.
 

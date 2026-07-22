@@ -1219,30 +1219,45 @@ index 0000000..3abe590
 +} // namespace DualDeck::RemoteServer
 diff --git a/src/remote_server/RemoteController.cpp b/src/remote_server/RemoteController.cpp
 new file mode 100644
-index 0000000..c2ae6bb
+index 0000000..125495e
 --- /dev/null
 +++ b/src/remote_server/RemoteController.cpp
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,123 @@
 +#include "remote_server/RemoteController.h"
 +
 +#include "melonds_remote/adapter/generic_input.h"
 +
-+// This file's raw_state() is deliberately the mirror image of
-+// VPADController::set_default_mapping()'s InputAPI::XInput case (see
-+// input/emulated/VPADController.cpp, confirmed by reading it): that
-+// function maps *this controller's* Buttons2 IDs onto Wii U button IDs
-+// (kButtonId_A <- kButton13, etc.); this file maps GenericButton (the
-+// DualDeck wire format, see adapter-sdk/generic_input.h) onto the exact
-+// same Buttons2 IDs, so the two tables compose correctly end to end:
++// This file's raw_state() feeds the exact same Buttons2 IDs
++// VPADController::set_default_mapping()'s InputAPI::XInput case reads
++// (see input/emulated/VPADController.cpp, confirmed by reading it):
++// that table already does the Xbox-layout -> Nintendo-layout physical-
++// position correction real XInput hardware needs (kButtonId_A <-
++// kButton13, i.e. Wii U's A comes from the physical position Xbox
++// calls B, since that's the position Nintendo calls A) -- it was
++// designed for, and is shared verbatim with, real physical XInput
++// controllers. For that correction to apply correctly to us too,
++// kButton12..15 here must mean the exact same thing they do for a real
++// XInput device: XInputController.cpp populates them directly from
++// XINPUT_GAMEPAD_A/B/X/Y's own raw bit positions (bits 12/13/14/15
++// respectively) -- NOT from what Wii U button they're destined for.
++// An earlier version of this file wired GenericButton_South straight
++// to kButton13 on the reasoning "South is our nominal A, and kButtonId_A
++// reads from kButton13" -- that applies the table's own position
++// correction a second time and cancels it out, so a physical south-face
++// press (Steam Deck's "A", Xbox-layout south) ended up on Wii U's A
++// instead of the physically-corresponding Wii U B. Fixed by mapping
++// each face button directly to the XInput bit position it physically
++// corresponds to (South/A-labeled -> bit 12, matching real hardware),
++// letting the shared table apply the correction exactly once:
 +//
-+//   client GenericButton --(this file)--> Buttons2 --(VPADController's
-+//   new DualDeckRemote case, added by the patch, reusing the XInput
-+//   table verbatim)--> Wii U VPAD button
++//   client GenericButton --(this file, real-XInput-bit-position)-->
++//   Buttons2 --(VPADController's DualDeckRemote case, reusing the
++//   XInput table verbatim, Xbox->Nintendo position correction)--> Wii U
 +//
-+//   GenericButton_South (A)      -> kButton13
-+//   GenericButton_East  (B)      -> kButton12
-+//   GenericButton_West  (X)      -> kButton15
-+//   GenericButton_North (Y)      -> kButton14
++//   GenericButton_South (Xbox-layout south/"A") -> kButton12
++//   GenericButton_East  (Xbox-layout east/"B")  -> kButton13
++//   GenericButton_West  (Xbox-layout west/"X")  -> kButton14
++//   GenericButton_North (Xbox-layout north/"Y") -> kButton15
 +//   GenericButton_DpadUp         -> kButton0
 +//   GenericButton_DpadDown       -> kButton1
 +//   GenericButton_DpadLeft       -> kButton2
@@ -1302,10 +1317,10 @@ index 0000000..c2ae6bb
 +            result.buttons.SetButtonState(static_cast<uint32>(target), true);
 +        }
 +    };
-+    setIf(buttons, GenericButton_South, kButton13);
-+    setIf(buttons, GenericButton_East, kButton12);
-+    setIf(buttons, GenericButton_West, kButton15);
-+    setIf(buttons, GenericButton_North, kButton14);
++    setIf(buttons, GenericButton_South, kButton12);
++    setIf(buttons, GenericButton_East, kButton13);
++    setIf(buttons, GenericButton_West, kButton14);
++    setIf(buttons, GenericButton_North, kButton15);
 +    setIf(buttons, GenericButton_DpadUp, kButton0);
 +    setIf(buttons, GenericButton_DpadDown, kButton1);
 +    setIf(buttons, GenericButton_DpadLeft, kButton2);
