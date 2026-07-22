@@ -106,38 +106,59 @@ Nintendo Wii U.
   chicken-and-egg construction-order bug in `RemoteControllerProvider`)
   were all done by reading Cemu's actual source at the pinned commit
   before writing this patch, not by guessing at API shapes.
+- **A real CI build attempt got most of the way through the codebase**
+  before failing (see below) -- vcpkg resolved and built all ~108
+  packages (including wxWidgets 3.3) with no changes needed to this
+  patch's dependency assumptions, and roughly 130 of Cemu's own ~545
+  translation units compiled cleanly, including several files this patch
+  touches (`InputAPI.h`, `VPADController.cpp`, `InputManager.cpp`) --
+  before hitting the one real compile error described below.
 
 ## What is *not* verified yet
 
-This is the first Cemu-integration pass where **no local build was
-attempted at all**, unlike the melonDS and Azahar patches (both of which
-were built and run end-to-end in this project's development sandbox
-before being committed). That's a deliberate, explicit trade-off: Cemu's
-own dependency graph resolves to ~108 vcpkg packages, the large majority
-of which require downloading prebuilt binaries or source archives from
+This is the first Cemu-integration pass where local builds weren't
+possible during development, unlike the melonDS and Azahar patches (both
+built and run end-to-end in this project's development sandbox before
+being committed). That's a deliberate, explicit trade-off: Cemu's own
+dependency graph resolves to ~108 vcpkg packages, the large majority of
+which require downloading prebuilt binaries or source archives from
 hosts this sandbox's network policy blocks (only apt mirrors and the
 git-protocol mirror are reliably reachable here -- see
 `docs/known-limitations.md`). Continuing to work around that
 dependency-by-dependency (as was done for `vcpkg-tool` itself) was judged
-not worth it for ~100 more packages; verification for this patch
-specifically is deferred to this project's GitHub Actions CI pipeline,
-which runs on a normal, unrestricted-network runner.
+not worth it for ~100 more packages; verification for this patch instead
+happens via this project's GitHub Actions CI pipeline, which runs on a
+normal, unrestricted-network runner.
+
+**First real CI build attempt (before this README's most recent
+update)**: failed at `src/Cafe/CMakeLists.txt`+`CafeSystem.cpp` --
+`CafeSystem.cpp` (compiled as part of the `CemuCafe` library) `#include`s
+`remote_server/RemoteServerBridge.h`, which pulls in the vendored
+`melonds_remote/adapter/...` headers; those don't live under the plain
+`"../"` (src/) include root every other cross-module include in this
+codebase resolves through (e.g. `"input/InputManager.h"` needs no extra
+include dir), since `adapter_sdk/` is vendored a level deeper, under
+`remote_server/adapter_sdk/include/`. Fixed with one extra
+`target_include_directories(CemuCafe PUBLIC
+"../remote_server/adapter_sdk/include")` line in `src/Cafe/CMakeLists.txt`
+-- not a `target_link_libraries` dependency on `CemuRemoteServer` (that
+library is defined by a later `add_subdirectory()` call in the top-level
+`CMakeLists.txt`, and isn't otherwise needed since `CemuBin` already
+links every top-level library directly for symbol resolution). This is
+exactly the class of build-order/include-path mistake local compilation
+would have caught immediately -- expect more rounds of this as CI gets
+further into the build each time.
 
 Concretely, still unverified:
-- **Does it compile at all.** No C++ compiler has seen any file in this
-  patch. Template instantiation errors, missing includes, and CMake
-  target-linkage mistakes (in particular, whether `CemuRemoteServer`'s
-  `target_link_libraries(... PRIVATE CemuGui)` is sufficient to pull in
-  wxWidgets' own include paths transitively for `RemoteServerBridge.cpp`,
-  and whether `CemuInput`'s existing `target_include_directories(CemuInput
-  PUBLIC "../")` is sufficient for `InputManager.cpp` to `#include
-  "remote_server/RemoteControllerProvider.h"`) are all reasoned through
-  by reading Cemu's existing CMake conventions, not confirmed by an
-  actual `cmake --build`.
+- **A full, successful compile.** The first CI attempt got to roughly
+  130/545 translation units (including this patch's own
+  `InputAPI.h`/`VPADController.cpp`/`InputManager.cpp` changes) before
+  the include-path error above; the fix hasn't been through CI yet.
+  `LatteRenderTarget.cpp` (also part of `CemuCafe`, also including
+  `remote_server/CemuAdapter.h`/`RemoteServerBridge.h`) never got reached
+  by that first attempt and could plausibly reveal another issue.
 - **No real Wii U game has been run.** Video capture, the auto-injected
   VPAD mapping, and the wx GUI quit-session/quit-application wiring have
   all been read and reasoned about but never observed taking effect.
-- `scripts/build-release.sh`'s Cemu packaging step, the host launcher's
-  emulator picker, and end-to-end verification against a real DualDeck
-  client are all still pending (see the open Cemu tasks tracked in this
-  session).
+- End-to-end verification against a real DualDeck client is still
+  pending.

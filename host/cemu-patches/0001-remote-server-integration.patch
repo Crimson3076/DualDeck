@@ -18,6 +18,34 @@ index e8373f9..60e1938 100644
  	CemuUtil
  )
  
+diff --git a/src/Cafe/CMakeLists.txt b/src/Cafe/CMakeLists.txt
+index b509e72..f375b63 100644
+--- a/src/Cafe/CMakeLists.txt
++++ b/src/Cafe/CMakeLists.txt
+@@ -660,6 +660,23 @@ target_link_libraries(CemuCafe PRIVATE
+   OpenSSL::SSL
+ )
+ 
++# DualDeck (github.com/crimson3076/DualDeck): CafeSystem.cpp and
++# LatteRenderTarget.cpp both #include remote_server/RemoteServerBridge.h
++# (and, transitively, remote_server/CemuAdapter.h), which pull in the
++# vendored melonds_remote/adapter/... headers -- these don't live under
++# the generic "../" (src/) root's own namespace-matching path the way
++# every other cross-module include in this codebase does (e.g.
++# "input/InputManager.h" needs no extra include dir beyond that plain
++# "../"), since adapter_sdk/ is vendored a level deeper, under
++# remote_server/adapter_sdk/include/. A plain extra include directory
++# here, not a target_link_libraries dependency on CemuRemoteServer
++# (defined by a later add_subdirectory() call in the top-level
++# CMakeLists.txt, and not otherwise needed since CemuBin already links
++# every top-level library directly for symbol resolution) -- simpler,
++# and matches every other cross-directory include in this codebase being
++# a plain target_include_directories path, not a library dependency.
++target_include_directories(CemuCafe PUBLIC "../remote_server/adapter_sdk/include")
++
+ if (ENABLE_WAYLAND)
+ 	# PUBLIC because wayland-client.h is included in VulkanAPI.h
+   target_link_libraries(CemuCafe PUBLIC Wayland::Client)
 diff --git a/src/Cafe/CafeSystem.cpp b/src/Cafe/CafeSystem.cpp
 index e52b8a7..90cca83 100644
 --- a/src/Cafe/CafeSystem.cpp
