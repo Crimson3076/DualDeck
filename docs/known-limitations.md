@@ -3830,6 +3830,52 @@ so it's been read carefully and matches the same edge-detection pattern
 the pre-existing, working identity-refresh code right next to it already
 uses, but is not yet confirmed against a real Steam Deck.
 
+## Azahar video still black even after the Vulkan/dimension fixes -- capture-loop diagnostics added
+
+**Where this stands**: after both fixes above shipped, the user updated
+and confirmed via the host's own log (`NetServer: stats -- ... video:
+sent=0 (0.0 fps) dropped=0 ...`, unchanged across the whole session
+despite `input: accepted=` climbing steadily) that **zero video frames
+ever leave the host**, with a real game actually running in Azahar (not
+just sitting at the game list). Since `dropped` never increments either
+(it's only ever bumped by a frame-index gap in an already-flowing
+stream, per `net_server.cpp`'s `videoLoop()`), this means
+`AdapterBridge::getLatestFrame()` never once returned true for the
+whole session -- tracing back through `AdapterIpcServer`'s stored
+`latestFrames_` and `AdapterIpcClient::writeLoop()` (which only ever
+sends a `Frame` message when `AzaharAdapter::latestFrame()` itself
+returns true), this points at `AzaharAdapter::captureLoop()`'s own
+`RequestScreenshot()` calls never completing at all on this user's
+system -- a capture failure that exists *before* either of the two
+previous fixes even come into play, and unrelated to both of them.
+
+**Why this needed new instrumentation instead of another guess**:
+`captureLoop()` had no logging whatsoever -- a total, permanent capture
+failure (every single `RequestScreenshot()` call timing out after
+500ms, forever) produces the exact same host-side symptom
+(`video: sent=0`) as "the code isn't even trying," with nothing to tell
+the two apart. Guessing at a third fix without that visibility would
+have repeated the same mistake as the first two rounds.
+
+**What was added**: `captureLoop()` now tracks attempts/successes/
+timeouts and logs a summary line to Azahar's own stderr every 5 seconds,
+e.g. `AzaharAdapter: capture stats -- attempts=150 succeeded=0
+timed_out=150 (last invert_y=n/a)`. This is purely additive
+instrumentation -- no behavior change, nothing this session's tests
+could regress -- and directly answers the open question: is
+`RequestScreenshot()`'s callback ever firing at all on this user's
+hardware, or not.
+
+**Next step**: waiting on the user to re-run with this build and share
+the new `AzaharAdapter: capture stats --` lines. `timed_out` climbing
+while `succeeded` stays at 0 would point at something inside Azahar's
+own `RenderScreenshot()` path (Vulkan or Software, whichever they're
+using) silently never invoking the completion callback on this specific
+system/driver combination -- worth then checking Azahar's own upstream
+issue tracker for known `RequestScreenshot()`/screenshot-capture bugs
+independent of this project, since at that point it would no longer be
+this project's own integration code at fault.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

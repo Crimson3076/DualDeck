@@ -175,15 +175,16 @@ index 673c513..542d0f8 100644
      // The path to the game currently running
 diff --git a/src/citra_qt/remote_server/AzaharAdapter.cpp b/src/citra_qt/remote_server/AzaharAdapter.cpp
 new file mode 100644
-index 0000000..7115d2f
+index 0000000..ef2e559
 --- /dev/null
 +++ b/src/citra_qt/remote_server/AzaharAdapter.cpp
-@@ -0,0 +1,313 @@
+@@ -0,0 +1,340 @@
 +#include "citra_qt/remote_server/AzaharAdapter.h"
 +
 +#include <algorithm>
 +#include <chrono>
 +#include <condition_variable>
++#include <cstdio>
 +
 +#include "common/param_package.h"
 +#include "common/settings.h"
@@ -416,11 +417,24 @@ index 0000000..7115d2f
 +        Layout::SingleFrameLayout(kBottomScreenWidth, kBottomScreenHeight, /*swapped=*/true,
 +                                  /*upright=*/false);
 +
++    // Diagnostic counters, logged every ~5s (see below) -- captureLoop()
++    // had no visibility at all into whether RequestScreenshot() was
++    // actually succeeding, so a silent, total capture failure (every
++    // single request timing out) looked identical, from the host's own
++    // NetServer stats, to "nothing is even trying": both show
++    // "video: sent=0". This makes that distinction visible on Azahar's
++    // own stderr instead.
++    uint64_t attempts = 0;
++    uint64_t successes = 0;
++    uint64_t timeouts = 0;
++    auto lastLogTime = std::chrono::steady_clock::now();
++
 +    while (running_.load()) {
 +        std::mutex doneMutex;
 +        std::condition_variable doneCv;
 +        bool done = false;
 +        bool invertY = false;
++        ++attempts;
 +
 +        system_.GPU().Renderer().RequestScreenshot(
 +            buffer.data(),
@@ -459,6 +473,7 @@ index 0000000..7115d2f
 +        }
 +
 +        if (done) {
++            ++successes;
 +            if (invertY) {
 +                // Flip rows in place so latestFrame_ is always top-down
 +                // regardless of which renderer backend captured it --
@@ -476,6 +491,18 @@ index 0000000..7115d2f
 +            latestFrame_ = buffer;
 +            ++frameIndex_;
 +            hasFrame_ = true;
++        } else {
++            ++timeouts;
++        }
++
++        auto now = std::chrono::steady_clock::now();
++        if (now - lastLogTime >= std::chrono::seconds(5)) {
++            std::fprintf(stderr,
++                          "AzaharAdapter: capture stats -- attempts=%llu succeeded=%llu timed_out=%llu "
++                          "(last invert_y=%s)\n",
++                          static_cast<unsigned long long>(attempts), static_cast<unsigned long long>(successes),
++                          static_cast<unsigned long long>(timeouts), done ? (invertY ? "true" : "false") : "n/a");
++            lastLogTime = now;
 +        }
 +
 +        // Deliberately ~30fps, not 60: 3DS games render real 3D scenes
