@@ -4522,11 +4522,44 @@ worked. That session surfaced three issues:
    `padView` parameter to the virtual so it can tell which of
    `LatteGPUState.tvBufferUsesSRGB`/`drcBufferUsesSRGB` applies.
 
-The aspect-ratio fix is client-only and needs no Cemu rebuild. The
-color fix lives inside `host/cemu-patches/0001-remote-server-integration.patch`
-and hasn't been through a CI build yet as of this writing -- see
-`host/cemu-patches/README.md`'s "First real end-to-end run findings"
-section for the exact unverified-vs-verified breakdown.
+The aspect-ratio fix is client-only and needed no Cemu rebuild. The
+color fix went through a CI build (v0.1.61), which succeeded, though
+real confirmation it resolves the color difference against actual game
+content is still pending -- see `host/cemu-patches/README.md`'s "First
+real end-to-end run findings" section for the exact
+unverified-vs-verified breakdown.
+
+## 2026-07-22: Cemu integration -- GamePad video required the local GamePad View window
+
+Testing the v0.1.61 build (aspect ratio + color fixes applied)
+surfaced one more issue: GamePad video only streamed to a DualDeck
+client while Cemu's own "Enable GamePad View" window was also open
+locally -- not something a headless/remote-play use case should ever
+require.
+
+Root cause: the video-capture hook originally lived alongside Cemu's
+own `HandleScreenshotRequest()` call, inside a function that only runs
+for the GamePad surface when Cemu's local pad window actually exists
+(`g_renderer->IsPadWindowActive()`). That's correct for a one-shot,
+user-triggered screenshot of whatever's on screen, but wrong for a
+capture path that's supposed to work regardless of what, if anything,
+is open locally. Fixed by moving the hook to
+`LatteRenderTarget_itHLECopyColorBufferToScanBuffer()`, which hands
+over the real TV/DRC scan-buffer texture unconditionally, once per real
+frame per surface, with no dependency on any window's existence --
+`CaptureSurfaceBGRA()` reads straight from that GPU texture. This also
+fixes a subtler, previously-undiscovered issue: the old hook fired from
+the on-screen *presentation* path, which includes a local Tab/Ctrl+Tab
+(or VPAD "screen active" button) toggle that can swap GamePad content
+onto the "TV" backbuffer -- so the old capture could mislabel which
+surface was which depending on what a local player was looking at. The
+new hook reads the real TV/DRC buffers before any such local toggling,
+so the streamed `"tv"`/`"gamepad"` surfaces now always correspond to
+the Wii U's actual TV/GamePad outputs.
+
+See `host/cemu-patches/README.md`'s "Second real end-to-end run
+findings" section for the full writeup. Not yet re-verified through a
+CI build as of this writing.
 
 ## Things intentionally out of scope for v0.1
 

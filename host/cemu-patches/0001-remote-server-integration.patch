@@ -107,7 +107,7 @@ index e52b8a7..90cca83 100644
  		Latte_Stop();
  		// reset Cafe OS userspace modules
 diff --git a/src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp b/src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp
-index 79b2d69..650563f 100644
+index 79b2d69..2eab168 100644
 --- a/src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp
 +++ b/src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp
 @@ -16,6 +16,8 @@
@@ -119,20 +119,53 @@ index 79b2d69..650563f 100644
  
  uint32 prevScissorX = 0;
  uint32 prevScissorY = 0;
-@@ -963,6 +965,13 @@ void LatteRenderTarget_copyToBackbuffer(LatteTextureView* textureView, bool isPa
+@@ -963,6 +965,20 @@ void LatteRenderTarget_copyToBackbuffer(LatteTextureView* textureView, bool isPa
  	cemu_assert(shader);
  	g_renderer->DrawBackbufferQuad(textureView, shader, filter==LatteTextureView::MagFilter::kLinear, imageX, imageY, imageWidth, imageHeight, isPadView, clearBackground);
  	g_renderer->HandleScreenshotRequest(textureView, isPadView);
-+	// DualDeck (github.com/crimson3076/DualDeck): a small parallel hook
-+	// alongside the existing HandleScreenshotRequest() call above -- see
-+	// remote_server/CemuAdapter.h's top comment. No-op (a single atomic
-+	// load returning null) unless CEMU_REMOTE_ENABLE is set and a title
-+	// is currently running.
-+	if (auto* dualDeckAdapter = DualDeck::RemoteServer::RemoteServerBridge::currentAdapter())
-+		dualDeckAdapter->onSurfaceRendered(textureView, isPadView);
++	// DualDeck (github.com/crimson3076/DualDeck): the video-capture hook
++	// used to live here, alongside HandleScreenshotRequest() above -- but
++	// this function only runs for the GamePad surface when
++	// g_renderer->IsPadWindowActive() is true (see the call site below,
++	// gated on that exact check), i.e. only while Cemu's own "Enable
++	// GamePad View" window is open locally. That's fine for
++	// HandleScreenshotRequest() (a one-shot, user-triggered screenshot of
++	// whatever's on screen), but meant DualDeck's own GamePad stream
++	// silently produced no frames at all unless the user also had that
++	// window open -- not what a headless streaming capture should
++	// depend on. Moved to LatteRenderTarget_itHLECopyColorBufferToScanBuffer()
++	// below, which hands over the real TV/DRC scan-buffer texture
++	// unconditionally, once per real frame per surface, independent of
++	// any window's existence.
  	if (!g_renderer->ImguiBegin(!isPadView))
  		return;
  	swkbd_render(!isPadView);
+@@ -980,6 +996,25 @@ void LatteRenderTarget_itHLECopyColorBufferToScanBuffer(MPTR colorBufferPtr, uin
+ 		return;
+ 	}
+ 
++	// DualDeck (github.com/crimson3076/DualDeck): see
++	// LatteRenderTarget_copyToBackbuffer()'s comment above for why this
++	// hook lives here instead. `texView` here is the real TV/DRC scan
++	// buffer the HLE layer just handed over for this frame -- reading it
++	// via CaptureSurfaceBGRA() (glGetTexImage/vkCmdCopyImageToBuffer)
++	// needs no window or backbuffer of any kind, so both surfaces are
++	// captured unconditionally, once per real frame, regardless of
++	// whether Cemu's own "Enable GamePad View" window (or even its main
++	// window) is open. `renderTarget` may have both bits set in the same
++	// call (a game feeding an identical framebuffer to both screens),
++	// in which case both surfaces correctly capture the same content.
++	if (auto* dualDeckAdapter = DualDeck::RemoteServer::RemoteServerBridge::currentAdapter())
++	{
++		if (renderTarget & RENDER_TARGET_TV)
++			dualDeckAdapter->onSurfaceRendered(texView, false);
++		if (renderTarget & RENDER_TARGET_DRC)
++			dualDeckAdapter->onSurfaceRendered(texView, true);
++	}
++
+ 	auto getVPADScreenActive = [](size_t n) -> std::pair<bool, bool> {
+ 		auto controller = InputManager::instance().get_vpad_controller(n);
+ 		if (!controller)
 diff --git a/src/Cafe/HW/Latte/Renderer/OpenGL/OpenGLRenderer.cpp b/src/Cafe/HW/Latte/Renderer/OpenGL/OpenGLRenderer.cpp
 index 9d30da3..07edf12 100644
 --- a/src/Cafe/HW/Latte/Renderer/OpenGL/OpenGLRenderer.cpp

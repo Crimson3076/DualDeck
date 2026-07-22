@@ -16,12 +16,17 @@ Nintendo Wii U.
    - **Video**: exposes two surfaces, `"tv"` (`SurfaceRole::Tv`) and
      `"gamepad"` (`SurfaceRole::GamePad`) -- the Wii U's TV and
      GamePad/DRC outputs. Captured via a new `Renderer::CaptureSurfaceBGRA()`
-     virtual (see below) called from a small hook alongside Cemu's own
-     `HandleScreenshotRequest()` call in `LatteRenderTarget.cpp`, once per
-     surface per real frame, throttled internally to
-     `CEMU_REMOTE_CAPTURE_FPS` (default 30) so a Vulkan capture's full
-     GPU sync (blit + copy-to-buffer + submit + wait, unavoidable on that
-     backend) doesn't run at the game's actual frame rate.
+     virtual (see below) called from a hook in
+     `LatteRenderTarget_itHLECopyColorBufferToScanBuffer()`
+     (`LatteRenderTarget.cpp`), once per surface per real frame,
+     throttled internally to `CEMU_REMOTE_CAPTURE_FPS` (default 30) so a
+     Vulkan capture's full GPU sync (blit + copy-to-buffer + submit +
+     wait, unavoidable on that backend) doesn't run at the game's actual
+     frame rate. Deliberately *not* hooked alongside
+     `HandleScreenshotRequest()` in `LatteRenderTarget_copyToBackbuffer()`
+     (the first pass's approach) -- see "First real end-to-end run
+     findings" below for why that broke GamePad streaming whenever
+     Cemu's own "Enable GamePad View" window was closed.
    - **Input**: registers a `RemoteControllerProvider`
      (`InputAPI::DualDeckRemote`, a new enum value) through
      `InputManager`'s existing `create_provider<TProvider>()` template,
@@ -69,7 +74,8 @@ Nintendo Wii U.
    engine-level boot/shutdown lifecycle hook, independent of whichever
    frontend is active.
 5. `src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp` -- the video-capture
-   hook, alongside the existing `HandleScreenshotRequest()` call.
+   hook, in `LatteRenderTarget_itHLECopyColorBufferToScanBuffer()` (see
+   item 1's video bullet above).
 6. `src/Cafe/HW/Latte/Renderer/Renderer.h` (+ `OpenGL/OpenGLRenderer.{h,cpp}`,
    `Vulkan/VulkanRenderer.{h,cpp}`) -- the new `CaptureSurfaceBGRA()`
    virtual, default no-op (so an unimplemented backend like Metal simply
@@ -236,12 +242,45 @@ Testing the successful build surfaced three issues:
    threaded through from `CemuAdapter::onSurfaceRendered()`'s existing
    `isPadView` argument.
 
-Fixes 2 and 3 haven't been through a fifth CI build yet (fix 2 is a
-client-only change needing no Cemu rebuild at all; fix 3 needs one,
-since it lives inside this patch). Still unverified:
-- **A CI build of the fix-3 patch changes.** Not yet re-run through CI
-  since the third fix's successful build.
-- **Real confirmation that fix 3 actually resolves the color
-  difference against real Wii U game content in practice** (the fix
-  mirrors Cemu's own established correctness logic exactly, but hasn't
-  been re-tested against the same game/scene that showed the darkening).
+Fixes 2 and 3 (fix 2 client-only, fix 3 inside this patch) went through
+a fifth CI build (v0.1.61), which succeeded. Still unverified: **real
+confirmation that fix 3 actually resolves the color difference against
+real Wii U game content in practice** -- the fix mirrors Cemu's own
+established correctness logic exactly, but hasn't been re-tested
+against the same game/scene that showed the darkening.
+
+## Second real end-to-end run findings
+
+Testing the v0.1.61 build (aspect ratio + color fixes applied) surfaced
+one more issue:
+
+4. **GamePad video only streamed while Cemu's own "Enable GamePad
+   View" window was open locally.** Root cause: the video-capture hook
+   originally lived in `LatteRenderTarget_copyToBackbuffer()`, alongside
+   `HandleScreenshotRequest()` -- but for the GamePad surface, that
+   function is only called at all
+   (`if ((renderTarget & RENDER_TARGET_DRC) && g_renderer->IsPadWindowActive())`
+   in `LatteRenderTarget_itHLECopyColorBufferToScanBuffer()`) when
+   Cemu's own local pad window actually exists. Fine for
+   `HandleScreenshotRequest()` (a one-shot screenshot of whatever's
+   currently on screen), wrong for a headless streaming capture that
+   should work whether or not the user has any particular local window
+   open. Fixed by moving the hook to
+   `LatteRenderTarget_itHLECopyColorBufferToScanBuffer()` itself, which
+   hands over the real TV/DRC scan-buffer texture unconditionally, once
+   per real frame per surface -- `CaptureSurfaceBGRA()` reads straight
+   from that GPU texture, so it needs no window or backbuffer of any
+   kind. This also incidentally fixes a subtler, previously-undiscovered
+   correctness issue: the old hook fired from the *on-screen
+   presentation* path, which includes a local Tab/Ctrl+Tab (or VPAD
+   "screen active" button) toggle that can swap GamePad content onto
+   the "TV" backbuffer -- meaning the old "tv"/"gamepad" capture could
+   have been swapped depending on what a local player was looking at.
+   The new hook captures directly off the real TV/DRC scan buffers
+   Cemu's HLE layer produces, before any such local presentation
+   toggling, so `"tv"`/`"gamepad"` now always correspond to the actual
+   Wii U TV/GamePad outputs regardless of local window state.
+
+Concretely, still unverified: **a CI build of this fix and real
+confirmation that GamePad streaming now works with the local GamePad
+View window closed** -- not yet re-run through CI.
