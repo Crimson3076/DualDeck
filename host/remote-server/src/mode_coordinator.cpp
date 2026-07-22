@@ -1,6 +1,7 @@
 #include "host/mode_coordinator.h"
 
 #include <chrono>
+#include <cstdio>
 
 namespace melonds_remote::host {
 
@@ -80,9 +81,19 @@ void ModeCoordinator::applyMode(HostMode mode) {
             systemIdentityExplicit_ ? fallbackSystemIdentity_ : adapterServer_.capabilities().system;
         AdapterIdentity adapter =
             adapterIdentityExplicit_ ? fallbackAdapterIdentity_ : adapterServer_.capabilities().adapter;
+        // No prior visibility at all into whether/when this switch ever
+        // happens -- a diagnostic gap found while tracing a real report
+        // of "video never sends" all the way from AzaharAdapter's
+        // capture through to NetServer's stats: without this, "the
+        // adapter connected but mode never left HostControl" and "mode
+        // switched fine but capture itself never produces a frame" both
+        // look identical (silence) from the host's own terminal.
+        std::fprintf(stderr, "ModeCoordinator: switching to Emulation mode (system=%s, adapter=%s)\n",
+                      system.systemName.c_str(), adapter.adapterName.c_str());
         server_.setTarget(emulationInputSink_, emulationFrameSource_, HostMode::Emulation, std::move(system),
                            std::move(adapter));
     } else {
+        std::fprintf(stderr, "ModeCoordinator: switching to HostControl mode\n");
         server_.setTarget(hostControlInputSink_, hostControlFrameSource_, HostMode::HostControl,
                            kHostControlSystemIdentity, kHostControlAdapterIdentity);
     }
