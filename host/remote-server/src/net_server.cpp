@@ -805,6 +805,21 @@ void NetServer::videoLoop() {
                 std::lock_guard<std::mutex> lock(targetMutex_);
                 gotFrame = frameSource_->getLatestFrame(frame, frameIndex);
             }
+            // Skip re-sending a frame whose index hasn't changed since the
+            // last tick: getLatestFrame() is "return the most recent one,
+            // whatever it is" (latest-frame-wins), not "return a new one
+            // if there is one" -- when this loop's own tick rate (up to
+            // videoSendFps) outpaces the actual source frame rate (e.g.
+            // AzaharAdapter's own ~30fps capture loop vs. this loop's
+            // default 60Hz), sending unconditionally meant roughly half of
+            // every video packet was a byte-for-byte duplicate of the one
+            // before it -- pure wasted bandwidth, worth nothing to the
+            // client (main.cpp/net_client.cpp just redraw the same texture
+            // either way), and reducing the send budget actually available
+            // for genuinely new frames.
+            if (gotFrame && lastSentFrameIndex && frameIndex == *lastSentFrameIndex) {
+                gotFrame = false;
+            }
             if (gotFrame) {
                 ByteBuffer packet = buildPacket(PacketType::VideoFrame, frame);
                 if (!sendAll(clientFd, packet.data(), packet.size())) {

@@ -175,16 +175,17 @@ index 673c513..542d0f8 100644
      // The path to the game currently running
 diff --git a/src/citra_qt/remote_server/AzaharAdapter.cpp b/src/citra_qt/remote_server/AzaharAdapter.cpp
 new file mode 100644
-index 0000000..ef2e559
+index 0000000..6d68483
 --- /dev/null
 +++ b/src/citra_qt/remote_server/AzaharAdapter.cpp
-@@ -0,0 +1,340 @@
+@@ -0,0 +1,356 @@
 +#include "citra_qt/remote_server/AzaharAdapter.h"
 +
 +#include <algorithm>
 +#include <chrono>
 +#include <condition_variable>
 +#include <cstdio>
++#include <cstdlib>
 +
 +#include "common/param_package.h"
 +#include "common/settings.h"
@@ -200,6 +201,29 @@ index 0000000..ef2e559
 +namespace {
 +
 +constexpr const char* kInputEngineName = "melonds_remote";
++
++// Defaults to 60fps (up from an earlier, untested-on-real-hardware 30fps
++// guess -- see docs/known-limitations.md's performance-tuning entry in
++// the DualDeck repo this was vendored from): real playtest data showed
++// zero RequestScreenshot() timeouts at 30fps with plenty of headroom, so
++// 60 was the obvious next thing to try. Overridable via
++// AZAHAR_REMOTE_CAPTURE_FPS so this can be tuned per-machine without a
++// new host build for every value -- e.g. a lower-end system might need
++// to drop back down if 60 turns out to visibly stall the game itself
++// (RequestScreenshot() can force a GPU sync on some backends/paths).
++// Clamped to [1, 60]: below 1 doesn't make sense, and there's no benefit
++// polling faster than a real display's own refresh rate -- it would
++// just be extra GPU syncs for frames that don't exist yet.
++std::chrono::milliseconds resolveCaptureInterval() {
++    int fps = 60;
++    if (const char* env = std::getenv("AZAHAR_REMOTE_CAPTURE_FPS")) {
++        int parsed = std::atoi(env);
++        if (parsed > 0) {
++            fps = std::clamp(parsed, 1, 60);
++        }
++    }
++    return std::chrono::milliseconds(1000 / fps);
++}
 +
 +// Mirrors host/adapter_bridge.cpp's dsButtonsToGenericButtons() table --
 +// deliberately explicit, not a bit-shift trick, for the same reason
@@ -276,7 +300,7 @@ index 0000000..ef2e559
 +
 +AzaharAdapter::AzaharAdapter(Core::System& system, std::string azaharVersion)
 +    : system_(system), azaharVersion_(std::move(azaharVersion)),
-+      inputStatus_(std::make_shared<RemoteInputStatus>()) {
++      inputStatus_(std::make_shared<RemoteInputStatus>()), captureInterval_(resolveCaptureInterval()) {
 +    registerInputEngine();
 +    running_ = true;
 +    captureThread_ = std::thread(&AzaharAdapter::captureLoop, this);
@@ -498,33 +522,25 @@ index 0000000..ef2e559
 +        auto now = std::chrono::steady_clock::now();
 +        if (now - lastLogTime >= std::chrono::seconds(5)) {
 +            std::fprintf(stderr,
-+                          "AzaharAdapter: capture stats -- attempts=%llu succeeded=%llu timed_out=%llu "
-+                          "(last invert_y=%s)\n",
++                          "AzaharAdapter: capture stats -- target=%lldms/frame attempts=%llu succeeded=%llu "
++                          "timed_out=%llu (last invert_y=%s)\n",
++                          static_cast<long long>(captureInterval_.count()),
 +                          static_cast<unsigned long long>(attempts), static_cast<unsigned long long>(successes),
 +                          static_cast<unsigned long long>(timeouts), done ? (invertY ? "true" : "false") : "n/a");
 +            lastLogTime = now;
 +        }
 +
-+        // Deliberately ~30fps, not 60: 3DS games render real 3D scenes
-+        // (unlike the DS's largely-2D workload melonDS's software path
-+        // handles trivially -- see docs/azahar-integration-analysis.md
-+        // section 1), and RequestScreenshot()'s real per-frame cost was
-+        // never measured against an actual running game in this
-+        // sandbox (no display/GPU stack available here). Halving the
-+        // rate is a conservative starting point, not a measured
-+        // optimum -- a real playtest may find 60 is fine, or that even
-+        // 30 is too aggressive on lower-end hardware.
-+        std::this_thread::sleep_for(std::chrono::milliseconds(33));
++        std::this_thread::sleep_for(captureInterval_);
 +    }
 +}
 +
 +} // namespace CitraQt::RemoteServer
 diff --git a/src/citra_qt/remote_server/AzaharAdapter.h b/src/citra_qt/remote_server/AzaharAdapter.h
 new file mode 100644
-index 0000000..3c3497c
+index 0000000..bee24d3
 --- /dev/null
 +++ b/src/citra_qt/remote_server/AzaharAdapter.h
-@@ -0,0 +1,177 @@
+@@ -0,0 +1,181 @@
 +#pragma once
 +
 +// DualDeck's IEmulatorAdapter implementation for Azahar (Nintendo 3DS).
@@ -558,6 +574,7 @@ index 0000000..3c3497c
 +
 +#include <array>
 +#include <atomic>
++#include <chrono>
 +#include <memory>
 +#include <mutex>
 +#include <thread>
@@ -699,6 +716,9 @@ index 0000000..3c3497c
 +
 +    std::atomic<bool> running_{false};
 +    std::thread captureThread_;
++    // Resolved once at construction (from AZAHAR_REMOTE_CAPTURE_FPS, or
++    // 60fps by default) -- see resolveCaptureInterval() in the .cpp.
++    std::chrono::milliseconds captureInterval_;
 +};
 +
 +} // namespace CitraQt::RemoteServer

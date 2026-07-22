@@ -3943,6 +3943,87 @@ really do catch this exact bug rather than passing vacuously. Full
 `ctest` suite passes with the fix in place. Not yet confirmed against
 real Azahar/Steam Deck hardware -- pending the user's next test.
 
+## Performance tuning: bandwidth waste fixed, Azahar's capture rate doubled and made configurable
+
+**Context**: once video was confirmed genuinely working end to end (see
+the AdapterBridge fix above), the user asked to work on latency and
+framerate. Two independent, real changes came out of reading the actual
+pipeline rather than guessing:
+
+**1. `NetServer::videoLoop()` was sending duplicate frames.** It called
+`frameSource_->getLatestFrame()` on every tick (up to `videoSendFps`,
+default 60Hz) and sent whatever came back unconditionally -- it never
+compared the returned `frameIndex` against what it last sent.
+`getLatestFrame()`'s contract is "return the latest one, whatever it
+is" (latest-frame-wins), not "return a new one if there is one," so
+whenever the loop's own tick rate outpaced the actual source frame rate
+(exactly AzaharAdapter's situation at its old ~30fps capture rate vs.
+this loop's 60Hz), roughly half of every video packet sent was a
+byte-for-byte duplicate of the one before it -- pure wasted bandwidth,
+worth nothing to the client (it just redraws the same texture either
+way), and directly reducing the throughput budget actually available
+for genuinely new frames. Fixed: skip the send when `frameIndex` is
+unchanged from the last one actually sent. Not covered by a new
+automated test -- verifying it properly would need a raw-socket test
+harness duplicating `net_client.cpp`'s own handshake sequence outside
+the `NetClient` class (opening a second video connection through
+`NetClient` itself is rejected, since `NetServer` only tracks one
+video client at a time), which wasn't judged worth the investment for
+a change this simple to verify by reading (a guarded early-exit that
+can't suppress the very first frame, since the guard requires a prior
+sent index to exist) -- relying on code-review confidence and the
+existing end-to-end `NetClient` tests, which already prove new frames
+still arrive correctly with this change in place.
+
+**2. AzaharAdapter's capture rate was hardcoded to ~30fps**, a
+conservative, explicitly-labeled-as-untested guess made before this
+project had ever run on real display/GPU hardware. The AzaharAdapter
+capture-loop diagnostics added earlier this session gave real data:
+zero `RequestScreenshot()` timeouts, 100% success rate, comfortably
+within the 500ms-per-attempt budget at 30fps -- clear headroom. Default
+bumped to 60fps, and made overridable via `AZAHAR_REMOTE_CAPTURE_FPS`
+(clamped to [1, 60]) so it can be tuned per-machine without a new host
+build for every value tried -- a real consideration after how many
+rebuild-and-retest cycles the video bug itself took. The capture-stats
+diagnostic log line now also reports the currently configured
+ms-per-frame target for visibility while tuning.
+
+**What wasn't changed, and why**: `RequestScreenshot()`'s Vulkan path
+(`RenderScreenshotWithStagingCopy()`, in `renderer_vulkan.cpp`, not
+part of this project's own patch) calls `scheduler.Finish()` -- a full
+GPU pipeline sync -- as part of every single capture. At 30fps this
+clearly wasn't a problem on the user's hardware (0 timeouts), but
+whether it stays cheap at 60fps, and whether it measurably affects
+Azahar's own native framerate (not just the streamed copy), is exactly
+the kind of thing that needs a real playtest to answer, not more
+reasoning from this sandbox (still no display/GPU stack here). That's
+the whole reason for making the rate an env var instead of just
+hardcoding 60: if 60 turns out to visibly stall the game itself, dial
+it back (`AZAHAR_REMOTE_CAPTURE_FPS=45` or `=30`) without waiting on
+another release.
+
+**Not touched in this round** (real, larger levers, left for a
+follow-up if the above isn't enough): frames are still sent as raw,
+uncompressed BGRA8888 over TCP (Azahar's 320x240 frame is 307,200 bytes
+-- at a genuine 60fps that's ~18.4MB/s just for video, which could
+itself become the bottleneck on a real WiFi link); `AdapterIpcClient`'s
+own 16ms poll interval between capture and the Unix-socket send to the
+Host Service; and the DS/melonDS side's own frame-source pacing were
+all left alone, since the reported problem was Azahar/3DS-specific and
+none of these showed up as an actual bottleneck in the data gathered
+so far.
+
+**Verified**: full `ctest` suite passes with the `NetServer` dedup
+change (existing video-delivery tests, including the two newer 3DS-sized
+frame tests from the AdapterBridge fix, still pass -- confirming genuinely
+new frames aren't accidentally suppressed). The Azahar-side capture-rate
+change compiles cleanly (`citra_meta` target, full rebuild) and the
+regenerated patch applies cleanly to a fresh checkout of the pinned
+commit. Neither change has been confirmed to actually improve perceived
+latency/smoothness on real hardware yet -- that needs the user's own
+playtest, which is the whole reason `AZAHAR_REMOTE_CAPTURE_FPS` exists
+as a same-build, no-rebuild-needed knob.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

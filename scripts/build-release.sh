@@ -854,6 +854,13 @@ sleep 0.5 # let the listener bind before Azahar tries to connect
 
 export AZAHAR_REMOTE_ENABLE=1
 export AZAHAR_REMOTE_ADAPTER_SOCKET="${adapter_socket}"
+# Performance tuning (optional): set AZAHAR_REMOTE_CAPTURE_FPS (1-60,
+# default 60) before running this script to change how often the video
+# capture loop polls for a new frame -- no rebuild needed, e.g.
+# `AZAHAR_REMOTE_CAPTURE_FPS=30 ./melonds-remote-host.sh` if 60 turns
+# out to visibly affect the game's own performance on your hardware.
+# Already inherited by the exec below with no extra wiring needed --
+# see docs/known-limitations.md's performance-tuning entry.
 
 # Works around a known class of Qt6-on-Linux crash (reported for many
 # Qt6 apps, not specific to Azahar): a GTK3 platform-theme bug in
