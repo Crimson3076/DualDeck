@@ -1,12 +1,20 @@
 # Cemu patches
 
 `0001-remote-server-integration.patch` implements the remote-server
-integration against upstream Cemu (github.com/cemu-project/Cemu) commit
-`50b9e4ba1d4d7cf9821a9cd416378bb94e1ba0ca` (main, 2026-07-22), adding a
-third real `IEmulatorAdapter` implementation
-(`melonds_remote::adapter::IEmulatorAdapter`, the same contract melonDS's
-`MelonDSAdapter` and Azahar's `AzaharAdapter` both implement) for the
-Nintendo Wii U.
+integration against upstream Cemu (github.com/cemu-project/Cemu) tag
+`v2.6` (commit `a6fb0a48eb437a8a41c13b782ac8ae0433bf8f98`), the latest
+stable release as of this writing, adding a third real
+`IEmulatorAdapter` implementation (`melonds_remote::adapter::IEmulatorAdapter`,
+the same contract melonDS's `MelonDSAdapter` and Azahar's `AzaharAdapter`
+both implement) for the Nintendo Wii U.
+
+**Rebased from a development-branch commit to this stable release** --
+see "Rebase to the v2.6 stable release" below for why and what changed.
+Everything through "Fourth real end-to-end run findings" documents the
+integration's design and its first four rounds of real CI-and-hardware
+verification against that earlier dev-branch base; the rebase section
+after it covers what's different (and what still needs re-verifying)
+now that the base is v2.6.
 
 ## What the patch does
 
@@ -357,3 +365,123 @@ no change -- only the four face buttons were affected.
 Concretely, still unverified: **a CI build of this fix and real
 confirmation that face buttons now land in the physically-correct
 position.**
+
+## Rebase to the v2.6 stable release
+
+Everything above was developed and verified (through four real
+end-to-end rounds) against a development-branch commit taken from
+Cemu's `main` at whatever point it happened to be cloned. Rebased onto
+`v2.6` (the latest tagged stable release) on user request, since a dev
+build can carry in-progress work with its own performance regressions
+or instability -- not something to build a release on top of by
+default. Note that Cemu's own public development slowed sharply after
+the project's late-2024 acquisition, so `v2.6` (tagged
+2025-02-06) and the dev-branch commit this was previously pinned to
+turned out to be closer in real content than the raw commit count
+suggests (278 commits, 775 files touched between them) --
+still substantial, but the actual overlap with the specific files and
+hook points this patch touches was smaller than that number implies.
+
+**Method**: cloned Cemu at the `v2.6` tag into a scratch checkout,
+attempted `git apply --check` with the existing (dev-branch) patch,
+and worked through every resulting conflict by reading `v2.6`'s actual
+source at each point rather than forcing the old hunks to fit -- the
+same source-reading discipline the original patch was written with,
+just applied to a diff instead of a blank slate. 30 of the 35
+previously-patched files applied with line-offset-only changes (no
+real conflicts), which is itself informative: it means the specific
+functions and call patterns this patch hooks into (`LatteRenderTarget_
+itHLECopyColorBufferToScanBuffer`'s exact body, `Renderer::CaptureSurfaceBGRA`'s
+sibling `HandleScreenshotRequest`/`DrawBackbufferQuad`/`SRGBComponentToRGB`
+declarations, `LatteTexture_UpdateDataToLatest`/`LatteTC_MarkTextureStillInUse`'s
+signatures, the OpenGL/Vulkan capture backends' exact API surface,
+`VPADController`'s XInput mapping table byte-for-byte, `InputManager`'s
+provider-registration pattern) are unchanged between `v2.6` and the
+later dev commit -- not just superficially re-appliable, but the same
+underlying code. Five files genuinely needed manual rework:
+
+- **`src/CMakeLists.txt`**: `v2.6` lacks the dev branch's `asm`
+  subdirectory and links `SDL2::SDL2` directly into `CemuBin` (the dev
+  branch had moved to SDL3) -- neither relevant to this patch. Added
+  `add_subdirectory(remote_server)` and `CemuRemoteServer` to
+  `CemuBin`'s link list in the equivalent places for `v2.6`'s actual
+  file.
+- **`src/Cafe/CMakeLists.txt`**: same `target_include_directories(CemuCafe
+  PUBLIC "../remote_server/adapter_sdk/include")` addition as before,
+  just re-anchored to `v2.6`'s surrounding `target_link_libraries(CemuCafe
+  ...)` block, which has a different (but equivalent) set of linked
+  libraries.
+- **`src/Cafe/CafeSystem.cpp`**: `v2.6` calls `gui_notifyGameLoaded()`
+  where the dev branch called `WindowSystem::NotifyGameLoaded()` (an
+  abstraction-layer rename) -- same hook points otherwise
+  (`LaunchForegroundTitle()`/`ShutdownTitle()`), just re-anchored.
+- **`src/Cafe/HW/Latte/Renderer/Renderer.h`**: `v2.6` doesn't yet have
+  the dev branch's `RequestScreenshot`/`ScreenshotSaveFunction`
+  preamble ahead of `HandleScreenshotRequest()` -- irrelevant to this
+  patch either way; the new `CaptureSurfaceBGRA()` virtual just moved
+  to sit directly after `HandleScreenshotRequest()` in `v2.6`'s actual
+  layout.
+- **`src/input/emulated/VPADController.cpp`**: purely a missing
+  `#endif` block the dev branch had immediately before `case
+  InputAPI::XInput:` that doesn't exist in `v2.6` -- the
+  `InputAPI::DualDeckRemote` fallthrough case (and the XInput mapping
+  table itself, confirmed byte-for-byte identical) needed no other
+  change.
+
+Two further things needed rework beyond what `git apply --check` alone
+surfaces, since they're new files (no upstream diff to conflict) whose
+*content* still assumes dev-branch APIs:
+
+- **`src/remote_server/CMakeLists.txt`**: `v2.6` has no
+  `cemu_use_precompiled_header()` helper function (a later addition) --
+  `CemuCommon` there instead declares its precompiled header
+  `PUBLIC` (`target_precompile_headers(CemuCommon PUBLIC precompiled.h)`,
+  `src/Common/CMakeLists.txt`), which every other real module (e.g.
+  `CemuCafe`) already gets for free purely by linking `CemuCommon` --
+  confirmed by reading `Cafe/CMakeLists.txt`, which does exactly that
+  and calls no separate helper. Replaced the helper call with an
+  explicit `CemuCommon` link, matching that convention. Also dropped
+  the dev branch's extra `target_include_directories(CemuRemoteServer
+  PUBLIC "../gui/wxgui")` line entirely: `v2.6`'s `gui/` tree has no
+  `wxgui/` subdirectory at all (introduced later, presumably when Cemu
+  added an alternate Qt frontend) -- it's still flat
+  (`gui/MainWindow.h`, `gui/components/wxGameList.h`, ...), and none of
+  `MainWindow.h`'s own transitive includes bare-`#include` `wxHelper.h`
+  the way the dev-branch chain did, so the extra include directory the
+  dev-branch version needed to resolve that isn't needed here at all.
+- **`src/remote_server/RemoteServerBridge.cpp`** (QuitSession/
+  QuitApplication wiring, GitHub issue #25): `v2.6`'s `MainWindow` has
+  no public `EndEmulation()` method -- confirmed by reading the actual
+  handler, `MainWindow::OnFileMenu()`'s `MAINFRAME_MENU_ID_FILE_END_EMULATION`
+  branch inlines the "stop title, return to game list" sequence
+  directly (`CafeSystem::ShutdownTitle()` + `DestroyCanvas()` +
+  `RecreateMenu()` + `CreateGameListAndStatusBar()` + `DoLayout()` +
+  `UpdateChildWindowTitleRunningState()`), and the menu-id constant it
+  switches on is a private, unstably-valued enum with nothing to
+  reference from outside that translation unit. Unlike every other
+  change in this patch, this one **does touch upstream `gui/MainWindow.{h,cpp}`**
+  (the one file this integration had specifically avoided touching
+  against the dev-branch base, by relying on the `EndEmulation()`
+  method that existed there) -- extracted that exact sequence into a
+  new public `MainWindow::EndEmulation()` method, with `OnFileMenu()`
+  itself now calling it too instead of duplicating the sequence. Also
+  fixed the include from `"wxgui/MainWindow.h"` to `"gui/MainWindow.h"`,
+  matching `v2.6`'s flat layout.
+
+Also spot-verified beyond what patch application alone would catch,
+since these are real behavioral dependencies this patch's own code
+relies on, not just text that happens to be nearby: `InputManager`'s
+`add_controller()`-before-`set_default_mapping()` ordering requirement
+(re-confirmed by reading both real call sites in `v2.6`'s own
+`gui/input/InputSettings2.cpp`, identical ordering to what the original
+patch verified against the dev branch), and that `CemuAdapter.cpp`
+doesn't depend on any Cemu-internal version-string API (`m_cemuVersion`
+is purely an external string passed in via `CEMU_REMOTE_VERSION`, set
+by this project's own launcher script, never read from Cemu itself).
+
+**Still unverified**: this is the first time the `v2.6`-based patch has
+been through an actual compiler, let alone CI or real hardware -- same
+caveat that applied to every earlier round of this integration, now
+applying again to a new base. Expect this to need at least one or two
+rounds of real build-error troubleshooting, the same as every previous
+base-commit/major-change round of this patch has.

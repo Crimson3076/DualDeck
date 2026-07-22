@@ -4659,6 +4659,49 @@ Wi-Fi). Adding compression is a protocol-level change (affecting every
 adapter, the wire format, and both client and host) big enough to need
 its own separate design pass, not folded into this fix.
 
+## 2026-07-22: Cemu integration rebased onto the v2.6 stable release
+
+The Cemu patch was developed and verified through four real
+end-to-end rounds against a development-branch commit. Rebased onto
+`v2.6` (the latest tagged stable release, 2025-02-06) on request, since
+a dev build can carry in-progress work with its own performance
+regressions or instability -- not a sound default to build a release
+on. Cemu's own public development slowed sharply after the project's
+late-2024 acquisition, so the real overlap between `v2.6` and the old
+dev-branch base turned out smaller than the raw 278-commit/775-file gap
+between them suggested: 30 of the 35 previously-patched files applied
+against `v2.6` with line-offset-only changes, no real conflicts,
+meaning the specific functions and APIs this patch hooks into are
+unchanged between the two. Five files needed real rework (CMake
+subdirectory/link-list differences, a `WindowSystem::NotifyGameLoaded()`
+-> `gui_notifyGameLoaded()` rename, a missing `#endif` block, and
+`Renderer.h` lacking a since-added screenshot-request preamble that
+this patch's own addition sits next to). Two more needed content
+changes despite applying cleanly as new files: `v2.6` has no
+`cemu_use_precompiled_header()` helper yet (replaced with an explicit
+`CemuCommon` link, which gets the same effect the same way every other
+real module in `v2.6` already does it), and `v2.6`'s `gui/` tree
+predates the `wxgui/` subdirectory split (flat `gui/MainWindow.h`
+instead) with no bare-`#include` resolution issue to work around there
+at all.
+
+One change goes further than anything else in this patch has needed:
+`v2.6`'s `MainWindow` has no public `EndEmulation()` method for the
+QuitSession (GitHub issue #25) hook to call -- confirmed by reading the
+real handler, which inlines the "stop title, return to game list"
+sequence directly in a private menu-event handler with no reusable
+entry point. Extracted that exact sequence into a new public
+`MainWindow::EndEmulation()` method (with the original handler now
+calling it too), the first and only change this Cemu integration has
+made to Cemu's own `gui/MainWindow.{h,cpp}` -- every other change stays
+confined to new files plus small, targeted hook points in existing
+ones, same discipline as the melonDS and Azahar patches.
+
+See `host/cemu-patches/README.md`'s "Rebase to the v2.6 stable
+release" section for the full file-by-file breakdown. Not yet
+build-verified -- this is the first time the `v2.6`-based patch has
+been through an actual compiler.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

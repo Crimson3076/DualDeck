@@ -1,53 +1,44 @@
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index e8373f9..60e1938 100644
+index 7947132..4fc7e4b 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -63,6 +63,7 @@ add_subdirectory(audio)
- add_subdirectory(util)
+@@ -50,6 +50,7 @@ add_subdirectory(util)
  add_subdirectory(imgui)
  add_subdirectory(resource)
+ add_subdirectory(asm)
 +add_subdirectory(remote_server)
  
  add_executable(CemuBin
  	main.cpp
-@@ -224,6 +225,7 @@ target_link_libraries(CemuBin PRIVATE
+@@ -130,6 +131,7 @@ target_link_libraries(CemuBin PRIVATE
  	CemuConfig
  	CemuGui
  	CemuInput
 +	CemuRemoteServer
  	CemuUtil
- )
- 
+ 	OpenGL::GL
+ 	SDL2::SDL2
 diff --git a/src/Cafe/CMakeLists.txt b/src/Cafe/CMakeLists.txt
-index b509e72..f375b63 100644
+index d51d58d..be95631 100644
 --- a/src/Cafe/CMakeLists.txt
 +++ b/src/Cafe/CMakeLists.txt
-@@ -660,6 +660,23 @@ target_link_libraries(CemuCafe PRIVATE
-   OpenSSL::SSL
+@@ -562,6 +562,14 @@ target_link_libraries(CemuCafe PRIVATE
+ 	zstd::zstd
  )
  
-+# DualDeck (github.com/crimson3076/DualDeck): CafeSystem.cpp and
-+# LatteRenderTarget.cpp both #include remote_server/RemoteServerBridge.h
-+# (and, transitively, remote_server/CemuAdapter.h), which pull in the
-+# vendored melonds_remote/adapter/... headers -- these don't live under
-+# the generic "../" (src/) root's own namespace-matching path the way
-+# every other cross-module include in this codebase does (e.g.
-+# "input/InputManager.h" needs no extra include dir beyond that plain
-+# "../"), since adapter_sdk/ is vendored a level deeper, under
-+# remote_server/adapter_sdk/include/. A plain extra include directory
-+# here, not a target_link_libraries dependency on CemuRemoteServer
-+# (defined by a later add_subdirectory() call in the top-level
-+# CMakeLists.txt, and not otherwise needed since CemuBin already links
-+# every top-level library directly for symbol resolution) -- simpler,
-+# and matches every other cross-directory include in this codebase being
-+# a plain target_include_directories path, not a library dependency.
++# DualDeck (github.com/crimson3076/DualDeck): CafeSystem.cpp includes
++# remote_server/RemoteServerBridge.h, which pulls in the vendored
++# melonds_remote/adapter/... headers under
++# remote_server/adapter_sdk/include/ -- one level deeper than the plain
++# "../" (src/) include root every other cross-module include here
++# resolves through.
 +target_include_directories(CemuCafe PUBLIC "../remote_server/adapter_sdk/include")
 +
  if (ENABLE_WAYLAND)
  	# PUBLIC because wayland-client.h is included in VulkanAPI.h
    target_link_libraries(CemuCafe PUBLIC Wayland::Client)
 diff --git a/src/Cafe/CafeSystem.cpp b/src/Cafe/CafeSystem.cpp
-index e52b8a7..90cca83 100644
+index 1bf3755..6bb4927 100644
 --- a/src/Cafe/CafeSystem.cpp
 +++ b/src/Cafe/CafeSystem.cpp
 @@ -26,6 +26,7 @@
@@ -58,7 +49,7 @@ index e52b8a7..90cca83 100644
  
  #include "Cafe/IOSU/legacy/iosu_ioctl.h"
  #include "Cafe/IOSU/legacy/iosu_act.h"
-@@ -916,6 +917,18 @@ namespace CafeSystem
+@@ -850,6 +851,18 @@ namespace CafeSystem
  			coreinit::OSSchedulerBegin(1);
  	}
  
@@ -77,8 +68,8 @@ index e52b8a7..90cca83 100644
  	void LaunchForegroundTitle()
  	{
  		PPCTimer_waitForInit();
-@@ -924,6 +937,16 @@ namespace CafeSystem
- 		WindowSystem::NotifyGameLoaded();
+@@ -858,6 +871,16 @@ namespace CafeSystem
+ 		gui_notifyGameLoaded();
  		std::thread t(_LaunchTitleThread);
  		t.detach();
 +
@@ -94,7 +85,7 @@ index e52b8a7..90cca83 100644
  	}
  
  	bool IsTitleRunning()
-@@ -1067,6 +1090,11 @@ namespace CafeSystem
+@@ -987,6 +1010,11 @@ namespace CafeSystem
  	{
  		if(!sSystemRunning)
  			return;
@@ -103,14 +94,14 @@ index e52b8a7..90cca83 100644
 +		// this title's state as early into teardown as possible -- same
 +		// ordering the Azahar patch's ShutdownGame() hook already uses.
 +		s_remoteServerBridge.reset();
- 		coreinit::OSSchedulerEnd();
- 		Latte_Stop();
- 		// reset Cafe OS userspace modules
+         coreinit::OSSchedulerEnd();
+         Latte_Stop();
+         // reset Cafe OS userspace modules
 diff --git a/src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp b/src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp
-index 79b2d69..a289ba6 100644
+index 2efef5b..0fcdef3 100644
 --- a/src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp
 +++ b/src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp
-@@ -16,6 +16,8 @@
+@@ -15,6 +15,8 @@
  #include "Cafe/OS/libs/erreula/erreula.h"
  #include "input/InputManager.h"
  #include "Cafe/OS/libs/swkbd/swkbd.h"
@@ -119,7 +110,7 @@ index 79b2d69..a289ba6 100644
  
  uint32 prevScissorX = 0;
  uint32 prevScissorY = 0;
-@@ -963,6 +965,20 @@ void LatteRenderTarget_copyToBackbuffer(LatteTextureView* textureView, bool isPa
+@@ -973,6 +975,20 @@ void LatteRenderTarget_copyToBackbuffer(LatteTextureView* textureView, bool isPa
  	cemu_assert(shader);
  	g_renderer->DrawBackbufferQuad(textureView, shader, filter==LatteTextureView::MagFilter::kLinear, imageX, imageY, imageWidth, imageHeight, isPadView, clearBackground);
  	g_renderer->HandleScreenshotRequest(textureView, isPadView);
@@ -140,7 +131,7 @@ index 79b2d69..a289ba6 100644
  	if (!g_renderer->ImguiBegin(!isPadView))
  		return;
  	swkbd_render(!isPadView);
-@@ -980,6 +996,33 @@ void LatteRenderTarget_itHLECopyColorBufferToScanBuffer(MPTR colorBufferPtr, uin
+@@ -990,6 +1006,33 @@ void LatteRenderTarget_itHLECopyColorBufferToScanBuffer(MPTR colorBufferPtr, uin
  		return;
  	}
  
@@ -175,10 +166,10 @@ index 79b2d69..a289ba6 100644
  		auto controller = InputManager::instance().get_vpad_controller(n);
  		if (!controller)
 diff --git a/src/Cafe/HW/Latte/Renderer/OpenGL/OpenGLRenderer.cpp b/src/Cafe/HW/Latte/Renderer/OpenGL/OpenGLRenderer.cpp
-index 9d30da3..07edf12 100644
+index bbf988b..52ce7f6 100644
 --- a/src/Cafe/HW/Latte/Renderer/OpenGL/OpenGLRenderer.cpp
 +++ b/src/Cafe/HW/Latte/Renderer/OpenGL/OpenGLRenderer.cpp
-@@ -580,6 +580,74 @@ void OpenGLRenderer::HandleScreenshotRequest(LatteTextureView* texView, bool pad
+@@ -544,6 +544,74 @@ void OpenGLRenderer::HandleScreenshotRequest(LatteTextureView* texView, bool pad
  	SaveScreenshot(rgb_data, screenshotWidth, screenshotHeight, !padView);
  }
  
@@ -254,10 +245,10 @@ index 9d30da3..07edf12 100644
  {
  	if (padView && !IsPadWindowActive())
 diff --git a/src/Cafe/HW/Latte/Renderer/OpenGL/OpenGLRenderer.h b/src/Cafe/HW/Latte/Renderer/OpenGL/OpenGLRenderer.h
-index 435ea42..3926b3b 100644
+index e29e9d4..d5831ce 100644
 --- a/src/Cafe/HW/Latte/Renderer/OpenGL/OpenGLRenderer.h
 +++ b/src/Cafe/HW/Latte/Renderer/OpenGL/OpenGLRenderer.h
-@@ -57,6 +57,7 @@ public:
+@@ -37,6 +37,7 @@ public:
  	void DrawEmptyFrame(bool mainWindow) override;
  	void ClearColorbuffer(bool padView) override;
  	void HandleScreenshotRequest(LatteTextureView* texView, bool padView) override;
@@ -266,13 +257,16 @@ index 435ea42..3926b3b 100644
  	void DrawBackbufferQuad(LatteTextureView* texView, RendererOutputShader* shader, bool useLinearTexFilter, sint32 imageX, sint32 imageY, sint32 imageWidth, sint32 imageHeight, bool padView, bool clearBackground) override;
  
 diff --git a/src/Cafe/HW/Latte/Renderer/Renderer.h b/src/Cafe/HW/Latte/Renderer/Renderer.h
-index 6482f37..daac3d6 100644
+index 77d588b..11758b8 100644
 --- a/src/Cafe/HW/Latte/Renderer/Renderer.h
 +++ b/src/Cafe/HW/Latte/Renderer/Renderer.h
-@@ -73,6 +73,24 @@ public:
+@@ -66,8 +66,26 @@ public:
+ 	virtual void SwapBuffers(bool swapTV, bool swapDRC) = 0;
  
  	virtual void HandleScreenshotRequest(LatteTextureView* texView, bool padView){}
- 
+-	
+-	virtual void DrawBackbufferQuad(LatteTextureView* texView, RendererOutputShader* shader, bool useLinearTexFilter, 
++
 +	// DualDeck (github.com/crimson3076/DualDeck): reads back `texView`
 +	// as top-down BGRA8888 into `outPixels`/`outWidth`/`outHeight`.
 +	// Unlike HandleScreenshotRequest() above (a one-shot, user-triggered
@@ -291,14 +285,15 @@ index 6482f37..daac3d6 100644
 +	// applies to this capture.
 +	virtual bool CaptureSurfaceBGRA(LatteTextureView* texView, bool padView, std::vector<uint8>& outPixels, int& outWidth, int& outHeight) { return false; }
 +
- 	virtual void DrawBackbufferQuad(LatteTextureView* texView, RendererOutputShader* shader, bool useLinearTexFilter,
- 												sint32 imageX, sint32 imageY, sint32 imageWidth, sint32 imageHeight,
++	virtual void DrawBackbufferQuad(LatteTextureView* texView, RendererOutputShader* shader, bool useLinearTexFilter,
+ 												sint32 imageX, sint32 imageY, sint32 imageWidth, sint32 imageHeight, 
  												bool padView, bool clearBackground) = 0;
+ 	virtual bool BeginFrame(bool mainWindow) = 0;
 diff --git a/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.cpp b/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.cpp
-index 95bc0fc..1fbec1c 100644
+index 4ff2faa..1eb0597 100644
 --- a/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.cpp
 +++ b/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.cpp
-@@ -1271,6 +1271,303 @@ void VulkanRenderer::HandleScreenshotRequest(LatteTextureView* texView, bool pad
+@@ -1074,6 +1074,303 @@ void VulkanRenderer::HandleScreenshotRequest(LatteTextureView* texView, bool pad
  		SaveScreenshot(rgb_data, width, height, !padView);
  }
  
@@ -603,10 +598,10 @@ index 95bc0fc..1fbec1c 100644
  
  std::vector<VkDeviceQueueCreateInfo> VulkanRenderer::CreateQueueCreateInfos(const std::set<sint32>& uniqueQueueFamilies) const
 diff --git a/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.h b/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.h
-index 2909440..452b56b 100644
+index f145048..d7f5655 100644
 --- a/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.h
 +++ b/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.h
-@@ -204,6 +204,7 @@ public:
+@@ -189,6 +189,7 @@ public:
  	bool IsPadWindowActive() override;
  
  	void HandleScreenshotRequest(LatteTextureView* texView, bool padView) override;
@@ -614,8 +609,61 @@ index 2909440..452b56b 100644
  
  	void QueryMemoryInfo();
  	void QueryAvailableFormats();
+diff --git a/src/gui/MainWindow.cpp b/src/gui/MainWindow.cpp
+index 4801706..7f9e0a3 100644
+--- a/src/gui/MainWindow.cpp
++++ b/src/gui/MainWindow.cpp
+@@ -661,16 +661,21 @@ void MainWindow::OnFileMenu(wxCommandEvent& event)
+ 	}
+ 	else if (menuId == MAINFRAME_MENU_ID_FILE_END_EMULATION)
+ 	{
+-        CafeSystem::ShutdownTitle();
+-		DestroyCanvas();
+-		m_game_launched = false;
+-		RecreateMenu();
+-        CreateGameListAndStatusBar();
+-        DoLayout();
+-		UpdateChildWindowTitleRunningState();
++		EndEmulation();
+ 	}
+ }
+ 
++void MainWindow::EndEmulation()
++{
++	CafeSystem::ShutdownTitle();
++	DestroyCanvas();
++	m_game_launched = false;
++	RecreateMenu();
++	CreateGameListAndStatusBar();
++	DoLayout();
++	UpdateChildWindowTitleRunningState();
++}
++
+ void MainWindow::OnOpenFolder(wxCommandEvent& event)
+ {
+ 	if(event.GetId() == MAINFRAME_MENU_ID_FILE_OPEN_CEMU_FOLDER)
+diff --git a/src/gui/MainWindow.h b/src/gui/MainWindow.h
+index beb86f9..a913bb2 100644
+--- a/src/gui/MainWindow.h
++++ b/src/gui/MainWindow.h
+@@ -67,6 +67,15 @@ public:
+ 	void UpdateSettingsAfterGameLaunch();
+ 	void RestoreSettingsAfterGameExited();
+ 
++	// DualDeck (github.com/crimson3076/DualDeck): the exact sequence
++	// OnFileMenu() already runs for MAINFRAME_MENU_ID_FILE_END_EMULATION
++	// (stop the current title, return to the game list), pulled out into
++	// its own public method so it's callable from outside this
++	// translation unit -- see remote_server/RemoteServerBridge.cpp's top
++	// comment. OnFileMenu() itself now just calls this too, so there's
++	// exactly one copy of the sequence.
++	void EndEmulation();
++
+ 	bool FileLoad(const fs::path launchPath, wxLaunchGameEvent::INITIATED_BY initiatedBy);
+ 
+ 	[[nodiscard]] bool IsGameLaunched() const { return m_game_launched; }
 diff --git a/src/input/InputManager.cpp b/src/input/InputManager.cpp
-index 44973d8..d5e52a1 100644
+index 64b238f..3bb9586 100644
 --- a/src/input/InputManager.cpp
 +++ b/src/input/InputManager.cpp
 @@ -5,6 +5,7 @@
@@ -639,7 +687,7 @@ index 44973d8..d5e52a1 100644
  	m_update_thread_shutdown.store(false);
  	m_update_thread = std::thread(&InputManager::update_thread, this);
 diff --git a/src/input/api/InputAPI.h b/src/input/api/InputAPI.h
-index a5f1f92..25e041d 100644
+index 07ae16c..12d05bf 100644
 --- a/src/input/api/InputAPI.h
 +++ b/src/input/api/InputAPI.h
 @@ -17,6 +17,12 @@ namespace InputAPI
@@ -674,12 +722,12 @@ index a5f1f92..25e041d 100644
  			return DSUClient;
  		
 diff --git a/src/input/emulated/VPADController.cpp b/src/input/emulated/VPADController.cpp
-index f7e9447..bccb431 100644
+index 81615c9..7ab0c68 100644
 --- a/src/input/emulated/VPADController.cpp
 +++ b/src/input/emulated/VPADController.cpp
-@@ -638,6 +638,11 @@ bool VPADController::set_default_mapping(const std::shared_ptr<ControllerBase>&
+@@ -635,6 +635,11 @@ bool VPADController::set_default_mapping(const std::shared_ptr<ControllerBase>&
+ 		break;
  	}
- #endif
  	case InputAPI::XInput:
 +	// DualDeck's RemoteController (src/remote_server/RemoteController.cpp)
 +	// deliberately mirrors this exact XInput table bit-for-bit -- see
@@ -691,10 +739,10 @@ index f7e9447..bccb431 100644
  		{
 diff --git a/src/remote_server/CMakeLists.txt b/src/remote_server/CMakeLists.txt
 new file mode 100644
-index 0000000..eac591e
+index 0000000..d7c39c0
 --- /dev/null
 +++ b/src/remote_server/CMakeLists.txt
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,53 @@
 +# DualDeck (github.com/crimson3076/DualDeck) remote-server integration --
 +# see CemuAdapter.h's top comment. Vendors the same adapter-sdk contract
 +# (adapter_sdk/) already vendored into this project's melonDS and Azahar
@@ -720,34 +768,32 @@ index 0000000..eac591e
 +
 +set_property(TARGET CemuRemoteServer PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 +
-+# Every other library in this codebase force-includes
-+# Common/precompiled.h (via this helper, defined in the top-level
-+# src/CMakeLists.txt), which is where project-wide typedefs like
-+# uint32/uint16/sint32 (plain aliases for uint32_t/uint16_t/int32_t) are
-+# established -- CemuAdapter.cpp reaches into Cemu's own Latte headers
-+# (Renderer.h, LatteTextureLoader.h, LatteAddrLib.h, ...), which use
-+# those bare typedefs throughout with no self-contained fallback, so
-+# this is required, not just conventional.
-+cemu_use_precompiled_header(CemuRemoteServer)
++# Project-wide typedefs like uint32/uint16/sint32 (plain aliases for
++# uint32_t/uint16_t/int32_t) are established in Common/precompiled.h,
++# force-included via CemuCommon's own `target_precompile_headers(CemuCommon
++# PUBLIC precompiled.h)` (src/Common/CMakeLists.txt) -- PUBLIC there means
++# any target linking CemuCommon reuses the same precompiled header
++# automatically, which is how every other library in this codebase gets
++# it (see e.g. Cafe/CMakeLists.txt's own target_link_libraries(CemuCafe
++# ... CemuCommon ...)), not via a separate helper function. CemuAdapter.cpp
++# reaches into Cemu's own Latte headers (Renderer.h, LatteTextureLoader.h,
++# LatteAddrLib.h, ...), which use those bare typedefs throughout with no
++# self-contained fallback, so linking CemuCommon here is required, not
++# just conventional.
 +
-+# "../" (src/) for input/, Cafe/, wxgui/, etc. -- same convention every
++# "../" (src/) for input/, Cafe/, gui/, etc. -- same convention every
 +# other top-level library here uses (see e.g. Cafe/CMakeLists.txt's
 +# identical target_include_directories(CemuCafe PUBLIC "../") line).
++# RemoteServerBridge.cpp's own #include "gui/MainWindow.h" resolves
++# through this alone -- unlike some later Cemu versions, this codebase's
++# gui/ headers consistently use "gui/..."-prefixed includes among
++# themselves rather than bare same-directory includes, so no extra
++# include directory is needed here.
 +target_include_directories(CemuRemoteServer PUBLIC "../")
 +target_include_directories(CemuRemoteServer PUBLIC "adapter_sdk/include")
 +
-+# RemoteServerBridge.cpp includes wxgui/MainWindow.h, which chains into
-+# gui/wxgui/components/wxGameList.h, which in turn bare-#includes
-+# "wxHelper.h" (gui/wxgui/wxHelper.h) with no path prefix at all. That
-+# only resolves because CMAKE_INCLUDE_CURRENT_DIR is set ON globally
-+# (top-level src/CMakeLists.txt), which auto-adds *each target's own*
-+# CMAKE_CURRENT_SOURCE_DIR to its include path -- for CemuWxGui itself
-+# that's gui/wxgui/ directly, so files built as part of that target get
-+# this for free. CemuRemoteServer's own directory is remote_server/, a
-+# different one, so it needs this added explicitly.
-+target_include_directories(CemuRemoteServer PUBLIC "../gui/wxgui")
-+
 +target_link_libraries(CemuRemoteServer PRIVATE
++	CemuCommon
 +	CemuGui
 +)
 diff --git a/src/remote_server/CemuAdapter.cpp b/src/remote_server/CemuAdapter.cpp
@@ -1026,7 +1072,7 @@ index 0000000..7227247
 +} // namespace DualDeck::RemoteServer
 diff --git a/src/remote_server/CemuAdapter.h b/src/remote_server/CemuAdapter.h
 new file mode 100644
-index 0000000..3abe590
+index 0000000..ac3373d
 --- /dev/null
 +++ b/src/remote_server/CemuAdapter.h
 @@ -0,0 +1,187 @@
@@ -1060,7 +1106,7 @@ index 0000000..3abe590
 +//     RemoteControllerProvider.h) through InputManager's existing
 +//     create_provider<TProvider>() template and, once at construction,
 +//     auto-wires it as VPAD player 1's default mapping. Confirmed by
-+//     reading gui/wxgui/input/InputSettings2.cpp (the only two call
++//     reading gui/input/InputSettings2.cpp (the only two call
 +//     sites of EmulatedController::set_default_mapping() anywhere in
 +//     Cemu) that the real, idiomatic sequence is always
 +//     add_controller() *then* set_default_mapping() on the target
@@ -1537,10 +1583,10 @@ index 0000000..d6dd71f
 +} // namespace DualDeck::RemoteServer
 diff --git a/src/remote_server/RemoteServerBridge.cpp b/src/remote_server/RemoteServerBridge.cpp
 new file mode 100644
-index 0000000..a300277
+index 0000000..daa6a5c
 --- /dev/null
 +++ b/src/remote_server/RemoteServerBridge.cpp
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,125 @@
 +#include "remote_server/RemoteServerBridge.h"
 +
 +#include <algorithm>
@@ -1549,7 +1595,7 @@ index 0000000..a300277
 +
 +#include <wx/event.h>
 +
-+#include "wxgui/MainWindow.h"
++#include "gui/MainWindow.h"
 +#include "remote_server/CemuAdapter.h"
 +
 +namespace DualDeck::RemoteServer {
@@ -1577,13 +1623,21 @@ index 0000000..a300277
 +RemoteServerBridge::RemoteServerBridge(std::string cemuVersion, std::string adapterSocketPath) {
 +    if (g_mainFrame) {
 +        // QuitSession: stop the current title, return to the game list --
-+        // same "eject/stop" semantics as EndEmulation() itself (bound to
-+        // the existing File > End Emulation menu item), just reachable
-+        // from a background thread. QuitApplication: post a real
-+        // wxCloseEvent, i.e. behave exactly as if the user had clicked
-+        // MainWindow's own close button -- MainWindow already binds
-+        // EVT_CLOSE(MainWindow::OnClose) (confirmed by reading it), so no
-+        // new close-handling logic is needed here at all.
++        // same "eject/stop" semantics as the File > End Emulation menu
++        // item, just reachable from a background thread. That menu item
++        // (MAINFRAME_MENU_ID_FILE_END_EMULATION in MainWindow.cpp) inlines
++        // its handling directly in OnFileMenu() rather than exposing a
++        // public method, and the id it switches on is a private
++        // implementation-detail enum with no stable value to reference
++        // from outside that translation unit -- so MainWindow::EndEmulation()
++        // (declared in MainWindow.h, defined in MainWindow.cpp) extracts
++        // that exact same sequence into a small public method OnFileMenu
++        // itself now also calls, rather than duplicating it here.
++        // QuitApplication: post a real wxCloseEvent, i.e. behave exactly
++        // as if the user had clicked MainWindow's own close button --
++        // MainWindow already binds EVT_CLOSE(MainWindow::OnClose)
++        // (confirmed by reading it), so no new close-handling logic is
++        // needed here at all.
 +        g_mainFrame->Bind(EVT_DUALDECK_QUIT_SESSION, [](wxCommandEvent&) {
 +            if (g_mainFrame) {
 +                g_mainFrame->EndEmulation();

@@ -13,7 +13,7 @@ set -euo pipefail
 
 MELONDS_COMMIT="10a173b5536fc75cd93f8a3868349dad963542ef"
 AZAHAR_COMMIT="75134fca82eab4e1a86dca0aaa4a188cefff5469"
-CEMU_COMMIT="50b9e4ba1d4d7cf9821a9cd416378bb94e1ba0ca"
+CEMU_COMMIT="a6fb0a48eb437a8a41c13b782ac8ae0433bf8f98" # v2.6, latest stable release
 SDL3_TAG="release-3.2.16"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
