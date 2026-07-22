@@ -56,6 +56,21 @@ ensure_packages "cemu build" \
     "freeglut-devel bluez-libs-devel libgcrypt-devel glm-devel gtk3-devel pulseaudio-libs-devel libsecret-devel systemd-devel libtool nasm libusb1-devel perl-IPC-Cmd" \
     "freeglut bluez-libs libgcrypt glm gtk3 libpulse libsecret systemd libtool nasm libusb"
 
+# sccache (github.com/mozilla/sccache), if present on PATH -- installed
+# by .github/workflows/release.yml's mozilla-actions/sccache-action step
+# in CI; simply absent for a typical local run, where this falls back to
+# no compiler launcher at all. Speeds up rebuilding after a patch change
+# by caching object files keyed on preprocessed source content rather
+# than on whether the same build directory happens to still be on disk:
+# without this, every Azahar/Cemu patch iteration recompiles all ~500+
+# translation units from scratch even though a patch usually touches
+# only a handful of files.
+cmake_launcher_args=()
+if command -v sccache >/dev/null 2>&1; then
+    echo "sccache found on PATH, enabling as CMake compiler launcher"
+    cmake_launcher_args=(-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache)
+fi
+
 # vcpkg's openssl port shells out to system Perl for its build (not
 # Cemu-specific -- any vcpkg-based project hits this the same way), and
 # recent Perl versions (5.40+, confirmed against Fedora 42's Perl 5.42)
@@ -79,7 +94,8 @@ else
     git clone --depth 1 --branch "${SDL3_TAG}" https://github.com/libsdl-org/SDL.git "${sdl3_src}"
     cmake -S "${sdl3_src}" -B "${sdl3_src}/build" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="${sdl3_install}" \
-        -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF
+        -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF \
+        "${cmake_launcher_args[@]}"
     cmake --build "${sdl3_src}/build" -j"$(nproc)"
     cmake --install "${sdl3_src}/build"
 fi
@@ -90,7 +106,8 @@ rm -rf "${melonds_src}"
 git clone https://github.com/melonDS-emu/melonDS.git "${melonds_src}"
 (cd "${melonds_src}" && git checkout "${MELONDS_COMMIT}")
 (cd "${melonds_src}" && git apply "${repo_root}/host/melonds-patches/0001-remote-server-integration.patch")
-cmake -S "${melonds_src}" -B "${melonds_src}/build" -DCMAKE_BUILD_TYPE=Release
+cmake -S "${melonds_src}" -B "${melonds_src}/build" -DCMAKE_BUILD_TYPE=Release \
+    "${cmake_launcher_args[@]}"
 cmake --build "${melonds_src}/build" -j"$(nproc)"
 
 echo "== [3/6] Patched Azahar host (Nintendo 3DS, commit ${AZAHAR_COMMIT}) =="
@@ -131,7 +148,8 @@ if [[ "${azahar_cache_hit}" -eq 0 ]]; then
     (cd "${azahar_src}" && git submodule update --init --recursive --depth 1)
     (cd "${azahar_src}" && git apply "${azahar_patch_file}")
     cmake -S "${azahar_src}" -B "${azahar_src}/build" -DCMAKE_BUILD_TYPE=Release \
-        -DENABLE_QT_TRANSLATION=OFF
+        -DENABLE_QT_TRANSLATION=OFF \
+        "${cmake_launcher_args[@]}"
     cmake --build "${azahar_src}/build" -j"$(nproc)"
 fi
 
@@ -150,6 +168,21 @@ echo "== [4/6] Patched Cemu host (Nintendo Wii U, commit ${CEMU_COMMIT}) =="
 # Cached across runs by commit + patch hash, same technique and same
 # rationale as Azahar's step above (an even heavier build: Cemu's own
 # vcpkg submodule resolves to roughly 108 packages).
+#
+# That source+build cache is keyed on the patch file's content, so it's
+# invalidated by every patch iteration -- exactly the case this project
+# is in most often (fixing a bug found during end-to-end testing, not
+# touching the pinned upstream commit). Without a *separate* cache for
+# vcpkg's own built dependency binaries, each of those iterations would
+# also rebuild all ~108 vcpkg packages from source, even though neither
+# the pinned Cemu commit nor its vcpkg manifest/baseline changed at all.
+# vcpkg's binary caching is enabled by default and, unless overridden,
+# reads/writes a local archive cache at $HOME/.cache/vcpkg/archives --
+# outside cemu_src entirely, so it survives the `rm -rf cemu_src` below
+# on a patch-hash cache miss. .github/workflows/release.yml caches that
+# directory separately, keyed on the Cemu commit (not the patch hash),
+# so a from-scratch clone still restores already-built package binaries
+# instead of recompiling wxWidgets/OpenSSL/etc. from source every time.
 cemu_src="${work_dir}/cemu-src"
 cemu_patch_file="${repo_root}/host/cemu-patches/0001-remote-server-integration.patch"
 cemu_cache_hit=0
@@ -163,7 +196,8 @@ if [[ "${cemu_cache_hit}" -eq 0 ]]; then
     git clone --recurse-submodules https://github.com/cemu-project/Cemu.git "${cemu_src}"
     (cd "${cemu_src}" && git checkout "${CEMU_COMMIT}" && git submodule update --init --recursive)
     (cd "${cemu_src}" && git apply "${cemu_patch_file}")
-    cmake -S "${cemu_src}" -B "${cemu_src}/build" -DCMAKE_BUILD_TYPE=release -G Ninja
+    cmake -S "${cemu_src}" -B "${cemu_src}/build" -DCMAKE_BUILD_TYPE=release -G Ninja \
+        "${cmake_launcher_args[@]}"
     cmake --build "${cemu_src}/build" -j"$(nproc)"
 fi
 
@@ -171,7 +205,8 @@ echo "== [5/6] Client + host prototype (this repo) =="
 repo_build="${work_dir}/repo-build"
 cmake -S "${repo_root}" -B "${repo_build}" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DDUALDECK_BUILD_CLIENT=ON \
-    -DDUALDECK_BUILD_HOST=ON -DCMAKE_PREFIX_PATH="${sdl3_install}"
+    -DDUALDECK_BUILD_HOST=ON -DCMAKE_PREFIX_PATH="${sdl3_install}" \
+    "${cmake_launcher_args[@]}"
 cmake --build "${repo_build}" -j"$(nproc)"
 ctest --test-dir "${repo_build}" --output-on-failure
 

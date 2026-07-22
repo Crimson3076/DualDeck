@@ -30,6 +30,22 @@ name: Release (versioned build)
 # same as it would for anyone running it locally. This also means every
 # CI run is a live end-to-end test of that auto-install path on a
 # genuinely clean machine.
+#
+# Two more caches speed up the common case of iterating on a patch (a
+# bug found during end-to-end testing, not a change to the pinned
+# upstream commit), where the source+build caches above are invalidated
+# on every iteration since their keys include the patch file's hash:
+# - sccache (mozilla-actions/sccache-action below) caches compiled
+#   object files keyed on preprocessed source content, not on whether a
+#   build directory happens to still be on disk -- so a patch that
+#   touches a handful of files only recompiles those, even after the
+#   from-scratch clone a patch-hash cache miss triggers.
+# - vcpkg's own binary archive cache ($HOME/.cache/vcpkg/archives,
+#   cached below keyed on the pinned Cemu commit, not the patch hash)
+#   means a from-scratch Cemu clone restores its ~108 already-built
+#   vcpkg package binaries instead of recompiling wxWidgets/OpenSSL/etc.
+#   from source, since neither the pinned commit nor the vcpkg manifest
+#   changes when only our own patch does.
 
 on:
   workflow_dispatch: {}
@@ -47,6 +63,29 @@ jobs:
       - name: Compute version tag
         id: version
         run: echo "tag=v0.1.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      # Installs sccache and points it at the GitHub Actions cache
+      # backend automatically -- scripts/build-release.sh detects
+      # sccache on PATH and passes it to every emulator/client cmake
+      # configure step as CMAKE_C(XX)_COMPILER_LAUNCHER. See the header
+      # comment above for why this matters far more here than in a
+      # typical from-scratch CI build: most runs of this workflow are a
+      # single small patch fix, not a change to a pinned upstream
+      # commit.
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
+      # vcpkg's own binary archive cache (Cemu's dependency builds only
+      # -- melonDS/Azahar don't use vcpkg). See the header comment
+      # above; keyed on the pinned Cemu commit, deliberately NOT on the
+      # patch file's hash like the source+build cache below, since the
+      # vcpkg manifest/baseline only changes when the pinned commit
+      # does, never when just our own patch does.
+      - name: Cache vcpkg binary archives (Cemu dependencies, independent of our patch)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: cemu-vcpkg-archives-50b9e4ba1d4d7cf9821a9cd416378bb94e1ba0ca-${{ runner.os }}-v1
 
       - name: Cache SDL3 build (pinned tag, independent of this repo's commits)
         uses: actions/cache@v4
