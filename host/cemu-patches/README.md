@@ -169,14 +169,24 @@ Both are exactly the class of build-order/include-path/precompiled-
 header mistake local compilation would have caught immediately -- expect
 more rounds of this as CI gets further into the build each time.
 
+**Third real CI build attempt** (after both fixes above): got to
+530/546 -- all of `CemuCafe`, `CemuWxGui`, `CemuConfig`, almost all of
+`CemuInput`, and `CemuAdapter.cpp`/`RemoteController.cpp`/
+`RemoteControllerProvider.cpp` (all three files new to this patch)
+compiled clean. Only `RemoteServerBridge.cpp` failed:
+`wxgui/MainWindow.h` chains into `wxgui/components/wxGameList.h`, which
+bare-`#include`s `"wxHelper.h"` (`gui/wxgui/wxHelper.h`) with no path
+prefix -- that only resolves for `CemuWxGui`'s own files because
+`CMAKE_INCLUDE_CURRENT_DIR` is set `ON` globally, which auto-adds *each
+target's own* source directory to its include path, and `CemuWxGui`'s
+own directory happens to be `gui/wxgui/` itself. Fixed by adding
+`target_include_directories(CemuRemoteServer PUBLIC "../gui/wxgui")` to
+`src/remote_server/CMakeLists.txt`.
+
 Concretely, still unverified:
-- **A full, successful compile.** As of the second CI attempt's fix,
-  neither has been through CI yet. The first attempt got to roughly
-  130/545 translation units before its failure; the second got well
-  past that (all of `CemuCafe`, including `LatteRenderTarget.cpp`, which
-  also includes `remote_server/CemuAdapter.h`/`RemoteServerBridge.h` and
-  apparently didn't hit either of the two errors above) before failing
-  on `CemuAdapter.cpp` specifically.
+- **A full, successful compile.** As of this third fix, it hasn't been
+  through CI yet -- the previous attempt got to 530/546 files before
+  failing on the last of the four new `remote_server/` `.cpp` files.
 - **No real Wii U game has been run.** Video capture, the auto-injected
   VPAD mapping, and the wx GUI quit-session/quit-application wiring have
   all been read and reasoned about but never observed taking effect.

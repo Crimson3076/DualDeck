@@ -580,10 +580,10 @@ index f7e9447..bccb431 100644
  		{
 diff --git a/src/remote_server/CMakeLists.txt b/src/remote_server/CMakeLists.txt
 new file mode 100644
-index 0000000..c7edced
+index 0000000..eac591e
 --- /dev/null
 +++ b/src/remote_server/CMakeLists.txt
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,55 @@
 +# DualDeck (github.com/crimson3076/DualDeck) remote-server integration --
 +# see CemuAdapter.h's top comment. Vendors the same adapter-sdk contract
 +# (adapter_sdk/) already vendored into this project's melonDS and Azahar
@@ -624,6 +624,17 @@ index 0000000..c7edced
 +# identical target_include_directories(CemuCafe PUBLIC "../") line).
 +target_include_directories(CemuRemoteServer PUBLIC "../")
 +target_include_directories(CemuRemoteServer PUBLIC "adapter_sdk/include")
++
++# RemoteServerBridge.cpp includes wxgui/MainWindow.h, which chains into
++# gui/wxgui/components/wxGameList.h, which in turn bare-#includes
++# "wxHelper.h" (gui/wxgui/wxHelper.h) with no path prefix at all. That
++# only resolves because CMAKE_INCLUDE_CURRENT_DIR is set ON globally
++# (top-level src/CMakeLists.txt), which auto-adds *each target's own*
++# CMAKE_CURRENT_SOURCE_DIR to its include path -- for CemuWxGui itself
++# that's gui/wxgui/ directly, so files built as part of that target get
++# this for free. CemuRemoteServer's own directory is remote_server/, a
++# different one, so it needs this added explicitly.
++target_include_directories(CemuRemoteServer PUBLIC "../gui/wxgui")
 +
 +target_link_libraries(CemuRemoteServer PRIVATE
 +	CemuGui
