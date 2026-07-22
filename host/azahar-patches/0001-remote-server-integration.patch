@@ -257,10 +257,10 @@ index 673c513..f3f6884 100644
      // The path to the game currently running
 diff --git a/src/citra_qt/remote_server/AzaharAdapter.cpp b/src/citra_qt/remote_server/AzaharAdapter.cpp
 new file mode 100644
-index 0000000..c009492
+index 0000000..033af96
 --- /dev/null
 +++ b/src/citra_qt/remote_server/AzaharAdapter.cpp
-@@ -0,0 +1,382 @@
+@@ -0,0 +1,423 @@
 +#include "citra_qt/remote_server/AzaharAdapter.h"
 +
 +#include <algorithm>
@@ -305,6 +305,32 @@ index 0000000..c009492
 +        }
 +    }
 +    return std::chrono::milliseconds(1000 / fps);
++}
++
++// Native (1x) by default -- unchanged behavior for anyone not setting
++// this. Deliberately independent of Azahar's own internal
++// resolution_factor setting (Settings::values.resolution_factor): that
++// setting exists to make the *top* screen's local 3D rendering sharper
++// on the host's own display, and RequestScreenshot() below happily
++// captures at any resolution regardless of it -- but a host with
++// resolution_factor cranked up for a beefy desktop GPU has no relation
++// to what's sensible to stream over a LAN, so this needs its own,
++// explicit knob rather than silently inheriting whatever the other
++// setting happens to be. Clamped to [1, 4] (native up to 1280x960):
++// above that starts costing meaningfully more bandwidth than most
++// networks/decoders comfortably handle for a 30fps stream (see
++// docs/known-limitations.md's performance-tuning entry) without a
++// corresponding user-visible benefit on a screen this physically small
++// to begin with.
++int resolveCaptureScale() {
++    int scale = 1;
++    if (const char* env = std::getenv("AZAHAR_REMOTE_CAPTURE_SCALE")) {
++        int parsed = std::atoi(env);
++        if (parsed > 0) {
++            scale = std::clamp(parsed, 1, 4);
++        }
++    }
++    return scale;
 +}
 +
 +// Mirrors host/adapter_bridge.cpp's dsButtonsToGenericButtons() table --
@@ -384,7 +410,7 @@ index 0000000..c009492
 +                             std::function<void()> onQuitSession, std::function<void()> onQuitApplication)
 +    : system_(system), azaharVersion_(std::move(azaharVersion)), onQuitSession_(std::move(onQuitSession)),
 +      onQuitApplication_(std::move(onQuitApplication)), inputStatus_(std::make_shared<RemoteInputStatus>()),
-+      captureInterval_(resolveCaptureInterval()) {
++      captureInterval_(resolveCaptureInterval()), captureScale_(resolveCaptureScale()) {
 +    registerInputEngine();
 +    running_ = true;
 +    captureThread_ = std::thread(&AzaharAdapter::captureLoop, this);
@@ -437,10 +463,23 @@ index 0000000..c009492
 +    melonds_remote::adapter::VideoSurfaceDescriptor bottom;
 +    bottom.surfaceId = kBottomSurfaceId;
 +    bottom.role = melonds_remote::adapter::SurfaceRole::Bottom;
-+    bottom.width = kBottomScreenWidth;
-+    bottom.height = kBottomScreenHeight;
++    // Reports whatever captureLoop() actually produces (native *
++    // captureScale_), not always the fixed native constants -- the
++    // client already resizes its texture to whatever width/height a
++    // HelloAck reports (see client/src/main.cpp's host-resize handling),
++    // so this alone is enough to stream at a higher-than-native
++    // resolution with no client-side change needed.
++    bottom.width = kBottomScreenWidth * captureScale_;
++    bottom.height = kBottomScreenHeight * captureScale_;
 +    bottom.pixelFormat = melonds_remote::adapter::PixelFormat::Bgra8888;
 +    bottom.touchSupported = true;
++    // Touch precision is defined by the 3DS's own native touch-screen
++    // coordinate space (see applyGenericInput()'s touch handling, which
++    // works in normalized 0..1 fractions regardless of surface pixel
++    // size) -- deliberately NOT scaled by captureScale_, unlike
++    // width/height above, since a higher-resolution video capture
++    // doesn't change how precisely the touch digitizer itself can report
++    // a position.
 +    bottom.touchRangeX = kBottomScreenWidth - 1;
 +    bottom.touchRangeY = kBottomScreenHeight - 1;
 +    bottom.required = true;
@@ -538,16 +577,18 @@ index 0000000..c009492
 +}
 +
 +void AzaharAdapter::captureLoop() {
-+    std::vector<uint8_t> buffer(static_cast<size_t>(kBottomScreenWidth) * kBottomScreenHeight * 4);
++    const int width = kBottomScreenWidth * captureScale_;
++    const int height = kBottomScreenHeight * captureScale_;
++    std::vector<uint8_t> buffer(static_cast<size_t>(width) * height * 4);
 +    // swapped=true -> bottom screen only (see SingleFrameLayout's
 +    // implementation in framebuffer_layout.cpp, confirmed by reading
 +    // it: FramebufferLayout{..., top_screen_enabled=!swapped,
 +    // bottom_screen_enabled=swapped, ...}). Native 3DS bottom-screen
-+    // resolution, no upscaling -- this is what gets streamed over the
++    // resolution unless AZAHAR_REMOTE_CAPTURE_SCALE says otherwise (see
++    // resolveCaptureScale()) -- this is what gets streamed over the
 +    // network, not what the host's own window shows.
 +    const Layout::FramebufferLayout layout =
-+        Layout::SingleFrameLayout(kBottomScreenWidth, kBottomScreenHeight, /*swapped=*/true,
-+                                  /*upright=*/false);
++        Layout::SingleFrameLayout(width, height, /*swapped=*/true, /*upright=*/false);
 +
 +    // Diagnostic counters, logged every ~5s (see below) -- captureLoop()
 +    // had no visibility at all into whether RequestScreenshot() was
@@ -611,9 +652,9 @@ index 0000000..c009492
 +                // regardless of which renderer backend captured it --
 +                // see the comment above on why this is needed for
 +                // OpenGL specifically.
-+                constexpr size_t rowBytes = static_cast<size_t>(kBottomScreenWidth) * 4;
-+                for (int row = 0; row < kBottomScreenHeight / 2; ++row) {
-+                    const int mirrorRow = kBottomScreenHeight - 1 - row;
++                const size_t rowBytes = static_cast<size_t>(width) * 4;
++                for (int row = 0; row < height / 2; ++row) {
++                    const int mirrorRow = height - 1 - row;
 +                    std::swap_ranges(buffer.begin() + static_cast<size_t>(row) * rowBytes,
 +                                      buffer.begin() + static_cast<size_t>(row + 1) * rowBytes,
 +                                      buffer.begin() + static_cast<size_t>(mirrorRow) * rowBytes);
@@ -645,10 +686,10 @@ index 0000000..c009492
 +} // namespace CitraQt::RemoteServer
 diff --git a/src/citra_qt/remote_server/AzaharAdapter.h b/src/citra_qt/remote_server/AzaharAdapter.h
 new file mode 100644
-index 0000000..4b389fd
+index 0000000..b34a559
 --- /dev/null
 +++ b/src/citra_qt/remote_server/AzaharAdapter.h
-@@ -0,0 +1,198 @@
+@@ -0,0 +1,207 @@
 +#pragma once
 +
 +// DualDeck's IEmulatorAdapter implementation for Azahar (Nintendo 3DS).
@@ -844,6 +885,15 @@ index 0000000..4b389fd
 +    // Resolved once at construction (from AZAHAR_REMOTE_CAPTURE_FPS, or
 +    // 60fps by default) -- see resolveCaptureInterval() in the .cpp.
 +    std::chrono::milliseconds captureInterval_;
++    // Resolved once at construction (from AZAHAR_REMOTE_CAPTURE_SCALE, or
++    // native 1x by default) -- see resolveCaptureScale() in the .cpp.
++    // kBottomScreenWidth/Height multiplied by this; independent of
++    // Azahar's own internal resolution_factor rendering-quality setting
++    // (which affects the top screen's local 3D rendering sharpness, not
++    // what gets captured here) so bumping stream resolution is a
++    // deliberate, separate choice rather than an automatic side effect of
++    // an unrelated setting.
++    int captureScale_ = 1;
 +};
 +
 +} // namespace CitraQt::RemoteServer

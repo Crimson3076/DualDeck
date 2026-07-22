@@ -4355,6 +4355,77 @@ connect (and correctly restores on disconnect), whether Exit ROM/Exit
 Azahar Entirely actually take effect, and whether the Circle
 Pad/C-Stick now move correctly instead of the D-Pad.
 
+## Display scaling and streamed resolution: both now decoupled from fixed constants (2026-07-22)
+
+Two more real-usage gaps reported together, both about resolution
+assumptions baked in as fixed constants.
+
+**The client's UI didn't scale to non-Steam-Deck displays (e.g. an ROG
+Ally's 1920x1080).** Every UI/touch-hit-test coordinate in
+`client/src/main.cpp` is computed against `kWindowWidth`/`kWindowHeight`
+(1280x800, Steam Deck's exact panel resolution). `SDL_CreateWindow`'s
+`SDL_WINDOW_FULLSCREEN` flag fullscreens at the real display's native
+resolution regardless of the size passed to it (confirmed in SDL3's own
+header: "fullscreen window at desktop resolution"), so on any other
+device the app's own 1280x800-based rendering just occupied the
+top-left 1280x800 pixels of a larger real backbuffer -- uncentered,
+unscaled, most of the screen left black. Fixed with one call right
+after creating the renderer: `SDL_SetRenderLogicalPresentation(renderer,
+kWindowWidth, kWindowHeight, SDL_LOGICAL_PRESENTATION_LETTERBOX)`. This
+makes SDL do the scale-and-letterbox itself on every subsequent
+`SDL_Render*` call, so none of the existing 1280x800 layout math needed
+to change -- it still draws into a virtual 1280x800 canvas, which SDL
+now maps onto whatever the real window/display size actually is.
+LETTERBOX (not STRETCH) preserves the UI's own aspect ratio rather than
+distorting bitmap text. Touch coordinates needed no corresponding
+change: `event.tfinger.x/y` are already normalized 0..1 fractions of the
+real window, independent of its actual pixel size.
+
+**Azahar's streamed bottom-screen resolution was hardcoded to native
+(320x240) regardless of the host's own rendering resolution.**
+`AzaharAdapter`'s capture layout (`kBottomScreenWidth`/
+`kBottomScreenHeight`) never scaled with Azahar's own internal
+`resolution_factor` setting, so turning that up (for sharper local 3D
+rendering) had no effect at all on what got captured and streamed --
+the client still received a native-resolution image. Fixed by adding a
+new, independent `AZAHAR_REMOTE_CAPTURE_SCALE` env var (native 1x by
+default -- unchanged behavior unless set; clamped to [1, 4], i.e. up to
+1280x960), read once at construction and applied to the capture buffer
+size, the `SingleFrameLayout()` call, the OpenGL-invert-Y row-mirror
+math (this needed fixing too -- it was still computing row width from
+the native constants, which would have silently corrupted the image at
+any scale above 1x on the OpenGL backend), and the `capabilities()`
+call's reported `VideoSurfaceDescriptor` width/height. Deliberately
+*not* tied to `resolution_factor` automatically: that setting is about
+local 3D rendering sharpness on the host's own display and has no
+principled relationship to what's sensible to stream over a LAN, so
+this is its own explicit choice rather than an automatic, possibly
+bandwidth-surprising side effect of an unrelated setting. `touchRangeX/
+Y` in the same descriptor are deliberately left unscaled -- touch
+precision is defined by the 3DS's native touch-digitizer coordinate
+space, not by how many pixels the video capture happens to produce.
+The client needed no changes for this: it already resizes its texture
+to whatever native width/height a `HelloAck` reports (existing
+host-resize handling in `client/src/main.cpp`), so a higher-resolution
+`capabilities()` report alone is enough to stream at higher-than-native
+resolution.
+
+Bandwidth at higher capture scales is a known, deliberately deferred
+tradeoff (per the request that prompted this) -- not addressed here.
+
+**Verified**: full `ctest` suite passes. The display-scaling fix was
+visually confirmed via an Xvfb screenshot at 1920x1080 (previously
+top-left-cropped, now correctly letterboxed and centered) and at the
+native 1280x800 (unchanged, confirmed no regression). The Azahar patch
+was regenerated via the established scratch-clone workflow -- diffed
+against the previously-committed patch to confirm only these two
+features' lines changed, applied cleanly to a pristine checkout at the
+pinned commit, and `citra_qt` rebuilt clean with both. **Not yet
+verified**: the streamed-resolution fix hasn't been confirmed on real
+hardware at a non-default `AZAHAR_REMOTE_CAPTURE_SCALE` value, and the
+display-scaling fix hasn't been confirmed on a real ROG Ally/other
+non-Deck device (only simulated via Xvfb at a matching resolution).
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

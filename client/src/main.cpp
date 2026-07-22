@@ -1394,6 +1394,29 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Every UI/touch-hit-test coordinate in this file is computed against
+    // the kWindowWidth/kWindowHeight constants (1280x800, Steam Deck's
+    // exact panel resolution) -- SDL_CreateWindow's SDL_WINDOW_FULLSCREEN
+    // flag actually fullscreens at the real display's native resolution
+    // regardless of the size passed to it (confirmed in SDL3's own
+    // SDL_video.h: "fullscreen window at desktop resolution"), so on any
+    // other device -- an 1920x1080 ROG Ally, or simply a future display --
+    // this file's own 1280x800-based rendering just occupied the top-left
+    // 1280x800 pixels of a larger real backbuffer, uncentered and
+    // unscaled. SDL_SetRenderLogicalPresentation makes SDL do the
+    // scale-and-letterbox itself on every subsequent SDL_Render* call, so
+    // none of this file's existing 1280x800 layout math needs to change --
+    // it draws into a virtual 1280x800 canvas that SDL maps onto whatever
+    // the real window/display size turns out to be. LETTERBOX (not
+    // STRETCH) to preserve the UI's own aspect ratio rather than
+    // distorting bitmap text; touch coordinates need no corresponding
+    // fix since event.tfinger.x/y are already normalized 0..1 fractions
+    // of the real window, independent of its actual pixel size.
+    if (!SDL_SetRenderLogicalPresentation(renderer, kWindowWidth, kWindowHeight,
+                                           SDL_LOGICAL_PRESENTATION_LETTERBOX)) {
+        std::fprintf(stderr, "SDL_SetRenderLogicalPresentation failed: %s\n", SDL_GetError());
+    }
+
     // The wire format (docs/protocol.md) and melonDS's own software-renderer
     // output are B,G,R,X bytes in memory -- SDL_PIXELFORMAT_BGRA32 is the
     // constant that actually means that. SDL_PIXELFORMAT_BGRA8888 (no "32")
