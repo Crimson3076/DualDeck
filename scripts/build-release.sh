@@ -53,8 +53,20 @@ ensure_packages "azahar build" \
 # has only ever been reasoned through, never actually run here).
 ensure_packages "cemu build" \
     "freeglut3-dev libbluetooth-dev libgcrypt20-dev libglm-dev libgtk-3-dev libpulse-dev libsecret-1-dev libsystemd-dev libtool nasm libusb-1.0-0-dev" \
-    "freeglut-devel bluez-libs-devel libgcrypt-devel glm-devel gtk3-devel pulseaudio-libs-devel libsecret-devel systemd-devel libtool nasm libusb1-devel" \
+    "freeglut-devel bluez-libs-devel libgcrypt-devel glm-devel gtk3-devel pulseaudio-libs-devel libsecret-devel systemd-devel libtool nasm libusb1-devel perl-IPC-Cmd" \
     "freeglut bluez-libs libgcrypt glm gtk3 libpulse libsecret systemd libtool nasm libusb"
+
+# vcpkg's openssl port shells out to system Perl for its build (not
+# Cemu-specific -- any vcpkg-based project hits this the same way), and
+# recent Perl versions (5.40+, confirmed against Fedora 42's Perl 5.42)
+# removed IPC::Cmd from the core distribution -- it now needs a real
+# package. Confirmed via a real local build failure (not just read from
+# docs): "Can't locate IPC/Cmd.pm in @INC ... Perl cannot find IPC::Cmd"
+# aborting vcpkg's openssl:x64-linux port build entirely. Debian/Ubuntu
+# and Arch's own `perl` packages still bundle it as of this writing (no
+# separate package needed there); only Fedora's `perl-IPC-Cmd` is added
+# above. If this starts failing on Debian/Arch too in the future, add
+# their IPC::Cmd packages here the same way.
 
 sdl3_src="${work_dir}/sdl3-src"
 sdl3_install="${work_dir}/sdl3-install"
