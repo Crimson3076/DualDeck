@@ -77,18 +77,6 @@ jobs:
           RELEASE_VERSION_TAG: ${{ steps.version.outputs.tag }}
         run: ./scripts/build-release.sh
 
-      # melonds-remote-linux-x86_64.tar.gz is the archive's permanent,
-      # never-renamed filename (see scripts/build-release.sh's
-      # archive_name comment) -- every already-installed client/host's
-      # apply-update.sh has that exact URL hardcoded, so it must keep
-      # existing forever for auto-update to keep working across the
-      # melonDS-Remote -> DualDeck rebrand. This is purely a same-bytes
-      # second copy under the new name, for a tidier-looking Releases
-      # page and for DualDeck-Installer.sh going forward -- not a
-      # replacement.
-      - name: Add DualDeck-named archive alias
-        run: cp release-out/melonds-remote-linux-x86_64.tar.gz release-out/dualdeck-linux-x86_64.tar.gz
-
       - name: Publish versioned release
         uses: softprops/action-gh-release@v2
         with:

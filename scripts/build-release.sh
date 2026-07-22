@@ -1948,13 +1948,30 @@ archive_name="melonds-remote-linux-x86_64.tar.gz"
 tar czf "${out_dir}/${archive_name}" -C "${work_dir}" "${pkg_name}"
 echo "Wrote ${out_dir}/${archive_name} (contains ${pkg_name}/)"
 
+# melonds-remote-linux-x86_64.tar.gz above is the archive's permanent,
+# never-renamed filename (see the comment on archive_name) -- every
+# already-installed client/host's apply-update.sh has that exact
+# download URL hardcoded, so it must keep existing forever for
+# auto-update to keep working across the melonDS-Remote -> DualDeck
+# rebrand. This is a same-bytes second copy under the new name, for a
+# tidier-looking Releases page and for DualDeck-Installer.sh going
+# forward -- not a replacement. Copied here, before SHA256SUMS is
+# computed below, so both names get a checksum entry -- doing this copy
+# later (e.g. as a separate release.yml step, which is where this used
+# to live) left DualDeck-Installer.sh downloading a file SHA256SUMS had
+# no entry for at all, so every fresh install/update failed checksum
+# verification unconditionally.
+alias_archive_name="dualdeck-linux-x86_64.tar.gz"
+cp "${out_dir}/${archive_name}" "${out_dir}/${alias_archive_name}"
+echo "Wrote ${out_dir}/${alias_archive_name} (same bytes as ${archive_name})"
+
 # GitHub issue #26: lets DualDeck-Installer.sh (and anyone else) verify
 # the archive's integrity before extracting/installing anything from
 # it, rather than trusting a plain HTTPS download unconditionally. A
 # constant filename for the same reason the archive itself has one --
 # re-publishing to the same release asset name replaces it instead of
 # accumulating stale duplicates.
-(cd "${out_dir}" && sha256sum "${archive_name}" > SHA256SUMS)
+(cd "${out_dir}" && sha256sum "${archive_name}" "${alias_archive_name}" > SHA256SUMS)
 echo "Wrote ${out_dir}/SHA256SUMS"
 
 # DualDeck-Installer.sh needs no build-time-computed values (it always
