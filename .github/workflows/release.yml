@@ -1,9 +1,9 @@
 name: Release (versioned build)
 
-# Builds the patched melonDS host + SDL3 client from scratch and
-# publishes them as a new, uniquely-tagged GitHub Release, so there's
-# always something to grab and test without needing to build anything
-# yourself. See scripts/build-release.sh for what actually gets
+# Builds the patched melonDS/Azahar/Cemu hosts + SDL3 client from
+# scratch and publishes them as a new, uniquely-tagged GitHub Release,
+# so there's always something to grab and test without needing to build
+# anything yourself. See scripts/build-release.sh for what actually gets
 # built/packaged, and docs/known-limitations.md (bundled in the archive)
 # for what is/isn't verified in a given build.
 #
@@ -17,10 +17,14 @@ name: Release (versioned build)
 # it (Actions tab -> this workflow -> "Run workflow") at whatever points
 # actually feel release-worthy, not on every commit.
 #
-# Takes ~15-20 minutes per run since melonDS and SDL3 are both built from
-# source (neither is packaged for this runner's Ubuntu version); the
-# SDL3 build is cached across runs since it's pinned to a fixed tag and
-# doesn't change with this repo's own commits. Build-time dependencies
+# Takes considerably longer than the ~15-20 minutes earlier releases
+# needed now that Cemu is built from source too (its vcpkg-based
+# dependency graph is roughly 108 packages, on top of melonDS/Azahar/
+# SDL3, none of which are packaged for this runner's Ubuntu version);
+# SDL3/Azahar/Cemu are all cached across runs by pinned commit (or tag)
+# and patch-file hash where applicable, so only melonDS's still-cheap
+# step and this repo's own client/host rebuild from scratch every run.
+# Build-time dependencies
 # are NOT installed as a separate step here -- scripts/build-release.sh
 # detects and installs its own (via scripts/lib/ensure-packages.sh), the
 # same as it would for anyone running it locally. This also means every
@@ -69,6 +73,19 @@ jobs:
         with:
           path: .release-work/azahar-src
           key: azahar-75134fca82eab4e1a86dca0aaa4a188cefff5469-${{ hashFiles('host/azahar-patches/0001-remote-server-integration.patch') }}-${{ runner.os }}-v2
+
+      # Cemu (Nintendo Wii U) is the heaviest of the three emulator builds
+      # (its own vcpkg submodule resolves to roughly 108 packages) --
+      # cached the same way and for the same patch-hash-in-the-key reason
+      # as Azahar's step above. This is also the very first time this
+      # patch is being built at all (see host/cemu-patches/README.md's
+      # "What is not verified yet" section) -- expect this step to need
+      # troubleshooting on its first few runs.
+      - name: Cache Cemu build (pinned commit, independent of this repo's commits)
+        uses: actions/cache@v4
+        with:
+          path: .release-work/cemu-src
+          key: cemu-50b9e4ba1d4d7cf9821a9cd416378bb94e1ba0ca-${{ hashFiles('host/cemu-patches/0001-remote-server-integration.patch') }}-${{ runner.os }}-v1
 
       - name: Build release package
         env:

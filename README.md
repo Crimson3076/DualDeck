@@ -32,13 +32,15 @@ emulator, and `client/dualdeck-client.sh` on your Steam Deck (or
 any Linux machine with a gamepad). Each opens a small menu; the host's
 "Launch..." choice picks which system to run -- Nintendo DS (melonDS,
 the default/most-supported path), Nintendo 3DS (Azahar, experimental --
-see `docs/known-limitations.md`'s AzaharAdapter entry), host-control
-mode only (no emulator, browse the host's own UI from the client
-instead -- also experimental), or a custom emulator you've already
-patched yourself with `scripts/patch-existing-emulator.sh`, for anyone
-who doesn't want a separate DualDeck-managed copy. The 3DS and
-host-control-only choices get the same zero-typing device-approval
-prompt as melonDS's own in-process dialog -- a `kdialog` Yes/No popup on
+see `docs/known-limitations.md`'s AzaharAdapter entry), Nintendo Wii U
+(Cemu, experimental and not yet build-verified -- see
+`host/cemu-patches/README.md`), host-control mode only (no emulator,
+browse the host's own UI from the client instead -- also experimental),
+or a custom emulator you've already patched yourself with
+`scripts/patch-existing-emulator.sh`, for anyone who doesn't want a
+separate DualDeck-managed copy. The 3DS, Wii U, and host-control-only
+choices all get the same zero-typing device-approval prompt as
+melonDS's own in-process dialog -- a `kdialog` Yes/No popup on
 the host's own desktop the first time an unrecognized device connects,
 no shared secret to type or copy anywhere. Add to Steam (Big Picture/Gaming Mode), Remove from Steam, and
 Check for updates (which offers to install one automatically if it

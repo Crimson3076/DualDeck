@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Applies the DualDeck remote-server integration patch to an existing
-# melonDS or Azahar source checkout you already have, instead of
+# melonDS, Azahar, or Cemu source checkout you already have, instead of
 # downloading/building a separate DualDeck-managed copy via
 # scripts/build-release.sh -- for anyone who already has one of these
 # emulators set up the way they like it and doesn't want a duplicate
@@ -9,6 +9,7 @@
 # Usage:
 #   scripts/patch-existing-emulator.sh --system ds   --source /path/to/your/melonDS/checkout [--build]
 #   scripts/patch-existing-emulator.sh --system 3ds  --source /path/to/your/azahar/checkout  [--build]
+#   scripts/patch-existing-emulator.sh --system wiiu --source /path/to/your/Cemu/checkout    [--build]
 #
 # Without --build, only applies the patch (git apply) and prints the
 # commands to build it yourself. With --build, also configures and
@@ -41,6 +42,7 @@ set -euo pipefail
 
 MELONDS_COMMIT="10a173b5536fc75cd93f8a3868349dad963542ef"
 AZAHAR_COMMIT="75134fca82eab4e1a86dca0aaa4a188cefff5469"
+CEMU_COMMIT="50b9e4ba1d4d7cf9821a9cd416378bb94e1ba0ca"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -70,7 +72,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "${system}" || -z "${source_dir}" ]]; then
-    echo "usage: $0 --system <ds|3ds> --source /path/to/checkout [--build]" >&2
+    echo "usage: $0 --system <ds|3ds|wiiu> --source /path/to/checkout [--build]" >&2
     exit 1
 fi
 
@@ -96,8 +98,20 @@ case "${system}" in
         # for the single-config Makefiles/Ninja generators this script uses.
         binary_hint="build/bin/Release/azahar"
         ;;
+    wiiu)
+        patch_file="${repo_root}/host/cemu-patches/0001-remote-server-integration.patch"
+        pinned_commit="${CEMU_COMMIT}"
+        emulator_name="Cemu"
+        # Cemu's own top-level CMakeLists.txt sets RUNTIME_OUTPUT_DIRECTORY
+        # to "${CMAKE_CURRENT_SOURCE_DIR}/../bin" from within src/CMakeLists.txt
+        # (i.e. <checkout>/bin, not <checkout>/build/bin) with OUTPUT_NAME
+        # "Cemu_$<LOWER_CASE:$<CONFIG>>" -- confirmed by reading that
+        # CMakeLists.txt directly, not guessed. $<CONFIG> resolves to the
+        # -DCMAKE_BUILD_TYPE value below (lowercased), same as Azahar's hint.
+        binary_hint="bin/Cemu_release"
+        ;;
     *)
-        echo "error: --system must be 'ds' or '3ds', got '${system}'" >&2
+        echo "error: --system must be 'ds', '3ds', or 'wiiu', got '${system}'" >&2
         exit 1
         ;;
 esac

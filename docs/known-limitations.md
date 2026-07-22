@@ -4473,8 +4473,18 @@ inventing an entirely new Cemu-side touch pipeline.
 
 See `host/cemu-patches/README.md`'s "What is *not* verified yet"
 section for the full, explicit list of what remains unconfirmed
-(compilation, the launcher/build-release.sh packaging, and any real
-end-to-end run against a Wii U game).
+(compilation and any real end-to-end run against a Wii U game).
+
+**Update**: the host launcher (`dualdeck-host.sh`'s "Which system?"
+menu now offers "Nintendo Wii U (Cemu, experimental)"),
+`scripts/build-release.sh` (clones/patches/builds Cemu at the pinned
+commit, packages `host/cemu` + `host/internal/run-host-cemu.sh`
+alongside melonDS/Azahar), `scripts/patch-existing-emulator.sh`
+(`--system wiiu`, for anyone with their own Cemu checkout), and
+`.github/workflows/release.yml` (a cached build step, same pattern as
+Azahar's) are all wired up. Still not build-verified locally for the
+same sandbox-network reason as before; the next `release.yml` run is
+the actual first real build attempt.
 
 ## Things intentionally out of scope for v0.1
 

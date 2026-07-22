@@ -13,6 +13,7 @@ set -euo pipefail
 
 MELONDS_COMMIT="10a173b5536fc75cd93f8a3868349dad963542ef"
 AZAHAR_COMMIT="75134fca82eab4e1a86dca0aaa4a188cefff5469"
+CEMU_COMMIT="50b9e4ba1d4d7cf9821a9cd416378bb94e1ba0ca"
 SDL3_TAG="release-3.2.16"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,7 +24,7 @@ mkdir -p "${work_dir}" "${out_dir}"
 # shellcheck source=scripts/lib/ensure-packages.sh
 source "${repo_root}/scripts/lib/ensure-packages.sh"
 
-echo "== [0/5] Checking build dependencies =="
+echo "== [0/6] Checking build dependencies =="
 ensure_packages "build" \
     "cmake extra-cmake-modules ninja-build build-essential git python3 libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev libarchive-dev libenet-dev libzstd-dev libfaad-dev qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-svg-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libdecor-0-dev" \
     "cmake extra-cmake-modules ninja-build gcc-c++ git python3 libcurl-devel libpcap-devel SDL2-devel libarchive-devel enet-devel libzstd-devel faad2-devel qt6-qtbase-devel qt6-qtmultimedia-devel qt6-qtsvg-devel libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel" \
@@ -40,10 +41,25 @@ ensure_packages "azahar build" \
     "vulkan-loader-devel vulkan-headers boost-devel pulseaudio-libs-devel alsa-lib-devel" \
     "vulkan-headers vulkan-icd-loader boost pulseaudio alsa-lib"
 
+# Cemu (Wii U) additionally needs the packages its own BUILD.md lists
+# beyond melonDS's/Azahar's dependency lists above -- wxWidgets is
+# fetched and built by Cemu's own vcpkg submodule, not from a system
+# package, so it isn't listed here. libusb-1.0-0-dev works around a
+# known vcpkg-hidapi build issue BUILD.md calls out explicitly. Debian
+# package names taken directly from BUILD.md; Fedora/Arch names are
+# best-effort and unverified -- see host/cemu-patches/README.md's "What
+# is not verified yet" section (this project's sandbox cannot reach the
+# hosts Cemu's vcpkg-based dependency graph needs, so this whole step
+# has only ever been reasoned through, never actually run here).
+ensure_packages "cemu build" \
+    "freeglut3-dev libbluetooth-dev libgcrypt20-dev libglm-dev libgtk-3-dev libpulse-dev libsecret-1-dev libsystemd-dev libtool nasm libusb-1.0-0-dev" \
+    "freeglut-devel bluez-libs-devel libgcrypt-devel glm-devel gtk3-devel pulseaudio-libs-devel libsecret-devel systemd-devel libtool nasm libusb1-devel" \
+    "freeglut bluez-libs libgcrypt glm gtk3 libpulse libsecret systemd libtool nasm libusb"
+
 sdl3_src="${work_dir}/sdl3-src"
 sdl3_install="${work_dir}/sdl3-install"
 
-echo "== [1/5] SDL3 (${SDL3_TAG}) =="
+echo "== [1/6] SDL3 (${SDL3_TAG}) =="
 if [[ -f "${sdl3_install}/lib/cmake/SDL3/SDL3Config.cmake" ]]; then
     echo "already built at ${sdl3_install}, skipping (cache hit)"
 else
@@ -56,7 +72,7 @@ else
     cmake --install "${sdl3_src}/build"
 fi
 
-echo "== [2/5] Patched melonDS host (commit ${MELONDS_COMMIT}) =="
+echo "== [2/6] Patched melonDS host (commit ${MELONDS_COMMIT}) =="
 melonds_src="${work_dir}/melonds-src"
 rm -rf "${melonds_src}"
 git clone https://github.com/melonDS-emu/melonDS.git "${melonds_src}"
@@ -65,7 +81,7 @@ git clone https://github.com/melonDS-emu/melonDS.git "${melonds_src}"
 cmake -S "${melonds_src}" -B "${melonds_src}/build" -DCMAKE_BUILD_TYPE=Release
 cmake --build "${melonds_src}/build" -j"$(nproc)"
 
-echo "== [3/5] Patched Azahar host (Nintendo 3DS, commit ${AZAHAR_COMMIT}) =="
+echo "== [3/6] Patched Azahar host (Nintendo 3DS, commit ${AZAHAR_COMMIT}) =="
 # See docs/azahar-integration-analysis.md and
 # docs/adr/0001-host-service-and-adapter-architecture.md's AzaharAdapter
 # section for what this patch actually does. This is a much heavier
@@ -107,7 +123,39 @@ if [[ "${azahar_cache_hit}" -eq 0 ]]; then
     cmake --build "${azahar_src}/build" -j"$(nproc)"
 fi
 
-echo "== [4/5] Client + host prototype (this repo) =="
+echo "== [4/6] Patched Cemu host (Nintendo Wii U, commit ${CEMU_COMMIT}) =="
+# See host/cemu-patches/README.md and docs/known-limitations.md's
+# 2026-07-22 Cemu entry for what this patch does and, importantly, what
+# has and hasn't been verified -- this patch was written entirely from
+# reading Cemu's source, never compiled in this project's own
+# development sandbox (Cemu's vcpkg-based dependency graph needs
+# unrestricted internet access that sandbox doesn't have). This is the
+# first time it's actually being built, on whatever machine runs this
+# script -- expect this step to need troubleshooting the first few
+# times it runs for real (see Cemu's own BUILD.md "Troubleshooting
+# Steps" section for common vcpkg issues).
+#
+# Cached across runs by commit + patch hash, same technique and same
+# rationale as Azahar's step above (an even heavier build: Cemu's own
+# vcpkg submodule resolves to roughly 108 packages).
+cemu_src="${work_dir}/cemu-src"
+cemu_patch_file="${repo_root}/host/cemu-patches/0001-remote-server-integration.patch"
+cemu_cache_hit=0
+if [[ -f "${cemu_src}/bin/Cemu_release" ]] && \
+   (cd "${cemu_src}" && git apply --reverse --check "${cemu_patch_file}" 2>/dev/null); then
+    echo "already built at ${cemu_src} with the current patch applied, skipping (cache hit)"
+    cemu_cache_hit=1
+fi
+if [[ "${cemu_cache_hit}" -eq 0 ]]; then
+    rm -rf "${cemu_src}"
+    git clone --recurse-submodules https://github.com/cemu-project/Cemu.git "${cemu_src}"
+    (cd "${cemu_src}" && git checkout "${CEMU_COMMIT}" && git submodule update --init --recursive)
+    (cd "${cemu_src}" && git apply "${cemu_patch_file}")
+    cmake -S "${cemu_src}" -B "${cemu_src}/build" -DCMAKE_BUILD_TYPE=release -G Ninja
+    cmake --build "${cemu_src}/build" -j"$(nproc)"
+fi
+
+echo "== [5/6] Client + host prototype (this repo) =="
 repo_build="${work_dir}/repo-build"
 cmake -S "${repo_root}" -B "${repo_build}" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DDUALDECK_BUILD_CLIENT=ON \
@@ -115,7 +163,7 @@ cmake -S "${repo_root}" -B "${repo_build}" -G Ninja \
 cmake --build "${repo_build}" -j"$(nproc)"
 ctest --test-dir "${repo_build}" --output-on-failure
 
-echo "== [5/5] Packaging =="
+echo "== [6/6] Packaging =="
 commit_short="$(cd "${repo_root}" && git rev-parse --short HEAD)"
 branch_name="$(cd "${repo_root}" && git rev-parse --abbrev-ref HEAD)"
 # Set by .github/workflows/release.yml to the actual published tag
@@ -155,6 +203,16 @@ cp "${azahar_src}/build/bin/Release/azahar" "${pkg_dir}/host/azahar"
 chmod +x "${pkg_dir}/host/azahar"
 ldd "${azahar_src}/build/bin/Release/azahar" | awk '{print $1}' | sort -u \
     > "${pkg_dir}/host/internal/azahar-shared-library-dependencies.txt"
+
+# Cemu (Nintendo Wii U) -- top-level alongside melonDS/azahar, same
+# "one binary per double-clickable emulator" layout. See
+# host/internal/run-host-cemu.sh for how it's actually launched (always
+# as an out-of-process adapter, same as Azahar -- see host/cemu-patches/
+# README.md for why Cemu has no in-process device-approval path).
+cp "${cemu_src}/bin/Cemu_release" "${pkg_dir}/host/cemu"
+chmod +x "${pkg_dir}/host/cemu"
+ldd "${cemu_src}/bin/Cemu_release" | awk '{print $1}' | sort -u \
+    > "${pkg_dir}/host/internal/cemu-shared-library-dependencies.txt"
 
 # The standalone Host Service binary (GitHub issue #4): not used by the
 # default launch path (melonDS still runs its own in-process server, see
@@ -911,6 +969,95 @@ export QT_QPA_PLATFORMTHEME=""
 WRAP
 chmod +x "${pkg_dir}/host/internal/run-host-azahar.sh"
 
+cat > "${pkg_dir}/host/internal/run-host-cemu.sh" <<'WRAP'
+#!/usr/bin/env bash
+# Runs the patched Cemu binary (Nintendo Wii U) -- see
+# host/cemu-patches/README.md and
+# docs/adr/0001-host-service-and-adapter-architecture.md in the
+# DualDeck repository this was built from.
+#
+# Same out-of-process-only shape as run-host-azahar.sh: Cemu has no
+# in-process device-approval dialog either, so this script always
+# starts the standalone Host Service in the background first, which
+# pops the same zero-typing kdialog Yes/No approval prompt melonDS's
+# own in-process dialog gives you (see kdialog_approval_prompt.h),
+# unless CEMU_REMOTE_AUTH_TOKEN is set, in which case that static
+# shared secret is used instead. Normally launched via
+# ../dualdeck-host.sh's "Launch..." menu, not directly.
+#
+# Pick a game through Cemu's own game list / File > Load once it opens,
+# same as any other Cemu launch. The GamePad/DRC screen streams to the
+# DualDeck client; the TV output stays on this host's own display, same
+# "host shows one screen, client shows the other" split as melonDS/
+# Azahar.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+host_root="$(cd .. && pwd)"
+
+# shellcheck source=scripts/lib/ensure-packages.sh
+source ./ensure-packages.sh
+
+ensure_packages "cemu runtime" \
+    "libvulkan1 freeglut3 libgtk-3-0 libpulse0 libsecret-1-0 libsystemd0 libbluetooth3 libgcrypt20 libusb-1.0-0" \
+    "vulkan-loader freeglut gtk3 pulseaudio-libs libsecret systemd-libs bluez-libs libgcrypt libusb1" \
+    "vulkan-icd-loader freeglut gtk3 libpulse libsecret systemd bluez-libs libgcrypt libusb" \
+    || echo "warning: could not verify/install Cemu runtime libraries automatically; see docs/troubleshooting.md" >&2
+
+if [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1; then
+    echo "Note: this looks like an immutable (rpm-ostree) system, e.g. Bazzite -- Cemu's" >&2
+    echo "Distrobox launch path isn't built yet (see host/cemu-patches/README.md), so" >&2
+    echo "this may fail if a required library isn't already present on the base image." >&2
+fi
+
+if [[ ! -x "${host_root}/internal/dualdeck-host-service" ]]; then
+    echo "error: host/internal/dualdeck-host-service is missing from this install --" >&2
+    echo "re-download the release archive." >&2
+    exit 1
+fi
+if [[ ! -x "${host_root}/cemu" ]]; then
+    echo "error: host/cemu is missing from this install -- re-download the" >&2
+    echo "release archive." >&2
+    exit 1
+fi
+
+run_dir="${HOME}/.config/dualdeck/run"
+mkdir -p "${run_dir}"
+adapter_socket="${run_dir}/cemu-adapter.sock"
+rm -f "${adapter_socket}"
+
+# See run-host.sh's identical MELONDS_REMOTE_VERSION comment -- same
+# central VERSION file, read the same way.
+export CEMU_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+
+auth_token_args=()
+if [[ -n "${CEMU_REMOTE_AUTH_TOKEN:-}" ]]; then
+    auth_token_args=(--auth-token "${CEMU_REMOTE_AUTH_TOKEN}")
+fi
+
+echo "Starting the standalone Host Service ..." >&2
+"${host_root}/internal/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
+    --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
+    --app-version "${CEMU_REMOTE_VERSION}" &
+host_service_pid=$!
+# Not exec'd below, same reason as run-host.sh's host-control branch:
+# this trap needs to still be able to run once Cemu exits.
+trap 'kill "${host_service_pid}" 2>/dev/null || true' EXIT
+sleep 0.5 # let the listener bind before Cemu tries to connect
+
+export CEMU_REMOTE_ENABLE=1
+export CEMU_REMOTE_ADAPTER_SOCKET="${adapter_socket}"
+# Performance tuning (optional): set CEMU_REMOTE_CAPTURE_FPS (1-60,
+# default 30) before running this script to change how often the
+# GamePad/TV video capture is allowed to run -- no rebuild needed, e.g.
+# `CEMU_REMOTE_CAPTURE_FPS=20 ./dualdeck-host.sh` if 30 turns out to
+# visibly affect the game's own performance on your hardware (Vulkan's
+# capture path is a real GPU sync every time it runs, see
+# host/cemu-patches/README.md). Already inherited by the exec below
+# with no extra wiring needed.
+"${host_root}/cemu" "$@"
+WRAP
+chmod +x "${pkg_dir}/host/internal/run-host-cemu.sh"
+
 cat > "${pkg_dir}/host/internal/launch-custom-emulator.sh" <<'WRAP'
 #!/usr/bin/env bash
 # Launches a custom-patched emulator binary the user built themselves
@@ -949,11 +1096,13 @@ prompt_type() {
         kdialog --title "DualDeck Host" --menu "Which system is this?" \
             ds "Nintendo DS (melonDS-based)" \
             n3ds "Nintendo 3DS (Azahar-based)" \
+            wiiu "Nintendo Wii U (Cemu-based)" \
             2>/dev/null || true
     else
-        read -rp "Is this a (d)S-based or (3)DS-based emulator? [d/3]: " t >&2
+        read -rp "Is this a (d)S-based, (3)DS-based, or (w)ii U-based emulator? [d/3/w]: " t >&2
         case "${t}" in
             3) echo "n3ds" ;;
+            w) echo "wiiu" ;;
             *) echo "ds" ;;
         esac
     fi
@@ -1036,6 +1185,35 @@ case "${type}" in
         # disabling the GTK3 platform theme integration that triggers
         # it (cosmetic-only downside).
         export QT_QPA_PLATFORMTHEME=""
+        "${path}" "$@"
+        ;;
+    wiiu)
+        if [[ ! -x "${host_root}/internal/dualdeck-host-service" ]]; then
+            echo "error: host/internal/dualdeck-host-service is missing from this" >&2
+            echo "install -- re-download the release archive." >&2
+            exit 1
+        fi
+        run_dir="${HOME}/.config/dualdeck/run"
+        mkdir -p "${run_dir}"
+        adapter_socket="${run_dir}/custom-adapter.sock"
+        rm -f "${adapter_socket}"
+
+        export CEMU_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+        # Same zero-typing kdialog approval as the n3ds case above --
+        # see that case's identical comment.
+        auth_token_args=()
+        if [[ -n "${token:-}" ]]; then
+            auth_token_args=(--auth-token "${token}")
+        fi
+        "${host_root}/internal/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
+            --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
+            --app-version "${CEMU_REMOTE_VERSION}" &
+        host_service_pid=$!
+        trap 'kill "${host_service_pid}" 2>/dev/null || true' EXIT
+        sleep 0.5
+
+        export CEMU_REMOTE_ENABLE=1
+        export CEMU_REMOTE_ADAPTER_SOCKET="${adapter_socket}"
         "${path}" "$@"
         ;;
     *)
@@ -1370,9 +1548,10 @@ choose_action() {
 
 # GitHub issue "rework the host launcher so it does not boot into
 # melonDS": picks which system/emulator to actually launch, instead of
-# always going straight to melonDS. Azahar (3DS) and "host control only"
-# use the standalone Host Service's own kdialog-based device-approval
-# popup (see internal/run-host-azahar.sh's comment and
+# always going straight to melonDS. Azahar (3DS), Cemu (Wii U), and
+# "host control only" all use the standalone Host Service's own
+# kdialog-based device-approval popup (see
+# internal/run-host-azahar.sh's/run-host-cemu.sh's comments and
 # kdialog_approval_prompt.h) -- the same zero-typing flow melonDS's own
 # in-process dialog already has.
 choose_emulator() {
@@ -1388,6 +1567,7 @@ choose_emulator() {
         kdialog --title "DualDeck Host" --menu "Which system?" \
             ds "Nintendo DS (melonDS)" \
             n3ds "Nintendo 3DS (Azahar, experimental)" \
+            wiiu "Nintendo Wii U (Cemu, experimental)" \
             hostcontrol "Host control only -- no emulator (experimental)" \
             custom "${custom_label}" \
             2>/dev/null || echo "cancel"
@@ -1396,16 +1576,18 @@ choose_emulator() {
             echo "Which system?"
             echo "  1) Nintendo DS (melonDS)"
             echo "  2) Nintendo 3DS (Azahar, experimental)"
-            echo "  3) Host control only -- no emulator (experimental)"
-            echo "  4) ${custom_label}"
-            echo "  5) Back"
+            echo "  3) Nintendo Wii U (Cemu, experimental)"
+            echo "  4) Host control only -- no emulator (experimental)"
+            echo "  5) ${custom_label}"
+            echo "  6) Back"
         } >&2
-        read -rp "Choice [1-5]: " choice
+        read -rp "Choice [1-6]: " choice
         case "${choice}" in
             1) echo "ds" ;;
             2) echo "n3ds" ;;
-            3) echo "hostcontrol" ;;
-            4) echo "custom" ;;
+            3) echo "wiiu" ;;
+            4) echo "hostcontrol" ;;
+            5) echo "custom" ;;
             *) echo "cancel" ;;
         esac
     fi
@@ -1436,6 +1618,15 @@ case "${action}" in
                 # directly, not through launch-host.sh's melonDS-specific
                 # Distrobox-vs-plain dispatch.
                 exec ./internal/run-host-azahar.sh
+                ;;
+            wiiu)
+                # Same out-of-process-only shape as n3ds above -- see
+                # internal/run-host-cemu.sh's comment and
+                # host/cemu-patches/README.md for why Cemu has no
+                # in-process device-approval path either. No Distrobox
+                # launch path yet -- called directly, not through
+                # launch-host.sh's melonDS-specific dispatch.
+                exec ./internal/run-host-cemu.sh
                 ;;
             hostcontrol)
                 # Exported before the same launch-host.sh dispatch the
