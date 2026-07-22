@@ -580,10 +580,10 @@ index f7e9447..bccb431 100644
  		{
 diff --git a/src/remote_server/CMakeLists.txt b/src/remote_server/CMakeLists.txt
 new file mode 100644
-index 0000000..e8a9fd1
+index 0000000..c7edced
 --- /dev/null
 +++ b/src/remote_server/CMakeLists.txt
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,44 @@
 +# DualDeck (github.com/crimson3076/DualDeck) remote-server integration --
 +# see CemuAdapter.h's top comment. Vendors the same adapter-sdk contract
 +# (adapter_sdk/) already vendored into this project's melonDS and Azahar
@@ -609,6 +609,16 @@ index 0000000..e8a9fd1
 +
 +set_property(TARGET CemuRemoteServer PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 +
++# Every other library in this codebase force-includes
++# Common/precompiled.h (via this helper, defined in the top-level
++# src/CMakeLists.txt), which is where project-wide typedefs like
++# uint32/uint16/sint32 (plain aliases for uint32_t/uint16_t/int32_t) are
++# established -- CemuAdapter.cpp reaches into Cemu's own Latte headers
++# (Renderer.h, LatteTextureLoader.h, LatteAddrLib.h, ...), which use
++# those bare typedefs throughout with no self-contained fallback, so
++# this is required, not just conventional.
++cemu_use_precompiled_header(CemuRemoteServer)
++
 +# "../" (src/) for input/, Cafe/, wxgui/, etc. -- same convention every
 +# other top-level library here uses (see e.g. Cafe/CMakeLists.txt's
 +# identical target_include_directories(CemuCafe PUBLIC "../") line).
@@ -620,15 +630,32 @@ index 0000000..e8a9fd1
 +)
 diff --git a/src/remote_server/CemuAdapter.cpp b/src/remote_server/CemuAdapter.cpp
 new file mode 100644
-index 0000000..80b4e50
+index 0000000..bb89f57
 --- /dev/null
 +++ b/src/remote_server/CemuAdapter.cpp
-@@ -0,0 +1,251 @@
+@@ -0,0 +1,268 @@
 +#include "remote_server/CemuAdapter.h"
 +
 +#include <algorithm>
 +#include <cstdlib>
 +
++// Renderer.h is not a self-contained leaf header -- it uses
++// Latte::E_DIM, LatteConst::ShaderType, and LatteAddrLib::
++// CachedSurfaceAddrInfo's full definition (via LatteTextureLoader.h's
++// own AddrLibFastDecode.h) without declaring or including any of them
++// itself, relying on whichever .cpp includes it to have already pulled
++// those in -- confirmed by reading LatteRenderTarget.cpp's own include
++// order (the same set below, in the same order) and
++// Cafe/OS/libs/gx2/GX2_TilingAperture.cpp (which explicitly includes
++// LatteAddrLib.h before LatteTextureLoader.h for the same reason).
++#include "Cafe/HW/Latte/ISA/RegDefines.h"
++#include "Cafe/HW/Latte/Core/Latte.h"
++#include "Cafe/HW/Latte/Core/LatteDraw.h"
++#include "Cafe/HW/Latte/Core/LatteShader.h"
++#include "Cafe/HW/Latte/Core/LatteOverlay.h"
++#include "Cafe/HW/Latte/Core/LatteBufferCache.h"
++#include "Cafe/HW/Latte/Core/LatteTexture.h"
++#include "Cafe/HW/Latte/Core/LatteCachedFBO.h"
 +#include "Cafe/HW/Latte/Renderer/Renderer.h"
 +#include "input/InputManager.h"
 +#include "input/api/Controller.h"

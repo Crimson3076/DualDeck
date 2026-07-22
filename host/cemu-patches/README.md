@@ -130,9 +130,9 @@ not worth it for ~100 more packages; verification for this patch instead
 happens via this project's GitHub Actions CI pipeline, which runs on a
 normal, unrestricted-network runner.
 
-**First real CI build attempt (before this README's most recent
-update)**: failed at `src/Cafe/CMakeLists.txt`+`CafeSystem.cpp` --
-`CafeSystem.cpp` (compiled as part of the `CemuCafe` library) `#include`s
+**First real CI build attempt**: failed at
+`src/Cafe/CMakeLists.txt`+`CafeSystem.cpp` -- `CafeSystem.cpp` (compiled
+as part of the `CemuCafe` library) `#include`s
 `remote_server/RemoteServerBridge.h`, which pulls in the vendored
 `melonds_remote/adapter/...` headers; those don't live under the plain
 `"../"` (src/) include root every other cross-module include in this
@@ -144,19 +144,39 @@ include dir), since `adapter_sdk/` is vendored a level deeper, under
 -- not a `target_link_libraries` dependency on `CemuRemoteServer` (that
 library is defined by a later `add_subdirectory()` call in the top-level
 `CMakeLists.txt`, and isn't otherwise needed since `CemuBin` already
-links every top-level library directly for symbol resolution). This is
-exactly the class of build-order/include-path mistake local compilation
-would have caught immediately -- expect more rounds of this as CI gets
-further into the build each time.
+links every top-level library directly for symbol resolution).
+
+**Second real CI build attempt** (after the fix above): got past
+`CemuCafe` entirely, then failed compiling `CemuAdapter.cpp` itself
+(part of the new `CemuRemoteServer` library) with a cascade of "`uint32`
+has not been declared"/"`Latte::E_DIM` has not been declared"/etc.
+errors from Cemu's own `LatteAddrLib.h`/`Renderer.h`. Root cause: every
+other library in this codebase force-includes `Common/precompiled.h`
+via a `cemu_use_precompiled_header(<target>)` helper -- that's where
+`uint32`/`uint16`/`sint32`/etc. (plain aliases for the `<cstdint>`
+fixed-width types) are established project-wide, and `CemuRemoteServer`
+never called it. Fixed by adding that same call to
+`src/remote_server/CMakeLists.txt`, and separately adding the same
+leading Latte include block `LatteRenderTarget.cpp` already uses
+(`ISA/RegDefines.h`, `Core/Latte.h`, `LatteDraw.h`, `LatteShader.h`,
+`LatteOverlay.h`, `LatteBufferCache.h`, `LatteTexture.h`,
+`LatteCachedFBO.h`) to `CemuAdapter.cpp` before its own
+`Renderer.h` include, since `Renderer.h` isn't a self-contained leaf
+header either -- it assumes whichever `.cpp` includes it already pulled
+those in.
+
+Both are exactly the class of build-order/include-path/precompiled-
+header mistake local compilation would have caught immediately -- expect
+more rounds of this as CI gets further into the build each time.
 
 Concretely, still unverified:
-- **A full, successful compile.** The first CI attempt got to roughly
-  130/545 translation units (including this patch's own
-  `InputAPI.h`/`VPADController.cpp`/`InputManager.cpp` changes) before
-  the include-path error above; the fix hasn't been through CI yet.
-  `LatteRenderTarget.cpp` (also part of `CemuCafe`, also including
-  `remote_server/CemuAdapter.h`/`RemoteServerBridge.h`) never got reached
-  by that first attempt and could plausibly reveal another issue.
+- **A full, successful compile.** As of the second CI attempt's fix,
+  neither has been through CI yet. The first attempt got to roughly
+  130/545 translation units before its failure; the second got well
+  past that (all of `CemuCafe`, including `LatteRenderTarget.cpp`, which
+  also includes `remote_server/CemuAdapter.h`/`RemoteServerBridge.h` and
+  apparently didn't hit either of the two errors above) before failing
+  on `CemuAdapter.cpp` specifically.
 - **No real Wii U game has been run.** Video capture, the auto-injected
   VPAD mapping, and the wx GUI quit-session/quit-application wiring have
   all been read and reasoned about but never observed taking effect.
