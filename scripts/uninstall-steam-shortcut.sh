@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Removes the melonDS Remote Steam non-Steam-game shortcut added by
+# Removes the DualDeck Steam non-Steam-game shortcut added by
 # install-steam-shortcut.sh, and deletes the central install directory
 # install-steam-shortcut.sh copies everything into. See
 # scripts/lib/steam_shortcut.py for exactly what the shortcut-removal
@@ -29,13 +29,13 @@ set -euo pipefail
 # logs to a persistent file and, when available (SteamOS Desktop Mode/
 # Bazzite are both KDE Plasma), pops up a graphical error dialog via
 # kdialog.
-error_log="${HOME}/.config/melonds-remote-client/install.log"
+error_log="${HOME}/.config/dualdeck-client/install.log"
 on_error() {
     local exit_code="$1" line_no="$2" failing_cmd="$3"
     mkdir -p "$(dirname "${error_log}")"
     echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") uninstall-steam-shortcut.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
     if command -v kdialog >/dev/null 2>&1; then
-        kdialog --title "melonDS Remote" \
+        kdialog --title "DualDeck" \
             --error "Removing the Steam shortcut failed: ${failing_cmd}
 (exit code ${exit_code})
 
@@ -48,7 +48,7 @@ trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
 # Keep in sync with the same constant in scripts/install-steam-shortcut.sh
 # and the packaged client/install-steam-shortcut.sh / uninstall-steam-shortcut.sh
 # heredocs in scripts/build-release.sh.
-central_install_dir="${HOME}/.config/melonds-remote-client/install"
+central_install_dir="${HOME}/.config/dualdeck-client/install"
 self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 steam_shortcut_py=""
@@ -69,15 +69,28 @@ if [[ -z "${steam_shortcut_py}" ]]; then
     exit 0
 fi
 
-python3 "${steam_shortcut_py}" \
-    --exe "${central_install_dir}/client/melonds-remote-client" \
-    --remove \
-    "$@"
-
 dry_run=0
 for arg in "$@"; do
     [[ "${arg}" == "--dry-run" ]] && dry_run=1
 done
+
+# One-time melonDS-Remote -> DualDeck rebrand cleanup: an old install's
+# central dir/Exe/AppName all differ from the current ones (see
+# install-steam-shortcut.sh's matching comment for why the Exe-OR-AppName
+# fallback alone can't bridge that compound a change), so also try
+# removing under the old identity, best-effort. No-op if it was never
+# installed there or was already migrated.
+old_central_install_dir="${HOME}/.config/melonds-remote-client/install"
+python3 "${steam_shortcut_py}" \
+    --exe "${old_central_install_dir}/client/melonds-remote-client" \
+    --name "melonDS Remote" \
+    --remove "$@" >/dev/null 2>&1 || true
+
+python3 "${steam_shortcut_py}" \
+    --exe "${central_install_dir}/client/dualdeck-client" \
+    --name "DualDeck" \
+    --remove \
+    "$@"
 
 if [[ "${dry_run}" -eq 0 ]]; then
     # cd out first -- this script may itself be running from inside

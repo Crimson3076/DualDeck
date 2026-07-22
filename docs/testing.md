@@ -37,14 +37,14 @@ want to see the log line yourself.
 Run:
 
 ```sh
-cmake -S . -B build -DMELONDS_REMOTE_BUILD_CLIENT=OFF
+cmake -S . -B build -DDUALDECK_BUILD_CLIENT=OFF
 cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure
 ```
 
 ## Integration smoke test (`tests/smoke_test.py`)
 
-Exercises the real `melonds-remote-server` binary (started with
+Exercises the real `dualdeck-host-service` binary (started with
 `--auth-token`, the static-token path) over actual TCP/UDP sockets:
 
 - a handshake with the wrong auth token is rejected (`accepted=0`,
@@ -71,14 +71,14 @@ confirming the video path delivers correctly-sized frames), plus section
 melonDS or the SDL3 client built.
 
 ```sh
-python3 tests/smoke_test.py build/host/remote-server/melonds-remote-server
+python3 tests/smoke_test.py build/host/remote-server/dualdeck-host-service
 ```
 
 Exits non-zero and prints the server's log output on any failure.
 
 ## Device-approval smoke test (`tests/device_approval_smoke_test.py`)
 
-Exercises the same `melonds-remote-server` binary in its **default**
+Exercises the same `dualdeck-host-service` binary in its **default**
 mode (no `--auth-token`, so device-approval mode is active), covering the
 state machine `DeviceApprovalManager` implements (spec section 13,
 adapted -- see below): an unrecognized device identity is rejected with
@@ -91,13 +91,13 @@ identity survives a full host process restart when `--state-dir` is
 given.
 
 ```sh
-python3 tests/device_approval_smoke_test.py build/host/remote-server/melonds-remote-server
+python3 tests/device_approval_smoke_test.py build/host/remote-server/dualdeck-host-service
 ```
 
 This is a protocol-level test (raw sockets standing in for a client, and
 writing directly to the server's stdin standing in for a human operator).
 The corresponding real-client verification -- the actual
-`melonds-remote-client` binary detecting `ApprovalRequired`, showing its
+`dualdeck-client` binary detecting `ApprovalRequired`, showing its
 "awaiting approval" status, and connecting once approved on the host,
 with no typing anywhere -- is documented in
 `host/melonds-patches/README.md`.

@@ -1,13 +1,13 @@
-// melonDS Remote -- Steam Deck client.
+// DualDeck -- Steam Deck client.
 //
 // What this does today:
 //  - Opens a 1280x800 window (Steam Deck panel resolution)
-//  - On every launch, scans the LAN for available melonds-remote hosts
+//  - On every launch, scans the LAN for available DualDeck hosts
 //    and shows a gamepad/keyboard-navigable selection screen (spec
 //    section 8.1's discovery, adapted per user request: always show the
 //    picker rather than silently reconnecting to whichever host was used
 //    last, so switching to a different HTPC is always one screen away)
-//  - Connects to the chosen melonds-remote-server host and displays
+//  - Connects to the chosen dualdeck-host-service host and displays
 //    whatever bottom-screen frames it sends, aspect-correct-fit inside
 //    the window
 //  - Reads the first connected gamepad and maps it to DS buttons per
@@ -37,6 +37,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -187,7 +188,7 @@ void renderDiscoverySearching(SDL_Renderer* renderer) {
     renderCenteredBitmapText(renderer, "SEARCHING FOR HOST...",
                               static_cast<float>(kWindowHeight) / 2.0f - 20.0f, 4,
                               SDL_Color{200, 200, 200, 255});
-    renderCenteredBitmapText(renderer, "MAKE SURE A MELONDS REMOTE HOST IS RUNNING ON THIS NETWORK",
+    renderCenteredBitmapText(renderer, "MAKE SURE A DUALDECK HOST IS RUNNING ON THIS NETWORK",
                               static_cast<float>(kWindowHeight) / 2.0f + 40.0f, 2,
                               SDL_Color{140, 140, 140, 255});
     renderCenteredBitmapText(renderer, kMenuComboHint, static_cast<float>(kWindowHeight) - 80.0f, 2,
@@ -369,7 +370,7 @@ void renderPauseMenu(SDL_Renderer* renderer, const std::vector<std::string>& ite
 
 // Runs on every launch (spec request: "each time the client is booted, it
 // should show this screen in the event I want to connect to another
-// client"): scans the LAN for melonds-remote hosts and always lets the
+// client"): scans the LAN for DualDeck hosts and always lets the
 // user pick one via gamepad D-pad/South or keyboard arrows/Enter -- never
 // auto-connects silently, even when only one host answers, so switching
 // to a different HTPC is always available, not just when there happens
@@ -1285,16 +1286,18 @@ bool runSetupWizard(SDL_Window* window, SDL_Renderer* renderer, SDL_Texture* tex
 
 int main(int argc, char** argv) {
     NetClientConfig netConfig;
-    // Set from MELONDS_REMOTE_VERSION (exported by run-client.sh, read
-    // from the archive's VERSION file) rather than baked in at compile
-    // time, matching how the host's version is threaded into the patched
-    // melonDS via the same env var -- see net_server.h's
-    // NetServerConfig::appVersion and protocol.h's
-    // HelloPayload::appVersion for what this is compared against and why.
-    // Empty (unset) disables the version-mismatch check for this
-    // connection, e.g. for a from-source dev build run directly, not via
-    // run-client.sh.
-    if (const char* envVersion = std::getenv("MELONDS_REMOTE_VERSION")) {
+    // Set from DUALDECK_VERSION (exported by run-client.sh, read from
+    // the archive's VERSION file) rather than baked in at compile time
+    // -- see net_server.h's NetServerConfig::appVersion and
+    // protocol.h's HelloPayload::appVersion for what this is compared
+    // against and why. This is this client binary's own env var, not
+    // the one the patched melonDS/Azahar reads for the same purpose on
+    // the host side (MELONDS_REMOTE_VERSION/AZAHAR_REMOTE_VERSION,
+    // deliberately left alone -- see docs/known-limitations.md's
+    // rebrand section for why those stay as-is). Empty (unset) disables
+    // the version-mismatch check for this connection, e.g. for a
+    // from-source dev build run directly, not via run-client.sh.
+    if (const char* envVersion = std::getenv("DUALDECK_VERSION")) {
         netConfig.appVersion = envVersion;
     }
     bool authTokenExplicit = false; // --auth-token given: skip device-approval entirely (CI/scripting use)
@@ -1322,10 +1325,10 @@ int main(int argc, char** argv) {
         } else if (arg == "--discovery-port") {
             discoveryPort = static_cast<uint16_t>(std::stoi(nextArg()));
         } else if (arg == "--app-version") {
-            netConfig.appVersion = nextArg(); // overrides MELONDS_REMOTE_VERSION above
+            netConfig.appVersion = nextArg(); // overrides DUALDECK_VERSION above
         } else if (!arg.empty() && arg[0] != '-') {
             // Positional host address, for scripts/run-client.sh's
-            // `melonds-remote-client 127.0.0.1` convenience form.
+            // `dualdeck-client 127.0.0.1` convenience form.
             netConfig.hostAddress = arg;
             hostExplicit = true;
         } else {
@@ -1346,7 +1349,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    SDL_Window* window = SDL_CreateWindow("melonDS Remote", kWindowWidth, kWindowHeight,
+    SDL_Window* window = SDL_CreateWindow("DualDeck", kWindowWidth, kWindowHeight,
                                            SDL_WINDOW_FULLSCREEN);
     if (!window) {
         std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -1666,7 +1669,20 @@ int main(int argc, char** argv) {
         };
         bool exitEmulationConfirm = false;
         int exitEmulationSelectedIndex = 0;
-        const std::vector<std::string> exitEmulationItems = {"EXIT ROM", "EXIT MELONDS ENTIRELY", "CANCEL"};
+        // A lambda re-evaluated at every use site (same pattern as
+        // settingsMenuItems above), not a fixed const vector -- the
+        // middle item names whichever adapter is actually connected
+        // (e.g. "EXIT AZAHAR ENTIRELY"), which used to be hardcoded to
+        // "EXIT MELONDS ENTIRELY" even when connected to a non-melonDS
+        // adapter.
+        auto exitEmulationItems = [&]() {
+            std::string adapterUpper = sessionAdapterName;
+            std::transform(adapterUpper.begin(), adapterUpper.end(), adapterUpper.begin(),
+                            [](unsigned char c) { return std::toupper(c); });
+            std::string middleItem =
+                adapterUpper.empty() ? "EXIT EMULATION ENTIRELY" : "EXIT " + adapterUpper + " ENTIRELY";
+            return std::vector<std::string>{"EXIT ROM", middleItem, "CANCEL"};
+        };
         // Sent as ControllerState::emulatorActions for a fixed window after
         // confirming a choice above, not just one packet -- input goes over
         // UDP (spec section 6.3), so a single-packet one-shot action risks
@@ -1825,14 +1841,14 @@ int main(int argc, char** argv) {
                                 menuActive = true;
                             }
                         } else if (menuActive && exitEmulationConfirm) {
-                            int subCount = static_cast<int>(exitEmulationItems.size());
+                            int subCount = static_cast<int>(exitEmulationItems().size());
                             if (event.key.key == SDLK_UP) {
                                 exitEmulationSelectedIndex = (exitEmulationSelectedIndex + subCount - 1) % subCount;
                             } else if (event.key.key == SDLK_DOWN) {
                                 exitEmulationSelectedIndex = (exitEmulationSelectedIndex + 1) % subCount;
                             } else if (event.key.key == SDLK_RETURN) {
-                                const std::string& picked =
-                                    exitEmulationItems[static_cast<size_t>(exitEmulationSelectedIndex)];
+                                const std::string picked =
+                                    exitEmulationItems()[static_cast<size_t>(exitEmulationSelectedIndex)];
                                 if (picked == "CANCEL") {
                                     exitEmulationConfirm = false;
                                 } else {
@@ -1902,14 +1918,14 @@ int main(int argc, char** argv) {
                                 menuActive = true;
                             }
                         } else if (menuActive && exitEmulationConfirm) {
-                            int subCount = static_cast<int>(exitEmulationItems.size());
+                            int subCount = static_cast<int>(exitEmulationItems().size());
                             if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP) {
                                 exitEmulationSelectedIndex = (exitEmulationSelectedIndex + subCount - 1) % subCount;
                             } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_DOWN) {
                                 exitEmulationSelectedIndex = (exitEmulationSelectedIndex + 1) % subCount;
                             } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH) {
-                                const std::string& picked =
-                                    exitEmulationItems[static_cast<size_t>(exitEmulationSelectedIndex)];
+                                const std::string picked =
+                                    exitEmulationItems()[static_cast<size_t>(exitEmulationSelectedIndex)];
                                 if (picked == "CANCEL") {
                                     exitEmulationConfirm = false;
                                 } else {
@@ -2103,7 +2119,7 @@ int main(int argc, char** argv) {
 
             if (menuActive) {
                 if (exitEmulationConfirm) {
-                    renderPauseMenu(renderer, exitEmulationItems, exitEmulationSelectedIndex, "EXIT EMULATION");
+                    renderPauseMenu(renderer, exitEmulationItems(), exitEmulationSelectedIndex, "EXIT EMULATION");
                 } else {
                     renderPauseMenu(renderer, menuItems, menuSelectedIndex, "MENU", "", -1.0f, identityLine());
                 }

@@ -16,8 +16,8 @@ for arg in "$@"; do
 done
 
 cmake -S "${repo_root}" -B "${build_dir}" \
-    -DMELONDS_REMOTE_BUILD_CLIENT="${with_client}" \
-    -DMELONDS_REMOTE_ENABLE_WARNINGS=ON \
+    -DDUALDECK_BUILD_CLIENT="${with_client}" \
+    -DDUALDECK_ENABLE_WARNINGS=ON \
     -DCMAKE_CXX_FLAGS="-Wall -Wextra -Wpedantic -Wconversion -Wshadow"
 
 cmake --build "${build_dir}" -j"$(nproc)"
@@ -25,4 +25,4 @@ ctest --test-dir "${build_dir}" --output-on-failure
 
 echo
 echo "Build complete. Run the integration smoke test with:"
-echo "  python3 ${repo_root}/tests/smoke_test.py ${build_dir}/host/remote-server/melonds-remote-server"
+echo "  python3 ${repo_root}/tests/smoke_test.py ${build_dir}/host/remote-server/dualdeck-host-service"

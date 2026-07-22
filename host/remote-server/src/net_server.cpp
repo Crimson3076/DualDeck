@@ -853,7 +853,7 @@ void NetServer::discoveryLoop() {
         if (::gethostname(hostnameBuf, sizeof(hostnameBuf) - 1) == 0) {
             hostName = hostnameBuf;
         } else {
-            hostName = "melonds-remote-host";
+            hostName = "dualdeck-host";
         }
     }
     if (hostName.size() > kMaxProtocolStringLength) {

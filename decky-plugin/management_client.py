@@ -1,4 +1,4 @@
-"""Thin client for melonDS Remote's management control channel.
+"""Thin client for DualDeck's management control channel.
 
 Matches the wire protocol implemented by ManagementServer in
 host/melonds-patches/0001-remote-server-integration.patch

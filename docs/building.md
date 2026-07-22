@@ -23,15 +23,15 @@ building from source yourself (e.g. to modify the code).
 
 ```sh
 cmake -S . -B build \
-    -DMELONDS_REMOTE_BUILD_CLIENT=OFF \
-    -DMELONDS_REMOTE_BUILD_HOST=ON
+    -DDUALDECK_BUILD_CLIENT=OFF \
+    -DDUALDECK_BUILD_HOST=ON
 cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure
 ```
 
 This builds and tests everything that has no external dependencies:
 `protocol/` (static library + unit tests) and
-`host/remote-server/melonds-remote-server` (a standalone binary that
+`host/remote-server/dualdeck-host-service` (a standalone binary that
 serves a synthetic 256x192 test-pattern bottom screen and logs received
 controller/touch input -- see `docs/architecture.md` for why it doesn't
 depend on melonDS yet).
@@ -40,14 +40,14 @@ Development builds should also enable strict warnings:
 
 ```sh
 cmake -S . -B build \
-    -DMELONDS_REMOTE_BUILD_CLIENT=OFF \
+    -DDUALDECK_BUILD_CLIENT=OFF \
     -DCMAKE_CXX_FLAGS="-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror"
 ```
 
 ## Building the SDL3 client
 
 ```sh
-cmake -S . -B build -DMELONDS_REMOTE_BUILD_CLIENT=ON
+cmake -S . -B build -DDUALDECK_BUILD_CLIENT=ON
 cmake --build build -j"$(nproc)"
 ```
 
@@ -62,11 +62,11 @@ git clone --depth 1 --branch release-3.2.16 https://github.com/libsdl-org/SDL.gi
 cmake -S SDL -B SDL/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/path/to/sdl3-install
 cmake --build SDL/build -j"$(nproc)"
 cmake --install SDL/build
-cmake -S . -B build -DMELONDS_REMOTE_BUILD_CLIENT=ON -DCMAKE_PREFIX_PATH=/path/to/sdl3-install
+cmake -S . -B build -DDUALDECK_BUILD_CLIENT=ON -DCMAKE_PREFIX_PATH=/path/to/sdl3-install
 ```
 
 This has been verified to work: building SDL3 3.2.16 from source this way
-and configuring against it produces a `melonds-remote-client` that
+and configuring against it produces a `dualdeck-client` that
 compiles cleanly and has been run successfully (real handshake, real
 sustained video/input traffic) against both the standalone host prototype
 and the actual patched melonDS host -- see `docs/known-limitations.md`.
@@ -76,9 +76,9 @@ headless, gamepad-less environment).
 ## Running the standalone host server locally
 
 ```sh
-./build/host/remote-server/melonds-remote-server --bind 127.0.0.1 \
+./build/host/remote-server/dualdeck-host-service --bind 127.0.0.1 \
     --control-port 8760 --input-port 8761 --video-port 8762 --timeout-ms 500 \
-    --state-dir ~/.config/melonds-remote
+    --state-dir ~/.config/dualdeck
 ```
 
 `--bind 127.0.0.1` above is specific to same-machine testing (host and
@@ -106,17 +106,17 @@ it doesn't simulate a human approving a device.)
 ## Running the SDL3 client locally
 
 ```sh
-./build/client/melonds-remote-client --host 192.168.1.50
+./build/client/dualdeck-client --host 192.168.1.50
 ```
 
-Also accepts a bare positional host address (`melonds-remote-client
+Also accepts a bare positional host address (`dualdeck-client
 192.168.1.50`) for `scripts/run-client.sh`'s convenience form. If the
 host is in device-approval mode (the default) and this client hasn't
 connected to it before, the client shows "WAITING FOR APPROVAL ON HOST
 ..." -- no typing needed on the client side; approve it from the host's
 console (or the melonDS-integrated host's popup dialog) instead. The
 client's own persistent device identity is saved to
-`~/.config/melonds-remote-client/device_id.txt` and reused for every
+`~/.config/dualdeck-client/device_id.txt` and reused for every
 host, forever. Pass `--auth-token SECRET` only if the host was started
 with a static token instead. The client retries the connection with
 capped exponential backoff (1s up to 5s) on a background thread whenever

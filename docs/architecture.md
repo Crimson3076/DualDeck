@@ -42,8 +42,8 @@ adapter-sdk/         The versioned Emulator Adapter Contract (GitHub issue
                                              dualdeck-synthetic-adapter standalone binary that
                                              connects it over ipc/ -- proven against a real
                                              AdapterIpcServer across two separate OS processes,
-                                             and against a real melonds-remote-server +
-                                             melonds-remote-client end-to-end.
+                                             and against a real dualdeck-host-service +
+                                             dualdeck-client end-to-end.
 
 host/remote-server/  Standalone host process. Depends on protocol/ and,
                       for its opt-in adapter-driven mode, adapter-sdk/.

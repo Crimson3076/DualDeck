@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Adds melonds-remote-client as a Steam non-Steam-game shortcut, so it
+"""Adds dualdeck-client as a Steam non-Steam-game shortcut, so it
 shows up in Big Picture/Gaming Mode without the manual "Add a Non-Steam
-Game" steps in docs/steam-deck-setup.md (see melonds-remote's GitHub
+Game" steps in docs/steam-deck-setup.md (see DualDeck's GitHub
 issue #5: "Make an easy way for users to launch from steam big picture
 mode/game mode").
 
@@ -27,7 +27,7 @@ documented by Valve, so this is deliberately conservative:
 - Idempotent: re-running with the same --exe updates that entry in place
   (matched by Exe path, or by --name as a fallback -- see below) instead
   of adding a duplicate.
-- Matching falls back to --name (default "melonDS Remote") when Exe
+- Matching falls back to --name (default "DualDeck") when Exe
   doesn't match anything, so a shortcut created by an older version of
   this project's install script -- pointing at some now-stale path, e.g.
   a deleted per-release download directory -- gets migrated in place
@@ -262,8 +262,8 @@ def upsert_shortcut(root: dict, appname: str, exe: str, startdir: str, launch_op
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--exe", required=True, help="Absolute path to the melonds-remote-client binary")
-    parser.add_argument("--name", default="melonDS Remote", help="Shortcut display name (default: %(default)s)")
+    parser.add_argument("--exe", required=True, help="Absolute path to the dualdeck-client binary")
+    parser.add_argument("--name", default="DualDeck", help="Shortcut display name (default: %(default)s)")
     parser.add_argument("--launch-options", default="", help="Extra launch arguments, e.g. --host 192.168.1.50")
     parser.add_argument("--user", help="Restrict to one Steam user id (userdata subfolder name); "
                                         "applies to every local user by default, so this is optional")

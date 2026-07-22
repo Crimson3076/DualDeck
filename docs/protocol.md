@@ -430,14 +430,14 @@ melonDS-integrated host's dialog won't re-prompt for an already-denied
 identity again within the same process run).
 
 Approved device identities are persisted to `--state-dir PATH`
-(standalone host) or `$HOME/.config/melonds-remote/approved_devices.txt`
+(standalone host) or `$HOME/.config/dualdeck/approved_devices.txt`
 by default, or `$MELONDS_REMOTE_STATE_DIR` if set (melonDS-integrated
 host), so an approved client stays approved across host restarts. There
 is currently no UI to list or revoke individual approved devices -- only
 deleting the state file entirely (forgetting everyone) is possible.
 
 The SDL3 client persists its own device identity to
-`$HOME/.config/melonds-remote-client/device_id.txt` and reuses it for
+`$HOME/.config/dualdeck-client/device_id.txt` and reuses it for
 every host, forever (regenerated only if that file is missing).
 
 ### History: the 6-digit pairing code

@@ -1,4 +1,4 @@
-# melonDS Remote -- Decky Loader plugin backend.
+# DualDeck -- Decky Loader plugin backend.
 #
 # Talks to melonDS's management listener (ManagementServer, see
 # host/melonds-patches/README.md and management_client.py in this
@@ -21,12 +21,26 @@ import decky
 
 import management_client
 
-_SETTINGS_PATH = os.path.join(decky.DECKY_USER_HOME, ".config", "melonds-remote-decky", "settings.json")
+_SETTINGS_PATH = os.path.join(decky.DECKY_USER_HOME, ".config", "dualdeck-decky", "settings.json")
+_LEGACY_SETTINGS_PATH = os.path.join(decky.DECKY_USER_HOME, ".config", "melonds-remote-decky", "settings.json")
 
 
 class Plugin:
     def _load_settings(self):
         import json
+        # One-time melonDS-Remote -> DualDeck rebrand migration: copy an
+        # old settings file forward if the new one doesn't exist yet,
+        # same as the client binary's config-dir migration. Never
+        # deletes the old file.
+        if not os.path.isfile(_SETTINGS_PATH) and os.path.isfile(_LEGACY_SETTINGS_PATH):
+            try:
+                os.makedirs(os.path.dirname(_SETTINGS_PATH), exist_ok=True)
+                with open(_LEGACY_SETTINGS_PATH) as legacy_f:
+                    legacy_settings = legacy_f.read()
+                with open(_SETTINGS_PATH, "w") as new_f:
+                    new_f.write(legacy_settings)
+            except OSError:
+                pass  # best-effort -- _load_settings below still has a safe default
         try:
             with open(_SETTINGS_PATH) as f:
                 return json.load(f)
@@ -73,10 +87,10 @@ class Plugin:
     # --- Decky lifecycle hooks (see decky-plugin-template's main.py) ---
 
     async def _main(self):
-        decky.logger.info("melonDS Remote plugin loaded")
+        decky.logger.info("DualDeck plugin loaded")
 
     async def _unload(self):
-        decky.logger.info("melonDS Remote plugin unloaded")
+        decky.logger.info("DualDeck plugin unloaded")
 
     async def _uninstall(self):
         pass

@@ -1,6 +1,6 @@
-# melonDS Remote -- Decky Loader plugin
+# DualDeck -- Decky Loader plugin
 
-Lets you start or stop melonDS Remote's streaming server from the Steam
+Lets you start or stop DualDeck's streaming server from the Steam
 Deck's Quick Access Menu, on a melonDS that's already running on your
 HTPC -- no walking over to the host, no restarting melonDS. See GitHub
 issue "Decky plugin to start/stop the host server" for the original

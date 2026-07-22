@@ -12,14 +12,14 @@ target_include_directories(melonds_remote_host_tests PRIVATE
 )
 
 target_link_libraries(melonds_remote_host_tests PRIVATE
-    melonds_remote_host
-    melonds_remote_adapter_sdk_fakes
-    melonds_remote_adapter_sdk_synthetic
+    dualdeck_host
+    dualdeck_adapter_sdk_fakes
+    dualdeck_adapter_sdk_synthetic
 )
 
 target_compile_features(melonds_remote_host_tests PRIVATE cxx_std_20)
 
-if(MELONDS_REMOTE_ENABLE_WARNINGS)
+if(DUALDECK_ENABLE_WARNINGS)
     target_compile_options(melonds_remote_host_tests PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow
     )

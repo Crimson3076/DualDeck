@@ -174,7 +174,7 @@ void runUntilStopped(melonds_remote::host::NetServer& server, const melonds_remo
         std::thread(consoleLoop, std::ref(server), coordinator).detach();
     }
 
-    std::printf("melonds-remote-server running. Press Ctrl+C to stop.\n");
+    std::printf("DualDeck Host Service running. Press Ctrl+C to stop.\n");
     while (!g_stopRequested) {
         struct timespec ts{0, 100'000'000};
         nanosleep(&ts, nullptr);
@@ -268,7 +268,7 @@ int main(int argc, char** argv) {
             useAdapterIpc = true;
         } else if (arg == "--help") {
             std::printf(
-                "Usage: melonds-remote-server [--bind ADDR] [--control-port N] "
+                "Usage: dualdeck-host-service [--bind ADDR] [--control-port N] "
                 "[--input-port N] [--video-port N] [--timeout-ms N] [--auth-token TOKEN] "
                 "[--state-dir PATH] [--pending-request-ttl-s N] [--stats-interval-ms N] "
                 "[--discovery-port N] [--host-name NAME] [--no-discovery] "

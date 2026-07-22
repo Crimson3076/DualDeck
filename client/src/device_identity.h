@@ -21,7 +21,7 @@
 
 namespace melonds_remote::client {
 
-// $HOME/.config/melonds-remote-client/device_id.txt, or empty if $HOME
+// $HOME/.config/dualdeck-client/device_id.txt, or empty if $HOME
 // isn't set (persistence then silently unavailable -- a fresh random
 // identity is used for the life of the process instead, meaning it'll
 // need re-approval next launch).

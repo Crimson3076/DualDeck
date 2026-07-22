@@ -38,7 +38,7 @@ the architectural writeup.
      documented limitation, see `docs/known-limitations.md`.
 2. `src/citra_qt/remote_server/RemoteServerBridge.{h,cpp}` (new) --
    owns the `AzaharAdapter` plus an `AdapterIpcClient` that connects
-   *out* to an already-running `melonds-remote-server --adapter-ipc`
+   *out* to an already-running `dualdeck-host-service --adapter-ipc`
    over the local Unix socket (`AZAHAR_REMOTE_ADAPTER_SOCKET`), with the
    same 1s-5s exponential-backoff reconnect loop melonDS's own
    out-of-process mode and `client/`'s `NetClient` both already use.

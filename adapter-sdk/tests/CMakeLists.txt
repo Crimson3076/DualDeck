@@ -1,4 +1,4 @@
-add_executable(melonds_remote_adapter_sdk_tests
+add_executable(dualdeck_adapter_sdk_tests
     main.cpp
     test_session_state.cpp
     test_fake_ds_adapter.cpp
@@ -9,22 +9,22 @@ add_executable(melonds_remote_adapter_sdk_tests
     test_adapter_ipc_end_to_end.cpp
 )
 
-target_include_directories(melonds_remote_adapter_sdk_tests PRIVATE
+target_include_directories(dualdeck_adapter_sdk_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../protocol/tests
 )
 
-target_link_libraries(melonds_remote_adapter_sdk_tests PRIVATE
-    melonds_remote_adapter_sdk_fakes
-    melonds_remote_adapter_sdk_ipc
-    melonds_remote_adapter_sdk
+target_link_libraries(dualdeck_adapter_sdk_tests PRIVATE
+    dualdeck_adapter_sdk_fakes
+    dualdeck_adapter_sdk_ipc
+    dualdeck_adapter_sdk
 )
 
-target_compile_features(melonds_remote_adapter_sdk_tests PRIVATE cxx_std_20)
+target_compile_features(dualdeck_adapter_sdk_tests PRIVATE cxx_std_20)
 
-if(MELONDS_REMOTE_ENABLE_WARNINGS)
-    target_compile_options(melonds_remote_adapter_sdk_tests PRIVATE
+if(DUALDECK_ENABLE_WARNINGS)
+    target_compile_options(dualdeck_adapter_sdk_tests PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow
     )
 endif()
 
-add_test(NAME adapter_sdk_tests COMMAND melonds_remote_adapter_sdk_tests)
+add_test(NAME adapter_sdk_tests COMMAND dualdeck_adapter_sdk_tests)

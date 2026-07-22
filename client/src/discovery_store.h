@@ -13,7 +13,7 @@
 
 namespace melonds_remote::client {
 
-// $HOME/.config/melonds-remote-client/last_host.txt, or empty if $HOME
+// $HOME/.config/dualdeck-client/last_host.txt, or empty if $HOME
 // isn't set (persistence then silently unavailable).
 std::string defaultLastHostStorePath();
 

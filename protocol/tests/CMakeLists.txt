@@ -1,4 +1,4 @@
-add_executable(melonds_remote_protocol_tests
+add_executable(dualdeck_protocol_tests
     main.cpp
     test_header.cpp
     test_controller_state.cpp
@@ -12,13 +12,13 @@ add_executable(melonds_remote_protocol_tests
     test_mode_changed.cpp
 )
 
-target_link_libraries(melonds_remote_protocol_tests PRIVATE melonds_remote_protocol)
-target_compile_features(melonds_remote_protocol_tests PRIVATE cxx_std_20)
+target_link_libraries(dualdeck_protocol_tests PRIVATE dualdeck_protocol)
+target_compile_features(dualdeck_protocol_tests PRIVATE cxx_std_20)
 
-if(MELONDS_REMOTE_ENABLE_WARNINGS)
-    target_compile_options(melonds_remote_protocol_tests PRIVATE
+if(DUALDECK_ENABLE_WARNINGS)
+    target_compile_options(dualdeck_protocol_tests PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow
     )
 endif()
 
-add_test(NAME protocol_tests COMMAND melonds_remote_protocol_tests)
+add_test(NAME protocol_tests COMMAND dualdeck_protocol_tests)

@@ -133,7 +133,7 @@ index 0d48ee16..cfd686ea 100644
  
  DefaultList<double> DefaultDoubles =
 diff --git a/src/frontend/qt_sdl/EmuInstance.cpp b/src/frontend/qt_sdl/EmuInstance.cpp
-index a8b10218..2a8a7fb2 100755
+index a8b10218..6c67862a 100755
 --- a/src/frontend/qt_sdl/EmuInstance.cpp
 +++ b/src/frontend/qt_sdl/EmuInstance.cpp
 @@ -20,15 +20,24 @@
@@ -319,7 +319,7 @@ index a8b10218..2a8a7fb2 100755
 +                    mainWindow->statusBar()->clearMessage();
 +                } else {
 +                    mainWindow->statusBar()->showMessage(
-+                        QString("melonDS Remote: %1 pending connection request(s)")
++                        QString("DualDeck: %1 pending connection request(s)")
 +                            .arg(requests.size()));
 +                }
 +
@@ -328,7 +328,7 @@ index a8b10218..2a8a7fb2 100755
 +                    shownDeviceIds->insert(req.deviceId);
 +
 +                    QMessageBox box(mainWindow);
-+                    box.setWindowTitle("melonDS Remote -- connection request");
++                    box.setWindowTitle("DualDeck -- connection request");
 +                    box.setText(QString("Allow \"%1\" at %2 to connect?")
 +                                    .arg(QString::fromStdString(req.clientName))
 +                                    .arg(QString::fromStdString(req.address)));
@@ -862,7 +862,7 @@ index 3df2ddf1..fa5c3150 100644
              Config::Save();
  
 diff --git a/src/frontend/qt_sdl/EmuSettingsDialog.ui b/src/frontend/qt_sdl/EmuSettingsDialog.ui
-index b0787891..4254e756 100644
+index b0787891..df363d86 100644
 --- a/src/frontend/qt_sdl/EmuSettingsDialog.ui
 +++ b/src/frontend/qt_sdl/EmuSettingsDialog.ui
 @@ -56,7 +56,17 @@
@@ -873,10 +873,10 @@ index b0787891..4254e756 100644
 +       <item row="3" column="1">
 +        <widget class="QCheckBox" name="chkMelonDSRemoteEnable">
 +         <property name="whatsThis">
-+          <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Streams the bottom screen and accepts controller/touch input from a melonDS Remote client (e.g. a Steam Deck) over the local network. Takes effect on the next launch. See melonds-remote's docs/steam-deck-setup.md.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
++          <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Streams the bottom screen and accepts controller/touch input from a DualDeck client (e.g. a Steam Deck) over the local network. Takes effect on the next launch. See DualDeck's docs/steam-deck-setup.md.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
 +         </property>
 +         <property name="text">
-+          <string>Enable melonDS Remote (Steam Deck streaming)</string>
++          <string>Enable DualDeck (Steam Deck streaming)</string>
 +         </property>
 +        </widget>
 +       </item>
@@ -5398,13 +5398,13 @@ index 00000000..48014b9b
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
 new file mode 100644
-index 00000000..1d29126c
+index 00000000..b9ffdc73
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
 @@ -0,0 +1,492 @@
 +#pragma once
 +
-+// melonDS Remote wire protocol definitions.
++// DualDeck wire protocol definitions.
 +//
 +// This header defines the versioned, explicitly-sized, explicitly-serialized
 +// packet formats used between the Steam Deck client and the HTPC host. See

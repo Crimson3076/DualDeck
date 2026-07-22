@@ -110,8 +110,8 @@ fi
 echo "== [4/5] Client + host prototype (this repo) =="
 repo_build="${work_dir}/repo-build"
 cmake -S "${repo_root}" -B "${repo_build}" -G Ninja \
-    -DCMAKE_BUILD_TYPE=Release -DMELONDS_REMOTE_BUILD_CLIENT=ON \
-    -DMELONDS_REMOTE_BUILD_HOST=ON -DCMAKE_PREFIX_PATH="${sdl3_install}"
+    -DCMAKE_BUILD_TYPE=Release -DDUALDECK_BUILD_CLIENT=ON \
+    -DDUALDECK_BUILD_HOST=ON -DCMAKE_PREFIX_PATH="${sdl3_install}"
 cmake --build "${repo_build}" -j"$(nproc)"
 ctest --test-dir "${repo_build}" --output-on-failure
 
@@ -163,14 +163,14 @@ ldd "${azahar_src}/build/bin/Release/azahar" | awk '{print $1}' | sort -u \
 # never actually be used from a downloaded release, only from a source
 # build. Statically linked against melonds_remote_protocol/_host, so no
 # extra runtime library dependencies beyond libc/libstdc++/pthread.
-cp "${repo_build}/host/remote-server/melonds-remote-server" "${pkg_dir}/host/internal/melonds-remote-server"
-chmod +x "${pkg_dir}/host/internal/melonds-remote-server"
+cp "${repo_build}/host/remote-server/dualdeck-host-service" "${pkg_dir}/host/internal/dualdeck-host-service"
+chmod +x "${pkg_dir}/host/internal/dualdeck-host-service"
 
 cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/host/internal/ensure-packages.sh"
 cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/host/internal/steam_shortcut.py"
 
-cp "${repo_build}/client/melonds-remote-client" "${pkg_dir}/client/melonds-remote-client"
-chmod +x "${pkg_dir}/client/melonds-remote-client"
+cp "${repo_build}/client/dualdeck-client" "${pkg_dir}/client/dualdeck-client"
+chmod +x "${pkg_dir}/client/dualdeck-client"
 cp -a "${sdl3_install}"/lib/libSDL3.so* "${pkg_dir}/client/lib/"
 
 cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/client/internal/ensure-packages.sh"
@@ -178,10 +178,10 @@ cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/client/internal/stea
 
 cat > "${pkg_dir}/client/internal/run-client.sh" <<'WRAP'
 #!/usr/bin/env bash
-# Runs melonds-remote-client with the bundled SDL3 shared library,
+# Runs dualdeck-client with the bundled SDL3 shared library,
 # auto-installing any missing runtime system libraries first (X11/
 # Wayland etc. -- SDL3 itself is bundled in ../lib/, no install needed
-# for that part). Normally launched via ../../melonds-remote-client.sh's
+# for that part). Normally launched via ../../dualdeck-client.sh's
 # "Launch now" menu choice, or directly as the Steam shortcut's Exe
 # (install-steam-shortcut.sh points --exe straight here, bypassing the
 # menu entirely) -- so the auto-update check below has to live here, not
@@ -206,7 +206,7 @@ client_root="$(cd .. && pwd)"
 # so the rest of this launch (library check, the binary itself) runs the
 # new version, not whatever was already loaded into this process image.
 update_script="$(dirname "${client_root}")/check-for-updates.sh"
-settings_file="${HOME}/.config/melonds-remote-client/settings.conf"
+settings_file="${HOME}/.config/dualdeck-client/settings.conf"
 auto_update_on_launch=1
 if [[ -f "${settings_file}" ]] &&
    grep -Eq '^[[:space:]]*auto_update_on_launch[[:space:]]*=[[:space:]]*(0|false|off)[[:space:]]*$' \
@@ -216,12 +216,12 @@ fi
 if (( auto_update_on_launch )) && [[ -x "${update_script}" ]]; then
     if update_report="$("${update_script}" 2>/dev/null)" && \
        echo "${update_report}" | grep -q "update available:"; then
-        echo "melonDS Remote: update available, installing automatically..." >&2
+        echo "DualDeck: update available, installing automatically..." >&2
         if "${client_root}/internal/apply-update.sh" >&2; then
-            echo "melonDS Remote: updated, relaunching..." >&2
-            exec "${HOME}/.config/melonds-remote-client/install/internal/run-client.sh" "$@"
+            echo "DualDeck: updated, relaunching..." >&2
+            exec "${HOME}/.config/dualdeck-client/install/internal/run-client.sh" "$@"
         else
-            echo "melonDS Remote: auto-update failed, continuing with the current version" >&2
+            echo "DualDeck: auto-update failed, continuing with the current version" >&2
         fi
     fi
 fi
@@ -240,21 +240,21 @@ ensure_packages "client runtime" \
 # HelloPayload::appVersion and net_server.cpp's comparison logic.
 # dirname(client_root) matches check-for-updates.sh's own VERSION lookup
 # (the archive root, or the central install directory's parent).
-export MELONDS_REMOTE_VERSION="$(cat "$(dirname "${client_root}")/VERSION" 2>/dev/null || true)"
+export DUALDECK_VERSION="$(cat "$(dirname "${client_root}")/VERSION" 2>/dev/null || true)"
 
-LD_LIBRARY_PATH="${client_root}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" exec "${client_root}/melonds-remote-client" "$@"
+LD_LIBRARY_PATH="${client_root}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" exec "${client_root}/dualdeck-client" "$@"
 WRAP
 chmod +x "${pkg_dir}/client/internal/run-client.sh"
 
 cat > "${pkg_dir}/client/internal/install-steam-shortcut.sh" <<'WRAP'
 #!/usr/bin/env bash
-# Registers melonds-remote-client as a Steam non-Steam-game shortcut --
+# Registers dualdeck-client as a Steam non-Steam-game shortcut --
 # see ./steam_shortcut.py for exactly what this does and why it's
 # careful about it (backs up shortcuts.vdf first, refuses to run while
 # Steam is open unless --force). Any arguments given here are passed
 # through as the shortcut's launch options, e.g.:
 #   ./install-steam-shortcut.sh --host 192.168.1.50
-# Normally launched via ../../melonds-remote-client.sh's "Add to Steam"
+# Normally launched via ../../dualdeck-client.sh's "Add to Steam"
 # menu choice, not directly.
 #
 # Copies the whole client/ directory (this script's parent) into a
@@ -280,13 +280,13 @@ client_root="$(cd .. && pwd)"
 # logs to a persistent file and, when available (SteamOS Desktop Mode/
 # Bazzite are both KDE Plasma), pops up a graphical error dialog via
 # kdialog.
-error_log="${HOME}/.config/melonds-remote-client/install.log"
+error_log="${HOME}/.config/dualdeck-client/install.log"
 on_error() {
     local exit_code="$1" line_no="$2" failing_cmd="$3"
     mkdir -p "$(dirname "${error_log}")"
     echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") install-steam-shortcut.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
     if command -v kdialog >/dev/null 2>&1; then
-        kdialog --title "melonDS Remote" \
+        kdialog --title "DualDeck" \
             --error "Installing the Steam shortcut failed: ${failing_cmd}
 (exit code ${exit_code})
 
@@ -311,9 +311,23 @@ done
 
 # Keep in sync with the same constant in uninstall-steam-shortcut.sh and
 # apply-update.sh.
-central_install_dir="${HOME}/.config/melonds-remote-client/install"
+central_install_dir="${HOME}/.config/dualdeck-client/install"
 staging_dir="${central_install_dir}.new"
 previous_dir="${central_install_dir}.previous"
+
+# One-time melonDS-Remote -> DualDeck rebrand migration: this central
+# install dir moved (old: ~/.config/melonds-remote-client/install) and
+# the Steam AppName changed ("melonDS Remote" -> "DualDeck")
+# simultaneously, so steam_shortcut.py's Exe-OR-AppName matching can't
+# reliably find-and-update the old entry on its own. Explicitly remove
+# the old entry by its old identity first, best-effort.
+old_central_install_dir="${HOME}/.config/melonds-remote-client/install"
+if [[ -d "${old_central_install_dir}" && "${dry_run}" -eq 0 ]]; then
+    python3 ./steam_shortcut.py \
+        --exe "${old_central_install_dir}/internal/run-client.sh" \
+        --name "melonDS Remote" \
+        --remove "${extra_args[@]}" >/dev/null 2>&1 || true
+fi
 
 if [[ "${dry_run}" -eq 0 ]]; then
     rm -rf "${staging_dir}"
@@ -340,6 +354,7 @@ fi
 
 python3 ./steam_shortcut.py \
     --exe "${central_install_dir}/internal/run-client.sh" \
+    --name "DualDeck" \
     --launch-options "${launch_options}" \
     "${extra_args[@]}" && shortcut_exit=0 || shortcut_exit=$?
 if [[ "${shortcut_exit}" -ne 0 ]]; then
@@ -351,13 +366,13 @@ chmod +x "${pkg_dir}/client/internal/install-steam-shortcut.sh"
 
 cat > "${pkg_dir}/client/internal/uninstall-steam-shortcut.sh" <<'WRAP'
 #!/usr/bin/env bash
-# Removes the melonDS Remote Steam non-Steam-game shortcut added by
+# Removes the DualDeck Steam non-Steam-game shortcut added by
 # install-steam-shortcut.sh, and deletes the central install directory
 # that script copies everything into. See ./steam_shortcut.py for
 # exactly what the shortcut-removal part does and why it's careful
 # about it (backs up shortcuts.vdf first, refuses to run while Steam is
 # open unless --force). Normally launched via
-# ../../melonds-remote-client.sh's "Remove from Steam" menu choice, not
+# ../../dualdeck-client.sh's "Remove from Steam" menu choice, not
 # directly.
 #
 # Always targets the fixed central install directory below for the
@@ -378,13 +393,13 @@ set -euo pipefail
 # logs to a persistent file and, when available (SteamOS Desktop Mode/
 # Bazzite are both KDE Plasma), pops up a graphical error dialog via
 # kdialog.
-error_log="${HOME}/.config/melonds-remote-client/install.log"
+error_log="${HOME}/.config/dualdeck-client/install.log"
 on_error() {
     local exit_code="$1" line_no="$2" failing_cmd="$3"
     mkdir -p "$(dirname "${error_log}")"
     echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") uninstall-steam-shortcut.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
     if command -v kdialog >/dev/null 2>&1; then
-        kdialog --title "melonDS Remote" \
+        kdialog --title "DualDeck" \
             --error "Removing the Steam shortcut failed: ${failing_cmd}
 (exit code ${exit_code})
 
@@ -396,7 +411,7 @@ trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
 
 # Keep in sync with the same constant in install-steam-shortcut.sh and
 # apply-update.sh.
-central_install_dir="${HOME}/.config/melonds-remote-client/install"
+central_install_dir="${HOME}/.config/dualdeck-client/install"
 self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 steam_shortcut_py=""
@@ -416,8 +431,20 @@ if [[ -z "${steam_shortcut_py}" ]]; then
     exit 0
 fi
 
+# One-time melonDS-Remote -> DualDeck rebrand cleanup: also try removing
+# under the old identity (old central dir, old Exe, old AppName), since
+# the Exe-OR-AppName fallback alone can't bridge a compound change of
+# both fields at once. No-op if it was never installed there or was
+# already migrated.
+old_central_install_dir="${HOME}/.config/melonds-remote-client/install"
+python3 "${steam_shortcut_py}" \
+    --exe "${old_central_install_dir}/internal/run-client.sh" \
+    --name "melonDS Remote" \
+    --remove "$@" >/dev/null 2>&1 || true
+
 python3 "${steam_shortcut_py}" \
     --exe "${central_install_dir}/internal/run-client.sh" \
+    --name "DualDeck" \
     --remove \
     "$@"
 
@@ -450,13 +477,13 @@ chmod +x "${pkg_dir}/client/internal/uninstall-steam-shortcut.sh"
 
 cat > "${pkg_dir}/client/internal/apply-update.sh" <<'WRAP'
 #!/usr/bin/env bash
-# Downloads the latest melonDS Remote release and installs the client
+# Downloads the latest DualDeck release and installs the client
 # part, by handing off to that release's own
 # client/internal/install-steam-shortcut.sh --force -- reusing its
 # already-verified stage-then-swap file safety rather than duplicating
 # any of that logic here. This script's only job is fetching and
 # extracting the new release archive. Normally invoked from
-# ../../melonds-remote-client.sh's "Check for updates" menu choice
+# ../../dualdeck-client.sh's "Check for updates" menu choice
 # after the user confirms; also runnable standalone. See
 # host/internal/apply-update.sh for the host equivalent (same design,
 # minus the Distrobox complexity the client doesn't need).
@@ -479,13 +506,13 @@ cat > "${pkg_dir}/client/internal/apply-update.sh" <<'WRAP'
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-error_log="${HOME}/.config/melonds-remote-client/install.log"
+error_log="${HOME}/.config/dualdeck-client/install.log"
 on_error() {
     local exit_code="$1" line_no="$2" failing_cmd="$3"
     mkdir -p "$(dirname "${error_log}")"
     echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") apply-update.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
     if command -v kdialog >/dev/null 2>&1; then
-        kdialog --title "melonDS Remote" --error "Updating failed: ${failing_cmd}
+        kdialog --title "DualDeck" --error "Updating failed: ${failing_cmd}
 (exit code ${exit_code})
 
 Details logged to:
@@ -528,12 +555,12 @@ echo "Installing..."
 WRAP
 chmod +x "${pkg_dir}/client/internal/apply-update.sh"
 
-cat > "${pkg_dir}/client/melonds-remote-client.sh" <<'WRAP'
+cat > "${pkg_dir}/client/dualdeck-client.sh" <<'WRAP'
 #!/usr/bin/env bash
-# The one thing to double-click to set up or run the melonDS Remote
+# The one thing to double-click to set up or run the DualDeck
 # client -- shows a simple menu and delegates to whichever of the
 # internal/ scripts actually applies, so a user never has to figure out
-# which one they need. See ../host/melonds-remote-host.sh for the host
+# which one they need. See ../host/dualdeck-host.sh for the host
 # equivalent (same menu shape).
 #
 # Uses a graphical kdialog menu when available (SteamOS Desktop Mode
@@ -542,13 +569,13 @@ cat > "${pkg_dir}/client/melonds-remote-client.sh" <<'WRAP'
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-error_log="${HOME}/.config/melonds-remote-client/install.log"
+error_log="${HOME}/.config/dualdeck-client/install.log"
 on_error() {
     local exit_code="$1" line_no="$2" failing_cmd="$3"
     mkdir -p "$(dirname "${error_log}")"
-    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") melonds-remote-client.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") dualdeck-client.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
     if command -v kdialog >/dev/null 2>&1; then
-        kdialog --title "melonDS Remote" --error "Something went wrong: ${failing_cmd}
+        kdialog --title "DualDeck" --error "Something went wrong: ${failing_cmd}
 (exit code ${exit_code})
 
 Details logged to:
@@ -561,7 +588,7 @@ have_kdialog() { command -v kdialog >/dev/null 2>&1; }
 
 info() {
     if have_kdialog; then
-        kdialog --title "melonDS Remote" --msgbox "$1" 2>/dev/null
+        kdialog --title "DualDeck" --msgbox "$1" 2>/dev/null
     else
         echo
         echo "$1"
@@ -571,7 +598,7 @@ info() {
 
 confirm() {
     if have_kdialog; then
-        kdialog --title "melonDS Remote" --yesno "$1" 2>/dev/null
+        kdialog --title "DualDeck" --yesno "$1" 2>/dev/null
     else
         read -rp "$1 [y/N] " reply
         [[ "${reply}" =~ ^[Yy]$ ]]
@@ -580,8 +607,8 @@ confirm() {
 
 choose_action() {
     if have_kdialog; then
-        kdialog --title "melonDS Remote" --menu "What would you like to do?" \
-            launch "Launch melonDS Remote now" \
+        kdialog --title "DualDeck" --menu "What would you like to do?" \
+            launch "Launch DualDeck now" \
             steam-add "Add to Steam (Big Picture / Gaming Mode)" \
             steam-remove "Remove from Steam / uninstall" \
             update "Check for updates / update" \
@@ -593,8 +620,8 @@ choose_action() {
         # display text leaking onto stdout would get appended to that
         # and break the case match entirely.
         {
-            echo "melonDS Remote"
-            echo "  1) Launch melonDS Remote now"
+            echo "DualDeck"
+            echo "  1) Launch DualDeck now"
             echo "  2) Add to Steam (Big Picture / Gaming Mode)"
             echo "  3) Remove from Steam / uninstall"
             echo "  4) Check for updates / update"
@@ -623,7 +650,7 @@ case "${action}" in
         ;;
     steam-add)
         if ./internal/install-steam-shortcut.sh; then
-            info "Added melonDS Remote to Steam. Restart Steam (or switch to Gaming Mode) to see it, and set its Controller Layout to a plain Gamepad template once it's there."
+            info "Added DualDeck to Steam. Restart Steam (or switch to Gaming Mode) to see it, and set its Controller Layout to a plain Gamepad template once it's there."
         fi
         # A failure here already logged and showed its own error dialog
         # (install-steam-shortcut.sh has the same error-trap pattern as
@@ -671,7 +698,7 @@ Install ${latest_version} now? This downloads it from GitHub and also adds/updat
         ;;
 esac
 WRAP
-chmod +x "${pkg_dir}/client/melonds-remote-client.sh"
+chmod +x "${pkg_dir}/client/dualdeck-client.sh"
 
 cat > "${pkg_dir}/host/internal/run-host.sh" <<'WRAP'
 #!/usr/bin/env bash
@@ -689,7 +716,7 @@ cat > "${pkg_dir}/host/internal/run-host.sh" <<'WRAP'
 # own --help for the rest.
 # Omit MELONDS_REMOTE_AUTH_TOKEN (the default) to use zero-typing
 # device-approval authentication instead of a static shared secret.
-# Normally launched via ../../melonds-remote-host.sh's "Launch now" menu
+# Normally launched via ../../dualdeck-host.sh's "Launch now" menu
 # choice, not directly.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -723,8 +750,8 @@ export MELONDS_REMOTE_ENABLE=1
 export MELONDS_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
 
 # Host-control mode (GitHub issue #4, experimental): set by
-# ../melonds-remote-host.sh's "Launch with host-control mode" menu
-# choice, not on by default. Starts the standalone melonds-remote-server
+# ../dualdeck-host.sh's "Launch with host-control mode" menu
+# choice, not on by default. Starts the standalone dualdeck-host-service
 # binary in --adapter-ipc mode *before* melonDS, then points melonDS at
 # it as an out-of-process adapter (MELONDS_REMOTE_OUT_OF_PROCESS=1) --
 # see host/melonds-patches/0001-remote-server-integration.patch's
@@ -739,14 +766,14 @@ export MELONDS_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/
 # in which case that static shared secret is used instead.
 # --state-dir points at the same directory melonDS's own device-approval
 # uses, so a device approved once is approved for every emulator.
-if [[ "${MELONDS_REMOTE_HOST_CONTROL:-0}" == "1" ]]; then
-    if [[ ! -x "${host_root}/internal/melonds-remote-server" ]]; then
-        echo "error: host/internal/melonds-remote-server is missing from this" >&2
+if [[ "${DUALDECK_HOST_CONTROL:-0}" == "1" ]]; then
+    if [[ ! -x "${host_root}/internal/dualdeck-host-service" ]]; then
+        echo "error: host/internal/dualdeck-host-service is missing from this" >&2
         echo "install -- re-download the release archive." >&2
         exit 1
     fi
 
-    run_dir="${HOME}/.config/melonds-remote/run"
+    run_dir="${HOME}/.config/dualdeck/run"
     mkdir -p "${run_dir}"
     adapter_socket="${run_dir}/adapter.sock"
     rm -f "${adapter_socket}"
@@ -757,7 +784,7 @@ if [[ "${MELONDS_REMOTE_HOST_CONTROL:-0}" == "1" ]]; then
     fi
 
     echo "Starting the standalone Host Service (host-control mode, experimental) ..." >&2
-    "${host_root}/internal/melonds-remote-server" --adapter-ipc --adapter-socket "${adapter_socket}" \
+    "${host_root}/internal/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
         --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
         --app-version "${MELONDS_REMOTE_VERSION}" &
     host_service_pid=$!
@@ -792,7 +819,7 @@ cat > "${pkg_dir}/host/internal/run-host-azahar.sh" <<'WRAP'
 # approval prompt melonDS's in-process dialog gives you (see
 # kdialog_approval_prompt.h), unless AZAHAR_REMOTE_AUTH_TOKEN is set, in
 # which case that static shared secret is used instead. Normally
-# launched via ../melonds-remote-host.sh's "Launch..." menu, not
+# launched via ../dualdeck-host.sh's "Launch..." menu, not
 # directly.
 #
 # Pick a ROM through Azahar's own game list / File > Load File once it
@@ -817,8 +844,8 @@ if [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1; then
     echo "present on the base image." >&2
 fi
 
-if [[ ! -x "${host_root}/internal/melonds-remote-server" ]]; then
-    echo "error: host/internal/melonds-remote-server is missing from this install --" >&2
+if [[ ! -x "${host_root}/internal/dualdeck-host-service" ]]; then
+    echo "error: host/internal/dualdeck-host-service is missing from this install --" >&2
     echo "re-download the release archive." >&2
     exit 1
 fi
@@ -828,7 +855,7 @@ if [[ ! -x "${host_root}/azahar" ]]; then
     exit 1
 fi
 
-run_dir="${HOME}/.config/melonds-remote/run"
+run_dir="${HOME}/.config/dualdeck/run"
 mkdir -p "${run_dir}"
 adapter_socket="${run_dir}/azahar-adapter.sock"
 rm -f "${adapter_socket}"
@@ -843,7 +870,7 @@ if [[ -n "${AZAHAR_REMOTE_AUTH_TOKEN:-}" ]]; then
 fi
 
 echo "Starting the standalone Host Service ..." >&2
-"${host_root}/internal/melonds-remote-server" --adapter-ipc --adapter-socket "${adapter_socket}" \
+"${host_root}/internal/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
     --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
     --app-version "${AZAHAR_REMOTE_VERSION}" &
 host_service_pid=$!
@@ -857,7 +884,7 @@ export AZAHAR_REMOTE_ADAPTER_SOCKET="${adapter_socket}"
 # Performance tuning (optional): set AZAHAR_REMOTE_CAPTURE_FPS (1-60,
 # default 60) before running this script to change how often the video
 # capture loop polls for a new frame -- no rebuild needed, e.g.
-# `AZAHAR_REMOTE_CAPTURE_FPS=30 ./melonds-remote-host.sh` if 60 turns
+# `AZAHAR_REMOTE_CAPTURE_FPS=30 ./dualdeck-host.sh` if 60 turns
 # out to visibly affect the game's own performance on your hardware.
 # Already inherited by the exec below with no extra wiring needed --
 # see docs/known-limitations.md's performance-tuning entry.
@@ -884,11 +911,11 @@ cat > "${pkg_dir}/host/internal/launch-custom-emulator.sh" <<'WRAP'
 # manually following its same steps) instead of the bundled melonDS/
 # Azahar binaries -- for anyone who already has an emulator set up
 # elsewhere and doesn't want a separate DualDeck-managed copy alongside
-# it. Normally launched via ../../melonds-remote-host.sh's "Launch..."
+# it. Normally launched via ../../dualdeck-host.sh's "Launch..."
 # menu's "Custom" choice, not directly.
 #
 # The chosen path and system type are remembered in
-# ~/.config/melonds-remote/custom-emulator.conf so this only has to be
+# ~/.config/dualdeck/custom-emulator.conf so this only has to be
 # configured once; pass --reconfigure to point at a different binary or
 # change the system type.
 set -euo pipefail
@@ -903,7 +930,7 @@ have_kdialog() { command -v kdialog >/dev/null 2>&1; }
 
 prompt_path() {
     if have_kdialog; then
-        kdialog --title "melonDS Remote Host" --getopenfilename "${HOME}" 2>/dev/null || true
+        kdialog --title "DualDeck Host" --getopenfilename "${HOME}" 2>/dev/null || true
     else
         read -rp "Path to your patched emulator binary: " path >&2
         echo "${path}"
@@ -912,7 +939,7 @@ prompt_path() {
 
 prompt_type() {
     if have_kdialog; then
-        kdialog --title "melonDS Remote Host" --menu "Which system is this?" \
+        kdialog --title "DualDeck Host" --menu "Which system is this?" \
             ds "Nintendo DS (melonDS-based)" \
             n3ds "Nintendo 3DS (Azahar-based)" \
             2>/dev/null || true
@@ -968,12 +995,12 @@ case "${type}" in
         exec "${path}" "$@"
         ;;
     n3ds)
-        if [[ ! -x "${host_root}/internal/melonds-remote-server" ]]; then
-            echo "error: host/internal/melonds-remote-server is missing from this" >&2
+        if [[ ! -x "${host_root}/internal/dualdeck-host-service" ]]; then
+            echo "error: host/internal/dualdeck-host-service is missing from this" >&2
             echo "install -- re-download the release archive." >&2
             exit 1
         fi
-        run_dir="${HOME}/.config/melonds-remote/run"
+        run_dir="${HOME}/.config/dualdeck/run"
         mkdir -p "${run_dir}"
         adapter_socket="${run_dir}/custom-adapter.sock"
         rm -f "${adapter_socket}"
@@ -988,7 +1015,7 @@ case "${type}" in
         if [[ -n "${token:-}" ]]; then
             auth_token_args=(--auth-token "${token}")
         fi
-        "${host_root}/internal/melonds-remote-server" --adapter-ipc --adapter-socket "${adapter_socket}" \
+        "${host_root}/internal/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
             --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
             --app-version "${AZAHAR_REMOTE_VERSION}" &
         host_service_pid=$!
@@ -1015,20 +1042,20 @@ chmod +x "${pkg_dir}/host/internal/launch-custom-emulator.sh"
 
 cat > "${pkg_dir}/host/internal/install-host-distrobox.sh" <<'WRAP'
 #!/usr/bin/env bash
-# Runs the melonDS Remote host inside a Distrobox container, for
+# Runs the DualDeck host inside a Distrobox container, for
 # immutable-filesystem systems (Bazzite, other rpm-ostree/Fedora Atomic
 # derivatives) where run-host.sh can't install missing runtime libraries
 # directly -- see docs/bazzite-host-setup.md. On a regular (non-immutable)
 # Linux system, just use run-host.sh instead; this refuses to run there
 # rather than needlessly creating a container. Normally launched via
-# ../../melonds-remote-host.sh's "Launch now"/"Add to Steam" menu
+# ../../dualdeck-host.sh's "Launch now"/"Add to Steam" menu
 # choices, not directly.
 #
 # Safe to re-run any time, including from a newer release's extracted
 # archive: it always re-syncs the whole host/ directory (this script's
 # grandparent -- the entry-point script and binary alongside it, plus
 # this internal/ directory) into a fixed location
-# (~/.config/melonds-remote/install/) and re-installs into the same
+# (~/.config/dualdeck/install/) and re-installs into the same
 # Distrobox container (dnf skips packages already present), so updating
 # is just "download the new release, run this again" -- no need to
 # recreate the container or redo any setup by hand. After the first run
@@ -1061,7 +1088,7 @@ fi
 
 # Host-control mode (GitHub issue #4, experimental -- see run-host.sh's
 # matching comment for the full explanation) isn't wired up for the
-# Distrobox path yet: it would need the standalone melonds-remote-server
+# Distrobox path yet: it would need the standalone dualdeck-host-service
 # binary running *outside* the container (a client should be able to
 # reach it before melonDS/the container even starts) with a socket
 # shared into the container for melonDS to connect to, which hasn't been
@@ -1069,7 +1096,7 @@ fi
 # ordinary in-process mode, which would otherwise look like host-control
 # mode "worked" right up until a client tried to use it with no emulator
 # running.
-if [[ "${MELONDS_REMOTE_HOST_CONTROL:-0}" == "1" ]]; then
+if [[ "${DUALDECK_HOST_CONTROL:-0}" == "1" ]]; then
     echo "error: host-control mode isn't supported yet on immutable/Distrobox" >&2
     echo "systems (see host/internal/run-host.sh's comment) -- only the regular," >&2
     echo "non-Distrobox launch path (./run-host.sh) supports it so far." >&2
@@ -1092,10 +1119,19 @@ fi
 # Keep in sync with the same paths in uninstall-host-distrobox.sh,
 # install-steam-shortcut.sh, uninstall-steam-shortcut.sh, and
 # docs/bazzite-host-setup.md's description of this path.
-central_install_dir="${HOME}/.config/melonds-remote/install"
+central_install_dir="${HOME}/.config/dualdeck/install"
 staging_dir="${central_install_dir}.new"
 previous_dir="${central_install_dir}.previous"
-container_name="melonds-remote-host"
+container_name="dualdeck-host"
+
+# One-time melonDS-Remote -> DualDeck rebrand cleanup: remove a leftover
+# container from before the rename so this doesn't end up with two
+# (the old one orphaned, plus a freshly created "dualdeck-host"). No-op
+# if it doesn't exist.
+if command -v distrobox >/dev/null 2>&1 && distrobox list 2>/dev/null | grep -qw "melonds-remote-host"; then
+    echo "Removing old Distrobox container \"melonds-remote-host\" (renamed to \"${container_name}\") ..."
+    distrobox rm "melonds-remote-host" --force 2>/dev/null || true
+fi
 
 already_central=0
 if [[ "${host_root}" == "${central_install_dir}" ]]; then
@@ -1114,7 +1150,7 @@ else
     mkdir -p "${staging_dir}"
     cp -a "${host_root}/." "${staging_dir}/"
 
-    # So check-for-updates.sh keeps working via melonds-remote-host.sh's
+    # So check-for-updates.sh keeps working via dualdeck-host.sh's
     # "../check-for-updates.sh" reference even when a copy of that menu
     # script is later run from inside the central directory itself
     # (e.g. after the original downloaded archive has been deleted) --
@@ -1183,8 +1219,8 @@ set -uo pipefail
 
 # Keep in sync with the same paths in install-host-distrobox.sh,
 # install-steam-shortcut.sh, and uninstall-steam-shortcut.sh.
-central_install_dir="${HOME}/.config/melonds-remote/install"
-container_name="melonds-remote-host"
+central_install_dir="${HOME}/.config/dualdeck/install"
+container_name="dualdeck-host"
 
 removed_anything=0
 
@@ -1240,9 +1276,9 @@ fi
 WRAP
 chmod +x "${pkg_dir}/host/internal/launch-host.sh"
 
-cat > "${pkg_dir}/host/melonds-remote-host.sh" <<'WRAP'
+cat > "${pkg_dir}/host/dualdeck-host.sh" <<'WRAP'
 #!/usr/bin/env bash
-# The one thing to double-click to set up or run the melonDS Remote
+# The one thing to double-click to set up or run the DualDeck
 # host -- shows a simple menu and delegates to whichever of the
 # internal/ scripts actually applies, so a user never has to figure out
 # which one they need (GitHub issue #10: "the normal path requires no
@@ -1256,13 +1292,13 @@ cat > "${pkg_dir}/host/melonds-remote-host.sh" <<'WRAP'
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-error_log="${HOME}/.config/melonds-remote/install.log"
+error_log="${HOME}/.config/dualdeck/install.log"
 on_error() {
     local exit_code="$1" line_no="$2" failing_cmd="$3"
     mkdir -p "$(dirname "${error_log}")"
-    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") melonds-remote-host.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") dualdeck-host.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
     if command -v kdialog >/dev/null 2>&1; then
-        kdialog --title "melonDS Remote Host" --error "Something went wrong: ${failing_cmd}
+        kdialog --title "DualDeck Host" --error "Something went wrong: ${failing_cmd}
 (exit code ${exit_code})
 
 Details logged to:
@@ -1275,7 +1311,7 @@ have_kdialog() { command -v kdialog >/dev/null 2>&1; }
 
 info() {
     if have_kdialog; then
-        kdialog --title "melonDS Remote Host" --msgbox "$1" 2>/dev/null
+        kdialog --title "DualDeck Host" --msgbox "$1" 2>/dev/null
     else
         echo
         echo "$1"
@@ -1285,7 +1321,7 @@ info() {
 
 confirm() {
     if have_kdialog; then
-        kdialog --title "melonDS Remote Host" --yesno "$1" 2>/dev/null
+        kdialog --title "DualDeck Host" --yesno "$1" 2>/dev/null
     else
         read -rp "$1 [y/N] " reply
         [[ "${reply}" =~ ^[Yy]$ ]]
@@ -1294,7 +1330,7 @@ confirm() {
 
 choose_action() {
     if have_kdialog; then
-        kdialog --title "melonDS Remote Host" --menu "What would you like to do?" \
+        kdialog --title "DualDeck Host" --menu "What would you like to do?" \
             launch "Launch..." \
             steam-add "Add to Steam (Big Picture / Gaming Mode)" \
             steam-remove "Remove from Steam / uninstall" \
@@ -1307,7 +1343,7 @@ choose_action() {
         # display text leaking onto stdout would get appended to that
         # and break the case match entirely.
         {
-            echo "melonDS Remote Host"
+            echo "DualDeck Host"
             echo "  1) Launch..."
             echo "  2) Add to Steam (Big Picture / Gaming Mode)"
             echo "  3) Remove from Steam / uninstall"
@@ -1333,7 +1369,7 @@ choose_action() {
 # kdialog_approval_prompt.h) -- the same zero-typing flow melonDS's own
 # in-process dialog already has.
 choose_emulator() {
-    local custom_conf="${HOME}/.config/melonds-remote/custom-emulator.conf"
+    local custom_conf="${HOME}/.config/dualdeck/custom-emulator.conf"
     local custom_label="Custom (patch my own emulator)"
     if [[ -f "${custom_conf}" ]]; then
         local custom_path
@@ -1342,7 +1378,7 @@ choose_emulator() {
     fi
 
     if have_kdialog; then
-        kdialog --title "melonDS Remote Host" --menu "Which system?" \
+        kdialog --title "DualDeck Host" --menu "Which system?" \
             ds "Nintendo DS (melonDS)" \
             n3ds "Nintendo 3DS (Azahar, experimental)" \
             hostcontrol "Host control only -- no emulator (experimental)" \
@@ -1396,14 +1432,14 @@ case "${action}" in
                 ;;
             hostcontrol)
                 # Exported before the same launch-host.sh dispatch the
-                # "ds" case above uses -- MELONDS_REMOTE_HOST_CONTROL is
+                # "ds" case above uses -- DUALDECK_HOST_CONTROL is
                 # an environment variable, so run-host.sh (or
                 # install-host-distrobox.sh's rejection check, on an
                 # immutable system) sees it either way without
                 # launch-host.sh itself needing to know this mode
                 # exists. No auth token exported here either, same
                 # zero-typing kdialog approval as the n3ds case above.
-                export MELONDS_REMOTE_HOST_CONTROL=1
+                export DUALDECK_HOST_CONTROL=1
                 exec ./internal/launch-host.sh
                 ;;
             custom)
@@ -1416,7 +1452,7 @@ case "${action}" in
         ;;
     steam-add)
         if ./internal/install-steam-shortcut.sh; then
-            info "Added melonDS Remote Host to Steam. Restart Steam (or switch to Gaming Mode) to see it, and set its Controller Layout to a plain Gamepad template once it's there."
+            info "Added DualDeck Host to Steam. Restart Steam (or switch to Gaming Mode) to see it, and set its Controller Layout to a plain Gamepad template once it's there."
         fi
         # A failure here already logged and showed its own error dialog
         # (install-steam-shortcut.sh has the same error-trap pattern as
@@ -1464,18 +1500,18 @@ Install ${latest_version} now? This downloads it from GitHub and also adds/updat
         ;;
 esac
 WRAP
-chmod +x "${pkg_dir}/host/melonds-remote-host.sh"
+chmod +x "${pkg_dir}/host/dualdeck-host.sh"
 
 cat > "${pkg_dir}/host/internal/apply-update.sh" <<'WRAP'
 #!/usr/bin/env bash
-# Downloads the latest melonDS Remote release and installs it, by
+# Downloads the latest DualDeck release and installs it, by
 # handing off to that release's own
 # host/internal/install-steam-shortcut.sh --force -- reusing its
 # already-verified stage-then-swap file safety and Distrobox/dnf-gated
 # activation on immutable systems, rather than duplicating any of that
 # logic here. This script's only job is fetching and extracting the
 # new release archive. Normally invoked from
-# ../../melonds-remote-host.sh's "Check for updates" menu choice after
+# ../../dualdeck-host.sh's "Check for updates" menu choice after
 # the user confirms; also runnable standalone.
 #
 # Passes --force through to install-steam-shortcut.sh so an update
@@ -1500,13 +1536,13 @@ cat > "${pkg_dir}/host/internal/apply-update.sh" <<'WRAP'
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-error_log="${HOME}/.config/melonds-remote/install.log"
+error_log="${HOME}/.config/dualdeck/install.log"
 on_error() {
     local exit_code="$1" line_no="$2" failing_cmd="$3"
     mkdir -p "$(dirname "${error_log}")"
     echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") apply-update.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
     if command -v kdialog >/dev/null 2>&1; then
-        kdialog --title "melonDS Remote Host" --error "Updating failed: ${failing_cmd}
+        kdialog --title "DualDeck Host" --error "Updating failed: ${failing_cmd}
 (exit code ${exit_code})
 
 Details logged to:
@@ -1551,21 +1587,21 @@ chmod +x "${pkg_dir}/host/internal/apply-update.sh"
 
 cat > "${pkg_dir}/host/internal/install-steam-shortcut.sh" <<'WRAP'
 #!/usr/bin/env bash
-# Registers the melonDS Remote host as a Steam non-Steam-game shortcut,
+# Registers the DualDeck host as a Steam non-Steam-game shortcut,
 # so it can be launched from Steam Big Picture/Gaming Mode with only a
 # controller (GitHub issue #10). Mirrors
 # ../../client/internal/install-steam-shortcut.sh's approach, reusing
 # the same layout-agnostic steam_shortcut.py -- bundled flat alongside
 # this script rather than shared from a top-level scripts/ directory,
 # since host/ is fully self-contained (same reasoning as client/lib/
-# bundling SDL3). Normally launched via ../../melonds-remote-host.sh's
+# bundling SDL3). Normally launched via ../../dualdeck-host.sh's
 # "Add to Steam" menu choice, not directly.
 #
 # Copies the whole host/ directory (this script's grandparent -- the
 # entry-point script and binary, plus this internal/ directory) into a
-# fixed central location (~/.config/melonds-remote/install/ -- the same
+# fixed central location (~/.config/dualdeck/install/ -- the same
 # directory install-host-distrobox.sh already uses on immutable
-# systems) and points the shortcut at melonds-remote-host.sh there --
+# systems) and points the shortcut at dualdeck-host.sh there --
 # the same single entry point a double-click normally runs, showing its
 # "Which system?" picker (DS/melonDS, 3DS/Azahar, host-control-only, or
 # a custom emulator) -- not at melonDS, run-host.sh, or
@@ -1595,13 +1631,13 @@ host_root="$(cd .. && pwd)"
 # persistent file and, when available (SteamOS Desktop Mode/Bazzite are
 # both KDE Plasma), pops up a graphical error dialog via kdialog. Same
 # pattern as client/internal/install-steam-shortcut.sh.
-error_log="${HOME}/.config/melonds-remote/install.log"
+error_log="${HOME}/.config/dualdeck/install.log"
 on_error() {
     local exit_code="$1" line_no="$2" failing_cmd="$3"
     mkdir -p "$(dirname "${error_log}")"
     echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") install-steam-shortcut.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
     if command -v kdialog >/dev/null 2>&1; then
-        kdialog --title "melonDS Remote Host" \
+        kdialog --title "DualDeck Host" \
             --error "Installing the Steam shortcut failed: ${failing_cmd}
 (exit code ${exit_code})
 
@@ -1626,9 +1662,23 @@ done
 
 # Keep in sync with the same constant in install-host-distrobox.sh,
 # uninstall-host-distrobox.sh, and uninstall-steam-shortcut.sh.
-central_install_dir="${HOME}/.config/melonds-remote/install"
+central_install_dir="${HOME}/.config/dualdeck/install"
 staging_dir="${central_install_dir}.new"
 previous_dir="${central_install_dir}.previous"
+
+# One-time melonDS-Remote -> DualDeck rebrand migration: this central
+# install dir moved (old: ~/.config/melonds-remote/install) and the
+# Steam AppName changed ("melonDS Remote Host" -> "DualDeck Host")
+# simultaneously, so steam_shortcut.py's Exe-OR-AppName matching can't
+# reliably find-and-update the old entry on its own. Explicitly remove
+# the old entry by its old identity first, best-effort.
+old_central_install_dir="${HOME}/.config/melonds-remote/install"
+if [[ -d "${old_central_install_dir}" && "${dry_run}" -eq 0 ]]; then
+    python3 ./steam_shortcut.py \
+        --exe "${old_central_install_dir}/melonds-remote-host.sh" \
+        --name "melonDS Remote Host" \
+        --remove "${extra_args[@]}" >/dev/null 2>&1 || true
+fi
 
 if [[ "${dry_run}" -eq 0 ]]; then
     if [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1; then
@@ -1648,7 +1698,7 @@ if [[ "${dry_run}" -eq 0 ]]; then
 
         # Same reasoning as install-host-distrobox.sh's equivalent copy:
         # keeps "../check-for-updates.sh" resolvable from a copy of
-        # melonds-remote-host.sh later run from inside the central
+        # dualdeck-host.sh later run from inside the central
         # directory itself.
         cp "$(dirname "${host_root}")/check-for-updates.sh" "$(dirname "${central_install_dir}")/check-for-updates.sh" 2>/dev/null || true
         cp "$(dirname "${host_root}")/VERSION" "$(dirname "${central_install_dir}")/VERSION" 2>/dev/null || true
@@ -1656,8 +1706,8 @@ if [[ "${dry_run}" -eq 0 ]]; then
 fi
 
 python3 ./steam_shortcut.py \
-    --exe "${central_install_dir}/melonds-remote-host.sh" \
-    --name "melonDS Remote Host" \
+    --exe "${central_install_dir}/dualdeck-host.sh" \
+    --name "DualDeck Host" \
     --launch-options "${launch_options}" \
     "${extra_args[@]}" && shortcut_exit=0 || shortcut_exit=$?
 if [[ "${shortcut_exit}" -ne 0 ]]; then
@@ -1678,7 +1728,7 @@ chmod +x "${pkg_dir}/host/internal/install-steam-shortcut.sh"
 # run a file that no longer exists at the old flat path. This shim
 # forwards to the real (current) location so updating *from* one of
 # those older releases keeps working. New installs/updates never
-# reach this file directly -- melonds-remote-host.sh and apply-update.sh
+# reach this file directly -- dualdeck-host.sh and apply-update.sh
 # both already call internal/install-steam-shortcut.sh -- so this exists
 # purely for that one-time upgrade path and is safe to delete once no
 # supported release still depends on it.
@@ -1695,14 +1745,14 @@ chmod +x "${pkg_dir}/host/install-steam-shortcut.sh"
 
 cat > "${pkg_dir}/host/internal/uninstall-steam-shortcut.sh" <<'WRAP'
 #!/usr/bin/env bash
-# Removes the "melonDS Remote Host" Steam non-Steam-game shortcut added
+# Removes the "DualDeck Host" Steam non-Steam-game shortcut added
 # by install-steam-shortcut.sh, the central install directory
-# (~/.config/melonds-remote/install) it copies everything into, and the
+# (~/.config/dualdeck/install) it copies everything into, and the
 # Distrobox container if one was created -- i.e. this is the complete
 # host uninstall once a Steam shortcut has been set up. (If you only
 # ever used install-host-distrobox.sh directly and never installed the
 # Steam shortcut, uninstall-host-distrobox.sh alone is equivalent.)
-# Normally launched via ../../melonds-remote-host.sh's "Remove from
+# Normally launched via ../../dualdeck-host.sh's "Remove from
 # Steam" menu choice, not directly.
 #
 # Always targets the fixed central install directory below, regardless
@@ -1713,13 +1763,13 @@ cat > "${pkg_dir}/host/internal/uninstall-steam-shortcut.sh" <<'WRAP'
 # client/internal/uninstall-steam-shortcut.sh).
 set -euo pipefail
 
-error_log="${HOME}/.config/melonds-remote/install.log"
+error_log="${HOME}/.config/dualdeck/install.log"
 on_error() {
     local exit_code="$1" line_no="$2" failing_cmd="$3"
     mkdir -p "$(dirname "${error_log}")"
     echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") uninstall-steam-shortcut.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
     if command -v kdialog >/dev/null 2>&1; then
-        kdialog --title "melonDS Remote Host" \
+        kdialog --title "DualDeck Host" \
             --error "Removing the Steam shortcut failed: ${failing_cmd}
 (exit code ${exit_code})
 
@@ -1731,9 +1781,9 @@ trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
 
 # Keep in sync with the same constant in install-steam-shortcut.sh,
 # install-host-distrobox.sh, and uninstall-host-distrobox.sh.
-central_install_dir="${HOME}/.config/melonds-remote/install"
+central_install_dir="${HOME}/.config/dualdeck/install"
 self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-container_name="melonds-remote-host"
+container_name="dualdeck-host"
 
 steam_shortcut_py=""
 for candidate in \
@@ -1752,9 +1802,20 @@ if [[ -z "${steam_shortcut_py}" ]]; then
     exit 0
 fi
 
+# One-time melonDS-Remote -> DualDeck rebrand cleanup: also try removing
+# under the old identity (old central dir, old Exe, old AppName), since
+# the Exe-OR-AppName fallback alone can't bridge a compound change of
+# both fields at once. No-op if it was never installed there or was
+# already migrated.
+old_central_install_dir="${HOME}/.config/melonds-remote/install"
 python3 "${steam_shortcut_py}" \
-    --exe "${central_install_dir}/melonds-remote-host.sh" \
+    --exe "${old_central_install_dir}/melonds-remote-host.sh" \
     --name "melonDS Remote Host" \
+    --remove "$@" >/dev/null 2>&1 || true
+
+python3 "${steam_shortcut_py}" \
+    --exe "${central_install_dir}/dualdeck-host.sh" \
+    --name "DualDeck Host" \
     --remove \
     "$@"
 
@@ -1767,6 +1828,13 @@ if [[ "${dry_run}" -eq 0 ]]; then
     if command -v distrobox >/dev/null 2>&1 && distrobox list 2>/dev/null | grep -qw "${container_name}"; then
         echo "Removing Distrobox container \"${container_name}\" ..."
         distrobox rm "${container_name}" --force
+    fi
+    # Same melonDS-Remote -> DualDeck rebrand cleanup as the shortcut
+    # removal above, for the container this project itself created
+    # under the old name before the rename.
+    if command -v distrobox >/dev/null 2>&1 && distrobox list 2>/dev/null | grep -qw "melonds-remote-host"; then
+        echo "Removing old Distrobox container \"melonds-remote-host\" ..."
+        distrobox rm "melonds-remote-host" --force
     fi
 
     # cd out first -- this script may itself be running from inside
@@ -1799,9 +1867,9 @@ cp "${repo_root}/docs/release-readme.md" "${pkg_dir}/README.md"
 
 cat > "${pkg_dir}/check-for-updates.sh" <<'WRAP'
 #!/usr/bin/env bash
-# Checks whether a newer melonDS Remote release is published on GitHub --
+# Checks whether a newer DualDeck release is published on GitHub --
 # read-only, no download or install of anything happens here. Both
-# melonds-remote-host.sh and melonds-remote-client.sh's "Check for
+# dualdeck-host.sh and dualdeck-client.sh's "Check for
 # updates" menu choice call this first and only offer to actually
 # install if it reports one available. Capped at 5s network time and
 # never exits non-zero on a reachability/parse failure, specifically so
@@ -1817,27 +1885,27 @@ current_version="$(cat VERSION 2>/dev/null || echo "unknown")"
 repo="Crimson3076/DualDeck"
 
 if ! command -v curl >/dev/null 2>&1; then
-    echo "melonDS Remote ${current_version} -- install 'curl' to enable update checks."
+    echo "DualDeck ${current_version} -- install 'curl' to enable update checks."
     exit 0
 fi
 
 api_response="$(curl -fsSL --max-time 5 \
     "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null)"
 if [[ -z "${api_response}" ]]; then
-    echo "melonDS Remote ${current_version} -- couldn't reach GitHub to check for updates (offline?)."
+    echo "DualDeck ${current_version} -- couldn't reach GitHub to check for updates (offline?)."
     exit 0
 fi
 
 latest_version="$(echo "${api_response}" | grep -o '"tag_name" *: *"[^"]*"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')"
 if [[ -z "${latest_version}" ]]; then
-    echo "melonDS Remote ${current_version} -- couldn't parse GitHub's response to check for updates."
+    echo "DualDeck ${current_version} -- couldn't parse GitHub's response to check for updates."
     exit 0
 fi
 
 if [[ "${latest_version}" == "${current_version}" ]]; then
-    echo "melonDS Remote ${current_version} -- you're on the latest version."
+    echo "DualDeck ${current_version} -- you're on the latest version."
 else
-    echo "melonDS Remote ${current_version} -- update available: ${latest_version}"
+    echo "DualDeck ${current_version} -- update available: ${latest_version}"
     echo "  https://github.com/${repo}/releases/tag/${latest_version}"
 fi
 WRAP
@@ -1846,7 +1914,7 @@ chmod +x "${pkg_dir}/check-for-updates.sh"
 commit_full="$(cd "${repo_root}" && git rev-parse HEAD)"
 built_at="$(date -u +"%Y-%m-%d %H:%M UTC")"
 cat > "${pkg_dir}/RELEASE_NOTES.md" <<NOTES
-# melonDS Remote (\`${version_tag}\`)
+# DualDeck (\`${version_tag}\`)
 
 Built from commit \`${commit_full}\` on branch \`${branch_name}\`,
 ${built_at}. This is a distinct, permanently-retained release -- it will
@@ -1865,8 +1933,8 @@ equivalent) -- see \`docs/known-limitations.md\` (bundled here) for what's
 verified and portability notes.
 
 See \`README.md\` for how to actually run this. In short:
-double-click \`host/melonds-remote-host.sh\` on your HTPC and
-\`client/melonds-remote-client.sh\` on your Steam Deck -- each opens a
+double-click \`host/dualdeck-host.sh\` on your HTPC and
+\`client/dualdeck-client.sh\` on your Steam Deck -- each opens a
 menu that covers launching, Steam integration, and updates.
 NOTES
 

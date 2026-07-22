@@ -35,11 +35,11 @@ If you'd rather not build anything, download the latest release archive
 (see the top-level `README.md`'s "Download a build") and extract it in
 Desktop Mode's file manager (Dolphin).
 
-**Double-click `client/melonds-remote-client.sh`.** That's the only
+**Double-click `client/dualdeck-client.sh`.** That's the only
 client script you need to know about -- it shows a menu (a graphical
 one via `kdialog` on SteamOS/Bazzite's KDE Plasma desktop, or a plain
 numbered prompt if run from a terminal without `kdialog`) with four
-choices: **Launch melonDS Remote now** (a quick test, connects like
+choices: **Launch DualDeck now** (a quick test, connects like
 step 3 below), **Add to Steam** (registers a Gaming Mode shortcut --
 **close Steam first**, since it's creating a brand-new entry in Steam's
 library file and Steam can silently undo that if it's still running),
@@ -59,7 +59,7 @@ if you're modifying the code, but not required for normal use.
 
 ## Prerequisite: build the client
 
-You need `melonds-remote-client` built with SDL3 for the Deck's
+You need `dualdeck-client` built with SDL3 for the Deck's
 architecture. Two practical options:
 
 1. **Build directly on the Deck in Desktop Mode.** SteamOS Desktop Mode
@@ -82,13 +82,13 @@ See `docs/building.md` for the actual CMake invocation either way.
 3. Run the client. If you know your host's LAN address already, you can
    still pass it directly:
    ```sh
-   ./melonds-remote-client --host <htpc-ip-address>
+   ./dualdeck-client --host <htpc-ip-address>
    ```
    but as of the LAN discovery feature, this is optional -- run it with no
-   arguments and it scans the LAN for running `melonds-remote-server`
+   arguments and it scans the LAN for running `dualdeck-host-service`
    hosts instead:
    ```sh
-   ./melonds-remote-client
+   ./dualdeck-client
    ```
    You'll see a "SEARCHING FOR HOST..." screen while it scans, then a
    **SELECT A HOST** list -- shown every time the client launches, even
@@ -154,7 +154,7 @@ See `docs/building.md` for the actual CMake invocation either way.
 ## Gaming Mode: adding as a non-Steam shortcut
 
 **Quickest path**: with Steam closed, pick "Add to Steam" from
-`client/melonds-remote-client.sh`'s menu (see above), or double-click
+`client/dualdeck-client.sh`'s menu (see above), or double-click
 `client/internal/install-steam-shortcut.sh` directly (prebuilt release
 archive) or run `./scripts/install-steam-shortcut.sh` (from source; add
 `--host 192.168.1.50` if you'd rather skip discovery and always connect
@@ -173,7 +173,7 @@ below for why it matters.
 
 It copies the whole `client/` directory (binary, bundled SDL3 library,
 launcher wrapper, and the `internal/` scripts) into a fixed central
-directory, `~/.config/melonds-remote-client/install/`, and points the
+directory, `~/.config/dualdeck-client/install/`, and points the
 Steam shortcut's `Exe` at the copy of `run-client.sh` there rather than
 at wherever you happen to have extracted or built it -- so the
 extracted release folder (or a `build/` directory) can be deleted right
@@ -185,13 +185,13 @@ library, which could leave the shortcut launching to nothing on a real
 Deck. A failed update can't lose a working install either -- the new
 files are staged separately and only swapped in once that succeeds,
 keeping the replaced version as a one-generation backup. If either
-script ever fails, check `~/.config/melonds-remote-client/install.log`
+script ever fails, check `~/.config/dualdeck-client/install.log`
 (or the graphical error box it pops up on KDE Plasma, via `kdialog`) --
 see `docs/troubleshooting.md` if Steam's shortcut list itself looks
 wrong afterward.
 
 **Removing it**: with Steam closed, pick "Remove from Steam / uninstall"
-from `client/melonds-remote-client.sh`'s menu, or double-click
+from `client/dualdeck-client.sh`'s menu, or double-click
 `client/internal/uninstall-steam-shortcut.sh` directly (or run
 `./scripts/uninstall-steam-shortcut.sh` from source) -- same no-typing,
 applies-to-every-local-user behavior as the install script, and is safe
@@ -220,7 +220,7 @@ Gaming Mode:
 
 1. In Desktop Mode, open Steam.
 2. **Games → Add a Non-Steam Game to My Shortcuts...**
-3. **Browse...** to the built `melonds-remote-client` binary.
+3. **Browse...** to the built `dualdeck-client` binary.
 4. After adding, right-click it in your library → **Properties**:
    - **Launch Options**: leave blank to let the client discover hosts on
      the LAN automatically and show the selection screen every launch

@@ -33,7 +33,7 @@ KdialogPromptResult promptDeviceApprovalViaKdialog(const std::string& clientName
         // controlled, since they come from whatever the connecting device
         // claims about itself -- can't inject shell commands regardless of
         // their content.
-        execlp("kdialog", "kdialog", "--title", "melonDS Remote", "--yesno", message.c_str(),
+        execlp("kdialog", "kdialog", "--title", "DualDeck Host", "--yesno", message.c_str(),
                static_cast<char*>(nullptr));
         _exit(127); // execlp only returns on failure (e.g. kdialog not installed)
     }

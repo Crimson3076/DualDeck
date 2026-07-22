@@ -5,7 +5,7 @@ Replaces the earlier 6-digit-pairing-code flow, which required typing a
 code on the client -- unworkable since Steam Input doesn't reliably bring
 up a virtual keyboard in Gaming Mode (see docs/known-limitations.md).
 
-Starts the real `melonds-remote-server` binary with NO `--auth-token`
+Starts the real `dualdeck-host-service` binary with NO `--auth-token`
 (device-approval mode, the default), then exercises the same state
 machine a real client + host operator would hit:
 
@@ -29,7 +29,7 @@ verification account. Complements `tests/smoke_test.py`, which covers the
 static `--auth-token` path instead.
 
 Usage:
-    python3 tests/device_approval_smoke_test.py /path/to/melonds-remote-server
+    python3 tests/device_approval_smoke_test.py /path/to/dualdeck-host-service
 """
 
 import re
@@ -224,6 +224,6 @@ def run(server_path: str) -> int:
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print(f"usage: {sys.argv[0]} /path/to/melonds-remote-server", file=sys.stderr)
+        print(f"usage: {sys.argv[0]} /path/to/dualdeck-host-service", file=sys.stderr)
         sys.exit(2)
     sys.exit(run(sys.argv[1]))

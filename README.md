@@ -1,4 +1,4 @@
-# melonDS Remote
+# DualDeck
 
 A Linux-focused system for running Nintendo DS games through melonDS on an
 HTPC while using a Steam Deck as the handheld controller and bottom
@@ -27,8 +27,8 @@ installer section for exactly what it does and doesn't cover yet (it's
 Phase 1 of GitHub issue #26's larger installer/auto-update rework).
 
 Everything you need to run is one script per side, no typing required:
-double-click `host/melonds-remote-host.sh` on the machine running the
-emulator, and `client/melonds-remote-client.sh` on your Steam Deck (or
+double-click `host/dualdeck-host.sh` on the machine running the
+emulator, and `client/dualdeck-client.sh` on your Steam Deck (or
 any Linux machine with a gamepad). Each opens a small menu; the host's
 "Launch..." choice picks which system to run -- Nintendo DS (melonDS,
 the default/most-supported path), Nintendo 3DS (Azahar, experimental --
@@ -120,11 +120,11 @@ what is and isn't verified yet.
 ./scripts/install-dev.sh
 
 # Run the standalone host prototype (device-approval mode by default):
-./scripts/run-host.sh --state-dir ~/.config/melonds-remote
+./scripts/run-host.sh --state-dir ~/.config/dualdeck
 
 # In another terminal, exercise it end-to-end without needing the client built
 # (uses --auth-token, since it doesn't simulate a human approving a device):
-python3 tests/smoke_test.py build/host/remote-server/melonds-remote-server
+python3 tests/smoke_test.py build/host/remote-server/dualdeck-host-service
 
 # If you have SDL3 installed, build and run the client -- first connection to
 # a host will show "WAITING FOR APPROVAL ON HOST..." until you approve it

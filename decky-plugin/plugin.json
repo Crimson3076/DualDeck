@@ -1,6 +1,6 @@
 {
-  "name": "melonDS Remote",
-  "author": "melonDS Remote contributors",
+  "name": "DualDeck",
+  "author": "DualDeck contributors",
   "flags": ["debug"],
   "api_version": 1,
   "publish": {

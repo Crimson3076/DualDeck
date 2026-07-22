@@ -1,4 +1,4 @@
-// melonDS Remote -- Decky Loader plugin frontend.
+// DualDeck -- Decky Loader plugin frontend.
 //
 // Structure follows the official decky-plugin-template (fetched directly
 // from SteamDeckHomebrew/decky-plugin-template while writing this) as
@@ -71,7 +71,7 @@ function Content() {
   };
 
   return (
-    <PanelSection title="melonDS Remote">
+    <PanelSection title="DualDeck">
       <PanelSectionRow>
         <TextField label="Host address" value={host} onChange={(e) => setHost(e.target.value)} />
       </PanelSectionRow>
@@ -109,8 +109,8 @@ function Content() {
 
 export default definePlugin(() => {
   return {
-    name: "melonDS Remote",
-    titleView: <div className={staticClasses.Title}>melonDS Remote</div>,
+    name: "DualDeck",
+    titleView: <div className={staticClasses.Title}>DualDeck</div>,
     content: <Content />,
     icon: <FaGamepad />,
     onDismount() {},

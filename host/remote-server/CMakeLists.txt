@@ -1,4 +1,4 @@
-add_library(melonds_remote_host STATIC
+add_library(dualdeck_host STATIC
     src/logging_input_sink.cpp
     src/synthetic_frame_source.cpp
     src/net_server.cpp
@@ -10,35 +10,35 @@ add_library(melonds_remote_host STATIC
     src/kdialog_approval_prompt.cpp
 )
 
-target_include_directories(melonds_remote_host PUBLIC
+target_include_directories(dualdeck_host PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(melonds_remote_host PUBLIC melonds_remote_protocol)
+target_link_libraries(dualdeck_host PUBLIC dualdeck_protocol)
 # adapter_bridge.h/.cpp (GitHub issue #28 Phase 2) depend on the
 # adapter-sdk contract; adapter_ipc.h's AdapterIpcServer is what
 # main.cpp's opt-in --adapter-socket mode actually constructs.
-target_link_libraries(melonds_remote_host PUBLIC melonds_remote_adapter_sdk melonds_remote_adapter_sdk_ipc)
-target_compile_features(melonds_remote_host PUBLIC cxx_std_20)
+target_link_libraries(dualdeck_host PUBLIC dualdeck_adapter_sdk dualdeck_adapter_sdk_ipc)
+target_compile_features(dualdeck_host PUBLIC cxx_std_20)
 
 find_package(Threads REQUIRED)
-target_link_libraries(melonds_remote_host PUBLIC Threads::Threads)
+target_link_libraries(dualdeck_host PUBLIC Threads::Threads)
 
-if(MELONDS_REMOTE_ENABLE_WARNINGS)
-    target_compile_options(melonds_remote_host PRIVATE
+if(DUALDECK_ENABLE_WARNINGS)
+    target_compile_options(dualdeck_host PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow
     )
 endif()
 
-add_executable(melonds-remote-server src/main.cpp)
-target_link_libraries(melonds-remote-server PRIVATE melonds_remote_host)
+add_executable(dualdeck-host-service src/main.cpp)
+target_link_libraries(dualdeck-host-service PRIVATE dualdeck_host)
 
-if(MELONDS_REMOTE_ENABLE_WARNINGS)
-    target_compile_options(melonds-remote-server PRIVATE
+if(DUALDECK_ENABLE_WARNINGS)
+    target_compile_options(dualdeck-host-service PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow
     )
 endif()
 
-if(MELONDS_REMOTE_BUILD_TESTS)
+if(DUALDECK_BUILD_TESTS)
     add_subdirectory(tests)
 endif()

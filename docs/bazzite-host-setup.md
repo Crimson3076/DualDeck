@@ -22,7 +22,7 @@ to run the real melonDS-integrated host without building anything,
 download the latest release archive instead (see the top-level
 `README.md`'s "Download a build") and extract it.
 
-**Double-click `host/melonds-remote-host.sh`.** That's the only host
+**Double-click `host/dualdeck-host.sh`.** That's the only host
 script you need to know about -- it shows a menu (a graphical one via
 `kdialog` on Bazzite/SteamOS's KDE Plasma desktop, or a plain numbered
 prompt if run from a terminal without `kdialog`) with four choices:
@@ -82,7 +82,7 @@ figuring out `rpm-ostree install` + reboot by hand.
 
 `host/internal/install-host-distrobox.sh` (packaged alongside
 `run-host.sh` in every release archive's `host/internal/`, and what
-"Launch now" in `host/melonds-remote-host.sh`'s menu calls on an
+"Launch now" in `host/dualdeck-host.sh`'s menu calls on an
 immutable system) automates the Distrobox path end to end:
 
 1. Detects whether this actually is an immutable/rpm-ostree system at
@@ -91,14 +91,14 @@ immutable system) automates the Distrobox path end to end:
    not, since there's no need for a container there.
 2. Copies the whole `host/` directory (both the entry-point script and
    binary alongside it, and this internal/ folder) into a fixed
-   location, `~/.config/melonds-remote/install/` -- this is what makes
+   location, `~/.config/dualdeck/install/` -- this is what makes
    updates simple: downloading a newer release and running this again
    re-syncs that copy and re-verifies the container's packages, so
    there's nothing to redo by hand, and once set up once you can launch
    or update straight from that central directory instead of keeping the
    original download around.
 3. Creates (or reuses -- safe to re-run) a Fedora-based Distrobox
-   container named `melonds-remote-host`.
+   container named `dualdeck-host`.
 4. Installs the runtime library packages the host needs inside that
    container via `dnf` (skips anything already present).
 5. Launches melonDS (with the remote server enabled) from inside the
@@ -108,19 +108,19 @@ immutable system) automates the Distrobox path end to end:
 
 **A failed update can't break a working install**: step 2's copy and
 step 4's package install both happen in a separate staging location
-first (`~/.config/melonds-remote/install.new`) -- only once both
+first (`~/.config/dualdeck/install.new`) -- only once both
 succeed does the script swap it into place as the real
-`~/.config/melonds-remote/install/`, keeping the just-replaced version
+`~/.config/dualdeck/install/`, keeping the just-replaced version
 as a one-generation backup (`install.previous`) rather than deleting it.
 If the copy or the package install fails partway (no disk space,
 network drops mid-`dnf`, etc.), the previous, still-working install is
 left completely untouched, not deleted-then-maybe-not-replaced.
 
 **Uninstalling**: pick "Remove from Steam / uninstall" from
-`host/melonds-remote-host.sh`'s menu, or double-click
+`host/dualdeck-host.sh`'s menu, or double-click
 `host/internal/uninstall-host-distrobox.sh` directly -- either removes
 the Distrobox container and everything under
-`~/.config/melonds-remote/install*`. Never touches ROMs, saves,
+`~/.config/dualdeck/install*`. Never touches ROMs, saves,
 firmware, or any other melonDS data, since none of that lives in either
 of those places -- it all stays in your normal home directory the whole
 time (Distrobox shares it with the container automatically), regardless
@@ -131,15 +131,15 @@ of the container or central install directory being removed.
 Addresses the last remaining piece of GitHub issue #10's acceptance
 criteria: "the installed host can be launched from Steam Big Picture or
 Gaming Mode and accept a client connection." Pick "Add to Steam" from
-`host/melonds-remote-host.sh`'s menu (see above), or double-click
+`host/dualdeck-host.sh`'s menu (see above), or double-click
 `host/internal/install-steam-shortcut.sh` directly (once, in Desktop
-Mode, with Steam closed) -- either way it adds a **"melonDS Remote
+Mode, with Steam closed) -- either way it adds a **"DualDeck
 Host"** entry to your Steam library, mirroring
 `client/internal/install-steam-shortcut.sh`'s approach exactly, down to
 the same stage-then-swap update safety and error-log/`kdialog` failure
 visibility.
 
-This registers the shortcut's `Exe` as `melonds-remote-host.sh` itself
+This registers the shortcut's `Exe` as `dualdeck-host.sh` itself
 -- the same menu you get from double-clicking it, including its
 "Which system?" picker (DS/melonDS, 3DS/Azahar, host-control-only, or a
 custom emulator via `scripts/patch-existing-emulator.sh`). Picking
@@ -154,7 +154,7 @@ which in turn:
   as double-clicking it yourself.
 
 Like the client's shortcut, this copies the whole `host/` directory into
-the same fixed central location (`~/.config/melonds-remote/install/`)
+the same fixed central location (`~/.config/dualdeck/install/`)
 install-host-distrobox.sh already uses, so re-running
 `install-steam-shortcut.sh` from a newer release's extracted archive
 updates the same shortcut and the same install in place -- no
@@ -170,7 +170,7 @@ successfully, so a failed `dnf install` during an update can never leave
 half-applied, unverified files active in place of a working install.
 
 **Uninstalling**: pick "Remove from Steam / uninstall" from
-`host/melonds-remote-host.sh`'s menu, or double-click
+`host/dualdeck-host.sh`'s menu, or double-click
 `host/internal/uninstall-steam-shortcut.sh` directly -- either removes
 the Steam shortcut, the central install directory, *and* the Distrobox
 container if one was created, so this alone is a complete uninstall
@@ -227,19 +227,19 @@ distrobox enter melonds-remote-dev
 sudo dnf install -y gcc-c++ cmake git python3
 git clone <this-repo-url>
 cd melonds-remote  # or whatever you've named the checkout
-cmake -S . -B build -DMELONDS_REMOTE_BUILD_CLIENT=OFF
+cmake -S . -B build -DDUALDECK_BUILD_CLIENT=OFF
 cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure
 ```
 
-The resulting `melonds-remote-server` binary is a normal dynamically
+The resulting `dualdeck-host-service` binary is a normal dynamically
 linked Linux executable; it runs fine from inside the Distrobox (Bazzite
 exports host networking to Distrobox containers by default, so binding
 to a LAN-reachable address works normally) or you can copy it out to run
 directly on the host if you'd rather not keep the container around:
 
 ```sh
-distrobox-export --bin build/host/remote-server/melonds-remote-server
+distrobox-export --bin build/host/remote-server/dualdeck-host-service
 ```
 
 ## Option 2: layer build tools directly onto the base image
@@ -257,8 +257,8 @@ Then build exactly as in `docs/building.md`, no container needed.
 ## Running the host
 
 ```sh
-./build/host/remote-server/melonds-remote-server \
-    --state-dir ~/.config/melonds-remote
+./build/host/remote-server/dualdeck-host-service \
+    --state-dir ~/.config/dualdeck
 ```
 
 No `--bind` needed -- it defaults to `0.0.0.0` (all interfaces), so the

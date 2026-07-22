@@ -1564,8 +1564,8 @@ Narrower than it used to be, though: `client/tests/melonds_remote_net_client_tes
 -- see that phase's entry above) is a real end-to-end test suite for
 `net_client.cpp`/`net_client.h` against a real `host::NetServer`, and it
 needs no SDL3 at all -- `add_subdirectory(client/tests)` in the top-level
-`CMakeLists.txt` is gated only by `MELONDS_REMOTE_BUILD_TESTS`, not
-`MELONDS_REMOTE_BUILD_CLIENT`, so it already builds and runs as part of
+`CMakeLists.txt` is gated only by `DUALDECK_BUILD_TESTS`, not
+`DUALDECK_BUILD_CLIENT`, so it already builds and runs as part of
 `ci.yml`'s existing `protocol-and-host` job (confirmed by reproducing
 that job's exact `cmake`/`-Werror` configuration locally) with no
 workflow changes needed. `main.cpp`'s SDL3-dependent rendering/input/menu
@@ -4082,6 +4082,114 @@ diff against the previously committed patch confirmed to touch only the
 intended `kPollInterval` lines. Not yet confirmed to actually reduce
 perceived latency on real hardware -- that needs the user's own
 playtest.
+
+## Rebrand: melonDS Remote -> DualDeck
+
+**Context**: the GitHub repo has been `crimson3076/DualDeck` for a
+while, but the product itself hadn't caught up -- window title, every
+dialog, Steam shortcuts, binaries, scripts, and `~/.config/melonds-remote*`
+config directories all still said "melonDS Remote," a holdover from
+before this project grew past melonDS/DS support into a multi-emulator
+(DS + 3DS/Azahar) tool. The user hit a concrete symptom (the in-app exit
+menu said "EXIT MELONDS ENTIRELY" even when connected to Azahar/3DS) and
+asked for full consistency, confirming this should include internal
+paths/binaries, not just on-screen text.
+
+**Bug fixed along the way**: `client/src/main.cpp`'s `exitEmulationItems`
+was a `const` vector with "EXIT MELONDS ENTIRELY" hardcoded, unlike the
+adjacent `settingsMenuItems` lambda pattern which is re-evaluated at
+every use site. Converted to the same lambda shape, building the label
+from `sessionAdapterName` (already tracked, kept fresh from HelloAck) --
+e.g. "EXIT AZAHAR ENTIRELY" when actually connected to Azahar.
+
+**What changed**: window/dialog titles, on-screen text, console
+banners, Steam shortcut AppNames (`melonds-remote-client`/`server` ->
+`dualdeck-client`/`dualdeck-host-service`, launcher scripts ->
+`dualdeck-client.sh`/`dualdeck-host.sh`), CMake project/target names
+(`melonds_remote` -> `dualdeck`, `MELONDS_REMOTE_BUILD_*` ->
+`DUALDECK_BUILD_*`), the `~/.config/melonds-remote*` directories (host,
+client, Decky plugin), the Decky plugin's own name/panel title, and the
+melonDS patch's in-window approval dialog + Settings checkbox text.
+
+**Deliberately left alone, with reasons** (matches this session's
+established "scoped fix" pattern):
+- The C++ namespace `melonds_remote` -- used throughout every source
+  file *and* vendored into both emulator patches; renaming it is a huge
+  mechanical diff with zero user-visible benefit and would force a full
+  symbol-level regeneration of both patches for no reason.
+- Env vars baked into the emulator patches (`MELONDS_REMOTE_ENABLE`,
+  `MELONDS_REMOTE_VERSION`, `MELONDS_REMOTE_AUTH_TOKEN`,
+  `MELONDS_REMOTE_ADAPTER_SOCKET`, `MELONDS_REMOTE_STATE_DIR`,
+  `MELONDS_REMOTE_BIND`, `MELONDS_REMOTE_HOST_NAME`,
+  `MELONDS_REMOTE_OUT_OF_PROCESS`, `MELONDS_REMOTE_NO_DISCOVERY`,
+  `AZAHAR_REMOTE_*`) -- confirmed via `getenv`/`envOr` grep in both
+  patches that these are genuinely read by the patched emulator itself,
+  not just our own scripts, so renaming them would require another
+  patch-regeneration pass for zero user-visible benefit. Our *own*
+  binaries' env vars that aren't read by any patch (the client's
+  `MELONDS_REMOTE_VERSION` -> `DUALDECK_VERSION`, and
+  `MELONDS_REMOTE_HOST_CONTROL` -> `DUALDECK_HOST_CONTROL`, a pure
+  shell-script-level flag never read by melonDS) were renamed.
+- The release archive's internal package directory naming
+  (`melonds-remote-<commit>-linux-x86_64`) and the published tarball
+  filename (`melonds-remote-linux-x86_64.tar.gz`) -- kept exactly as-is,
+  permanently. This is load-bearing: every already-installed client/host's
+  `apply-update.sh` has that exact download URL and extraction glob
+  hardcoded (confirmed by reading the actual heredoc,
+  `scripts/build-release.sh`'s `client/internal/apply-update.sh`) and
+  its only real job is download -> extract -> hand off to the extracted
+  archive's own (now dualdeck-branded) `install-steam-shortcut.sh
+  --force` -- a generic, not path-specific handoff. So an old install's
+  updater fetches a fully-renamed release just fine as long as this one
+  external wrapper stays stable. `dualdeck-linux-x86_64.tar.gz` is
+  additionally published (same bytes, `release.yml`) as a nicer-looking
+  alias for the Releases page and for `DualDeck-Installer.sh` going
+  forward -- new/fresh installs use it, existing installs never see it.
+
+**Migration for existing installs**: since the Steam AppName and Exe
+path both change simultaneously (e.g. `"melonDS Remote"`/old central
+dir -> `"DualDeck"`/new central dir), `steam_shortcut.py`'s existing
+Exe-OR-AppName fallback matching can't reliably bridge that compound
+change on its own (confirmed by reading `find_matching_entry()` --
+matching on the *new* AppName wouldn't find an entry created under the
+*old* one). Both `install-steam-shortcut.sh` heredocs (client and host)
+now explicitly attempt removal under the old identity first,
+best-effort, before upserting under the new one -- this is new code
+tested against a hand-crafted fixture (fake `$HOME`, fake Steam
+userdata dir, a real old-identity entry created via `steam_shortcut.py`
+itself), confirming: exactly one entry afterward (old gone, not
+duplicated), and the old central install dir is left untouched.
+Config-dir migration (`device_id.txt`, `last_host.txt`,
+`settings.conf`, wizard state) is handled independently, directly in
+each `defaultXPath()` function in `client/src/device_identity.cpp`/
+`discovery_store.cpp`/`client_settings.cpp`/`wizard_state.cpp` -- a
+copy-forward-once (never delete/move) from the old
+`~/.config/melonds-remote-client/` path if the new
+`~/.config/dualdeck-client/` one doesn't exist yet, so it works
+regardless of how a user updates (Steam-shortcut reinstall or just a
+binary swap). `device_id.txt` in particular must survive byte-for-byte
+-- losing it would make the host treat an already-approved device as
+brand new. Covered by a new `config_migration_tests` ctest target
+(`client/tests/test_config_migration.cpp`). The Decky plugin's own
+settings path (`~/.config/melonds-remote-decky/` ->
+`~/.config/dualdeck-decky/`) gets the same copy-forward-once treatment
+in `main.py`, and a leftover Distrobox container from before the rename
+(`melonds-remote-host`) is detected and removed by both
+`install-host-distrobox.sh` (before creating the new one) and
+`uninstall-steam-shortcut.sh`.
+
+**Verified**: full `ctest` suite passes (including the new migration
+test target). Both emulator patches regenerated via the established
+scratch-clone workflow -- applied cleanly to a pristine checkout at the
+pinned commit, full rebuild (`citra_meta`/melonDS's own target), diffed
+against the previously-committed patch to confirm only the intended
+branding-string lines changed. The Steam-shortcut migration was verified
+end-to-end against a hand-crafted fixture as described above, for both
+install and uninstall. **Not verified**: an actual self-update from a
+real previously-published (melonDS-Remote-branded) release into this
+new build -- the fixture proves the migration logic is correct in
+isolation, but hasn't been exercised via a real `apply-update.sh` run
+against a real prior release archive.
 
 ## Things intentionally out of scope for v0.1
 

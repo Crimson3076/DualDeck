@@ -25,7 +25,7 @@ struct ClientSettings {
     bool micMuted = false;
 };
 
-// $HOME/.config/melonds-remote-client/settings.conf, or empty if HOME is
+// $HOME/.config/dualdeck-client/settings.conf, or empty if HOME is
 // unavailable. An empty path makes loading return defaults and saving fail
 // without touching the filesystem.
 std::string defaultClientSettingsPath();

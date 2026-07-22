@@ -1,6 +1,6 @@
 #pragma once
 
-// melonDS Remote wire protocol definitions.
+// DualDeck wire protocol definitions.
 //
 // This header defines the versioned, explicitly-sized, explicitly-serialized
 // packet formats used between the Steam Deck client and the HTPC host. See

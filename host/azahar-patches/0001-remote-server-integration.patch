@@ -36,7 +36,7 @@ index 91d8e13..c8876b4 100644
    target_sources(citra_qt PUBLIC
      qt_swizzle.h
 diff --git a/src/citra_qt/citra_qt.cpp b/src/citra_qt/citra_qt.cpp
-index f08a7ea..fa63c9a 100644
+index f08a7ea..acc5ef4 100644
 --- a/src/citra_qt/citra_qt.cpp
 +++ b/src/citra_qt/citra_qt.cpp
 @@ -3,12 +3,14 @@
@@ -103,7 +103,7 @@ index f08a7ea..fa63c9a 100644
 -    const QString filename = QFileDialog::getOpenFileName(
 -        this, tr("Load File"), UISettings::values.roms_path, file_filter);
 +
-+    // DualDeck (melonDS Remote) note: constructed explicitly instead of
++    // DualDeck note: constructed explicitly instead of
 +    // the QFileDialog::getOpenFileName() convenience static so a plain
 +    // QFileIconProvider can be forced via setIconProvider() below --
 +    // works around a crash reported on some Fedora/KDE Plasma systems
@@ -1438,13 +1438,13 @@ index 0000000..a441296
 +} // namespace melonds_remote::adapter
 diff --git a/src/citra_qt/remote_server/adapter_sdk/include/melonds_remote/protocol.h b/src/citra_qt/remote_server/adapter_sdk/include/melonds_remote/protocol.h
 new file mode 100644
-index 0000000..1d29126
+index 0000000..b9ffdc7
 --- /dev/null
 +++ b/src/citra_qt/remote_server/adapter_sdk/include/melonds_remote/protocol.h
 @@ -0,0 +1,492 @@
 +#pragma once
 +
-+// melonDS Remote wire protocol definitions.
++// DualDeck wire protocol definitions.
 +//
 +// This header defines the versioned, explicitly-sized, explicitly-serialized
 +// packet formats used between the Steam Deck client and the HTPC host. See

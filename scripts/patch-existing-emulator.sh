@@ -21,7 +21,7 @@
 # ccache/ninja-build/mold beforehand (e.g. `sudo dnf install ccache
 # ninja-build mold` on Fedora) for the biggest wins.
 #
-# Once built, point host/melonds-remote-host.sh's "Launch..." -> "Custom"
+# Once built, point host/dualdeck-host.sh's "Launch..." -> "Custom"
 # menu choice at the resulting binary -- see
 # host/internal/launch-custom-emulator.sh in a packaged release, or
 # just launch it directly with the right environment variables (see

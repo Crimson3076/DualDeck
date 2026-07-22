@@ -1,4 +1,4 @@
-# Project Scope: melonDS Remote Dual-Screen Client for Steam Deck
+# Project Scope: DualDeck (melonDS Remote) Dual-Screen Client for Steam Deck
 
 ## 1. Project Summary
 Develop a Linux-focused system that allows Nintendo DS games to run through melonDS on a Bazzite HTPC while using a Steam Deck as the complete handheld controller and lower display.

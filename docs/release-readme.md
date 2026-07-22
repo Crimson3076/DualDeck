@@ -1,4 +1,4 @@
-# melonDS Remote
+# DualDeck
 
 Play Nintendo DS games on your TV through melonDS while using a Steam
 Deck (or any Linux machine with a gamepad) as the handheld controller
@@ -7,13 +7,13 @@ and bottom screen.
 ## Quick start
 
 **Host** (the Linux PC/HTPC connected to your TV, running melonDS):
-double-click `host/melonds-remote-host.sh`. Pick "Launch melonDS now"
+double-click `host/dualdeck-host.sh`. Pick "Launch melonDS now"
 the first time -- it sets up anything it needs automatically, including
 on Bazzite/immutable systems. Pick "Add to Steam" if you want to launch
 it from Steam Big Picture/Gaming Mode with just a controller.
 
 **Client** (your Steam Deck, or any Linux x86_64 machine with a
-gamepad): double-click `client/melonds-remote-client.sh`. Same menu,
+gamepad): double-click `client/dualdeck-client.sh`. Same menu,
 same idea -- "Launch now" connects to a host on your network (it scans
 and shows a pick-a-host list), "Add to Steam" registers a Gaming Mode
 shortcut.

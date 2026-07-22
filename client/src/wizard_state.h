@@ -11,7 +11,7 @@
 
 namespace melonds_remote::client {
 
-// $HOME/.config/melonds-remote-client/setup_complete.txt, or empty if
+// $HOME/.config/dualdeck-client/setup_complete.txt, or empty if
 // $HOME isn't set (persistence then silently unavailable -- the wizard
 // runs every launch in that case, same fail-safe default as before this
 // existed).

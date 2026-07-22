@@ -11,7 +11,7 @@ instead.
 The client target requires an SDL3 development package
 (`libsdl3-dev`/`sdl3-devel`, or a local build with `SDL3Config.cmake` on
 `CMAKE_PREFIX_PATH`). If you only want to build/test the protocol and
-host (no display needed), pass `-DMELONDS_REMOTE_BUILD_CLIENT=OFF`
+host (no display needed), pass `-DDUALDECK_BUILD_CLIENT=OFF`
 (the default) -- see `docs/building.md`.
 
 ### Strict-warnings build fails with `-Werror`
@@ -24,15 +24,15 @@ section 22, code quality requirements aren't optional.
 
 ### `ctest` reports 0 tests
 
-You likely built with `-DMELONDS_REMOTE_BUILD_TESTS=OFF`. It defaults to
+You likely built with `-DDUALDECK_BUILD_TESTS=OFF`. It defaults to
 `ON`; check your CMake command line if you passed extra flags.
 
 ## Runtime problems (host)
 
 ### `bind (tcp): Address already in use`
 
-Another `melonds-remote-server` instance (or something else) is already
-listening on that port. Either stop it (`pkill melonds-remote-server`
+Another `dualdeck-host-service` instance (or something else) is already
+listening on that port. Either stop it (`pkill dualdeck-host-service`
 or find the PID with `ss -tlnp | grep 8760`) or pick different ports
 with `--control-port`/`--input-port`/`--video-port`.
 
@@ -59,7 +59,7 @@ entirely (e.g. scripted testing), pass
   **Approve** on the popup dialog).
 - If it keeps happening on every run instead of just the first: check
   that `$HOME` (or whatever the client is running as) is writable and
-  that `~/.config/melonds-remote-client/device_id.txt` is actually
+  that `~/.config/dualdeck-client/device_id.txt` is actually
   present after the first run -- a read-only home directory would make
   the client generate a brand-new (unapproved) identity every restart
   instead of reusing the same one. The same applies host-side to
@@ -224,7 +224,7 @@ These scripts are careful about editing Steam's binary `shortcuts.vdf`
 (see `scripts/lib/steam_shortcut.py`'s module docstring), but if
 something still goes wrong:
 
-- **Where to look first**: `~/.config/melonds-remote-client/install.log`
+- **Where to look first**: `~/.config/dualdeck-client/install.log`
   -- both scripts log every failure there with a timestamp and the exact
   command that failed, and (on SteamOS Desktop Mode/Bazzite, both KDE
   Plasma) pop up a `kdialog` error box too, specifically because
@@ -249,9 +249,9 @@ something still goes wrong:
 - **A failed install/update didn't lose my previous working shortcut**:
   `install-steam-shortcut.sh` stages the new files separately and only
   swaps them into place once staging succeeds, keeping the replaced
-  version as `~/.config/melonds-remote-client/install.previous` rather
+  version as `~/.config/dualdeck-client/install.previous` rather
   than deleting it outright -- if you ever need to manually go back to
-  it, move that directory back to `~/.config/melonds-remote-client/install`
+  it, move that directory back to `~/.config/dualdeck-client/install`
   yourself (with Steam closed).
 
 ## Diagnostics

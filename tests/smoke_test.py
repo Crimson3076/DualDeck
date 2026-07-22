@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end smoke test for host/remote-server.
 
-Starts the standalone `melonds-remote-server` binary, then exercises it as
+Starts the standalone `dualdeck-host-service` binary, then exercises it as
 a client would: TCP control handshake (with the negotiated Hello/HelloAck
 payload, including authentication), a UDP ControllerState packet, a
 malformed UDP packet (must be silently rejected, not crash the server), a
@@ -17,7 +17,7 @@ docs/architecture.md in isolation, per the acceptance criteria in
 docs/testing.md.
 
 Usage:
-    python3 tests/smoke_test.py /path/to/melonds-remote-server
+    python3 tests/smoke_test.py /path/to/dualdeck-host-service
 """
 
 import socket
@@ -342,6 +342,6 @@ def run(server_path: str) -> int:
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print(f"usage: {sys.argv[0]} /path/to/melonds-remote-server", file=sys.stderr)
+        print(f"usage: {sys.argv[0]} /path/to/dualdeck-host-service", file=sys.stderr)
         sys.exit(2)
     sys.exit(run(sys.argv[1]))

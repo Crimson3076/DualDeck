@@ -1,13 +1,13 @@
 {
-  "name": "melonds-remote-decky",
+  "name": "dualdeck-decky",
   "version": "0.1.0",
-  "description": "Start/stop melonDS Remote's streaming server from the Steam Deck Quick Access Menu.",
+  "description": "Start/stop DualDeck's streaming server from the Steam Deck Quick Access Menu.",
   "type": "module",
   "scripts": {
     "build": "rollup -c",
     "watch": "rollup -c -w"
   },
-  "author": "melonDS Remote contributors",
+  "author": "DualDeck contributors",
   "license": "BSD-3-Clause",
   "devDependencies": {
     "@decky/rollup": "^1.0.2",

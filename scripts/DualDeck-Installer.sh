@@ -32,7 +32,7 @@
 set -uo pipefail
 
 repo="Crimson3076/DualDeck"
-archive_name="melonds-remote-linux-x86_64.tar.gz"
+archive_name="dualdeck-linux-x86_64.tar.gz"
 log_file="${HOME}/.config/dualdeck-installer.log"
 
 log() {
@@ -251,7 +251,7 @@ install_client() {
     if "${extracted_dir}/client/internal/install-steam-shortcut.sh" "${force_flag[@]}"; then
         log "client install/repair succeeded"
     else
-        fail "Client installation failed. Details logged to ${HOME}/.config/melonds-remote-client/install.log and ${log_file}."
+        fail "Client installation failed. Details logged to ${HOME}/.config/dualdeck-client/install.log and ${log_file}."
     fi
 }
 
@@ -262,7 +262,7 @@ install_host() {
     if "${extracted_dir}/host/internal/install-steam-shortcut.sh" "${force_flag[@]}"; then
         log "host install/repair succeeded"
     else
-        fail "Host installation failed. Details logged to ${HOME}/.config/melonds-remote/install.log and ${log_file}."
+        fail "Host installation failed. Details logged to ${HOME}/.config/dualdeck/install.log and ${log_file}."
     fi
 }
 

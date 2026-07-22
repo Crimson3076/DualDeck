@@ -297,7 +297,7 @@ Qt6, SDL2, GCC 13) — not just written and assumed correct:
     added persisted `MelonDSRemote.*` Config keys (`Config.cpp`) mirroring
     each `MELONDS_REMOTE_*` env var, checked as a fallback whenever the
     matching env var isn't set (`EmuInstance.cpp`), plus an actual
-    checkbox -- **"Enable melonDS Remote (Steam Deck streaming)"** -- on
+    checkbox -- **"Enable DualDeck (Steam Deck streaming)"** -- on
     Emu Settings' General tab (`EmuSettingsDialog.ui`/`.cpp`) for
     `MelonDSRemote.Enable` specifically, the one setting that actually
     needs to be turned on rather than just have a sensible default.

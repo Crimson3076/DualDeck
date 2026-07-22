@@ -7,10 +7,30 @@
 
 namespace melonds_remote::client {
 
+namespace {
+
+// See device_identity.cpp's migrateFromLegacyPathIfNeeded() for the
+// full rationale -- same one-time melonDS-Remote -> DualDeck config-dir
+// migration, duplicated per file rather than shared.
+void migrateFromLegacyPathIfNeeded(const std::string& newPath, const std::string& legacyPath) {
+    std::error_code ec;
+    if (std::filesystem::exists(newPath, ec)) return;
+    if (!std::filesystem::exists(legacyPath, ec)) return;
+    std::filesystem::path path(newPath);
+    if (path.has_parent_path()) {
+        std::filesystem::create_directories(path.parent_path(), ec);
+    }
+    std::filesystem::copy_file(legacyPath, newPath, std::filesystem::copy_options::none, ec);
+}
+
+} // namespace
+
 std::string defaultClientSettingsPath() {
     const char* home = std::getenv("HOME");
     if (!home || !*home) return {};
-    return std::string(home) + "/.config/melonds-remote-client/settings.conf";
+    std::string newPath = std::string(home) + "/.config/dualdeck-client/settings.conf";
+    migrateFromLegacyPathIfNeeded(newPath, std::string(home) + "/.config/melonds-remote-client/settings.conf");
+    return newPath;
 }
 
 ClientSettings loadClientSettings(const std::string& settingsPath) {
