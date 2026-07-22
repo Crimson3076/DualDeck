@@ -4024,6 +4024,65 @@ latency/smoothness on real hardware yet -- that needs the user's own
 playtest, which is the whole reason `AZAHAR_REMOTE_CAPTURE_FPS` exists
 as a same-build, no-rebuild-needed knob.
 
+## Latency: tightened the two cheap-to-poll relay stages
+
+**Context**: after the bandwidth/framerate fixes above, the user
+confirmed "FPS is better. but latency is still noticable." Re-reading
+the pipeline end to end (`AzaharAdapter::captureLoop()` ->
+`AdapterIpcClient::writeLoop()` -> `AdapterIpcServer` ->
+`AdapterBridge::getLatestFrame()` -> `NetServer::videoLoop()` ->
+`NetClient`) shows three separate polling stages stacked in series,
+each adding up to its own poll interval of worst-case delay before a
+newly captured frame reaches the client:
+
+1. `AzaharAdapter::captureLoop()`'s interval -- has a real GPU cost per
+   poll (each one is an actual `RequestScreenshot()` call), already
+   tuned in the round above and deliberately left alone here.
+2. `AdapterIpcClient::writeLoop()`'s poll interval -- cheap: each
+   iteration that finds nothing new is just a mutex-guarded
+   struct/vector copy and comparison, no IPC message sent.
+3. `NetServer::videoLoop()`'s tick rate -- also cheap now, and *only*
+   cheap because of the dedup fix above: a tick that finds an unchanged
+   `frameIndex` is now a free no-op (no packet sent), where before this
+   session's earlier fix it would have sent a duplicate frame on every
+   single tick.
+
+Since (2) and (3) are now both free when they find nothing new, there's
+no bandwidth cost to polling them far more often than frames actually
+arrive -- only a (correspondingly small) reduction in the worst-case
+relay delay. Changed:
+
+- `AdapterIpcClient::writeLoop()`'s `kPollInterval`: 16ms -> 4ms, in
+  both the native source-of-truth copy
+  (`adapter-sdk/ipc/src/adapter_ipc_client.cpp`) and the Azahar-vendored
+  copy inside `host/azahar-patches/0001-remote-server-integration.patch`.
+  melonDS's own separately-vendored copy of this same file was
+  deliberately **not** touched in this pass -- host-control mode is a
+  separate, already-experimental path, and the user's reported issue is
+  specifically the Azahar/3DS video pipeline.
+- `NetServerConfig::videoSendFps`: 60 -> 240, in
+  `host/remote-server/include/host/net_server.h`. Its doc comment was
+  rewritten to describe it as a polling-responsiveness knob rather than
+  a send-rate cap, since that's now what it actually controls.
+
+**Not touched in this round, and likely the larger remaining lever**:
+stage 1 above (Azahar's own capture interval, GPU-cost-bound, already
+tuned last round) and the physical network link itself -- video is
+still raw uncompressed BGRA8888 over TCP, and round-trip time between
+host and client (WiFi vs. wired, physical proximity) is entirely outside
+this project's control and wasn't something this sandbox could measure.
+If tightening the two relay-stage polls here doesn't fully resolve the
+report, compressing the video stream and/or asking about network
+topology are the next things to try.
+
+**Verified**: full `ctest` suite passes with both native-side changes.
+The regenerated Azahar patch applies cleanly to a fresh checkout of the
+pinned commit and compiles (`citra_meta` target, full rebuild) with the
+diff against the previously committed patch confirmed to touch only the
+intended `kPollInterval` lines. Not yet confirmed to actually reduce
+perceived latency on real hardware -- that needs the user's own
+playtest.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

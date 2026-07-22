@@ -220,12 +220,18 @@ void AdapterIpcClient::readLoop() {
 }
 
 void AdapterIpcClient::writeLoop() {
-    // ~60Hz poll -- not tied to any one declared surface's own
+    // ~250Hz poll -- not tied to any one declared surface's own
     // nominalFps/maxFps (an adapter may have surfaces at different
     // rates); this just governs how often writeLoop() checks whether
     // there's anything new to send, not how often frames actually
-    // change.
-    constexpr auto kPollInterval = std::chrono::milliseconds(16);
+    // change. Each iteration that finds nothing new (the per-surface
+    // lastSentFrameIndex_ check below) is just a mutex-guarded
+    // struct/vector copy and comparison -- no message is sent -- so
+    // polling this often costs CPU wakeups, not bandwidth. Kept well
+    // below the video-loop's own tick rate on the host side
+    // (NetServerConfig::videoSendFps) so this stage is never the
+    // bottleneck in the capture -> IPC -> relay -> send latency chain.
+    constexpr auto kPollInterval = std::chrono::milliseconds(4);
     constexpr auto kHeartbeatInterval = std::chrono::seconds(1);
     auto lastHeartbeat = std::chrono::steady_clock::now();
 

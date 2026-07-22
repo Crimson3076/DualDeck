@@ -53,7 +53,15 @@ struct NetServerConfig {
     uint16_t inputPort = 8761;
     uint16_t videoPort = 8762;
     uint64_t inputTimeoutUs = 500'000; // 500ms, spec section 6.4 / 7.1
-    int videoSendFps = 60;
+    // How often videoLoop() checks frameSource_->getLatestFrame() for a
+    // new frame index -- NOT a bandwidth cap. Since net_server.cpp's
+    // dedup guard skips re-sending an unchanged frameIndex, a tick that
+    // finds nothing new costs one mutex-guarded comparison and never
+    // touches the socket. Raising this only shrinks the worst-case delay
+    // between a new frame becoming available and this loop noticing it
+    // (relay latency); it does not raise actual send rate, which is
+    // still bounded by how fast frameSource_ itself produces new frames.
+    int videoSendFps = 240;
 
     // Whether this host accepts MicAudioFrame packets at all (GitHub
     // issue #2) -- an explicit host-side on/off switch (like
