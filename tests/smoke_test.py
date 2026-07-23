@@ -266,7 +266,12 @@ def run(server_path: str) -> int:
         vheader = recv_exact(video, 12)
         vmagic, _, vtype, vsize = struct.unpack("<IHHI", vheader)
         assert vmagic == MAGIC and vtype == PT_VIDEO_FRAME
-        assert vsize == FRAME_BYTES, f"expected {FRAME_BYTES} byte frame, got {vsize}"
+        # Protocol v8: the payload is JPEG-compressed and varies with scene
+        # content (see docs/protocol.md's "Video payload" section), so this
+        # can no longer assert an exact size -- just the same sanity bound
+        # NetClient::videoReceiveLoop() itself applies (net_client.cpp):
+        # non-empty, and no bigger than the uncompressed frame would be.
+        assert 0 < vsize <= FRAME_BYTES, f"expected a 1..{FRAME_BYTES} byte JPEG frame, got {vsize}"
         recv_exact(video, vsize)
         video.close()
         print(f"[ok] received a {vsize}-byte video frame")
