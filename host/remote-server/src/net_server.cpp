@@ -127,10 +127,22 @@ bool constantTimeEquals(const std::string& a, const std::string& b) {
 // malformed width/height.
 bool compressFrameBgraToJpeg(tjhandle compressor, const uint8_t* bgra, int width, int height,
                               int quality, ByteBuffer& outJpeg) {
+    // 4:2:0 chroma subsampling (half resolution in both chroma axes) is
+    // invisible at typical photo/game content and quality settings, but
+    // real-world feedback on DS/3DS -- small enough surfaces that
+    // bandwidth was never the constraint compression exists for -- found
+    // it visibly softens sharp pixel-art edges and text even at quality
+    // 100, since subsampling is a structural choice independent of the
+    // quality scalar. At a high requested quality (client is explicitly
+    // asking for close-to-lossless, protocol v9's HelloPayload::
+    // videoQuality), use full-resolution 4:4:4 chroma instead -- still
+    // cheap at these frame sizes -- so "quality" actually reaches
+    // full fidelity rather than being capped by subsampling artifacts.
+    const TJSAMP subsampling = quality >= 90 ? TJSAMP_444 : TJSAMP_420;
     unsigned char* jpegBuf = nullptr;
     unsigned long jpegSize = 0;
     int result = tjCompress2(compressor, bgra, width, /*pitch=*/0, height, TJPF_BGRA,
-                              &jpegBuf, &jpegSize, TJSAMP_420, quality, TJFLAG_FASTDCT);
+                              &jpegBuf, &jpegSize, subsampling, quality, TJFLAG_FASTDCT);
     if (result != 0) {
         std::fprintf(stderr, "NetServer: tjCompress2 failed: %s\n", tjGetErrorStr2(compressor));
         return false;
@@ -160,7 +172,8 @@ NetServer::NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFra
       currentSystemIdentity_(config_.systemIdentity), currentAdapterIdentity_(config_.adapterIdentity),
       micSink_(micSink),
       deviceApproval_(config_.approvalStateFilePath, config_.pendingRequestTtl),
-      rateLimiter_(config_.maxConnectionAttemptsPerWindow, config_.connectionAttemptWindowUs) {
+      rateLimiter_(config_.maxConnectionAttemptsPerWindow, config_.connectionAttemptWindowUs),
+      currentVideoQuality_(config_.videoJpegQuality) {
     if (!config_.authToken.empty()) {
         std::fprintf(stderr,
                       "NetServer: static auth token configured -- device-approval flow is disabled, "
@@ -463,6 +476,15 @@ void NetServer::controlLoop() {
                                 rejectReason = HelloRejectReason::ApprovalRequired;
                                 break;
                         }
+                    }
+
+                    if (handshakeOk) {
+                        // Protocol v9: an in-range client request wins; 0 (or
+                        // an out-of-range value from a misbehaving client)
+                        // falls back to this host's own configured default.
+                        currentVideoQuality_ = (hello->videoQuality >= 1 && hello->videoQuality <= 100)
+                                                   ? hello->videoQuality
+                                                   : config_.videoJpegQuality;
                     }
                 } else {
                     std::fprintf(stderr, "NetServer: rejecting handshake (short Hello payload)\n");
@@ -864,15 +886,25 @@ void NetServer::videoLoop() {
         // any adapter in this project uses) -- but what actually goes out
         // over the wire since protocol v8 is a JPEG-compressed frame (see
         // compressFrameBgraToJpeg() above), typically well under a quarter
-        // of that raw size at videoJpegQuality's default of 80 on real game
-        // content. Sizing this buffer off the true raw size would let the
-        // exact bufferbloat this SO_SNDBUF sizing exists to prevent creep
-        // back in, just at a smaller absolute scale -- so this estimates a
-        // conservative quarter-of-raw compressed size instead. Floored so
-        // tiny (e.g. test-fixture) frame sizes still get a workable buffer.
+        // of that raw size at the mid-range qualities a bandwidth-
+        // constrained session (e.g. Cemu) would actually use. Sizing this
+        // buffer off the true raw size would let the exact bufferbloat
+        // this SO_SNDBUF sizing exists to prevent creep back in, just at a
+        // smaller absolute scale -- so this estimates a conservative
+        // fraction of raw size instead, floored so tiny (e.g. test-
+        // fixture) frame sizes still get a workable buffer. Protocol v9's
+        // per-session HelloPayload::videoQuality means that fraction can
+        // no longer assume quality 80's compression ratio -- a
+        // near-lossless request (>=90, see compressFrameBgraToJpeg()'s own
+        // 4:4:4-subsampling threshold) compresses far less aggressively,
+        // so this halves rather than quarters the raw estimate there to
+        // avoid under-sizing the buffer for a case this code didn't need
+        // to account for before per-session quality existed.
         {
             const size_t rawFrameBytes = static_cast<size_t>(frameWidth) * frameHeight * 4;
-            const size_t estimatedCompressedFrameBytes = std::max<size_t>(rawFrameBytes / 4, 16384);
+            const size_t rawFrameDivisor = currentVideoQuality_.load() >= 90 ? 2 : 4;
+            const size_t estimatedCompressedFrameBytes =
+                std::max<size_t>(rawFrameBytes / rawFrameDivisor, 16384);
             if (rawFrameBytes > 0) {
                 int sndBuf = static_cast<int>(std::min<size_t>(estimatedCompressedFrameBytes * 2, 0x7fffffff));
                 ::setsockopt(clientFd, SOL_SOCKET, SO_SNDBUF, &sndBuf, sizeof(sndBuf));
@@ -907,7 +939,7 @@ void NetServer::videoLoop() {
                 gotFrame = false;
             }
             if (gotFrame && !compressFrameBgraToJpeg(jpegCompressor, frame.data(), frameWidth, frameHeight,
-                                                      config_.videoJpegQuality, jpegFrame)) {
+                                                      currentVideoQuality_.load(), jpegFrame)) {
                 // Logged inside compressFrameBgraToJpeg(); skip this tick
                 // rather than tearing down the connection, same treatment
                 // as "nothing new to send" below -- a transient encode

@@ -43,7 +43,7 @@ import tempfile
 import time
 
 MAGIC = 0x444D5231
-VERSION = 8
+VERSION = 9
 
 PT_HELLO = 1
 PT_HELLO_ACK = 2
@@ -65,9 +65,14 @@ def hello_payload(name: str, platform: str, width: int, height: int, device_id: 
     # Trailing empty appVersion: this server is never started with
     # --app-version, so the AppVersionMismatch check is skipped regardless
     # of what's sent here -- see protocol.h's HelloPayload::appVersion.
+    #
+    # Final 0 byte: HelloPayload::videoQuality (protocol v9) -- 0 means
+    # "defer to the host's own configured default," irrelevant to what
+    # this file actually tests (device approval, not video).
     return (
         lp_string(name) + lp_string(platform) + struct.pack("<HH", width, height) + lp_string(device_id)
         + lp_string("")
+        + struct.pack("<B", 0)
     )
 
 

@@ -13,7 +13,7 @@ same fixed-size header.
 | Offset | Size | Field            | Notes                                   |
 |-------:|-----:|------------------|------------------------------------------|
 | 0      | 4    | `magic`          | Always `0x444D5231` ("DMR1"). Packets with any other value are rejected before further parsing. |
-| 4      | 2    | `protocolVersion`| Currently `8` (bumped from `7` when `VideoFrame`'s payload changed from a raw pixel buffer to a JPEG-compressed image -- see "Video payload" below; `7` itself had bumped from `6` when `HelloAckPayload.mode` was added, GitHub issue #4 Phase E -- see "HelloAck payload" below; `6` itself had bumped from `5` when `HelloAckPayload.system`/`.adapter` and `DiscoveryResponsePayload.system`/`.adapter` were added for the emulator identity model, GitHub issue #28 -- see "Emulator identity model" below; `5` itself had bumped from `4` when `HelloAckPayload.micSupported` and `DiscoveryResponsePayload.audioPort` were added for microphone support, GitHub issue #2 -- see "MicAudioFrame payload" below; `4` itself had bumped from `3` when `HelloPayload.appVersion`/`HelloAckPayload.appVersion` were added and `HelloRejectReason::AppVersionMismatch` was introduced -- see "App version mismatch" below; `3` itself had bumped from `2` when `HelloAckPayload.pairingToken` was removed and `HelloRejectReason::PairingRequired` was renamed to `ApprovalRequired`, moving from a typed-code pairing flow to device-approval; `2` itself had bumped from `1` when those pairing-code fields were first added). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
+| 4      | 2    | `protocolVersion`| Currently `9` (bumped from `8` when `HelloPayload.videoQuality` was added, letting the client request its own session's JPEG quality instead of always getting the host's one configured default -- see "Hello payload"/"Video payload" below; `8` itself had bumped from `7` when `VideoFrame`'s payload changed from a raw pixel buffer to a JPEG-compressed image -- see "Video payload" below; `7` itself had bumped from `6` when `HelloAckPayload.mode` was added, GitHub issue #4 Phase E -- see "HelloAck payload" below; `6` itself had bumped from `5` when `HelloAckPayload.system`/`.adapter` and `DiscoveryResponsePayload.system`/`.adapter` were added for the emulator identity model, GitHub issue #28 -- see "Emulator identity model" below; `5` itself had bumped from `4` when `HelloAckPayload.micSupported` and `DiscoveryResponsePayload.audioPort` were added for microphone support, GitHub issue #2 -- see "MicAudioFrame payload" below; `4` itself had bumped from `3` when `HelloPayload.appVersion`/`HelloAckPayload.appVersion` were added and `HelloRejectReason::AppVersionMismatch` was introduced -- see "App version mismatch" below; `3` itself had bumped from `2` when `HelloAckPayload.pairingToken` was removed and `HelloRejectReason::PairingRequired` was renamed to `ApprovalRequired`, moving from a typed-code pairing flow to device-approval; `2` itself had bumped from `1` when those pairing-code fields were first added). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
 | 6      | 2    | `packetType`     | See table below.                        |
 | 8      | 4    | `payloadSize`    | Size of the payload that follows, in bytes. Receivers must verify this matches the number of bytes actually available before parsing the payload. |
 
@@ -99,14 +99,25 @@ table, not part of the wire format.
 ## Video payload
 
 Protocol v8: the payload is a JPEG-compressed image (libjpeg-turbo's
-turbojpeg API, quality configurable via
-`NetServerConfig::videoJpegQuality`, default 80), one frame's worth of
-whatever pixel dimensions the connected adapter's `frameDimensions()`
-reports (see the "Emulator identity model" section below for how a
-non-DS-sized adapter's dimensions reach the client). `payloadSize` varies
-frame to frame with scene content, unlike every payload elsewhere in this
-protocol -- receivers must not assume a fixed expected size the way older
-versions of this protocol's client did.
+turbojpeg API), one frame's worth of whatever pixel dimensions the
+connected adapter's `frameDimensions()` reports (see the "Emulator
+identity model" section below for how a non-DS-sized adapter's
+dimensions reach the client). `payloadSize` varies frame to frame with
+scene content, unlike every payload elsewhere in this protocol --
+receivers must not assume a fixed expected size the way older versions
+of this protocol's client did.
+
+Quality defaults to `NetServerConfig::videoJpegQuality` (80), but
+protocol v9's `HelloPayload::videoQuality` (see "Hello payload" above)
+lets the connecting client request a different value for its own
+session -- added after a single host-wide default turned out to
+over-compress DS/3DS, whose small frame sizes have bandwidth to spare
+that a large, often link-constrained Cemu session would not. At a
+requested quality of 90 or higher, chroma subsampling switches from
+4:2:0 to 4:4:4 (`net_server.cpp`'s `compressFrameBgraToJpeg()`) so a
+"maximum quality" request isn't still capped by subsampling artifacts on
+sharp pixel-art edges/text -- the quality scalar alone doesn't control
+that.
 
 **Before v7 (raw pixel buffer, retained here for history)**: the payload
 used to be an uncompressed pixel buffer, `width * height * 4` bytes,
@@ -333,6 +344,7 @@ declared length that would run past the end of the received buffer.
 | `displayHeight`   | `u16`         | Client's display height in pixels. Not currently used by the host. |
 | `authToken`       | length-prefixed string | See "Authentication and device approval" below -- meaning depends on whether the host has a static `--auth-token` configured. |
 | `appVersion`      | length-prefixed string | This client's release version (e.g. "v0.1.24"), from `MELONDS_REMOTE_VERSION`/the archive's `VERSION` file. Distinct from `protocolVersion` above -- see "App version mismatch" below. Empty on a from-source dev build with no wrapper script setting it. |
+| `videoQuality`    | `u8`          | Added in protocol v9. JPEG quality (1-100, libjpeg-turbo's `tjCompress2` scale) this client wants its video compressed at for the session, or `0` to defer to the host's own `NetServerConfig::videoJpegQuality`. An out-of-range nonzero value is treated the same as `0`. Applied once, at handshake time -- there is no packet type for changing it without reconnecting. See "Video payload"'s JPEG-compression note for why this exists: a single host-wide default over-compressed DS/3DS, whose small frame sizes have bandwidth to spare that a Cemu-sized session over a slow link would not. |
 
 The whole `Hello` payload is capped at 512 bytes by the host before it will
 even attempt to parse it, so a hostile `payloadSize` can't be used to make

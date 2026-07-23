@@ -353,6 +353,16 @@ private:
     // unauthenticated input).
     std::atomic<bool> clientAuthenticated_{false};
     std::atomic<uint32_t> authenticatedClientAddr_{0}; // sockaddr_in::sin_addr.s_addr, network byte order
+
+    // The effective JPEG quality for the current/most recent session --
+    // either config_.videoJpegQuality, or the connecting client's own
+    // HelloPayload::videoQuality if it sent a nonzero one (protocol v9).
+    // Set once at handshake time, alongside clientAuthenticated_ above;
+    // videoLoop() reads it when a new video connection arrives. Same
+    // single-active-client assumption as the rest of this class (see
+    // clientAuthenticated_'s comment) -- there is no per-connection state
+    // here, just the most recent handshake's outcome.
+    std::atomic<int> currentVideoQuality_{80};
 };
 
 } // namespace melonds_remote::host

@@ -22,6 +22,14 @@ namespace melonds_remote {
 
 // Bumped whenever the wire format changes incompatibly.
 //
+// v9: HelloPayload gained videoQuality, letting the client (not just the
+// host's own --video-quality flag) choose the JPEG quality used for that
+// session -- see its own comment below for why. v8's fixed default (80)
+// turned out too aggressive for DS/3DS, whose small frame sizes have
+// plenty of bandwidth headroom to spare for a much higher-fidelity
+// setting, unlike the large-surface link-constrained case v8 was written
+// for.
+//
 // v8: VideoFrame's payload is now a JPEG-compressed image (libjpeg-turbo,
 // TJPF_BGRA) instead of a raw BGRA8888 buffer -- see net_server.cpp's
 // videoLoop() and net_client.cpp's videoReceiveLoop(). A raw
@@ -32,7 +40,7 @@ namespace melonds_remote {
 // negotiating an optional codec keeps both sides simple, matching how
 // every other incompatible wire-format change in this project has been
 // handled (see the mic-support v5 bump above).
-inline constexpr uint16_t kProtocolVersion = 8;
+inline constexpr uint16_t kProtocolVersion = 9;
 
 // Sentinel at the start of every packet so malformed/foreign traffic on the
 // same port can be rejected cheaply before any further parsing.
@@ -213,6 +221,19 @@ struct HelloPayload {
     // packaged via scripts/build-release.sh) -- see net_server.cpp's
     // comparison logic for how an empty value on either side is handled.
     std::string appVersion;
+
+    // JPEG quality (1-100, libjpeg-turbo's tjCompress2 scale) the client
+    // wants this session's video compressed at, or 0 to defer to whatever
+    // the host is configured with (NetServerConfig::videoJpegQuality --
+    // see net_server.cpp's compressFrameBgraToJpeg()). Added (protocol
+    // v9) after v8's fixed default of 80 turned out to over-compress
+    // DS/3DS: those surfaces are small enough that bandwidth was never
+    // the constraint compression was introduced for, so a client
+    // streaming from one has plenty of headroom to ask for much higher
+    // fidelity than a Cemu-sized surface over a slow link would want.
+    // Applied once, at handshake time, for this session's whole lifetime
+    // -- there's no packet type for changing it without reconnecting.
+    uint8_t videoQuality = 0;
 };
 
 enum class HelloRejectReason : uint8_t {

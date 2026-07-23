@@ -23,6 +23,16 @@ struct ClientSettings {
     // the device, it just stops sending captured audio to the host, so
     // the level meter still works while muted.
     bool micMuted = false;
+
+    // JPEG quality (1-100) requested for this session's video (protocol
+    // v9, HelloPayload::videoQuality), or 0 to defer to the host's own
+    // configured default. 80 was a reasonable one-size-fits-all default
+    // when introduced for Cemu's much larger, often bandwidth-constrained
+    // GamePad surface, but turned out to over-compress DS/3DS, whose
+    // small frame sizes have bandwidth to spare -- this lets a user
+    // dial it back up (or down further, for a genuinely slow link)
+    // per client rather than being stuck with one host-wide value.
+    int videoQuality = 0;
 };
 
 // $HOME/.config/dualdeck-client/settings.conf, or empty if HOME is

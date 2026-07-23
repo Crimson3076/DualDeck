@@ -213,6 +213,7 @@ void serializeHelloPayload(ByteBuffer& out, const HelloPayload& hello) {
     appendU16(out, hello.displayHeight);
     appendString(out, hello.authToken);
     appendString(out, hello.appVersion);
+    out.push_back(hello.videoQuality);
 }
 
 std::optional<HelloPayload> parseHelloPayload(const uint8_t* data, size_t size) {
@@ -242,6 +243,9 @@ std::optional<HelloPayload> parseHelloPayload(const uint8_t* data, size_t size) 
     auto version = readString(data, size, offset);
     if (!version) return std::nullopt;
     hello.appVersion = std::move(*version);
+
+    if (offset + 1 > size) return std::nullopt;
+    hello.videoQuality = data[offset]; offset += 1;
 
     if (offset != size) {
         // trailing garbage: reject rather than silently ignore

@@ -44,6 +44,12 @@ struct NetClientConfig {
     // this connection regardless of what the host itself is running.
     std::string appVersion;
 
+    // JPEG quality (1-100) to request for this session's video, or 0 to
+    // defer to the host's own configured default. See
+    // melonds_remote::HelloPayload::videoQuality's comment; set from
+    // ClientSettings::videoQuality in main.cpp.
+    uint8_t videoQuality = 0;
+
     // How often to send a Heartbeat packet on the control channel while
     // otherwise idle, so the host's control-channel timeout doesn't fire
     // on a live-but-quiet connection.

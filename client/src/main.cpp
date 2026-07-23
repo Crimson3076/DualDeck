@@ -1600,6 +1600,13 @@ int main(int argc, char** argv) {
             renderConnecting(renderer, netConfig.hostAddress);
         }
 
+        // Read fresh every time a NetClient is (re)constructed, not just
+        // once at startup, so picking a new VIDEO QUALITY in Settings and
+        // then reconnecting (CHANGE HOST, or a dropped connection) takes
+        // effect without needing to relaunch -- see settingsMenuItems()'s
+        // cycleVideoQuality() below for how clientSettings.videoQuality
+        // gets changed.
+        netConfig.videoQuality = static_cast<uint8_t>(clientSettings.videoQuality);
         NetClient net(netConfig);
 
         // Auto-reconnect (spec section 7.2): connect() does several blocking
@@ -1706,10 +1713,23 @@ int main(int argc, char** argv) {
         uint32_t micSequence = 0;
         float micLevel = 0.0f;
 
+        // Labels the current ClientSettings::videoQuality value for the
+        // settings menu -- a handful of named presets rather than a raw
+        // number, matching this menu's cycle-through-fixed-choices style
+        // (MICROPHONE:/AUTO UPDATE ON LAUNCH: above) instead of a
+        // continuous slider this text UI has no widget for.
+        auto videoQualityLabel = [](int quality) -> std::string {
+            if (quality == 0) return "AUTO";
+            if (quality <= 40) return "LOW (SLOWEST LINKS)";
+            if (quality <= 65) return "MEDIUM";
+            if (quality <= 85) return "HIGH";
+            return "MAXIMUM (LARGEST)";
+        };
         auto settingsMenuItems = [&]() {
             std::vector<std::string> items{
                 std::string("AUTO UPDATE ON LAUNCH: ") +
                     (clientSettings.autoUpdateOnLaunch ? "ON" : "OFF"),
+                std::string("VIDEO QUALITY: ") + videoQualityLabel(clientSettings.videoQuality),
             };
             if (!hostExplicit) items.push_back("RUN SETUP WIZARD");
             if (net.hostMicSupported()) {
@@ -1720,6 +1740,25 @@ int main(int argc, char** argv) {
             }
             items.push_back("BACK");
             return items;
+        };
+        // Cycles clientSettings.videoQuality through a fixed set of
+        // presets (see videoQualityLabel above), wrapping back to AUTO.
+        // Only takes effect on the next connection (see netConfig.
+        // videoQuality's own comment above, near NetClient's
+        // construction) -- there's no packet type for changing an
+        // already-connected session's compression quality.
+        auto cycleVideoQuality = [&]() {
+            static constexpr int kPresets[] = {0, 40, 65, 85, 100};
+            constexpr int kPresetCount = static_cast<int>(sizeof(kPresets) / sizeof(kPresets[0]));
+            int currentIndex = 0;
+            for (int i = 0; i < kPresetCount; ++i) {
+                if (kPresets[i] == clientSettings.videoQuality) {
+                    currentIndex = i;
+                    break;
+                }
+            }
+            clientSettings.videoQuality = kPresets[(currentIndex + 1) % kPresetCount];
+            settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
         };
         // Cycles clientSettings.micDeviceName to the next enumerated
         // recording device (wrapping back to "SYSTEM DEFAULT"), saves,
@@ -1913,6 +1952,8 @@ int main(int argc, char** argv) {
                             if (picked.rfind("AUTO UPDATE ON LAUNCH:", 0) == 0) {
                                 clientSettings.autoUpdateOnLaunch = !clientSettings.autoUpdateOnLaunch;
                                 settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
+                            } else if (picked.rfind("VIDEO QUALITY:", 0) == 0) {
+                                cycleVideoQuality();
                             } else if (picked == "RUN SETUP WIZARD") {
                                 setupWizardRequested = true;
                                 runningInner = false;
@@ -1986,6 +2027,8 @@ int main(int argc, char** argv) {
                                 if (picked.rfind("AUTO UPDATE ON LAUNCH:", 0) == 0) {
                                     clientSettings.autoUpdateOnLaunch = !clientSettings.autoUpdateOnLaunch;
                                     settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
+                                } else if (picked.rfind("VIDEO QUALITY:", 0) == 0) {
+                                    cycleVideoQuality();
                                 } else if (picked == "RUN SETUP WIZARD") {
                                     setupWizardRequested = true;
                                     runningInner = false;

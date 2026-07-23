@@ -27,7 +27,7 @@ import sys
 import time
 
 MAGIC = 0x444D5231
-VERSION = 8
+VERSION = 9
 
 PT_HELLO = 1
 PT_HELLO_ACK = 2
@@ -59,12 +59,17 @@ def hello_payload(name: str, platform: str, width: int, height: int, token: str,
     # app_version left empty by default: an empty appVersion on either side
     # skips the AppVersionMismatch check entirely (see protocol.h), which is
     # what every test below except a dedicated version-mismatch case wants.
+    #
+    # Trailing 0 byte: HelloPayload::videoQuality (protocol v9) -- 0 means
+    # "defer to the host's own configured default," which is what every
+    # test here wants (none of them exercise video compression directly).
     return (
         lp_string(name)
         + lp_string(platform)
         + struct.pack("<HH", width, height)
         + lp_string(token)
         + lp_string(app_version)
+        + struct.pack("<B", 0)
     )
 
 

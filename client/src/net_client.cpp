@@ -171,6 +171,7 @@ bool NetClient::connect() {
     helloPayload.displayHeight = config_.displayHeight;
     helloPayload.authToken = config_.authToken;
     helloPayload.appVersion = config_.appVersion;
+    helloPayload.videoQuality = config_.videoQuality;
     ByteBuffer hello = buildHelloPacket(helloPayload);
     if (!sendAll(controlFd_, hello.data(), hello.size())) {
         std::fprintf(stderr, "failed to send Hello\n");

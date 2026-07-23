@@ -4792,6 +4792,72 @@ original "unwanted extra window" complaint likely means rendering
 instead of a real window swapchain, a nontrivial Cemu-rendering change
 outside this fix's scope.
 
+## 2026-07-23: Per-client video quality setting (protocol v9) -- JPEG compression was too aggressive for DS/3DS
+
+Follow-up to the JPEG compression entry above. Reported after real use:
+"now compression is too much in DS and 3DS, client should have settings
+to control video compression amount. allowing full resolution down to
+quite compressed." Root cause: `NetServerConfig::videoJpegQuality`'s
+default of 80 was tuned for Cemu's much larger, often bandwidth-
+constrained GamePad surface -- exactly the case compression was
+introduced to fix -- but DS (256x192) and 3DS (320x240) frames are small
+enough that bandwidth was never the constraint, so the same fixed
+quality just threw away fidelity those sessions had no need to sacrifice.
+
+Fixed by adding `HelloPayload::videoQuality` (protocol v8 -> v9): the
+client now requests a quality (1-100) for its own session at handshake
+time, or `0` to defer to the host's configured default; an out-of-range
+value falls back the same way. `NetServer` stores the effective value in
+`currentVideoQuality_`, set once per handshake (this project's existing
+single-active-client assumption, same as `authenticatedClientAddr_`) and
+read by `videoLoop()` for every frame of that session -- see
+`net_server.cpp`. Client-side, `ClientSettings::videoQuality` persists
+the choice (`~/.config/dualdeck-client/settings.conf`'s `video_quality=`
+line) and a new "VIDEO QUALITY" entry in the Settings menu cycles through
+five presets (AUTO, LOW, MEDIUM, HIGH, MAXIMUM = 0/40/65/85/100) --
+matching this menu's existing cycle-through-fixed-choices style
+(MICROPHONE:, AUTO UPDATE ON LAUNCH:) rather than a continuous slider
+this text UI has no widget for. Takes effect on the next connection, not
+immediately -- there is no packet type for changing an already-connected
+session's compression quality, and reconnecting to pick up a Settings
+change is consistent with how e.g. CHANGE HOST already works.
+
+Also fixed alongside the quality knob, since "full resolution" fidelity
+was specifically requested: at quality >= 90, `compressFrameBgraToJpeg()`
+switches JPEG chroma subsampling from 4:2:0 to 4:4:4. Subsampling is a
+structural choice independent of the quality scalar -- even quality 100
+with 4:2:0 subsampling visibly softens sharp pixel-art edges/text, which
+a "maximum quality" request should not still be capped by. The SO_SNDBUF
+sizing estimate (see the JPEG-compression entry above) was widened
+correspondingly at quality >= 90, since 4:4:4's larger compressed output
+would otherwise be under-estimated by the heuristic tuned for the
+default quality's 4:2:0 case.
+
+## 2026-07-23: Cemu GamePad screen flashes between "connecting" and host-control, controls don't work -- root cause not yet found
+
+Reported after the v2.6-based Cemu build was first tested for real:
+"Wii U second screen still does not work, it flashes between the
+connecting to host and host control screen, without actually showing
+the game menu or controls working." This describes the *client's own UI*
+oscillating between its "CONNECTING..." state and its HostControl-mode
+screen (the one shown when no emulator adapter is connected and the
+client is just driving the host's own input directly) -- which, per
+`ModeCoordinator`'s design (see the Host Service architecture ADR), only
+happens if the host repeatedly gains and loses its adapter connection to
+Cemu. `RemoteServerBridge`'s `AdapterIpcClient` already has a
+reconnect-with-backoff loop for exactly this kind of transient failure
+(`host/cemu-patches/0001-remote-server-integration.patch`, mirroring
+Azahar's own equivalent loop) -- consistent with what's described, but
+this project has no way to reproduce Cemu locally (no sandbox access to
+build/run it, confirmed repeatedly throughout this integration's
+development), so the actual cause of *why* the IPC connection keeps
+dropping is unconfirmed: could be Cemu itself crash-looping, a socket
+permission/path issue specific to the v2.6 rebase, a timing race between
+Cemu's own startup and the host adapter-socket becoming ready, or
+something else. Needs the host-service process's own stderr/console
+output captured during the flashing to diagnose further -- not
+speculatively fixed here.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

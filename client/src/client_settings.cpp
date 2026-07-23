@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 
 namespace melonds_remote::client {
@@ -43,6 +44,7 @@ ClientSettings loadClientSettings(const std::string& settingsPath) {
         constexpr const char* kAutoUpdatePrefix = "auto_update_on_launch=";
         constexpr const char* kMicDevicePrefix = "mic_device_name=";
         constexpr const char* kMicMutedPrefix = "mic_muted=";
+        constexpr const char* kVideoQualityPrefix = "video_quality=";
 
         if (line.rfind(kAutoUpdatePrefix, 0) == 0) {
             std::string value = line.substr(std::char_traits<char>::length(kAutoUpdatePrefix));
@@ -59,6 +61,19 @@ ClientSettings loadClientSettings(const std::string& settingsPath) {
                 settings.micMuted = true;
             } else if (value == "0" || value == "false" || value == "off") {
                 settings.micMuted = false;
+            }
+        } else if (line.rfind(kVideoQualityPrefix, 0) == 0) {
+            std::string value = line.substr(std::char_traits<char>::length(kVideoQualityPrefix));
+            try {
+                int parsed = std::stoi(value);
+                // 0 (auto) or a valid quality; anything else (corrupt
+                // file, hand-edited garbage) falls back to the default
+                // rather than sending an out-of-range byte to the host.
+                if (parsed == 0 || (parsed >= 1 && parsed <= 100)) {
+                    settings.videoQuality = parsed;
+                }
+            } catch (const std::exception&) {
+                // Leave the default in place.
             }
         }
     }
@@ -83,6 +98,7 @@ bool saveClientSettings(const std::string& settingsPath, const ClientSettings& s
         out << "auto_update_on_launch=" << (settings.autoUpdateOnLaunch ? "1" : "0") << '\n';
         out << "mic_device_name=" << settings.micDeviceName << '\n';
         out << "mic_muted=" << (settings.micMuted ? "1" : "0") << '\n';
+        out << "video_quality=" << settings.videoQuality << '\n';
         if (!out.good()) {
             out.close();
             std::error_code cleanupError;

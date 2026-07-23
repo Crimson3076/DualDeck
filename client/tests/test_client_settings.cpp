@@ -84,3 +84,39 @@ MDR_TEST(client_settings_ignores_unknown_and_invalid_values) {
     std::error_code ec;
     std::filesystem::remove_all(path.parent_path(), ec);
 }
+
+MDR_TEST(client_settings_missing_file_uses_auto_video_quality) {
+    auto path = temporarySettingsPath("missing-video-quality");
+    ClientSettings settings = loadClientSettings(path.string());
+    MDR_CHECK_EQ(settings.videoQuality, 0);
+}
+
+MDR_TEST(client_settings_round_trip_video_quality) {
+    auto path = temporarySettingsPath("video-quality-round-trip");
+    ClientSettings settings;
+    settings.videoQuality = 100;
+
+    MDR_CHECK(saveClientSettings(path.string(), settings));
+    MDR_CHECK_EQ(loadClientSettings(path.string()).videoQuality, 100);
+
+    settings.videoQuality = 0;
+    MDR_CHECK(saveClientSettings(path.string(), settings));
+    MDR_CHECK_EQ(loadClientSettings(path.string()).videoQuality, 0);
+
+    std::error_code ec;
+    std::filesystem::remove_all(path.parent_path(), ec);
+}
+
+MDR_TEST(client_settings_ignores_out_of_range_video_quality) {
+    auto path = temporarySettingsPath("video-quality-out-of-range");
+    std::filesystem::create_directories(path.parent_path());
+    {
+        std::ofstream out(path);
+        out << "video_quality=101\n";
+    }
+
+    MDR_CHECK_EQ(loadClientSettings(path.string()).videoQuality, 0);
+
+    std::error_code ec;
+    std::filesystem::remove_all(path.parent_path(), ec);
+}
