@@ -991,13 +991,15 @@ export AZAHAR_REMOTE_ADAPTER_SOCKET="${adapter_socket}"
 # capture loop polls for a new frame -- no rebuild needed, e.g.
 # `AZAHAR_REMOTE_CAPTURE_FPS=30 ./dualdeck-host.sh` if 60 turns
 # out to visibly affect the game's own performance on your hardware.
-# Also AZAHAR_REMOTE_CAPTURE_SCALE (1-4, default 1/native): streams the
-# bottom screen at that multiple of its native 320x240 instead, e.g.
-# `AZAHAR_REMOTE_CAPTURE_SCALE=2 ./dualdeck-host.sh` for 640x480 --
-# independent of Azahar's own internal resolution_factor setting (that
-# one is for the top screen's local rendering sharpness, not what's
-# streamed). Higher scales cost more bandwidth; see
-# docs/known-limitations.md's resolution-decoupling entry.
+# Also AZAHAR_REMOTE_CAPTURE_SCALE (1-10): overrides how many multiples
+# of the bottom screen's native 320x240 get streamed, e.g.
+# `AZAHAR_REMOTE_CAPTURE_SCALE=2 ./dualdeck-host.sh` for 640x480. Not
+# needed just to match Azahar's own "Internal Resolution" graphics
+# setting -- the stream already follows that automatically now (see
+# docs/known-limitations.md's capture-scale-follows-resolution-factor
+# entry); only set this to stream at a different resolution than what's
+# configured there, e.g. a sharper local picture than is worth sending
+# over a particular link.
 # Already inherited by the exec below with no extra wiring needed --
 # see docs/known-limitations.md's performance-tuning entry.
 

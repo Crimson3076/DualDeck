@@ -257,10 +257,10 @@ index 673c513..f3f6884 100644
      // The path to the game currently running
 diff --git a/src/citra_qt/remote_server/AzaharAdapter.cpp b/src/citra_qt/remote_server/AzaharAdapter.cpp
 new file mode 100644
-index 0000000..033af96
+index 0000000..e6c0186
 --- /dev/null
 +++ b/src/citra_qt/remote_server/AzaharAdapter.cpp
-@@ -0,0 +1,423 @@
+@@ -0,0 +1,427 @@
 +#include "citra_qt/remote_server/AzaharAdapter.h"
 +
 +#include <algorithm>
@@ -307,30 +307,34 @@ index 0000000..033af96
 +    return std::chrono::milliseconds(1000 / fps);
 +}
 +
-+// Native (1x) by default -- unchanged behavior for anyone not setting
-+// this. Deliberately independent of Azahar's own internal
-+// resolution_factor setting (Settings::values.resolution_factor): that
-+// setting exists to make the *top* screen's local 3D rendering sharper
-+// on the host's own display, and RequestScreenshot() below happily
-+// captures at any resolution regardless of it -- but a host with
-+// resolution_factor cranked up for a beefy desktop GPU has no relation
-+// to what's sensible to stream over a LAN, so this needs its own,
-+// explicit knob rather than silently inheriting whatever the other
-+// setting happens to be. Clamped to [1, 4] (native up to 1280x960):
-+// above that starts costing meaningfully more bandwidth than most
-+// networks/decoders comfortably handle for a 30fps stream (see
-+// docs/known-limitations.md's performance-tuning entry) without a
-+// corresponding user-visible benefit on a screen this physically small
-+// to begin with.
-+int resolveCaptureScale() {
-+    int scale = 1;
++// Defaults to following Azahar's own resolution_factor setting instead
++// of always native -- real feedback found the earlier "always native
++// unless you know a separate env var exists" default surprising: setting
++// resolution_factor to a high value in Azahar's own graphics settings
++// visibly had no effect on the stream at all. AZAHAR_REMOTE_CAPTURE_SCALE
++// still overrides this explicitly for anyone who wants a sharper *local*
++// picture than is worth streaming over their particular link -- a more
++// affordable ask now than when this default was first written, since
++// every frame is JPEG-compressed (DualDeck's host/remote-server) before
++// it goes out over the wire, rather than sent raw.
++// resolution_factor's own 0 ("Auto (Window Size)") is resolved via
++// GetResolutionScaleFactor() the same way the renderer itself resolves
++// it (video_core/renderer_base.cpp), not reimplemented here -- calling
++// this from AzaharAdapter's constructor is safe because RemoteServerBridge
++// (and so this adapter) is only ever constructed after BootGame() has
++// already loaded the ROM and created the renderer (see citra_qt.cpp),
++// the same precondition RequestScreenshot() below already relies on.
++// Clamped to [1, 10], matching resolution_factor's own valid range
++// (common/settings.h).
++int resolveCaptureScale(Core::System& system) {
 +    if (const char* env = std::getenv("AZAHAR_REMOTE_CAPTURE_SCALE")) {
 +        int parsed = std::atoi(env);
 +        if (parsed > 0) {
-+            scale = std::clamp(parsed, 1, 4);
++            return std::clamp(parsed, 1, 10);
 +        }
 +    }
-+    return scale;
++    const u32 factor = system.GPU().Renderer().GetResolutionScaleFactor();
++    return std::clamp(static_cast<int>(factor), 1, 10);
 +}
 +
 +// Mirrors host/adapter_bridge.cpp's dsButtonsToGenericButtons() table --
@@ -410,7 +414,7 @@ index 0000000..033af96
 +                             std::function<void()> onQuitSession, std::function<void()> onQuitApplication)
 +    : system_(system), azaharVersion_(std::move(azaharVersion)), onQuitSession_(std::move(onQuitSession)),
 +      onQuitApplication_(std::move(onQuitApplication)), inputStatus_(std::make_shared<RemoteInputStatus>()),
-+      captureInterval_(resolveCaptureInterval()), captureScale_(resolveCaptureScale()) {
++      captureInterval_(resolveCaptureInterval()), captureScale_(resolveCaptureScale(system)) {
 +    registerInputEngine();
 +    running_ = true;
 +    captureThread_ = std::thread(&AzaharAdapter::captureLoop, this);

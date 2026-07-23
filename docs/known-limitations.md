@@ -4792,6 +4792,52 @@ original "unwanted extra window" complaint likely means rendering
 instead of a real window swapchain, a nontrivial Cemu-rendering change
 outside this fix's scope.
 
+## 2026-07-23: Azahar capture scale now follows resolution_factor automatically -- the earlier deliberate decoupling was the wrong default
+
+Follow-up to the resolution-decoupling entry directly above. Reported
+after real use: "the client resolution does not respect the internal
+resolution of azahar. I have it set to 9x on host but client still
+looks like it's being sent the native resolution." The behavior was
+exactly as designed at the time (`AZAHAR_REMOTE_CAPTURE_SCALE` is
+independent of `resolution_factor` on purpose, per the entry above) --
+but real usage showed that design choice reads as a bug to anyone who
+doesn't already know a second, separate env var exists: raising Azahar's
+own "Internal Resolution" graphics setting is the obvious, discoverable
+way to ask for a sharper stream, and having it silently do nothing is
+worse than the bandwidth risk the decoupling was meant to avoid.
+
+Fixed in `AzaharAdapter.cpp`'s `resolveCaptureScale()`: without
+`AZAHAR_REMOTE_CAPTURE_SCALE` explicitly set, it now reads the actual
+renderer's effective scale via `system.GPU().Renderer().
+GetResolutionScaleFactor()` -- the same accessor `RendererBase` itself
+uses (`video_core/renderer_base.cpp`), so `resolution_factor`'s own `0`
+("Auto (Window Size)") resolves the same way it would for local
+rendering, rather than being reinterpreted here. `AZAHAR_REMOTE_CAPTURE_SCALE`
+still exists as an explicit override for anyone who wants a sharper
+*local* picture than they want to actually stream. The clamp also moved
+from `[1, 4]` to `[1, 10]`, matching `resolution_factor`'s own valid
+range (`common/settings.h`) -- the original ceiling's bandwidth
+rationale is considerably weaker now that every frame is JPEG-compressed
+(see the protocol v8/v9 entries above) rather than sent raw, which is
+the whole reason revisiting this ceiling was reasonable to do alongside
+that work rather than needing its own separate bandwidth analysis.
+
+Calling `system.GPU().Renderer()` from `AzaharAdapter`'s constructor
+(inside a member-initializer, before the constructor body runs) is safe
+because `RemoteServerBridge` -- and so this adapter -- is only ever
+constructed after `BootGame()` has already loaded the ROM and created
+the renderer (`citra_qt.cpp`); `RequestScreenshot()` elsewhere in the
+same file already relies on that same precondition.
+
+**Verified**: regenerated via the established scratch-clone workflow --
+diffed against the previously-committed patch to confirm only this
+function's lines changed, and `citra_meta` (Azahar's actual GUI
+executable target, not just the `citra_qt` static library) rebuilt clean
+incrementally from the existing build directory. **Not yet verified**:
+real hardware confirmation that a client actually receives a
+higher-than-native stream with no env var set, once `resolution_factor`
+is raised in Azahar's own settings.
+
 ## 2026-07-23: Per-client video quality setting (protocol v9) -- JPEG compression was too aggressive for DS/3DS
 
 Follow-up to the JPEG compression entry above. Reported after real use:
