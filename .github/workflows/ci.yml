@@ -13,6 +13,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libturbojpeg0-dev
+
       - name: Configure
         run: |
           cmake -S . -B build \
@@ -37,6 +40,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libturbojpeg0-dev
 
       - name: Compile net_client.cpp with strict warnings
         run: |
