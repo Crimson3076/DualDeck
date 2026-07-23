@@ -1001,8 +1001,16 @@ void NetServer::discoveryLoop() {
         }
 
         auto header = parseHeader(buf.data(), static_cast<size_t>(n));
-        if (!header || header->protocolVersion != kProtocolVersion ||
-            header->type != PacketType::DiscoveryRequest) {
+        // Deliberately NOT checking header->protocolVersion here (real-usage
+        // bug: a client left on an older/newer build than a freshly-updated
+        // host silently saw zero hosts in its discovery scan, with no error
+        // anywhere -- this check made a mismatched-but-otherwise-well-formed
+        // DiscoveryRequest indistinguishable from noise on the wire).
+        // Discovery only needs to answer "is there a host here to try" --
+        // actual version compatibility is already enforced, with a real
+        // AppVersionMismatch error shown to the user, by the Hello/HelloAck
+        // handshake a client performs after picking this host from the list.
+        if (!header || header->type != PacketType::DiscoveryRequest) {
             continue; // not a well-formed DiscoveryRequest -- ignore silently
         }
 

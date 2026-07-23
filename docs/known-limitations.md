@@ -5045,6 +5045,42 @@ committed patch, not compiled or tested. Needs a CI build and a real
 retest against Twilight Princess HD and Pokemon Rumble U specifically to
 confirm the tearing is gone.
 
+## 2026-07-23: Discovery silently found zero hosts across a client/host protocol-version mismatch (all adapters, not melonDS-specific)
+
+Reported as "MelonDS is seemingly no longer transmitting a server to
+connect to" -- but the actual bug is in the client<->host LAN discovery
+path (`DiscoveryRequest`/`DiscoveryResponse`), which every adapter
+(melonDS, Azahar, Cemu, synthetic) shares equally; whichever emulator
+was running at the time was incidental, not the cause.
+
+`NetServer::discoveryLoop()` and `discovery_client.cpp`'s response
+parser each required `header->protocolVersion == kProtocolVersion`
+before accepting a `DiscoveryRequest`/`DiscoveryResponse` -- an exact
+match, with no logging or fallback on a mismatch, silently treating a
+well-formed request/response from a different protocol version exactly
+like line noise. `kProtocolVersion` was bumped twice in quick succession
+this session (v7 JPEG compression, v8->v9 per-client video quality) --
+if a host auto-updates (`check-for-updates.sh`) before its client does,
+or vice versa, the two sides end up on different versions, and the
+client's host-selection screen shows nothing at all, with no error
+anywhere to explain why. This is a strictly worse failure mode than the
+version mismatch this project already handles well: the Hello/HelloAck
+handshake (performed *after* a client picks a host from the discovery
+list) already rejects a real version mismatch with an explicit
+`AppVersionMismatch` error shown to the user -- discovery never even
+got that far.
+
+Fixed by dropping the protocol-version-equality check from both sides
+of discovery specifically (`DiscoveryResponsePayload`'s wire format
+hasn't changed across any of these version bumps, so an older or newer
+side can always decode it regardless of version). A mismatched host now
+still shows up in the list; attempting to connect to it still correctly
+surfaces the existing `AppVersionMismatch` error from the Hello/HelloAck
+handshake, instead of the host disappearing from view with zero
+explanation. Every other packet type's version check is untouched --
+this is scoped to discovery only, where the sole purpose is "is there a
+host here to try," not compatibility enforcement.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

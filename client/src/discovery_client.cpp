@@ -98,8 +98,12 @@ std::vector<DiscoveredHost> discoverHosts(uint16_t discoveryPort, int timeoutMs,
         }
 
         auto header = parseHeader(buf, static_cast<size_t>(n));
-        if (!header || header->protocolVersion != kProtocolVersion ||
-            header->type != PacketType::DiscoveryResponse ||
+        // Deliberately NOT checking header->protocolVersion here -- see
+        // net_server.cpp's discoveryLoop()'s identical comment. A host on a
+        // different protocol version than this client should still show up
+        // in the list; the Hello/HelloAck handshake after picking it already
+        // enforces real compatibility with a proper AppVersionMismatch error.
+        if (!header || header->type != PacketType::DiscoveryResponse ||
             header->payloadSize > static_cast<size_t>(n) - kPacketHeaderWireSize) {
             continue; // not a well-formed DiscoveryResponse -- ignore
         }

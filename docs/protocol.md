@@ -193,6 +193,19 @@ binds `0.0.0.0` rather than a specific configured address -- see the doc
 comment on `NetServerConfig::discoveryEnabled` in
 `host/remote-server/include/host/net_server.h`.
 
+Unlike every other packet type, `DiscoveryRequest`/`DiscoveryResponse`
+deliberately do **not** enforce `header.protocolVersion == kProtocolVersion`
+on either side (real-usage bug: a client and host that auto-updated at
+different times ended up on different protocol versions, and the exact-
+match check made a well-formed request/response from "the wrong"
+version indistinguishable from noise -- the client's host list silently
+showed nothing, with no error anywhere). `DiscoveryResponsePayload`'s
+wire format is stable across every version bump so far, so this is safe:
+a mismatched host still shows up in the list, and attempting to connect
+to it still correctly surfaces `AppVersionMismatch` from the Hello/
+HelloAck handshake described below -- discovery's only job is "is there
+a host here to try," not compatibility enforcement.
+
 The client shows the discovered-host list on every launch (see
 `docs/architecture.md` "Client" section) -- it never auto-connects
 silently, even when only one host answers, so switching to a different
