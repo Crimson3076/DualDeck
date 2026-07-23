@@ -5137,6 +5137,73 @@ explanation. Every other packet type's version check is untouched --
 this is scoped to discovery only, where the sole purpose is "is there a
 host here to try," not compatibility enforcement.
 
+## 2026-07-23: HostControlAdapter (the virtual-gamepad "host control" mode) removed
+
+Reported by the user: "host control is mostly useless in it's current
+form. we can remove it if it does not affect the codebase much and if
+it helps us." `HostControlAdapter` (GitHub issue #4 Phase C) was a
+uinput-based virtual Xbox-360 gamepad, driven by `ModeCoordinator`
+whenever no real emulator adapter was connected, letting a client
+navigate the host's own desktop UI. In practice this never turned into
+a workflow anyone actually used -- navigating a Big Picture/window-
+manager UI one-handed through a virtual gamepad while staring at a
+static placeholder screen -- while it cost real maintenance surface: a
+uinput device, a DS-button-to-virtual-gamepad translation table, and a
+whole class of "is /dev/uinput even available" degradation handling,
+none of it ever exercised on real hardware even after Cemu/Azahar
+shipped (this project's sandbox has never had `/dev/uinput`).
+
+Removed `host_control_adapter.{h,cpp}` and its test entirely, replacing
+`HostControlAdapter` with a trivial no-op placeholder pair,
+`NoAdapterInputSink`/`NoAdapterFrameSource` (new
+`host/remote-server/include/host/no_adapter_target.h`): input received
+while no adapter is connected is now silently discarded (there is
+nothing to apply it to) and no video frame is ever produced. This is
+what `ModeCoordinator` (`host/remote-server/include/host/
+mode_coordinator.h`) now points `NetServer` at during the "no adapter
+connected yet" gap -- `ModeCoordinator`'s own actual job, detecting an
+adapter connecting/disconnecting over the local IPC channel and
+swapping `NetServer`'s target so a client stays connected across an
+emulator starting and exiting, is completely unaffected by this
+removal; only *what* it swaps to during that gap changed.
+
+The manual `hostcontrol`/`resume` console commands that used to force
+`HostMode::HostControl` on demand (and `ModeCoordinator::isOverridden()`)
+were removed along with it -- forcing "no adapter connected" while a
+real adapter *is* connected has no use once there's nothing to
+navigate to. `computeDesiredMode()` dropped its now-unused
+`manualHostControlOverride` parameter to match. The client's
+`renderHostControlScreen()` (`client/src/main.cpp`) now shows a plain
+"WAITING FOR EMULATOR" message instead of "HOST CONTROL" / "USE YOUR
+CONTROLLER TO NAVIGATE THE HOST" text that no longer describes
+anything real.
+
+Also removed: `scripts/build-release.sh`'s separate "Host control only
+-- no emulator (experimental)" entry in `dualdeck-host.sh`'s "Which
+system?" picker, and the `DUALDECK_HOST_CONTROL` env var/
+`run-host.sh` branch it drove. That branch's own label was already
+misleading -- it actually still launched melonDS, just wired through
+the out-of-process adapter path a fraction of a second earlier than
+the default in-process path -- for a marginal (sub-second) "client can
+connect slightly before melonDS finishes booting" benefit that wasn't
+worth the extra picker entry, env var, and Distrobox-incompatibility
+special-casing (`install-host-distrobox.sh` used to hard-reject this
+mode with its own error message, now deleted along with it). The
+`dualdeck-host-service` binary itself is unaffected and still shipped
+and required -- Azahar and Cemu both always run as out-of-process
+adapters over it regardless of this change.
+
+**Verified**: full rebuild (`cmake --build build`) and `ctest` (all 6
+suites) pass clean in this sandbox after the removal; `bash -n` on
+`scripts/build-release.sh` and each touched heredoc body (`run-host.sh`,
+`dualdeck-host.sh`, `install-host-distrobox.sh`) all pass. Not yet
+tested on real hardware against a live Azahar/Cemu session -- the
+"waiting for emulator" screen and mode-switch timing should behave
+identically to before (same `ModeCoordinator` poll loop, same
+`ModeChanged` packet, same 100ms detection latency), just without the
+virtual-gamepad input path that was never functional in this sandbox
+to begin with.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

@@ -277,7 +277,7 @@ types too.
 
 | Offset | Size | Field   | Notes |
 |-------:|-----:|---------|-------|
-| 0      | 1    | `mode`  | `0` = `Emulation` (a real adapter, e.g. melonDS, is driving the session), `1` = `HostControl` (no emulator running -- client input drives a virtual gamepad, `HostControlAdapter`, that navigates the host's own UI instead). Any other value is rejected as malformed. |
+| 0      | 1    | `mode`  | `0` = `Emulation` (a real adapter, e.g. melonDS, is driving the session), `1` = `HostControl` (no emulator connected yet -- the client shows a "waiting for emulator" screen instead of video; `ControllerState` is still sent as normal but the host discards it, since there's nothing to apply it to). Any other value is rejected as malformed. |
 | 1      | length-prefixed identity | `system`  | Same encoding as `HelloAckPayload.system`/`DiscoveryResponsePayload.system` below -- see "Emulator identity model". |
 | ...    | length-prefixed identity | `adapter` | Same encoding as `HelloAckPayload.adapter`/`DiscoveryResponsePayload.adapter` below. |
 

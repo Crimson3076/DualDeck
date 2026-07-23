@@ -5,8 +5,7 @@
 
 namespace melonds_remote::host {
 
-HostMode computeDesiredMode(bool adapterConnected, bool manualHostControlOverride) {
-    if (manualHostControlOverride) return HostMode::HostControl;
+HostMode computeDesiredMode(bool adapterConnected) {
     return adapterConnected ? HostMode::Emulation : HostMode::HostControl;
 }
 
@@ -51,23 +50,14 @@ void ModeCoordinator::stop() {
     if (pollThread_.joinable()) pollThread_.join();
 }
 
-void ModeCoordinator::forceHostControl() {
-    manualOverride_ = true;
-}
-
-void ModeCoordinator::clearOverride() {
-    manualOverride_ = false;
-}
-
 void ModeCoordinator::pollLoop() {
-    // 100ms: fast enough that a mode swap (an adapter connecting/
-    // disconnecting, or a manual override command) reaches an already-
-    // connected client well within the reaction time this project's
-    // other UI feedback already targets, without polling so often it
-    // shows up as meaningful CPU use for what is otherwise an idle
-    // background thread.
+    // 100ms: fast enough that a mode swap (an adapter connecting or
+    // disconnecting) reaches an already-connected client well within the
+    // reaction time this project's other UI feedback already targets,
+    // without polling so often it shows up as meaningful CPU use for what
+    // is otherwise an idle background thread.
     while (running_.load()) {
-        HostMode desired = computeDesiredMode(adapterServer_.hasConnectedAdapter(), manualOverride_.load());
+        HostMode desired = computeDesiredMode(adapterServer_.hasConnectedAdapter());
         if (desired != server_.currentMode()) {
             applyMode(desired);
         }
@@ -93,9 +83,9 @@ void ModeCoordinator::applyMode(HostMode mode) {
         server_.setTarget(emulationInputSink_, emulationFrameSource_, HostMode::Emulation, std::move(system),
                            std::move(adapter));
     } else {
-        std::fprintf(stderr, "ModeCoordinator: switching to HostControl mode\n");
+        std::fprintf(stderr, "ModeCoordinator: no adapter connected -- waiting\n");
         server_.setTarget(hostControlInputSink_, hostControlFrameSource_, HostMode::HostControl,
-                           kHostControlSystemIdentity, kHostControlAdapterIdentity);
+                           kNoAdapterSystemIdentity, kNoAdapterAdapterIdentity);
     }
 }
 

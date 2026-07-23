@@ -5,7 +5,6 @@ add_library(dualdeck_host STATIC
     src/device_approval_manager.cpp
     src/logging_mic_audio_sink.cpp
     src/adapter_bridge.cpp
-    src/host_control_adapter.cpp
     src/mode_coordinator.cpp
     src/kdialog_approval_prompt.cpp
 )

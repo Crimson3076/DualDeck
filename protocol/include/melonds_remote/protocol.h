@@ -66,7 +66,7 @@ enum class PacketType : uint16_t {
     // host switched which mode/adapter is driving the session (GitHub
     // issue #4 Phase B) -- e.g. melonDS launching or exiting while a
     // client stays connected throughout, swapping NetServer's target
-    // between HostControlAdapter and the emulator. Sent only to an
+    // between the "no adapter connected" placeholder and the emulator. Sent only to an
     // already-authenticated, currently-connected client; a new
     // connection just learns the current state from HelloAck instead
     // (see HelloAckPayload::system/adapter), so there is no negotiated
@@ -81,11 +81,11 @@ enum class PacketType : uint16_t {
 
 // Which of two states the host is currently in (GitHub issue #4): a live
 // emulation session with a real adapter (e.g. melonDS) connected and
-// driving input/video, or idle host-control navigation with no emulator
-// running at all (a virtual gamepad -- HostControlAdapter -- the client
-// can use to browse/launch the host's own UI instead). Every host today
-// implicitly starts in, and stays in, Emulation; HostControl only
-// exists once a Host Service that outlives the emulator process is
+// driving input/video, or HostControl -- no adapter connected yet, so
+// the client shows a "waiting for emulator" screen in place of video
+// (see host/remote-server/include/host/no_adapter_target.h). Every
+// host today implicitly starts in, and stays in, Emulation; HostControl
+// only exists once a Host Service that outlives the emulator process is
 // wired up (issue #4's later phases) -- see NetServer::setTarget().
 enum class HostMode : uint8_t {
     Emulation = 0,

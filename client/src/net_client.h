@@ -143,9 +143,9 @@ public:
     // Which mode the host is currently in (GitHub issue #4 Phase E):
     // Emulation (streaming a real session, the only mode that ever
     // existed before issue #4) or HostControl (no emulator running --
-    // the client should show a host-control screen instead of the video
-    // texture, while still sending ControllerState as normal so
-    // HostControlAdapter's virtual gamepad on the host side works).
+    // the client should show a "waiting for emulator" screen instead of
+    // the video texture; ControllerState is still sent as normal, but
+    // the host's NoAdapterInputSink just discards it).
     // Reflects the host's most recent HelloAck right after connect(),
     // and is kept live afterward by controlReceiveLoop() reacting to
     // ModeChanged packets -- callers should poll this every frame rather
