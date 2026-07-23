@@ -80,13 +80,21 @@ melonds_remote::ByteBuffer buildIpcMessage(IpcMessageType type, const melonds_re
 //
 // Real-usage bug (GitHub-reported): the previous value here (16 MiB,
 // sized off a Wii U TV surface assumed to top out at 1920x1080 ==
-// 8,294,400 bytes) silently broke Cemu on any game running under one of
-// the resolution-enhancing graphics packs the Cemu community widely
-// uses -- CemuAdapter captures the TV surface at Cemu's actual internal
-// render resolution (LatteTextureVk::GetEffectiveSize(), the same
-// resolution a 4K/5K/8K graphics pack targets), not a fixed 1080p, so a
-// game running at even 1440p (2560x1440x4 = 14,745,600 bytes) already
-// exceeded the old cap. parseSurfaceFrame() rejects an over-cap payload
+// 8,294,400 bytes) silently broke Cemu on any title whose actual
+// internal render-target size exceeds that -- CemuAdapter captures the
+// TV surface at Cemu's real internal render resolution
+// (LatteTextureVk::GetEffectiveSize()), which is NOT always a fixed
+// 1080p. The most obvious way to hit this is a user-installed 4K/5K/8K
+// resolution-enhancing graphics pack, but it doesn't require one: some
+// Wii U titles render their own internal framebuffer above their
+// display output resolution as part of the *game's own* built-in
+// anti-aliasing/supersampling (confirmed via a user report -- Twilight
+// Princess HD hit this bug with zero graphics packs installed, while
+// Wind Waker HD on the same setup did not, pointing at a per-title
+// native render-resolution difference rather than any pack). Either
+// way, a game whose real internal size is even 1440p
+// (2560x1440x4 = 14,745,600 bytes) already exceeded the old cap.
+// parseSurfaceFrame() rejects an over-cap payload
 // as malformed, which both AdapterIpcClient::readLoop() and
 // AdapterIpcServer's own receive loop treat as "this connection is
 // over" -- so every attempted TV-surface Frame message failed instantly

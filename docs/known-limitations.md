@@ -4924,9 +4924,7 @@ was too small for Cemu's real capture resolution.**
 `kMaxIpcFramePixelBytes` as 16 MiB, sized off an assumption that Wii U's
 TV surface tops out at 1920x1080 (8,294,400 bytes). `CemuAdapter`
 actually captures the TV surface at Cemu's *actual* internal render
-resolution (`GetEffectiveSize()`), which tracks whatever
-resolution-enhancing graphics pack is active in the Cemu community --
-commonly 1440p, 4K, or higher for popular titles, not capped at 1080p.
+resolution (`GetEffectiveSize()`), which is not always capped at 1080p.
 `parseSurfaceFrame()` rejects any declared frame over the cap as
 malformed, and both `AdapterIpcClient::readLoop()` and the server's own
 receive loop treat a failed parse as "this connection is over." That
@@ -4942,6 +4940,22 @@ observed ~1-second reconnect cadence is itself just an artifact of
 `RemoteServerBridge::start()`'s reconnect loop resetting its backoff to
 1000ms on every successful `connect()` -- not evidence the connection
 survived a full second before dying.
+
+**What actually drives the oversized capture, corrected after the first
+guess was tested and disproved.** Initially assumed this required a
+user-installed resolution-enhancing graphics pack. The user tested this
+directly and reported "no graphics packs installed on either" -- while
+also reporting the bug is specific to Twilight Princess HD and doesn't
+happen with Wind Waker HD on the same setup. That rules out graphics
+packs as the mechanism here, but not the underlying cause: some Wii U
+titles render their own internal framebuffer above their display output
+resolution as part of the *game's own* built-in anti-aliasing/
+supersampling, independent of anything Cemu's graphics-pack system adds.
+Twilight Princess HD doing this while Wind Waker HD doesn't would explain
+the exact split observed. The fix itself is unaffected either way, since
+it's keyed off Cemu's real per-frame render-target size
+(`GetEffectiveSize()`), not off detecting graphics packs specifically --
+raising the cap to 128 MiB covers both causes.
 
 Fixed by raising `kMaxIpcFramePixelBytes` from 16 MiB to 128 MiB (comment
 in `ipc_protocol.h` has the full sizing rationale, including that this

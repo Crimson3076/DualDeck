@@ -594,9 +594,7 @@ under `src/remote_server/adapter_sdk/include/...`) defined
 `kMaxIpcFramePixelBytes` as 16 MiB, sized off an assumption that Wii U's
 TV surface tops out at 1920x1080 (8,294,400 bytes). `CemuAdapter`
 actually captures the TV surface at Cemu's *real* internal render
-resolution (`GetEffectiveSize()`), which tracks whatever
-resolution-enhancing graphics pack the user has active in Cemu -- 1440p,
-4K, or higher is common for popular titles, not capped at 1080p at all.
+resolution (`GetEffectiveSize()`), which is not always capped at 1080p.
 `parseSurfaceFrame()` rejects any declared frame payload over the cap as
 malformed, and both `AdapterIpcClient::readLoop()` and the server's own
 receive loop treat a failed parse as "this connection is over."
@@ -625,11 +623,23 @@ Azahar too, once its own capture scale started auto-following
 `host/azahar-patches/` vendors an identical copy of the same header and
 was updated the same way.
 
-**Not yet verified**: this is the current best theory, self-consistent
-with every log detail gathered so far, but it has not been directly
-confirmed the way the two earlier theories were ruled out -- the user
-has not yet been asked whether the game in question was running under a
-Cemu resolution-enhancement graphics pack, which would be direct
-confirmation. As always, this patch cannot be compiled in this
-project's own sandbox, so the fix is diff-verified only; a CI build and
-a real retest on the user's hardware are both still needed.
+**Update: the first guess at *why* the capture is oversized was tested
+and disproved, but the fix stands.** Initially assumed this would need a
+user-installed resolution-enhancing graphics pack to trigger. Asked the
+user directly whether one was active; the answer was "no graphics packs
+installed on either" -- while also reporting that the bug is specific to
+Twilight Princess HD and doesn't reproduce on Wind Waker HD on the same
+setup. That rules out graphics packs as the mechanism here, but not the
+underlying cause: some Wii U titles render their own internal
+framebuffer above their display output resolution as part of the
+*game's own* built-in anti-aliasing/supersampling, independent of
+anything Cemu's graphics-pack system adds -- Twilight Princess HD doing
+this while Wind Waker HD doesn't would explain the exact per-title split
+observed. The fix itself doesn't depend on which mechanism is at play,
+since it's keyed off Cemu's real per-frame render-target size
+(`GetEffectiveSize()`) rather than off detecting graphics packs
+specifically, so raising the cap to 128 MiB should cover both. As
+always, this patch cannot be compiled in this project's own sandbox, so
+the fix is diff-verified only; a CI build and a real retest on the
+user's hardware (specifically against Twilight Princess HD) are both
+still needed.

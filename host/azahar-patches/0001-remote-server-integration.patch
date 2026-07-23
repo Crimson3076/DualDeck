@@ -1383,10 +1383,10 @@ index 0000000..5afcace
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/citra_qt/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/ipc_protocol.h b/src/citra_qt/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/ipc_protocol.h
 new file mode 100644
-index 0000000..69add26
+index 0000000..55fa7ce
 --- /dev/null
 +++ b/src/citra_qt/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/ipc_protocol.h
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,153 @@
 +#pragma once
 +
 +// Wire format for the Host-Service<->adapter local IPC channel (GitHub
@@ -1476,8 +1476,13 @@ index 0000000..69add26
 +// even the smaller 3DS screen (400x240 native) captures at
 +// 4000x2400x4 = 38,400,000 bytes, well over the old cap. The same class
 +// of bug independently affects Cemu, whose TV-surface capture resolution
-+// tracks whatever resolution-enhancing graphics pack is active rather
-+// than a fixed 1080p. parseSurfaceFrame() rejects an over-cap payload as
++// tracks Cemu's real internal render-target size rather than a fixed
++// 1080p -- not just from a user-installed resolution-enhancing graphics
++// pack, but also from some Wii U titles' own built-in
++// anti-aliasing/supersampling rendering above their output resolution
++// natively (confirmed via a user report: Twilight Princess HD hit this
++// bug with zero graphics packs installed, while Wind Waker HD on the
++// same setup did not). parseSurfaceFrame() rejects an over-cap payload as
 +// malformed, which both AdapterIpcClient::readLoop() and
 +// AdapterIpcServer's own receive loop treat as "this connection is
 +// over" -- so every attempted Frame message at a high capture scale
