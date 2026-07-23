@@ -139,6 +139,29 @@ ByteBuffer buildControllerStatePacket(const ControllerState& state) {
     return buildPacket(PacketType::ControllerState, payload);
 }
 
+void serializeVideoFramePayload(ByteBuffer& out, const VideoFramePayload& payload) {
+    appendU64(out, payload.captureTimestampUs);
+    out.insert(out.end(), payload.jpeg.begin(), payload.jpeg.end());
+}
+
+std::optional<VideoFramePayload> parseVideoFramePayload(const uint8_t* data, size_t size) {
+    if (data == nullptr || size < kVideoFrameTimestampWireSize) {
+        return std::nullopt;
+    }
+
+    VideoFramePayload payload;
+    payload.captureTimestampUs = readU64(data, 0);
+    payload.jpeg.assign(data + kVideoFrameTimestampWireSize, data + size);
+    return payload;
+}
+
+ByteBuffer buildVideoFramePacket(const VideoFramePayload& payload) {
+    ByteBuffer buf;
+    buf.reserve(kVideoFrameTimestampWireSize + payload.jpeg.size());
+    serializeVideoFramePayload(buf, payload);
+    return buildPacket(PacketType::VideoFrame, buf);
+}
+
 void appendString(ByteBuffer& out, const std::string& s) {
     appendU16(out, static_cast<uint16_t>(s.size()));
     out.insert(out.end(), s.begin(), s.end());

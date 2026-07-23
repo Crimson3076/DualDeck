@@ -5279,6 +5279,62 @@ this project has hit for every other client-UI change; the real
 code path the GUI binary uses, just without SDL's windowing/input layer
 around it.
 
+## 2026-07-23: Video-latency instrumentation (network+encode+queue, plus local decode time)
+
+Reported alongside the log-forwarding request above: "latency is still
+poor. we need ways to diagnose this and get measurements." Before this,
+the only latency number this project ever measured was the input path
+(`NetServer`'s `latencySampleCount`/`latencySumUs`/`latencyMinUs`/
+`latencyMaxUs`, from `ControllerState.clientTimestampUs`) -- there was
+no equivalent for video at all, so "latency feels bad" had nothing
+concrete to point at beyond frame rate/dropped-frame counters.
+
+`VideoFrame`'s payload (protocol v10, bumped from v9 -- see
+`docs/protocol.md`'s matching section) now carries an 8-byte host
+wall-clock timestamp before the JPEG bytes, taken in
+`net_server.cpp`'s `videoLoop()` immediately before that frame's
+encoding begins. `client/src/net_client.cpp`'s `videoReceiveLoop()`
+compares it against its own receipt wall-clock time to estimate
+network + encode + send-queue latency for the video path -- the same
+"assumes synced clocks" caveat the input-latency stat already
+documents applies here too, for the same reason (no NTP-style
+handshake exists between client and host to correct for clock skew).
+Separately, purely client-side `steady_clock` timing (no clock-sync
+concern at all, since both ends of that measurement happen on the same
+machine) wraps the `decompressJpegToBgra()` call to measure local JPEG
+decode time. Both are accumulated into a running min/max/avg (mirroring
+`NetServer`'s own periodic-stats bookkeeping shape) and logged via
+`logLine()` every 5 seconds -- which, thanks to the log-forwarding
+feature above, also reaches the host automatically without any extra
+plumbing.
+
+Unlike `ModeChanged`/`ClientLog` (new packet types an older peer can
+simply never send/read), this **did** require the `kProtocolVersion`
+bump: `VideoFrame`'s existing payload shape changed, so an old client
+reading a new-format frame would misinterpret the leading timestamp
+bytes as JPEG data (and vice versa) -- silent corruption, not a
+graceful ignore.
+
+**Verified**: `protocol/tests/test_video_frame.cpp` covers
+`VideoFramePayload` serialize/parse round-trips (including an empty
+JPEG portion) and the too-short-for-even-the-timestamp rejection path.
+`host/remote-server/tests/test_net_server_mode_switch.cpp`'s existing
+real end-to-end video-delivery tests needed updating for the new
+prefix (`readVideoFrameFirstByte()` now strips the timestamp via
+`parseVideoFramePayload()` before handing the JPEG portion to
+`tjDecompress2`) and continue to pass, proving actual pixel content
+still round-trips correctly through the new wire format, not just that
+the timestamp itself parses. `client/tests/test_net_client.cpp`'s real
+frame-delivery tests (`NetClient` decoding an actual resized frame from
+a real `NetServer`) also continue to pass unmodified, confirming
+`videoReceiveLoop()`'s new timestamp-stripping step doesn't disturb the
+decoded pixel content it already asserted on. All 6 host/client ctest
+suites pass. Not verified against real measured numbers on real
+hardware in this sandbox (no real emulator capture pipeline or network
+link to measure) -- the instrumentation itself is proven correct, but
+what it will actually report on a real Steam Deck-over-Wi-Fi session
+against Cemu/Azahar/melonDS remains to be seen.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

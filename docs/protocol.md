@@ -13,7 +13,7 @@ same fixed-size header.
 | Offset | Size | Field            | Notes                                   |
 |-------:|-----:|------------------|------------------------------------------|
 | 0      | 4    | `magic`          | Always `0x444D5231` ("DMR1"). Packets with any other value are rejected before further parsing. |
-| 4      | 2    | `protocolVersion`| Currently `9` (bumped from `8` when `HelloPayload.videoQuality` was added, letting the client request its own session's JPEG quality instead of always getting the host's one configured default -- see "Hello payload"/"Video payload" below; `8` itself had bumped from `7` when `VideoFrame`'s payload changed from a raw pixel buffer to a JPEG-compressed image -- see "Video payload" below; `7` itself had bumped from `6` when `HelloAckPayload.mode` was added, GitHub issue #4 Phase E -- see "HelloAck payload" below; `6` itself had bumped from `5` when `HelloAckPayload.system`/`.adapter` and `DiscoveryResponsePayload.system`/`.adapter` were added for the emulator identity model, GitHub issue #28 -- see "Emulator identity model" below; `5` itself had bumped from `4` when `HelloAckPayload.micSupported` and `DiscoveryResponsePayload.audioPort` were added for microphone support, GitHub issue #2 -- see "MicAudioFrame payload" below; `4` itself had bumped from `3` when `HelloPayload.appVersion`/`HelloAckPayload.appVersion` were added and `HelloRejectReason::AppVersionMismatch` was introduced -- see "App version mismatch" below; `3` itself had bumped from `2` when `HelloAckPayload.pairingToken` was removed and `HelloRejectReason::PairingRequired` was renamed to `ApprovalRequired`, moving from a typed-code pairing flow to device-approval; `2` itself had bumped from `1` when those pairing-code fields were first added). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
+| 4      | 2    | `protocolVersion`| Currently `10` (bumped from `9` when `VideoFrame`'s payload gained an 8-byte host capture timestamp prefix for video-latency instrumentation -- see "Video payload" below; `9` itself had bumped from `8` when `HelloPayload.videoQuality` was added, letting the client request its own session's JPEG quality instead of always getting the host's one configured default -- see "Hello payload"/"Video payload" below; `8` itself had bumped from `7` when `VideoFrame`'s payload changed from a raw pixel buffer to a JPEG-compressed image -- see "Video payload" below; `7` itself had bumped from `6` when `HelloAckPayload.mode` was added, GitHub issue #4 Phase E -- see "HelloAck payload" below; `6` itself had bumped from `5` when `HelloAckPayload.system`/`.adapter` and `DiscoveryResponsePayload.system`/`.adapter` were added for the emulator identity model, GitHub issue #28 -- see "Emulator identity model" below; `5` itself had bumped from `4` when `HelloAckPayload.micSupported` and `DiscoveryResponsePayload.audioPort` were added for microphone support, GitHub issue #2 -- see "MicAudioFrame payload" below; `4` itself had bumped from `3` when `HelloPayload.appVersion`/`HelloAckPayload.appVersion` were added and `HelloRejectReason::AppVersionMismatch` was introduced -- see "App version mismatch" below; `3` itself had bumped from `2` when `HelloAckPayload.pairingToken` was removed and `HelloRejectReason::PairingRequired` was renamed to `ApprovalRequired`, moving from a typed-code pairing flow to device-approval; `2` itself had bumped from `1` when those pairing-code fields were first added). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
 | 6      | 2    | `packetType`     | See table below.                        |
 | 8      | 4    | `payloadSize`    | Size of the payload that follows, in bytes. Receivers must verify this matches the number of bytes actually available before parsing the payload. |
 
@@ -99,14 +99,33 @@ table, not part of the wire format.
 
 ## Video payload
 
-Protocol v8: the payload is a JPEG-compressed image (libjpeg-turbo's
+Protocol v10: the payload is an 8-byte host wall-clock capture
+timestamp (`VideoFramePayload::captureTimestampUs`, little-endian
+microseconds since the Unix epoch) immediately followed by the JPEG-
+compressed image itself (protocol v8, described below, unchanged in
+shape). Added for video-latency instrumentation: the client compares
+this against its own wall-clock receipt time to estimate network +
+encode + send-queue latency for the video path, the same "assumes
+synced clocks" caveat `ControllerState.clientTimestampUs`'s existing
+input-latency estimate already carries (see `docs/known-limitations.md`).
+The timestamp is taken host-side (`net_server.cpp`'s `videoLoop()`)
+immediately before this frame's JPEG encoding begins, so the client-
+computed latency includes encode time, not just network transit. This
+is a genuine payload-shape change (unlike `ModeChanged`/`ClientLog`
+above, which are brand new packet types an older peer can just ignore)
+-- it required bumping `protocolVersion` because an old client reading
+a new-format frame would misinterpret the leading timestamp bytes as
+JPEG data, and a new client reading an old-format frame would
+misinterpret the JPEG's own leading bytes as a timestamp.
+
+Protocol v8: the JPEG portion is a JPEG-compressed image (libjpeg-turbo's
 turbojpeg API), one frame's worth of whatever pixel dimensions the
 connected adapter's `frameDimensions()` reports (see the "Emulator
 identity model" section below for how a non-DS-sized adapter's
-dimensions reach the client). `payloadSize` varies frame to frame with
-scene content, unlike every payload elsewhere in this protocol --
-receivers must not assume a fixed expected size the way older versions
-of this protocol's client did.
+dimensions reach the client). The overall `payloadSize` (timestamp plus
+JPEG) varies frame to frame with scene content, unlike every fixed-size
+payload elsewhere in this protocol -- receivers must not assume a fixed
+expected size the way older versions of this protocol's client did.
 
 Quality defaults to `NetServerConfig::videoJpegQuality` (80), but
 protocol v9's `HelloPayload::videoQuality` (see "Hello payload" above)

@@ -8,15 +8,30 @@
 #include <turbojpeg.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <thread>
 
 namespace melonds_remote::client {
 
 namespace {
+
+// Wall-clock (epoch) microseconds -- comparable against
+// VideoFramePayload::captureTimestampUs (protocol v10), which is also
+// wall-clock, not steady_clock. Same "assumes synced clocks" caveat as
+// ControllerState::clientTimestampUs already documents (see
+// docs/known-limitations.md); duplicated here rather than shared with
+// main.cpp's own wallClockNowUs() (internal linkage, file-local), same
+// as net_server.cpp's nowMicrosEpoch() already duplicates it host-side.
+uint64_t wallClockNowUs() {
+    using namespace std::chrono;
+    return static_cast<uint64_t>(duration_cast<microseconds>(system_clock::now().time_since_epoch()).count());
+}
 
 // JPEG-decodes one video frame (protocol v8, see protocol.h's
 // kProtocolVersion comment) back into raw BGRA8888 -- TJPF_BGRA as the
@@ -429,6 +444,33 @@ bool NetClient::getLatestFrame(std::vector<uint8_t>& outFrame) {
     return true;
 }
 
+namespace {
+// How often videoReceiveLoop() below logs an accumulated video-latency/
+// decode-time snapshot, matching the cadence NetServer's own periodic
+// stats logging uses host-side (default statsLoggingIntervalUs).
+constexpr uint64_t kVideoStatsLogIntervalUs = 5'000'000; // 5s
+
+// Same threshold net_server.cpp's inputLoop() already uses to skip a
+// clearly-bogus latency delta (clock not synced, or a peer that hasn't
+// been updated to send a comparable timestamp yet) rather than letting
+// it dominate the running average/max.
+constexpr uint64_t kMaxPlausibleLatencyUs = 10'000'000; // 10s
+
+struct MinMaxAvgUs {
+    uint64_t sampleCount = 0;
+    uint64_t sumUs = 0;
+    uint64_t minUs = std::numeric_limits<uint64_t>::max();
+    uint64_t maxUs = 0;
+
+    void record(uint64_t us) {
+        ++sampleCount;
+        sumUs += us;
+        minUs = std::min(minUs, us);
+        maxUs = std::max(maxUs, us);
+    }
+};
+} // namespace
+
 void NetClient::videoReceiveLoop() {
     std::vector<uint8_t> headerBuf(kPacketHeaderWireSize);
     std::vector<uint8_t> payloadBuf;
@@ -449,6 +491,21 @@ void NetClient::videoReceiveLoop() {
         return;
     }
 
+    // Video-latency instrumentation: `networkStats` is
+    // receipt-wall-clock-time minus VideoFramePayload::captureTimestampUs
+    // (protocol v10) -- network transit + host-side encode + send-queue
+    // time, the video-path counterpart to NetServer's own input-latency
+    // stat, with the same clock-sync assumption. `decodeStats` is purely
+    // local wall-clock-free timing (steady_clock) around
+    // decompressJpegToBgra() itself -- no clock-sync caveat applies to it
+    // at all, since both ends of that measurement happen on this same
+    // machine. Logged via logLine() (which also forwards to the host, see
+    // client_log.h) every kVideoStatsLogIntervalUs rather than per-frame,
+    // matching NetServer's own periodic-stats-not-per-packet approach.
+    MinMaxAvgUs networkStats;
+    MinMaxAvgUs decodeStats;
+    uint64_t lastStatsLogUs = wallClockNowUs();
+
     while (connected_.load()) {
         if (!recvExact(videoFd_, headerBuf.data(), headerBuf.size())) {
             break;
@@ -458,12 +515,14 @@ void NetClient::videoReceiveLoop() {
         // see the AzaharAdapter/3DS note this comment used to carry)
         // bound how large a compressed payload could legitimately be:
         // real JPEG output at any quality is essentially never larger
-        // than the equivalent raw frame, so this is a generous sanity
-        // ceiling against a corrupt/bogus size field, not a tight
+        // than the equivalent raw frame (plus VideoFramePayload's fixed
+        // 8-byte timestamp prefix, protocol v10), so this is a generous
+        // sanity ceiling against a corrupt/bogus size field, not a tight
         // expected-size check like before compression (payload size now
         // varies frame to frame with scene content).
         const uint32_t rawFrameBytes =
-            static_cast<uint32_t>(hostNativeWidth_.load()) * hostNativeHeight_.load() * 4u;
+            static_cast<uint32_t>(hostNativeWidth_.load()) * hostNativeHeight_.load() * 4u +
+            kVideoFrameTimestampWireSize;
         auto header = parseHeader(headerBuf.data(), headerBuf.size());
         if (!header || header->type != PacketType::VideoFrame || header->payloadSize == 0 ||
             header->payloadSize > rawFrameBytes) {
@@ -476,9 +535,29 @@ void NetClient::videoReceiveLoop() {
             break;
         }
 
+        auto videoFrame = parseVideoFramePayload(payloadBuf.data(), payloadBuf.size());
+        if (!videoFrame) {
+            logLine("video: dropping malformed frame (short of even the timestamp prefix), "
+                    "closing connection\n");
+            break;
+        }
+
+        uint64_t nowWallUs = wallClockNowUs();
+        if (nowWallUs >= videoFrame->captureTimestampUs) {
+            uint64_t latencyUs = nowWallUs - videoFrame->captureTimestampUs;
+            if (latencyUs <= kMaxPlausibleLatencyUs) {
+                networkStats.record(latencyUs);
+            }
+        }
+
+        auto decodeStart = std::chrono::steady_clock::now();
         int decodedWidth = 0, decodedHeight = 0;
-        if (!decompressJpegToBgra(jpegDecompressor, payloadBuf.data(), payloadBuf.size(), decodedFrame,
-                                   decodedWidth, decodedHeight)) {
+        bool decoded = decompressJpegToBgra(jpegDecompressor, videoFrame->jpeg.data(), videoFrame->jpeg.size(),
+                                             decodedFrame, decodedWidth, decodedHeight);
+        decodeStats.record(static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - decodeStart)
+                .count()));
+        if (!decoded) {
             logLine("video: dropping undecodable frame, closing connection\n");
             break;
         }
@@ -493,9 +572,31 @@ void NetClient::videoReceiveLoop() {
         hostNativeWidth_ = static_cast<uint16_t>(decodedWidth);
         hostNativeHeight_ = static_cast<uint16_t>(decodedHeight);
 
-        std::lock_guard<std::mutex> lock(frameMutex_);
-        latestFrame_.swap(decodedFrame);
-        hasFrame_ = true;
+        {
+            std::lock_guard<std::mutex> lock(frameMutex_);
+            latestFrame_.swap(decodedFrame);
+            hasFrame_ = true;
+        }
+
+        if (nowWallUs - lastStatsLogUs >= kVideoStatsLogIntervalUs) {
+            if (networkStats.sampleCount > 0) {
+                logLine("video: latency (network+encode+queue) avg=%.1fms min=%.1fms max=%.1fms "
+                        "(n=%llu) | decode avg=%.1fms min=%.1fms max=%.1fms (n=%llu)\n",
+                        static_cast<double>(networkStats.sumUs) / static_cast<double>(networkStats.sampleCount) /
+                            1000.0,
+                        static_cast<double>(networkStats.minUs) / 1000.0,
+                        static_cast<double>(networkStats.maxUs) / 1000.0,
+                        static_cast<unsigned long long>(networkStats.sampleCount),
+                        static_cast<double>(decodeStats.sumUs) / static_cast<double>(decodeStats.sampleCount) /
+                            1000.0,
+                        static_cast<double>(decodeStats.minUs) / 1000.0,
+                        static_cast<double>(decodeStats.maxUs) / 1000.0,
+                        static_cast<unsigned long long>(decodeStats.sampleCount));
+            }
+            networkStats = MinMaxAvgUs{};
+            decodeStats = MinMaxAvgUs{};
+            lastStatsLogUs = nowWallUs;
+        }
     }
 
     tjDestroy(jpegDecompressor);

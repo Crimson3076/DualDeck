@@ -22,6 +22,18 @@ namespace melonds_remote {
 
 // Bumped whenever the wire format changes incompatibly.
 //
+// v10: VideoFrame's payload gained an 8-byte host wall-clock capture
+// timestamp prepended before the JPEG bytes (see "video-latency
+// instrumentation" -- docs/known-limitations.md), so the client can
+// measure real glass-to-glass-ish latency (network + encode + queue
+// time) instead of only ever having a number for the input path
+// (ControllerState.clientTimestampUs). A genuine payload-shape change
+// (not a new packet type like ModeChanged/ClientLog, which don't need a
+// bump): an old client reading a new-format frame would misinterpret
+// the leading timestamp bytes as JPEG data, and a new client reading an
+// old-format frame would misinterpret the JPEG's own leading bytes as a
+// timestamp -- either way silent corruption, not a graceful ignore.
+//
 // v9: HelloPayload gained videoQuality, letting the client (not just the
 // host's own --video-quality flag) choose the JPEG quality used for that
 // session -- see its own comment below for why. v8's fixed default (80)
@@ -40,7 +52,7 @@ namespace melonds_remote {
 // negotiating an optional codec keeps both sides simple, matching how
 // every other incompatible wire-format change in this project has been
 // handled (see the mic-support v5 bump above).
-inline constexpr uint16_t kProtocolVersion = 9;
+inline constexpr uint16_t kProtocolVersion = 10;
 
 // Sentinel at the start of every packet so malformed/foreign traffic on the
 // same port can be rejected cheaply before any further parsing.
@@ -53,7 +65,10 @@ enum class PacketType : uint16_t {
     Heartbeat = 4,     // either direction, control channel, keepalive
     Disconnect = 5,    // either direction, control channel, graceful teardown
     EmulatorAction = 6, // client -> host, control channel, one-shot emulator command
-    VideoFrame = 7,    // host -> client, video channel, one JPEG-compressed frame (see kProtocolVersion's v8 note)
+    // host -> client, video channel, one JPEG-compressed frame (protocol
+    // v8) prefixed with an 8-byte host capture timestamp (protocol v10)
+    // -- see VideoFramePayload below and kProtocolVersion's v8/v10 notes.
+    VideoFrame = 7,
     DiscoveryRequest = 8,  // client -> host, UDP discovery port, broadcast "who's out there"
     DiscoveryResponse = 9, // host -> client, UDP discovery port, unicast reply to the sender
     // client -> host, UDP audio port, one chunk of captured microphone PCM
@@ -378,6 +393,27 @@ struct ControllerState {
 inline constexpr size_t kControllerStateWireSize =
     4 + 8 + 2 + 2 + 2 + 2 + 2 + 2 + 1 + 2 + 2;
 
+// Wire size of VideoFramePayload's fixed timestamp prefix (protocol
+// v10) -- the JPEG bytes that follow are variable-length, sized however
+// large that frame's compressed output happened to be.
+inline constexpr size_t kVideoFrameTimestampWireSize = 8;
+
+// VideoFrame (host -> client) payload, protocol v10: `captureTimestampUs`
+// is the host's own wall-clock time (same clock as
+// ControllerState::clientTimestampUs, epoch microseconds) taken
+// immediately before this frame's JPEG encoding began -- see
+// net_server.cpp's videoLoop(). Comparing it against the client's own
+// wall-clock receipt time gives an estimate of network + encode + send-
+// queue latency for the video path, the same "assumes synced clocks"
+// caveat the existing input-latency stat already documents (see
+// docs/known-limitations.md) applies here too. `jpeg` is exactly what
+// protocol v8 already sent -- this only adds the timestamp in front of
+// it, nothing about the JPEG encoding itself changed.
+struct VideoFramePayload {
+    uint64_t captureTimestampUs = 0;
+    std::vector<uint8_t> jpeg;
+};
+
 // Fixed sample format for MicAudioFrame (GitHub issue #2): mono, 16-bit
 // signed PCM, little-endian on the wire (like every other multi-byte
 // field here), at a single fixed rate rather than negotiated per-client.
@@ -490,6 +526,21 @@ ByteBuffer buildPacket(PacketType type, const ByteBuffer& payload);
 
 // Builds a complete ControllerState packet (header + serialized body).
 ByteBuffer buildControllerStatePacket(const ControllerState& state);
+
+// Serializes a VideoFramePayload (header not included): the 8-byte
+// timestamp prefix followed by `payload.jpeg` verbatim.
+void serializeVideoFramePayload(ByteBuffer& out, const VideoFramePayload& payload);
+
+// Parses a VideoFramePayload. Returns std::nullopt only if the buffer is
+// shorter than kVideoFrameTimestampWireSize (too short to even hold the
+// timestamp prefix) -- an empty or undecodable `jpeg` portion is not
+// itself rejected here, since validating JPEG content is the decoder's
+// job, not this function's (mirrors how this packet type was never
+// length/content-validated at this layer before v10 either).
+std::optional<VideoFramePayload> parseVideoFramePayload(const uint8_t* data, size_t size);
+
+// Builds a complete VideoFrame packet (header + timestamp + JPEG bytes).
+ByteBuffer buildVideoFramePacket(const VideoFramePayload& payload);
 
 // Appends a length-prefixed (u16 length + bytes) string. Rejects (asserts
 // via caller contract, not enforced here) building a packet with a string

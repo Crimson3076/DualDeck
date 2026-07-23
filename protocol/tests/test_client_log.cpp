@@ -96,5 +96,5 @@ MDR_TEST(build_client_log_packet_has_correct_type) {
 // kProtocolVersion bump. This guards against that being reintroduced
 // under the mistaken assumption every new packet type needs one.
 MDR_TEST(client_log_did_not_require_a_protocol_version_bump) {
-    MDR_CHECK(kProtocolVersion == 9);
+    MDR_CHECK(kProtocolVersion >= 9);
 }

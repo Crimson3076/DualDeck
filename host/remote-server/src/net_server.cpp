@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstring>
 #include <optional>
+#include <utility>
 
 #include "melonds_remote/protocol.h"
 
@@ -988,6 +989,19 @@ void NetServer::videoLoop() {
             if (gotFrame && lastSentFrameIndex && frameIndex == *lastSentFrameIndex) {
                 gotFrame = false;
             }
+            // Taken right before encoding begins (protocol v10, see
+            // protocol.h's kProtocolVersion comment and
+            // VideoFramePayload) -- wall-clock, not steady_clock, so
+            // it's directly comparable against the client's own
+            // wall-clock receipt time the same way
+            // ControllerState::clientTimestampUs already is for input
+            // latency. Deliberately captured even on a tick that ends up
+            // skipping the send below (dead code in that case) rather
+            // than moved inside the `if (gotFrame)` block, so this stays
+            // a single obvious "when did we start working on this
+            // frame" read with no risk of drifting from what it's
+            // actually meant to measure as the surrounding code changes.
+            uint64_t captureTimestampUs = nowMicrosEpoch();
             if (gotFrame && !compressFrameBgraToJpeg(jpegCompressor, frame.data(), currentFrameWidth, currentFrameHeight,
                                                       currentVideoQuality_.load(), jpegFrame)) {
                 // Logged inside compressFrameBgraToJpeg(); skip this tick
@@ -997,7 +1011,10 @@ void NetServer::videoLoop() {
                 gotFrame = false;
             }
             if (gotFrame) {
-                ByteBuffer packet = buildPacket(PacketType::VideoFrame, jpegFrame);
+                VideoFramePayload videoPayload;
+                videoPayload.captureTimestampUs = captureTimestampUs;
+                videoPayload.jpeg = std::move(jpegFrame);
+                ByteBuffer packet = buildVideoFramePacket(videoPayload);
                 if (!sendAll(clientFd, packet.data(), packet.size())) {
                     break;
                 }

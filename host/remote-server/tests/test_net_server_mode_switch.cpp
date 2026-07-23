@@ -168,9 +168,11 @@ struct TestClient {
     // Reads one VideoFrame packet and decodes its first pixel byte (enough
     // to identify which FakeFrameSource produced it, since each fills
     // every pixel with one distinct, widely-separated byte: 0x11 vs 0x22).
-    // The wire payload is JPEG-compressed (protocol v8, see protocol.h's
-    // kProtocolVersion comment) rather than the raw fill byte itself, so
-    // this decodes it first -- lossy compression means the decoded byte is
+    // The wire payload is an 8-byte host capture timestamp (protocol v10,
+    // see protocol.h's kProtocolVersion comment and VideoFramePayload)
+    // followed by JPEG-compressed image bytes (protocol v8) rather than
+    // the raw fill byte itself, so this strips the timestamp and decodes
+    // the JPEG portion -- lossy compression means the decoded byte is
     // only guaranteed to be *close* to the original fill byte, which is
     // exactly why 0x11/0x22 (a difference of 17) were chosen: no
     // JPEG-quality-80 rounding error gets anywhere near confusing the two.
@@ -183,12 +185,15 @@ struct TestClient {
         if (!recvExactRaw(videoFd, body.data(), body.size())) return false;
         if (body.empty()) return false;
 
+        auto videoFrame = parseVideoFramePayload(body.data(), body.size());
+        if (!videoFrame || videoFrame->jpeg.empty()) return false;
+
         tjhandle decompressor = tjInitDecompress();
         if (!decompressor) return false;
         std::vector<uint8_t> pixels(static_cast<size_t>(kFrameWidth) * kFrameHeight * 4);
-        int result = tjDecompress2(decompressor, body.data(), static_cast<unsigned long>(body.size()),
-                                    pixels.data(), kFrameWidth, /*pitch=*/0, kFrameHeight, TJPF_BGRA,
-                                    TJFLAG_FASTDCT);
+        int result = tjDecompress2(decompressor, videoFrame->jpeg.data(),
+                                    static_cast<unsigned long>(videoFrame->jpeg.size()), pixels.data(), kFrameWidth,
+                                    /*pitch=*/0, kFrameHeight, TJPF_BGRA, TJFLAG_FASTDCT);
         tjDestroy(decompressor);
         if (result != 0) return false;
 
