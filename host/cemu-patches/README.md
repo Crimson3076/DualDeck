@@ -643,3 +643,53 @@ always, this patch cannot be compiled in this project's own sandbox, so
 the fix is diff-verified only; a CI build and a real retest on the
 user's hardware (specifically against Twilight Princess HD) are both
 still needed.
+
+**Fifth real end-to-end round: video now flows, but is sheared/torn on
+most titles.** Once the IPC cap fix above let video through
+continuously, the user sent screenshots of three titles on the same
+setup: Twilight Princess HD and Pokemon Rumble U both showed a stable
+(not intermittent) horizontal comb/interlace-style tearing across the
+entire GamePad stream; Wind Waker HD streamed perfectly. All three
+showed a normal FPS counter and CPU/GPU stats, so this is unambiguously
+a *different* bug from the earlier flashing/dropped-connection reports
+-- video is flowing, it's just corrupted for two of the three titles.
+
+Root cause: `CemuAdapter::capabilities()` reported the GamePad surface's
+resolution as the hardcoded `kGamePadDefaultWidth`/`kGamePadDefaultHeight`
+(854x480 -- the Wii U GamePad *hardware's* native resolution)
+unconditionally, and `NetServer` queries that declared value exactly
+once per connection, then reuses it for the rest of the session to
+interpret every subsequent raw frame's byte layout when JPEG-encoding it
+(the width/pitch passed to `tjCompress2`). A title's actual internal
+GamePad-view render resolution -- what `CaptureSurfaceBGRA()` really
+captures, via `GetEffectiveSize()` -- has no reason to always be exactly
+854x480, and evidently isn't for most titles. Whenever it differs, the
+encoder reads the real (differently-sized) buffer using the wrong
+stride, producing exactly the sheared/torn image in the screenshots.
+The real captured size was already being computed and stored every
+single frame (`CapturedSurface::width/height`, set in
+`onSurfaceRendered()`) -- `capabilities()` just never read it back,
+despite `CemuAdapter.h`'s own top comment already documenting that this
+was the *intended* behavior ("these are only the AdapterCapabilities
+defaults reported before the first frame is captured... onSurfaceRendered()
+records whatever the real captured texture size turns out to be").
+
+Fixed by having `capabilities()` report the real last-captured
+width/height once at least one TV/GamePad frame exists, falling back to
+the compile-time default only before the first one ever arrives (in
+practice always resolved by the time a client's Hello reaches Cemu,
+since capture starts as soon as the title boots -- well before a user
+gets around to launching the DualDeck client). Required marking
+`CapturedSurface::mutex` `mutable` so the const `capabilities()` method
+can lock it to read `width`/`height`/`hasFrame` safely. No protocol,
+IPC wire-format, or client-side change needed here -- this is purely a
+Cemu-side bug: Azahar and melonDS/DS both already keep their declared
+and actual capture sizes consistent (DS/3DS have one genuinely fixed
+native resolution; Azahar's declared surface size already derives from
+the same `captureScale_` value its actual capture uses).
+
+**Not yet verified**: same sandbox limitation as every fix above --
+diffed against the previously-committed patch to confirm an isolated
+change, not compiled or tested. Needs a CI build and a real retest
+against Twilight Princess HD and Pokemon Rumble U specifically to
+confirm the tearing is gone and Wind Waker still works.

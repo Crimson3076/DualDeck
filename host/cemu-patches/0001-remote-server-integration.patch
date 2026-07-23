@@ -870,10 +870,10 @@ index 0000000..d7c39c0
 +)
 diff --git a/src/remote_server/CemuAdapter.cpp b/src/remote_server/CemuAdapter.cpp
 new file mode 100644
-index 0000000..7227247
+index 0000000..83d6275
 --- /dev/null
 +++ b/src/remote_server/CemuAdapter.cpp
-@@ -0,0 +1,268 @@
+@@ -0,0 +1,300 @@
 +#include "remote_server/CemuAdapter.h"
 +
 +#include <algorithm>
@@ -999,11 +999,40 @@ index 0000000..7227247
 +    // client session to be considered healthy (a title with the
 +    // GamePad screen blanked/disabled is still fully playable via the
 +    // TV alone, unlike the reverse).
++    // Real-usage bug (GitHub-reported): this used to always report
++    // kTvDefaultWidth/kTvDefaultHeight and kGamePadDefaultWidth/
++    // kGamePadDefaultHeight below, contrary to this file's own top
++    // comment ("these are only the AdapterCapabilities defaults reported
++    // before the first frame is captured") -- onSurfaceRendered() always
++    // recorded the real captured size into m_tvSurface/m_gamePadSurface,
++    // but capabilities() never actually read it back. NetServer queries
++    // capabilities() (via AdapterBridge::frameDimensions()) once per
++    // connection and uses that value for the rest of the session to
++    // interpret every subsequent raw frame's byte layout (JPEG encode
++    // width/pitch) -- so any title whose actual internal GamePad/DRC
++    // render resolution isn't exactly 854x480 (the vast majority: this
++    // is only Wii U's *physical GamePad hardware's* native resolution,
++    // not something every title's software renderer is required to
++    // render at) streamed a sheared/torn image, since the encoder read
++    // a differently-sized real buffer using the wrong stride. Confirmed
++    // via user report + screenshots: Wind Waker HD (actual GamePad
++    // resolution apparently == 854x480) streamed perfectly; Twilight
++    // Princess HD and Pokemon Rumble U (different actual resolutions)
++    // both showed the same horizontal-tearing corruption. Fixed by
++    // reporting the real last-captured size once one exists, falling
++    // back to the compile-time default only before the very first
++    // GamePad/TV frame has ever been captured (in practice always
++    // resolved by the time a client's Hello arrives, since Cemu renders
++    // continuously from title boot, well before a user gets to opening
++    // the DualDeck client).
 +    melonds_remote::adapter::VideoSurfaceDescriptor tv;
 +    tv.surfaceId = kTvSurfaceId;
 +    tv.role = melonds_remote::adapter::SurfaceRole::Tv;
-+    tv.width = kTvDefaultWidth;
-+    tv.height = kTvDefaultHeight;
++    {
++        std::lock_guard guard(m_tvSurface.mutex);
++        tv.width = m_tvSurface.hasFrame ? static_cast<uint16_t>(m_tvSurface.width) : kTvDefaultWidth;
++        tv.height = m_tvSurface.hasFrame ? static_cast<uint16_t>(m_tvSurface.height) : kTvDefaultHeight;
++    }
 +    tv.pixelFormat = melonds_remote::adapter::PixelFormat::Bgra8888;
 +    tv.touchSupported = false;
 +    tv.required = false;
@@ -1020,8 +1049,11 @@ index 0000000..7227247
 +    melonds_remote::adapter::VideoSurfaceDescriptor gamePad;
 +    gamePad.surfaceId = kGamePadSurfaceId;
 +    gamePad.role = melonds_remote::adapter::SurfaceRole::GamePad;
-+    gamePad.width = kGamePadDefaultWidth;
-+    gamePad.height = kGamePadDefaultHeight;
++    {
++        std::lock_guard guard(m_gamePadSurface.mutex);
++        gamePad.width = m_gamePadSurface.hasFrame ? static_cast<uint16_t>(m_gamePadSurface.width) : kGamePadDefaultWidth;
++        gamePad.height = m_gamePadSurface.hasFrame ? static_cast<uint16_t>(m_gamePadSurface.height) : kGamePadDefaultHeight;
++    }
 +    gamePad.pixelFormat = melonds_remote::adapter::PixelFormat::Bgra8888;
 +    gamePad.touchSupported = false;
 +    gamePad.required = true;
@@ -1144,10 +1176,10 @@ index 0000000..7227247
 +} // namespace DualDeck::RemoteServer
 diff --git a/src/remote_server/CemuAdapter.h b/src/remote_server/CemuAdapter.h
 new file mode 100644
-index 0000000..ac3373d
+index 0000000..68e1ed5
 --- /dev/null
 +++ b/src/remote_server/CemuAdapter.h
-@@ -0,0 +1,187 @@
+@@ -0,0 +1,190 @@
 +#pragma once
 +
 +// DualDeck's IEmulatorAdapter implementation for Cemu (Nintendo Wii U).
@@ -1250,7 +1282,10 @@ index 0000000..ac3373d
 +// the TV and GamePad surfaces never block each other's capture or
 +// latestFrame() reads.
 +struct CapturedSurface {
-+    std::mutex mutex;
++    // mutable: capabilities() (a const method, see CemuAdapter.cpp) locks
++    // this to read width/height/hasFrame -- the actual most-recently-
++    // captured size, not just latestFrame()'s non-const pixel readout.
++    mutable std::mutex mutex;
 +    std::vector<uint8_t> pixels;
 +    int width = 0;
 +    int height = 0;

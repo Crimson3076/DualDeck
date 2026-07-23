@@ -64,16 +64,47 @@ jobs:
         id: version
         run: echo "tag=v0.1.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
 
-      # Installs sccache and points it at the GitHub Actions cache
-      # backend automatically -- scripts/build-release.sh detects
-      # sccache on PATH and passes it to every emulator/client cmake
-      # configure step as CMAKE_C(XX)_COMPILER_LAUNCHER. See the header
-      # comment above for why this matters far more here than in a
-      # typical from-scratch CI build: most runs of this workflow are a
-      # single small patch fix, not a change to a pinned upstream
-      # commit.
+      # Installs sccache. scripts/build-release.sh detects sccache on
+      # PATH and passes it to every emulator/client cmake configure step
+      # as CMAKE_C(XX)_COMPILER_LAUNCHER. See the header comment above
+      # for why this matters far more here than in a typical from-
+      # scratch CI build: most runs of this workflow are a single small
+      # patch fix, not a change to a pinned upstream commit.
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@v0.0.7
+
+      # Real-usage bug (GitHub-reported, "why is the cache not working at
+      # all?"): sccache-action's own GitHub Actions cache backend
+      # (SCCACHE_GHA_ENABLED) was assumed to persist compiled objects
+      # across runs, but a completed run's own `sccache --show-stats`
+      # output showed `Cache location: Local disk` -- meaning sccache
+      # was never actually reaching the GHA backend at all, silently
+      # falling back to the runner's own ephemeral disk, which is wiped
+      # at the end of every job. Confirmed by the hit-rate staying
+      # essentially flat (8 hits, both on a 798-request run and again on
+      # an unrelated 3138-request run) regardless of how much total work
+      # a run did -- a real cross-run cache would show hits scaling with
+      # reuse, not a constant tiny number. Rather than debug sccache's
+      # own GHA integration further, this explicitly persists its local
+      # disk cache directory via the same actions/cache mechanism this
+      # workflow already relies on for vcpkg/SDL3/Azahar/Cemu, which is
+      # known to actually work. Bounded to 2 GiB (SCCACHE_CACHE_SIZE
+      # below, well under sccache's own 10 GiB default) since this is a
+      # fifth cache sharing GitHub's 10 GB total per-repo cache budget
+      # alongside those already-large source+build caches -- sccache
+      # only needs to hold enough recent objects to accelerate a typical
+      # small-patch iteration, not remember every historical build.
+      # Uses a monotonic run-id save key with a stable restore-keys
+      # prefix (the standard sccache-in-CI pattern) since actions/cache
+      # can't overwrite an existing key: every run restores the most
+      # recent previous cache and saves a new entry on top of it.
+      - name: Cache sccache compilation objects (works across patch changes, unlike the source+build caches below)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sccache
+          key: sccache-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ runner.os }}-
 
       # vcpkg's own binary archive cache (Cemu's dependency builds only
       # -- melonDS/Azahar don't use vcpkg). See the header comment
@@ -131,6 +162,10 @@ jobs:
           BUILD_RELEASE_WORKDIR: ${{ github.workspace }}/.release-work
           BUILD_RELEASE_OUTPUT_DIR: ${{ github.workspace }}/release-out
           RELEASE_VERSION_TAG: ${{ steps.version.outputs.tag }}
+          # Bounds sccache's own local cache directory -- see the "Cache
+          # sccache compilation objects" step's comment above for why
+          # this stays well under sccache's 10 GiB default.
+          SCCACHE_CACHE_SIZE: 2G
         run: ./scripts/build-release.sh
 
       - name: Publish versioned release
