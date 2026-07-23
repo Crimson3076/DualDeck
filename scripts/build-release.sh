@@ -336,7 +336,7 @@ source ./ensure-packages.sh
 
 ensure_packages "client runtime" \
     "libx11-6 libxext6 libxrandr2 libxcursor1 libxfixes3 libxi6 libxss1 libwayland-client0 libwayland-cursor0 libwayland-egl1 libxkbcommon0 libdrm2 libgbm1 libdecor-0-0 libturbojpeg0" \
-    "libX11 libXext libXrandr libXcursor libXfixes libXi libXScrnSaver wayland-client wayland-cursor wayland-egl libxkbcommon libdrm mesa-libgbm libdecor libjpeg-turbo" \
+    "libX11 libXext libXrandr libXcursor libXfixes libXi libXScrnSaver libwayland-client libwayland-cursor libwayland-egl libxkbcommon libdrm mesa-libgbm libdecor turbojpeg" \
     "libx11 libxext libxrandr libxcursor libxfixes libxi libxss wayland libxkbcommon libdrm mesa libdecor libjpeg-turbo" \
     || echo "warning: could not verify/install client runtime libraries automatically; continuing anyway in case they're already present" >&2
 
