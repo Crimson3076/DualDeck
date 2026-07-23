@@ -5335,6 +5335,78 @@ link to measure) -- the instrumentation itself is proven correct, but
 what it will actually report on a real Steam Deck-over-Wi-Fi session
 against Cemu/Azahar/melonDS remains to be seen.
 
+## 2026-07-23: Cheap latency-tuning pass (no live measurements yet)
+
+Following the video-latency instrumentation above (built specifically
+because no real numbers existed yet to tune against), this pass applied
+the one concrete, already-visible-by-inspection latency issue found
+while reviewing the video pipeline, and documents what else was
+reviewed and deliberately left alone pending real measurements from the
+instrumentation now in place.
+
+**Applied: size-aware default JPEG quality.** `NetServerConfig::
+videoJpegQuality` (default 80) turned out to be the *only* value ever
+actually used for a client that doesn't send its own `HelloPayload::
+videoQuality` override (protocol v9) -- there is no `--video-quality`
+CLI flag on the host binary at all, so `run-host.sh`/
+`run-host-azahar.sh`/`run-host-cemu.sh` all launch with the exact same
+compiled-in default regardless of which adapter is actually driving the
+session. That default was tuned for DS/3DS-sized surfaces (49k-77k
+pixels); applying it unchanged to Cemu's much larger GamePad surface
+(854x480, ~410k pixels -- 5-8x more pixels than DS/3DS) produces
+proportionally larger JPEGs at the same quality, directly adding to
+per-frame encode time, network transmit time, and how often the video
+loop's own `SO_SNDBUF` backpressure (see below) actually has to kick
+in -- a real, concrete contributor to "latency is poor" on Wii U
+sessions specifically, visible from code inspection alone without
+needing a live measurement. `net_server.cpp`'s new
+`defaultVideoQualityForFrameSize()` (declared in `net_server.h`,
+unit-tested directly, same pattern as `mode_coordinator.h`'s
+`computeDesiredMode()`) resolves the fallback once per connection from
+that connection's own real negotiated frame size (HelloAck's
+`nativeWidth`/`nativeHeight`), not the emulated system's identity --
+correct for any future large-surface adapter too, not just Cemu. Above
+150,000 pixels, the configured default is capped at 60 (never *raised*
+if an operator already configured something lower, e.g. for a
+known-slow link). This also compounds with the existing quality->=90
+chroma-subsampling threshold in `compressFrameBgraToJpeg()`: Cemu's new
+effective default (60) stays well under that threshold, so it
+automatically keeps using the cheaper 4:2:0 subsampling too, without
+any separate change needed there.
+
+**Reviewed and left alone: `CEMU_REMOTE_CAPTURE_FPS`.** Already
+defaults to 30 (`host/cemu-patches/`'s `CemuAdapter.cpp`), explicitly
+matching this project's own established precedent for a small streamed
+display (`AzaharAdapter.cpp`'s identical default/reasoning) rather than
+capturing at Cemu's own 60-144fps render rate, which would add a GPU
+sync stall to every frame whether or not a client is even watching.
+Already reasonable; no evidence from code inspection alone that this
+specific number is the problem, and it's already overridable per-launch
+via the env var if a real measurement later says otherwise.
+
+**Reviewed and left alone: `SO_SNDBUF` backpressure sizing.**
+`net_server.cpp`'s `videoLoop()` sizes the socket send buffer to
+roughly two frames' worth of the *estimated compressed* size (not raw
+size), so a link too slow to keep up blocks (bounded by a 1s
+`SO_SNDTIMEO`) rather than letting several stale frames queue up in the
+kernel -- already the right shape of design (bound staleness, don't let
+TCP's in-order guarantee silently accumulate latency) per its own
+extensive existing comment. The quality fix above shrinks Cemu's actual
+compressed frame size, which shrinks this buffer's sizing estimate too
+(same formula, smaller input) -- a free, compounding improvement,
+without touching this logic directly. Not otherwise changed: tightening
+or loosening the "roughly two frames" constant without a real
+measurement of what's actually happening on a real link risks trading
+one guess for another.
+
+**Not done, and deliberately so**: no attempt to guess at further
+tuning (frame-skip aggressiveness beyond what's described above,
+adaptive quality that reacts to measured latency in real time, etc.)
+without the real numbers the instrumentation above now makes possible
+to collect. The next real step is gathering actual `videoReceiveLoop()`
+latency/decode-time log output from a real session (Steam Deck over
+Wi-Fi, ideally against Cemu specifically) before tuning further.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

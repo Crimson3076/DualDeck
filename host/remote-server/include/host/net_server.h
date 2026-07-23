@@ -238,6 +238,17 @@ struct NetServerStats {
     }
 };
 
+// Pure decision, no I/O -- unit-tested directly (test_net_server.cpp)
+// without needing a real NetServer/connection at all, same pattern as
+// mode_coordinator.h's computeDesiredMode(). Picks the JPEG quality a
+// connecting client gets when it didn't request its own explicit
+// HelloPayload::videoQuality (protocol v9) -- `configuredDefault` is
+// NetServerConfig::videoJpegQuality, `width`/`height` are that
+// connection's real negotiated frame size (HelloAck's nativeWidth/
+// nativeHeight). See its definition in net_server.cpp for the full
+// "why Cemu specifically needs this" reasoning.
+int defaultVideoQualityForFrameSize(int configuredDefault, uint16_t width, uint16_t height);
+
 class NetServer {
 public:
     // `micSink` receives MicAudioFrame packets (GitHub issue #2). Pass a

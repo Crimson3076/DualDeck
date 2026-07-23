@@ -391,3 +391,30 @@ MDR_TEST(hello_ack_reflects_identity_from_a_set_target_call_made_before_any_clie
 
     client.close();
 }
+
+// defaultVideoQualityForFrameSize() (net_server.cpp) -- pure decision
+// logic, unit-tested directly without any real connection, same pattern
+// as mode_coordinator.h's computeDesiredMode(). Real bug/gap this
+// exists to catch: applying a DS/3DS-tuned JPEG quality default
+// unchanged to Cemu's much larger GamePad surface (see the function's
+// own comment) directly worsens video latency on Wii U sessions.
+MDR_TEST(default_video_quality_keeps_the_configured_default_for_ds_sized_frames) {
+    MDR_CHECK(defaultVideoQualityForFrameSize(80, 256, 192) == 80);
+}
+
+MDR_TEST(default_video_quality_keeps_the_configured_default_for_3ds_sized_frames) {
+    MDR_CHECK(defaultVideoQualityForFrameSize(80, 320, 240) == 80);
+}
+
+MDR_TEST(default_video_quality_is_lowered_for_cemu_sized_frames) {
+    int quality = defaultVideoQualityForFrameSize(80, 854, 480);
+    MDR_CHECK(quality < 80);
+    MDR_CHECK(quality > 0);
+}
+
+MDR_TEST(default_video_quality_never_exceeds_an_already_low_configured_default) {
+    // A host operator who already configured a lower-than-60 default
+    // (e.g. for a known-slow link) must never see it raised back up
+    // just because a large surface connected.
+    MDR_CHECK(defaultVideoQualityForFrameSize(40, 854, 480) == 40);
+}

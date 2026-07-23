@@ -167,6 +167,33 @@ bool sendAll(int fd, const uint8_t* data, size_t size) {
 
 } // namespace
 
+// Real, live tuning gap this closes: `NetServerConfig::videoJpegQuality`
+// (default 80) is the *only* value ever actually used for a client that
+// doesn't send its own HelloPayload::videoQuality override -- there is
+// no `--video-quality` CLI flag on this binary at all, so every one of
+// run-host.sh/run-host-azahar.sh/run-host-cemu.sh launches with the
+// exact same compiled-in default regardless of which adapter is
+// actually driving the session. That default was picked (see
+// videoJpegQuality's own comment) for DS/3DS-sized surfaces (49k-77k
+// pixels); applying it unchanged to Cemu's much larger GamePad surface
+// (854x480, ~410k pixels -- ~5-8x more pixels than DS/3DS) produces
+// proportionally larger JPEGs at the same quality, directly adding to
+// per-frame encode time, network transmit time, and how often
+// SO_SNDBUF's backpressure (see videoLoop()'s own comment) has to
+// actually kick in -- a real, concrete contributor to reported
+// "latency is poor" complaints on Wii U sessions specifically. Resolved
+// once per connection, from that connection's own real negotiated
+// frame size (HelloAck's nativeWidth/nativeHeight), not the emulated
+// system's identity -- correct for any future adapter with an
+// unusually large or small surface too, not just today's known ones.
+int defaultVideoQualityForFrameSize(int configuredDefault, uint16_t width, uint16_t height) {
+    constexpr int kLargeSurfacePixelThreshold = 150'000; // comfortably above 3DS's 76,800, below Cemu's 409,920
+    constexpr int kLargeSurfaceQuality = 60; // still legible on Cemu's GamePad UI text at typical viewing distance
+    const int pixels = static_cast<int>(width) * height;
+    return pixels > kLargeSurfacePixelThreshold ? std::min(configuredDefault, kLargeSurfaceQuality)
+                                                 : configuredDefault;
+}
+
 NetServer::NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource,
                      IMicAudioSink& micSink)
     : config_(std::move(config)), inputSink_(&inputSink), frameSource_(&frameSource),
@@ -426,6 +453,7 @@ void NetServer::controlLoop() {
 
         bool handshakeOk = false;
         HelloRejectReason rejectReason = HelloRejectReason::ProtocolVersionMismatch;
+        bool clientRequestedExplicitVideoQuality = false;
 
         uint8_t headerBuf[kPacketHeaderWireSize];
         ssize_t n = ::recv(clientFd, headerBuf, sizeof(headerBuf), MSG_WAITALL);
@@ -480,12 +508,16 @@ void NetServer::controlLoop() {
                     }
 
                     if (handshakeOk) {
-                        // Protocol v9: an in-range client request wins; 0 (or
-                        // an out-of-range value from a misbehaving client)
-                        // falls back to this host's own configured default.
-                        currentVideoQuality_ = (hello->videoQuality >= 1 && hello->videoQuality <= 100)
-                                                   ? hello->videoQuality
-                                                   : config_.videoJpegQuality;
+                        // Protocol v9: an in-range client request always
+                        // wins. Otherwise, the actual fallback is resolved
+                        // below (see defaultVideoQualityForFrameSize()),
+                        // once this connection's real frame dimensions are
+                        // known -- deferred rather than just using
+                        // config_.videoJpegQuality unconditionally here.
+                        if (hello->videoQuality >= 1 && hello->videoQuality <= 100) {
+                            currentVideoQuality_ = hello->videoQuality;
+                            clientRequestedExplicitVideoQuality = true;
+                        }
                     }
                 } else {
                     std::fprintf(stderr, "NetServer: rejecting handshake (short Hello payload)\n");
@@ -518,6 +550,10 @@ void NetServer::controlLoop() {
             // 320x240) instead of always claiming DS's 256x192, so the
             // client can size its receive buffer/texture correctly.
             frameSource_->frameDimensions(ack.nativeWidth, ack.nativeHeight);
+        }
+        if (handshakeOk && !clientRequestedExplicitVideoQuality) {
+            currentVideoQuality_ =
+                defaultVideoQualityForFrameSize(config_.videoJpegQuality, ack.nativeWidth, ack.nativeHeight);
         }
         ByteBuffer ackPacket = buildHelloAckPacket(ack);
         sendAll(clientFd, ackPacket.data(), ackPacket.size());
