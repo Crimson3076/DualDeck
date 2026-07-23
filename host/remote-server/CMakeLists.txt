@@ -24,6 +24,11 @@ target_compile_features(dualdeck_host PUBLIC cxx_std_20)
 find_package(Threads REQUIRED)
 target_link_libraries(dualdeck_host PUBLIC Threads::Threads)
 
+# JPEG-compresses video frames before they go out over the wire (protocol
+# v8) -- see net_server.cpp's videoLoop() and top-level CMakeLists.txt for
+# where TurboJPEG::TurboJPEG is found.
+target_link_libraries(dualdeck_host PRIVATE TurboJPEG::TurboJPEG)
+
 if(DUALDECK_ENABLE_WARNINGS)
     target_compile_options(dualdeck_host PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow

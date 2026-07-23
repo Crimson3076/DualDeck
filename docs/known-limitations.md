@@ -4714,6 +4714,84 @@ Fixed by replacing both `GetDefaultLayout()` calls with that same
 literal constant. Still unverified: whether this was the only issue at
 this base -- the build hadn't gotten past this file when it stopped.
 
+## 2026-07-22: Video frames are now JPEG-compressed (protocol v8) -- fixes "basically unusable" bandwidth on Cemu
+
+Follow-up to the SO_SNDBUF fix above, which explicitly left "real frame
+compression" out of scope. Reported after that fix shipped: "after
+testing both clients, connectivity is very poor, and basically unusable
+with most games. some 2D menus do not render and 'disconnect' the
+client, not allowing controls until the menus have been interacted with
+on the host directly."
+
+Root cause (the bandwidth half of that report -- the 2D-menu-freeze half
+is a separate, still-open issue, see below): every video frame was sent
+completely uncompressed, project-wide, since the very first version of
+this pipeline. Fine for DS's 256x192 or 3DS's 320x240 surfaces, but
+Cemu's 854x480 GamePad surface is ~9x the 3DS bottom screen's pixel
+count -- at 1.64MB/frame uncompressed, even 30fps needs ~394 Mbps and
+60fps ~788 Mbps, both far beyond what real Steam Deck/ROG Ally Wi-Fi (or
+often even real-world gigabit Ethernet) sustains. The SO_SNDBUF fix
+stopped latency from growing *unboundedly* on a too-slow link; it never
+could have manufactured bandwidth that isn't there.
+
+Fixed by JPEG-compressing every frame (libjpeg-turbo's turbojpeg API)
+before it goes out over the wire, and decompressing it back to raw
+BGRA8888 on the client before handing it to the existing texture-upload
+path -- a protocol version bump (v7 -> v8, see `protocol.h`'s
+`kProtocolVersion` comment) since the wire payload format changed
+incompatibly. The encode/decode step lives entirely inside
+`NetServer::videoLoop()` (`host/remote-server/src/net_server.cpp`) and
+`NetClient::videoReceiveLoop()` (`client/src/net_client.cpp`) -- no
+adapter (melonDS/Azahar/Cemu/synthetic/host-control) or any of their
+patches needed to change, since they all still just hand raw BGRA to/from
+the same `IFrameSource`/`getLatestFrame()` contract as before. Quality is
+configurable (`NetServerConfig::videoJpegQuality`, default 80) for
+tuning against a given link.
+
+One real, deliberate side effect: JPEG has no alpha channel, so the
+alpha byte of every decoded BGRA pixel always comes back as `0xFF`
+regardless of what was originally captured there. Harmless in practice
+-- `client/src/main.cpp` always sets `SDL_BLENDMODE_NONE` on the video
+texture specifically because this pipeline's alpha byte has never been
+meaningful transparency data, so it's never read for blending -- but
+worth knowing if a future change ever tries to use that channel for
+something real.
+
+Two existing end-to-end tests asserted exact byte-for-byte frame
+equality between what a fake frame source produced and what the client
+received; both were updated to a small per-channel tolerance (and to
+skip the now-`0xFF` alpha byte in the client-side test) rather than
+exact equality, since JPEG is lossy by design --
+`client/tests/test_net_client.cpp`'s
+`net_client_receives_a_non_ds_sized_video_frame` and
+`host/remote-server/tests/test_net_server_mode_switch.cpp`'s
+`set_target_routes_video_to_the_new_frame_source`.
+
+**Still open**: the 2D-menu-freeze half of the original report.
+Cemu composites Wii U system overlays (software keyboard, error/message
+popups -- `swkbd_render()`/`nn::erreula::render()`) only inside
+`LatteRenderTarget_copyToBackbuffer()`, and for the GamePad surface that
+function only runs while `g_renderer->IsPadWindowActive()` -- i.e. only
+while Cemu's real local "Enable GamePad View" window (with its own live
+GPU swapchain) is open. This project's video-capture hook was
+deliberately moved earlier in the pipeline (see the "GamePad video
+required the local GamePad View window" entry above) specifically to
+stop needing that window for normal gameplay, which means it now
+captures the raw scan-buffer texture *before* these overlays are
+composited in: any ordinary game frame is unaffected, but these specific
+system popups are invisible to a remote client, and since Cafe OS blocks
+waiting on them to resolve, no input does anything remotely until
+someone dismisses the popup locally on the host. `IsPadWindowActive()`
+can't simply be forced true without a window, either -- both backends'
+implementations (`GLCanvas_HasPadViewOpen()`,
+`IsSwapchainInfoValid(false)`) are tied to a real, live GPU swapchain
+that `copyToBackbuffer()`'s ImGui-based rendering actually draws into,
+not a spoofable flag. Not fixed here: doing so without reopening the
+original "unwanted extra window" complaint likely means rendering
+`swkbd_render()`/`erreula::render()` into an off-screen capture target
+instead of a real window swapchain, a nontrivial Cemu-rendering change
+outside this fix's scope.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

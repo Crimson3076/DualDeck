@@ -15,6 +15,7 @@ add_executable(dualdeck-client
 target_link_libraries(dualdeck-client PRIVATE
     dualdeck_protocol
     SDL3::SDL3
+    TurboJPEG::TurboJPEG
 )
 
 target_compile_features(dualdeck-client PRIVATE cxx_std_20)

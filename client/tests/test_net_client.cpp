@@ -242,8 +242,35 @@ MDR_TEST(net_client_receives_a_non_ds_sized_video_frame) {
     // (196608-byte) payload -- a 320x240 (307200-byte) frame would fail
     // that check, log "dropping unexpected packet", and close the video
     // connection entirely, so getLatestFrame() would never return true.
+    //
+    // Not a byte-for-byte comparison against realFrame: protocol v8
+    // JPEG-compresses every frame (see protocol.h's kProtocolVersion
+    // comment), which is lossy by design, so net_server.cpp's encode ->
+    // net_client.cpp's decode round trip is not guaranteed to reproduce
+    // the exact input bytes even for this flat, single-color frame. What
+    // this test actually needs to prove -- a non-DS-sized frame survives
+    // the whole pipeline, decoded back to the right size with recognizably
+    // the same content -- is checked instead via size plus a small
+    // per-channel tolerance on the B/G/R bytes.
+    //
+    // The 4th byte of every BGRA pixel (alpha) is skipped entirely rather
+    // than compared: JPEG has no alpha channel at all, so
+    // compressFrameBgraToJpeg()/decompressJpegToBgra() only ever round-trip
+    // B/G/R through it -- decoding always produces 0xFF there regardless
+    // of the original byte. That's fine in practice (main.cpp always sets
+    // SDL_BLENDMODE_NONE on the video texture, so alpha is never actually
+    // used), but means alpha can't be part of this equality check.
     std::vector<uint8_t> received;
-    MDR_CHECK(waitUntil([&] { return client.getLatestFrame(received) && received == realFrame; }));
+    MDR_CHECK(waitUntil([&] {
+        if (!client.getLatestFrame(received)) return false;
+        if (received.size() != realFrame.size()) return false;
+        for (size_t i = 0; i < received.size(); ++i) {
+            if (i % 4 == 3) continue; // alpha -- see comment above
+            int diff = static_cast<int>(received[i]) - static_cast<int>(realFrame[i]);
+            if (diff < -8 || diff > 8) return false;
+        }
+        return true;
+    }));
     MDR_CHECK(client.isConnected());
 
     client.disconnect();

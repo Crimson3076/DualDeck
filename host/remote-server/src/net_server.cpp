@@ -7,6 +7,8 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <turbojpeg.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -112,6 +114,30 @@ bool constantTimeEquals(const std::string& a, const std::string& b) {
         diff = static_cast<unsigned char>(diff | (ca ^ cb));
     }
     return diff == 0;
+}
+
+// JPEG-compresses one raw BGRA8888 frame (protocol v8, see protocol.h's
+// kProtocolVersion comment). `compressor` is reused across calls -- see
+// videoLoop()'s comment on why -- so this function is only ever called
+// from that one thread. TJPF_BGRA as both input format and (implicitly,
+// via JCS_EXT_BGRA under the hood) how libjpeg-turbo reads it means no
+// manual channel reordering is needed, matching this project's existing
+// BGRA8888-everywhere convention. Returns false (leaving outJpeg
+// untouched) on a compression failure, which should only happen for a
+// malformed width/height.
+bool compressFrameBgraToJpeg(tjhandle compressor, const uint8_t* bgra, int width, int height,
+                              int quality, ByteBuffer& outJpeg) {
+    unsigned char* jpegBuf = nullptr;
+    unsigned long jpegSize = 0;
+    int result = tjCompress2(compressor, bgra, width, /*pitch=*/0, height, TJPF_BGRA,
+                              &jpegBuf, &jpegSize, TJSAMP_420, quality, TJFLAG_FASTDCT);
+    if (result != 0) {
+        std::fprintf(stderr, "NetServer: tjCompress2 failed: %s\n", tjGetErrorStr2(compressor));
+        return false;
+    }
+    outJpeg.assign(jpegBuf, jpegBuf + jpegSize);
+    tjFree(jpegBuf);
+    return true;
 }
 
 bool sendAll(int fd, const uint8_t* data, size_t size) {
@@ -756,6 +782,19 @@ void NetServer::videoLoop() {
     const auto interval = std::chrono::microseconds(
         1'000'000 / (config_.videoSendFps > 0 ? config_.videoSendFps : 60));
 
+    // One compressor handle for this whole thread's lifetime (protocol v8,
+    // see protocol.h's kProtocolVersion comment and compressFrameBgraToJpeg()
+    // above) -- tjInitCompress()/tjDestroy() do real setup/teardown work,
+    // and this loop already runs at up to videoSendFps, so paying that cost
+    // once here instead of per-frame (or even per-connection) matters.
+    // Safe to reuse across reconnects since this thread never calls it
+    // concurrently with itself.
+    tjhandle jpegCompressor = tjInitCompress();
+    if (!jpegCompressor) {
+        std::fprintf(stderr, "NetServer: tjInitCompress failed, video streaming disabled\n");
+        return;
+    }
+
     while (running_.load()) {
         sockaddr_in clientAddr{};
         socklen_t clientLen = sizeof(clientAddr);
@@ -815,23 +854,33 @@ void NetServer::videoLoop() {
         // iteration reaches for whatever's truly latest rather than
         // whatever was queued -- so latency stays bounded to roughly one
         // frame's transmission time instead of growing without limit.
+        uint16_t frameWidth = 0;
+        uint16_t frameHeight = 0;
         {
-            uint16_t frameWidth = 0;
-            uint16_t frameHeight = 0;
-            {
-                std::lock_guard<std::mutex> lock(targetMutex_);
-                frameSource_->frameDimensions(frameWidth, frameHeight);
-            }
-            // 4 bytes/pixel: PixelFormat::Bgra8888 is the only pixel format
-            // any adapter in this project uses.
-            const size_t frameBytes = static_cast<size_t>(frameWidth) * frameHeight * 4;
-            if (frameBytes > 0) {
-                int sndBuf = static_cast<int>(std::min<size_t>(frameBytes * 2, 0x7fffffff));
+            std::lock_guard<std::mutex> lock(targetMutex_);
+            frameSource_->frameDimensions(frameWidth, frameHeight);
+        }
+        // 4 bytes/pixel raw (PixelFormat::Bgra8888 is the only pixel format
+        // any adapter in this project uses) -- but what actually goes out
+        // over the wire since protocol v8 is a JPEG-compressed frame (see
+        // compressFrameBgraToJpeg() above), typically well under a quarter
+        // of that raw size at videoJpegQuality's default of 80 on real game
+        // content. Sizing this buffer off the true raw size would let the
+        // exact bufferbloat this SO_SNDBUF sizing exists to prevent creep
+        // back in, just at a smaller absolute scale -- so this estimates a
+        // conservative quarter-of-raw compressed size instead. Floored so
+        // tiny (e.g. test-fixture) frame sizes still get a workable buffer.
+        {
+            const size_t rawFrameBytes = static_cast<size_t>(frameWidth) * frameHeight * 4;
+            const size_t estimatedCompressedFrameBytes = std::max<size_t>(rawFrameBytes / 4, 16384);
+            if (rawFrameBytes > 0) {
+                int sndBuf = static_cast<int>(std::min<size_t>(estimatedCompressedFrameBytes * 2, 0x7fffffff));
                 ::setsockopt(clientFd, SOL_SOCKET, SO_SNDBUF, &sndBuf, sizeof(sndBuf));
             }
         }
 
         std::vector<uint8_t> frame;
+        ByteBuffer jpegFrame;
         std::optional<uint64_t> lastSentFrameIndex;
         while (running_.load()) {
             auto tickStart = std::chrono::steady_clock::now();
@@ -857,8 +906,16 @@ void NetServer::videoLoop() {
             if (gotFrame && lastSentFrameIndex && frameIndex == *lastSentFrameIndex) {
                 gotFrame = false;
             }
+            if (gotFrame && !compressFrameBgraToJpeg(jpegCompressor, frame.data(), frameWidth, frameHeight,
+                                                      config_.videoJpegQuality, jpegFrame)) {
+                // Logged inside compressFrameBgraToJpeg(); skip this tick
+                // rather than tearing down the connection, same treatment
+                // as "nothing new to send" below -- a transient encode
+                // failure shouldn't be fatal.
+                gotFrame = false;
+            }
             if (gotFrame) {
-                ByteBuffer packet = buildPacket(PacketType::VideoFrame, frame);
+                ByteBuffer packet = buildPacket(PacketType::VideoFrame, jpegFrame);
                 if (!sendAll(clientFd, packet.data(), packet.size())) {
                     break;
                 }
@@ -881,6 +938,8 @@ void NetServer::videoLoop() {
         ::close(clientFd);
         videoClientFd_ = -1;
     }
+
+    tjDestroy(jpegCompressor);
 }
 
 void NetServer::discoveryLoop() {

@@ -21,7 +21,18 @@
 namespace melonds_remote {
 
 // Bumped whenever the wire format changes incompatibly.
-inline constexpr uint16_t kProtocolVersion = 7;
+//
+// v8: VideoFrame's payload is now a JPEG-compressed image (libjpeg-turbo,
+// TJPF_BGRA) instead of a raw BGRA8888 buffer -- see net_server.cpp's
+// videoLoop() and net_client.cpp's videoReceiveLoop(). A raw
+// width*height*4 payload made streaming unusable on anything less than a
+// very fast, uncontended link once Cemu's much larger GamePad surface
+// (854x480, ~9x the 3DS bottom screen's pixel count) was added: at 60fps
+// that alone needs ~788 Mbps uncompressed. Bumping the version rather than
+// negotiating an optional codec keeps both sides simple, matching how
+// every other incompatible wire-format change in this project has been
+// handled (see the mic-support v5 bump above).
+inline constexpr uint16_t kProtocolVersion = 8;
 
 // Sentinel at the start of every packet so malformed/foreign traffic on the
 // same port can be rejected cheaply before any further parsing.
@@ -34,7 +45,7 @@ enum class PacketType : uint16_t {
     Heartbeat = 4,     // either direction, control channel, keepalive
     Disconnect = 5,    // either direction, control channel, graceful teardown
     EmulatorAction = 6, // client -> host, control channel, one-shot emulator command
-    VideoFrame = 7,    // host -> client, video channel, one bottom-screen frame
+    VideoFrame = 7,    // host -> client, video channel, one JPEG-compressed frame (see kProtocolVersion's v8 note)
     DiscoveryRequest = 8,  // client -> host, UDP discovery port, broadcast "who's out there"
     DiscoveryResponse = 9, // host -> client, UDP discovery port, unicast reply to the sender
     // client -> host, UDP audio port, one chunk of captured microphone PCM

@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <turbojpeg.h>
 #include <unistd.h>
 
 #include <chrono>
@@ -12,6 +13,38 @@
 namespace melonds_remote::client {
 
 namespace {
+
+// JPEG-decodes one video frame (protocol v8, see protocol.h's
+// kProtocolVersion comment) back into raw BGRA8888 -- TJPF_BGRA as the
+// output format means no manual channel reordering, matching this
+// project's existing BGRA8888-everywhere convention. `outBgra` is resized
+// to exactly width*height*4 regardless of its previous contents. Returns
+// false (leaving outBgra unspecified) if `jpeg` isn't a valid JPEG image of
+// exactly width x height -- a mismatched size is treated as a decode
+// failure rather than silently cropped/padded, since it would otherwise
+// silently corrupt the frame the caller renders.
+bool decompressJpegToBgra(tjhandle decompressor, const uint8_t* jpeg, size_t jpegSize, int width,
+                           int height, std::vector<uint8_t>& outBgra) {
+    int jpegWidth = 0, jpegHeight = 0, jpegSubsamp = 0, jpegColorspace = 0;
+    if (tjDecompressHeader3(decompressor, jpeg, static_cast<unsigned long>(jpegSize), &jpegWidth,
+                             &jpegHeight, &jpegSubsamp, &jpegColorspace) != 0) {
+        std::fprintf(stderr, "video: tjDecompressHeader3 failed: %s\n", tjGetErrorStr2(decompressor));
+        return false;
+    }
+    if (jpegWidth != width || jpegHeight != height) {
+        std::fprintf(stderr, "video: decoded JPEG is %dx%d, expected %dx%d\n", jpegWidth, jpegHeight,
+                     width, height);
+        return false;
+    }
+
+    outBgra.resize(static_cast<size_t>(width) * height * 4);
+    if (tjDecompress2(decompressor, jpeg, static_cast<unsigned long>(jpegSize), outBgra.data(), width,
+                       /*pitch=*/0, height, TJPF_BGRA, TJFLAG_FASTDCT) != 0) {
+        std::fprintf(stderr, "video: tjDecompress2 failed: %s\n", tjGetErrorStr2(decompressor));
+        return false;
+    }
+    return true;
+}
 
 bool sendAll(int fd, const uint8_t* data, size_t size) {
     size_t sent = 0;
@@ -348,22 +381,41 @@ bool NetClient::getLatestFrame(std::vector<uint8_t>& outFrame) {
 void NetClient::videoReceiveLoop() {
     std::vector<uint8_t> headerBuf(kPacketHeaderWireSize);
     std::vector<uint8_t> payloadBuf;
+    std::vector<uint8_t> decodedFrame;
+
+    // Protocol v8 (see protocol.h's kProtocolVersion comment): VideoFrame's
+    // payload is now a JPEG-compressed image, decoded back to raw BGRA8888
+    // here before latestFrame_ is ever touched -- everything downstream
+    // (getLatestFrame(), main.cpp's texture upload) still sees exactly the
+    // same raw format it always has. One decompressor handle for this
+    // thread's whole lifetime, same reasoning as net_server.cpp's
+    // jpegCompressor: tjInitDecompress()/tjDestroy() aren't free, and this
+    // loop runs once per incoming frame.
+    tjhandle jpegDecompressor = tjInitDecompress();
+    if (!jpegDecompressor) {
+        std::fprintf(stderr, "video: tjInitDecompress failed, cannot receive video\n");
+        connected_ = false;
+        return;
+    }
 
     while (connected_.load()) {
         if (!recvExact(videoFd_, headerBuf.data(), headerBuf.size())) {
             break;
         }
-        // Compared against this connection's own HelloAck-reported
-        // dimensions (see hostNativeWidth_/hostNativeHeight_ above), not a
-        // fixed DS-sized constant -- a 320x240 3DS frame from
-        // AzaharAdapter used to always fail this check and silently kill
-        // the video connection, since the host previously never reported
-        // its real dimensions either (see net_server.cpp's matching fix).
-        const uint32_t expectedFrameBytes =
+        // hostNativeWidth_/hostNativeHeight_ (this connection's own
+        // HelloAck-reported dimensions, not a fixed DS-sized constant --
+        // see the AzaharAdapter/3DS note this comment used to carry)
+        // bound how large a compressed payload could legitimately be:
+        // real JPEG output at any quality is essentially never larger
+        // than the equivalent raw frame, so this is a generous sanity
+        // ceiling against a corrupt/bogus size field, not a tight
+        // expected-size check like before compression (payload size now
+        // varies frame to frame with scene content).
+        const uint32_t rawFrameBytes =
             static_cast<uint32_t>(hostNativeWidth_.load()) * hostNativeHeight_.load() * 4u;
         auto header = parseHeader(headerBuf.data(), headerBuf.size());
-        if (!header || header->type != PacketType::VideoFrame ||
-            header->payloadSize != expectedFrameBytes) {
+        if (!header || header->type != PacketType::VideoFrame || header->payloadSize == 0 ||
+            header->payloadSize > rawFrameBytes) {
             std::fprintf(stderr, "video: dropping unexpected packet, closing connection\n");
             break;
         }
@@ -373,11 +425,18 @@ void NetClient::videoReceiveLoop() {
             break;
         }
 
+        if (!decompressJpegToBgra(jpegDecompressor, payloadBuf.data(), payloadBuf.size(),
+                                   hostNativeWidth_.load(), hostNativeHeight_.load(), decodedFrame)) {
+            std::fprintf(stderr, "video: dropping undecodable frame, closing connection\n");
+            break;
+        }
+
         std::lock_guard<std::mutex> lock(frameMutex_);
-        latestFrame_.swap(payloadBuf);
+        latestFrame_.swap(decodedFrame);
         hasFrame_ = true;
     }
 
+    tjDestroy(jpegDecompressor);
     connected_ = false;
 }
 

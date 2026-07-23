@@ -15,6 +15,7 @@ target_link_libraries(melonds_remote_host_tests PRIVATE
     dualdeck_host
     dualdeck_adapter_sdk_fakes
     dualdeck_adapter_sdk_synthetic
+    TurboJPEG::TurboJPEG
 )
 
 target_compile_features(melonds_remote_host_tests PRIVATE cxx_std_20)

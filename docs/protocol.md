@@ -13,7 +13,7 @@ same fixed-size header.
 | Offset | Size | Field            | Notes                                   |
 |-------:|-----:|------------------|------------------------------------------|
 | 0      | 4    | `magic`          | Always `0x444D5231` ("DMR1"). Packets with any other value are rejected before further parsing. |
-| 4      | 2    | `protocolVersion`| Currently `7` (bumped from `6` when `HelloAckPayload.mode` was added, GitHub issue #4 Phase E -- see "HelloAck payload" below; `6` itself had bumped from `5` when `HelloAckPayload.system`/`.adapter` and `DiscoveryResponsePayload.system`/`.adapter` were added for the emulator identity model, GitHub issue #28 -- see "Emulator identity model" below; `5` itself had bumped from `4` when `HelloAckPayload.micSupported` and `DiscoveryResponsePayload.audioPort` were added for microphone support, GitHub issue #2 -- see "MicAudioFrame payload" below; `4` itself had bumped from `3` when `HelloPayload.appVersion`/`HelloAckPayload.appVersion` were added and `HelloRejectReason::AppVersionMismatch` was introduced -- see "App version mismatch" below; `3` itself had bumped from `2` when `HelloAckPayload.pairingToken` was removed and `HelloRejectReason::PairingRequired` was renamed to `ApprovalRequired`, moving from a typed-code pairing flow to device-approval; `2` itself had bumped from `1` when those pairing-code fields were first added). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
+| 4      | 2    | `protocolVersion`| Currently `8` (bumped from `7` when `VideoFrame`'s payload changed from a raw pixel buffer to a JPEG-compressed image -- see "Video payload" below; `7` itself had bumped from `6` when `HelloAckPayload.mode` was added, GitHub issue #4 Phase E -- see "HelloAck payload" below; `6` itself had bumped from `5` when `HelloAckPayload.system`/`.adapter` and `DiscoveryResponsePayload.system`/`.adapter` were added for the emulator identity model, GitHub issue #28 -- see "Emulator identity model" below; `5` itself had bumped from `4` when `HelloAckPayload.micSupported` and `DiscoveryResponsePayload.audioPort` were added for microphone support, GitHub issue #2 -- see "MicAudioFrame payload" below; `4` itself had bumped from `3` when `HelloPayload.appVersion`/`HelloAckPayload.appVersion` were added and `HelloRejectReason::AppVersionMismatch` was introduced -- see "App version mismatch" below; `3` itself had bumped from `2` when `HelloAckPayload.pairingToken` was removed and `HelloRejectReason::PairingRequired` was renamed to `ApprovalRequired`, moving from a typed-code pairing flow to device-approval; `2` itself had bumped from `1` when those pairing-code fields were first added). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
 | 6      | 2    | `packetType`     | See table below.                        |
 | 8      | 4    | `payloadSize`    | Size of the payload that follows, in bytes. Receivers must verify this matches the number of bytes actually available before parsing the payload. |
 
@@ -27,7 +27,7 @@ same fixed-size header.
 | 4     | `Heartbeat`       | either           | TCP control | none |
 | 5     | `Disconnect`      | either           | TCP control | none |
 | 6     | `EmulatorAction`  | client -> host  | TCP control | not yet implemented; emulator actions currently ride inside `ControllerState.emulatorActions` |
-| 7     | `VideoFrame`      | host -> client  | TCP video | raw pixel buffer, see "Video payload" below |
+| 7     | `VideoFrame`      | host -> client  | TCP video | JPEG-compressed image, see "Video payload" below |
 | 8     | `DiscoveryRequest`  | client -> host (UDP broadcast) | discovery | none |
 | 9     | `DiscoveryResponse` | host -> client (UDP unicast)   | discovery | see "Discovery payload" below |
 | 10    | `MicAudioFrame`   | client -> host  | UDP audio | see "MicAudioFrame payload" below |
@@ -98,20 +98,43 @@ table, not part of the wire format.
 
 ## Video payload
 
-Stage 1 transport (spec section 8.4): the payload is a raw pixel buffer,
-`256 * 192 * 4 = 196608` bytes, **B,G,R,X bytes in memory, in that order**
-(byte 0 = blue, 1 = green, 2 = red, 3 = unused/alpha) -- matching melonDS's
-software renderer output directly (see
-`docs/melonds-integration-analysis.md` section 1.1), so the eventual real
-integration does not need a color conversion step. `host/remote-server`'s
-`SyntheticFrameSource` already produces frames in this same format so the
-client-side decode path is exercised end-to-end today. This byte order
-was empirically confirmed (not just assumed) against a real patched
-melonDS binary delivering live frames from a running program -- see
-`tests/homebrew-test-rom/README.md`.
+Protocol v8: the payload is a JPEG-compressed image (libjpeg-turbo's
+turbojpeg API, quality configurable via
+`NetServerConfig::videoJpegQuality`, default 80), one frame's worth of
+whatever pixel dimensions the connected adapter's `frameDimensions()`
+reports (see the "Emulator identity model" section below for how a
+non-DS-sized adapter's dimensions reach the client). `payloadSize` varies
+frame to frame with scene content, unlike every payload elsewhere in this
+protocol -- receivers must not assume a fixed expected size the way older
+versions of this protocol's client did.
 
-**On the client, this is `SDL_PIXELFORMAT_BGRA32`, not
-`SDL_PIXELFORMAT_BGRA8888`.** SDL names its 32-bit "packed" formats
+**Before v7 (raw pixel buffer, retained here for history)**: the payload
+used to be an uncompressed pixel buffer, `width * height * 4` bytes,
+**B,G,R,X bytes in memory, in that order** (byte 0 = blue, 1 = green, 2 =
+red, 3 = unused/alpha) -- matching melonDS's software renderer output
+directly. Fine for DS's 256x192 or 3DS's 320x240 surfaces, but
+increasingly unworkable for anything larger (Cemu's 854x480 GamePad
+surface needs ~788 Mbps uncompressed at 60fps) on a real, bandwidth-
+constrained link -- see `docs/known-limitations.md`'s 2026-07-22 JPEG
+compression entry for the full story. `NetServer::videoLoop()`
+(`host/remote-server/src/net_server.cpp`) compresses every frame with
+this B,G,R,X-ordered raw buffer as turbojpeg's `TJPF_BGRA` input, and
+`NetClient::videoReceiveLoop()` (`client/src/net_client.cpp`) decodes
+back to the exact same B,G,R,X byte order via `TJPF_BGRA` as the output
+format -- so everything below this point (the SDL texture format note,
+`client/src/main.cpp`'s texture upload) is unchanged from before
+compression, since that layer only ever sees the decoded raw buffer.
+
+One real side effect of JPEG having no alpha channel at all: the fourth
+(X/alpha) byte of every decoded pixel always comes back `0xFF`, whatever
+the original byte was. This is harmless here since alpha in this
+protocol has never carried real transparency data and the client never
+reads it for blending (`SDL_SetTextureBlendMode(..., SDL_BLENDMODE_NONE)`
+in `client/src/main.cpp`), but would matter if that byte were ever put to
+real use.
+
+**On the client, the decoded buffer is uploaded as `SDL_PIXELFORMAT_BGRA32`,
+not `SDL_PIXELFORMAT_BGRA8888`.** SDL names its 32-bit "packed" formats
 (`..._8888`) after a bit layout read MSB-to-LSB of the pixel as a single
 integer, not a byte order in memory -- on a little-endian machine (the
 common case, including Steam Deck) `SDL_PIXELFORMAT_BGRA8888` actually

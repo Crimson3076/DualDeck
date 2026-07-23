@@ -11,6 +11,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
+#include <turbojpeg.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -161,9 +162,15 @@ struct TestClient {
         ::close(udpFd);
     }
 
-    // Reads one VideoFrame packet's first byte (enough to identify which
-    // FakeFrameSource produced it, since each fills every pixel with one
-    // distinct byte).
+    // Reads one VideoFrame packet and decodes its first pixel byte (enough
+    // to identify which FakeFrameSource produced it, since each fills
+    // every pixel with one distinct, widely-separated byte: 0x11 vs 0x22).
+    // The wire payload is JPEG-compressed (protocol v8, see protocol.h's
+    // kProtocolVersion comment) rather than the raw fill byte itself, so
+    // this decodes it first -- lossy compression means the decoded byte is
+    // only guaranteed to be *close* to the original fill byte, which is
+    // exactly why 0x11/0x22 (a difference of 17) were chosen: no
+    // JPEG-quality-80 rounding error gets anywhere near confusing the two.
     bool readVideoFrameFirstByte(uint8_t& outByte) {
         uint8_t headerBuf[kPacketHeaderWireSize];
         if (!recvExactRaw(videoFd, headerBuf, sizeof(headerBuf))) return false;
@@ -172,7 +179,17 @@ struct TestClient {
         ByteBuffer body(header->payloadSize);
         if (!recvExactRaw(videoFd, body.data(), body.size())) return false;
         if (body.empty()) return false;
-        outByte = body[0];
+
+        tjhandle decompressor = tjInitDecompress();
+        if (!decompressor) return false;
+        std::vector<uint8_t> pixels(static_cast<size_t>(kFrameWidth) * kFrameHeight * 4);
+        int result = tjDecompress2(decompressor, body.data(), static_cast<unsigned long>(body.size()),
+                                    pixels.data(), kFrameWidth, /*pitch=*/0, kFrameHeight, TJPF_BGRA,
+                                    TJFLAG_FASTDCT);
+        tjDestroy(decompressor);
+        if (result != 0) return false;
+
+        outByte = pixels[0];
         return true;
     }
 
@@ -236,6 +253,15 @@ struct ServerFixture {
     }
 };
 
+// JPEG compression (protocol v8) is lossy, so a decoded fill byte is only
+// guaranteed to land close to the original, not identical to it -- see
+// TestClient::readVideoFrameFirstByte()'s comment on why frameA/frameB's
+// 0x11/0x22 fill bytes are still unambiguous under this tolerance.
+bool closeTo(uint8_t actual, uint8_t expected) {
+    int diff = static_cast<int>(actual) - static_cast<int>(expected);
+    return diff >= -8 && diff <= 8;
+}
+
 } // namespace
 
 MDR_TEST(set_target_routes_new_input_to_the_new_sink) {
@@ -283,7 +309,7 @@ MDR_TEST(set_target_routes_video_to_the_new_frame_source) {
 
     uint8_t firstByte = 0;
     MDR_CHECK(client.readVideoFrameFirstByte(firstByte));
-    MDR_CHECK_EQ(firstByte, 0x11); // frameA's fill byte
+    MDR_CHECK(closeTo(firstByte, 0x11)); // frameA's fill byte
 
     fixture.server.setTarget(fixture.sinkB, fixture.frameB, HostMode::HostControl, {"host", "Host Menu"},
                               {"host-control", "Host Control", ""});
@@ -293,7 +319,7 @@ MDR_TEST(set_target_routes_video_to_the_new_frame_source) {
     bool sawFrameB = false;
     for (int i = 0; i < 20 && !sawFrameB; ++i) {
         if (!client.readVideoFrameFirstByte(firstByte)) break;
-        if (firstByte == 0x22) sawFrameB = true;
+        if (closeTo(firstByte, 0x22)) sawFrameB = true;
     }
     MDR_CHECK(sawFrameB);
 

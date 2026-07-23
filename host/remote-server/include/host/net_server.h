@@ -63,6 +63,16 @@ struct NetServerConfig {
     // still bounded by how fast frameSource_ itself produces new frames.
     int videoSendFps = 240;
 
+    // JPEG quality (1-100, libjpeg-turbo's tjCompress2 scale) videoLoop()
+    // compresses every frame at before sending (protocol v8 -- see
+    // protocol.h's kProtocolVersion comment for why: raw BGRA8888 frames
+    // made streaming unusable once Cemu's much larger GamePad surface was
+    // added). 80 is a middle-of-the-road tradeoff between bandwidth and
+    // visible compression artifacts on typical game content; lower this
+    // further for a slower link, or raise it for a fast wired one where
+    // artifacts matter more than bandwidth.
+    int videoJpegQuality = 80;
+
     // Whether this host accepts MicAudioFrame packets at all (GitHub
     // issue #2) -- an explicit host-side on/off switch (like
     // discoveryEnabled below), not just "does a sink object happen to
