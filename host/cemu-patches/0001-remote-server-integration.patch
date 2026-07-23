@@ -2171,10 +2171,10 @@ index 0000000..5afcace
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/ipc_protocol.h b/src/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/ipc_protocol.h
 new file mode 100644
-index 0000000..02a923d
+index 0000000..677ef35
 --- /dev/null
 +++ b/src/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/ipc_protocol.h
-@@ -0,0 +1,126 @@
+@@ -0,0 +1,147 @@
 +#pragma once
 +
 +// Wire format for the Host-Service<->adapter local IPC channel (GitHub
@@ -2253,13 +2253,34 @@ index 0000000..02a923d
 +// for payload-less types (Heartbeat, Disconnect, ReleaseInputs).
 +melonds_remote::ByteBuffer buildIpcMessage(IpcMessageType type, const melonds_remote::ByteBuffer& payload);
 +
-+// Upper bound on a single Frame message's pixel payload (16 MiB) --
-+// comfortably above any surface this project defines today (the
-+// largest fixture, Wii U's 1920x1080 BGRA8888 TV surface, is 1920 * 1080
-+// * 4 = 8,294,400 bytes) while still bounding it before ever allocating,
-+// per the same "validate every declared size before trusting it"
-+// discipline protocol.h already documents.
-+inline constexpr uint32_t kMaxIpcFramePixelBytes = 16u * 1024u * 1024u;
++// Upper bound on a single Frame message's pixel payload (128 MiB).
++//
++// Real-usage bug (GitHub-reported): the previous value here (16 MiB,
++// sized off a Wii U TV surface assumed to top out at 1920x1080 ==
++// 8,294,400 bytes) silently broke Cemu on any game running under one of
++// the resolution-enhancing graphics packs the Cemu community widely
++// uses -- CemuAdapter captures the TV surface at Cemu's actual internal
++// render resolution (LatteTextureVk::GetEffectiveSize(), the same
++// resolution a 4K/5K/8K graphics pack targets), not a fixed 1080p, so a
++// game running at even 1440p (2560x1440x4 = 14,745,600 bytes) already
++// exceeded the old cap. parseSurfaceFrame() rejects an over-cap payload
++// as malformed, which both AdapterIpcClient::readLoop() and
++// AdapterIpcServer's own receive loop treat as "this connection is
++// over" -- so every attempted TV-surface Frame message failed instantly
++// after a fresh handshake succeeded, producing a client that looked
++// like it was rapidly bouncing between Emulation and HostControl mode
++// forever, indistinguishable at a glance from a genuinely flaky
++// connection (see docs/known-limitations.md's matching entry). 128 MiB
++// comfortably covers even an 8K TV surface (7680x4320x4 = 132,710,400
++// bytes is the one real case this doesn't cover; 128 MiB was chosen to
++// stay a round number rather than chase that specific figure, and
++// nothing this project defines gets remotely close to it otherwise) --
++// this is purely local Unix-socket IPC between the emulator process and
++// the Host Service on the same machine, not anything sent over the
++// network, so the memory cost of a generous cap here is a non-issue on
++// any machine capable of rendering at that resolution in the first
++// place.
++inline constexpr uint32_t kMaxIpcFramePixelBytes = 128u * 1024u * 1024u;
 +
 +// Upper bound on how many VideoSurfaceDescriptors one AdapterCapabilities
 +// may declare -- generous for any real system (DS: 1, 3DS/Wii U: 2) while

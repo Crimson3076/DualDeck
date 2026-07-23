@@ -510,12 +510,23 @@ Reported directly from a user's host-service log: after roughly 15-20
 seconds of streaming, Cemu segfaults inside `__libc_free`, called (per
 the crash's own stack trace) from `CemuAdapter::onSurfaceRendered()` ->
 `LatteCP_itHLECopyColorBufferToScanBuffer()` -> `LatteCP_ProcessRingbuffer()`.
-The IPC-reconnect loop this produces (Cemu crashes, the launcher restarts
-it, `RemoteServerBridge`/`AdapterIpcClient` reconnects, `ModeCoordinator`
-flips back to `Emulation`, Cemu crashes again a few seconds later) is
-what a client actually sees as "flashes between connecting and host
-control, controls don't work" -- not a genuinely flaky IPC connection,
-Cemu itself dying repeatedly underneath it.
+
+**Correction (this crash does not explain the reported "flashing"):**
+initially reported to the user as explaining the entire "flashes between
+connecting and host control, controls don't work" symptom -- the theory
+being Cemu crashes, the launcher restarts it, `RemoteServerBridge`/
+`AdapterIpcClient` reconnects, `ModeCoordinator` flips back to
+`Emulation`, and Cemu crashes again a few seconds later, on repeat. The
+user pushed back: "Cemu itself was staying alive, so I doubt it was
+'crashing' unless it was the network plugin or something." Re-reading
+the same log confirmed this: the segfault trace appears exactly once, at
+the very end, after 20+ reconnect cycles with no crash evidence between
+them and continuous client input throughout. The crash below is real and
+worth fixing, but it is a separate, secondary bug -- see "IPC frame-size
+cap" further down for the theory that actually accounts for the repeated
+flashing, root-caused after the user clarified they were sitting in a
+single, stable, already-loaded game's own main menu when it happened
+(which also ruled out a title-relaunch-churn theory tried in between).
 
 Root cause (well-reasoned from reading the actual code both files
 involved, not confirmed with a debugger against a live crash -- this
@@ -568,3 +579,57 @@ crash becomes rarer/later (supporting the allocation-churn theory) or
 is unaffected (pointing elsewhere, e.g. the blit-target `image` path
 this fix left untouched, or the render-pass/command-buffer state at the
 specific point in Cemu's pipeline this hook runs from).
+
+**IPC frame-size cap: the likely actual root cause of the reported
+flashing.** After the Vulkan-crash fix above was shown not to explain
+the symptom (see the correction inline in that section), re-examined
+`RemoteServerBridge::start()`'s reconnect loop and the adapter IPC
+transport it drives. The ~1-second period of the observed
+connecting/host-control cycling is an artifact of the loop's own
+`backoffMs` resetting to 1000ms on every successful `connect()` -- not
+evidence the connection survives close to a full second before dying.
+
+`adapter-sdk/ipc/include/.../ipc_protocol.h` (vendored into this patch
+under `src/remote_server/adapter_sdk/include/...`) defined
+`kMaxIpcFramePixelBytes` as 16 MiB, sized off an assumption that Wii U's
+TV surface tops out at 1920x1080 (8,294,400 bytes). `CemuAdapter`
+actually captures the TV surface at Cemu's *real* internal render
+resolution (`GetEffectiveSize()`), which tracks whatever
+resolution-enhancing graphics pack the user has active in Cemu -- 1440p,
+4K, or higher is common for popular titles, not capped at 1080p at all.
+`parseSurfaceFrame()` rejects any declared frame payload over the cap as
+malformed, and both `AdapterIpcClient::readLoop()` and the server's own
+receive loop treat a failed parse as "this connection is over."
+
+That matches every symptom in the original report exactly: Cemu's
+process itself is completely unaffected (consistent with the user's
+correction, since this is a local Unix-socket IPC parse-rejection, not a
+crash); the connection completes its small Hello/HelloAck handshake,
+`ModeCoordinator` switches to `Emulation`, then the very first
+oversized TV-surface `Frame` message is rejected and the connection
+drops straight back to `HostControl`; and it doesn't depend on which
+screen is showing, consistent with the user's clarification that it
+happened while sitting stably in the game's own main menu (not during a
+title transition, which is what an earlier, since-abandoned theory about
+`CafeSystem.cpp`'s `LaunchForegroundTitle()`/`ShutdownTitle()` hooks had
+assumed).
+
+Fixed by raising `kMaxIpcFramePixelBytes` from 16 MiB to 128 MiB (see
+the constant's own comment in `ipc_protocol.h` for the full sizing
+rationale) in both the main repo's copy and this patch's vendored copy.
+This is purely local same-machine IPC between Cemu and the Host Service
+process, never sent over the network, so a generous cap costs nothing
+bandwidth-wise. The same 16 MiB cap was independently too small for
+Azahar too, once its own capture scale started auto-following
+`resolution_factor` (see `docs/known-limitations.md`'s matching entry);
+`host/azahar-patches/` vendors an identical copy of the same header and
+was updated the same way.
+
+**Not yet verified**: this is the current best theory, self-consistent
+with every log detail gathered so far, but it has not been directly
+confirmed the way the two earlier theories were ruled out -- the user
+has not yet been asked whether the game in question was running under a
+Cemu resolution-enhancement graphics pack, which would be direct
+confirmation. As always, this patch cannot be compiled in this
+project's own sandbox, so the fix is diff-verified only; a CI build and
+a real retest on the user's hardware are both still needed.

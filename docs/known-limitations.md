@@ -4879,7 +4879,7 @@ correspondingly at quality >= 90, since 4:4:4's larger compressed output
 would otherwise be under-estimated by the heuristic tuned for the
 default quality's 4:2:0 case.
 
-## 2026-07-23: Cemu GamePad screen flashes between "connecting" and host-control, controls don't work -- root-caused to a Vulkan capture crash, fixed (unverified)
+## 2026-07-23: Cemu GamePad screen flashes between "connecting" and host-control, controls don't work
 
 Reported after the v2.6-based Cemu build was first tested for real:
 "Wii U second screen still does not work, it flashes between the
@@ -4892,40 +4892,92 @@ client is just driving the host's own input directly) -- which, per
 happens if the host repeatedly gains and loses its adapter connection to
 Cemu.
 
-Diagnosed from a captured host-service log (`dualdeck-host.sh 2>&1 |
-tee ~/dualdeck-host.log`): Cemu itself was crashing, not the IPC
-connection flaking on its own. The log showed the exact
-attempt-connect / connect / switch-to-Emulation / switch-back-to-
-HostControl cycle the report described, ending in a real segfault
-inside `__libc_free`, with a stack trace through
-`CemuAdapter::onSurfaceRendered()` -> `LatteCP_itHLECopyColorBufferToScanBuffer()`
--> `LatteCP_ProcessRingbuffer()` -- i.e. Cemu's own graphics command
-processor thread. `RemoteServerBridge`'s `AdapterIpcClient`
-reconnect-with-backoff loop was doing exactly what it's supposed to
-after each crash (matching Azahar's own equivalent loop); the actual
-bug was upstream of it.
+**First diagnosis, overstated -- corrected by the user.** A captured
+host-service log (`dualdeck-host.sh 2>&1 | tee ~/dualdeck-host.log`)
+showed the expected attempt-connect / connect / switch-to-Emulation /
+switch-back-to-HostControl cycle repeating dozens of times, ending in a
+real segfault inside `__libc_free`, stack-traced through
+`CemuAdapter::onSurfaceRendered()` ->
+`LatteCP_itHLECopyColorBufferToScanBuffer()` ->
+`LatteCP_ProcessRingbuffer()` (Cemu's own graphics command processor
+thread). This was initially reported to the user as "Cemu itself was
+crashing" -- explaining the whole cycle. The user correctly pushed back:
+"Cemu itself was staying alive, so I doubt it was 'crashing' unless it
+was the network plugin or something." Re-reading the same log confirmed
+they were right: the segfault trace appears exactly once, at the very
+end, after 20+ reconnect cycles that show no crash evidence at all, with
+client input flowing continuously and unaffected throughout. The crash
+is real (see the Vulkan fix below) but it does not explain the repeated
+flashing that was actually reported -- it only explains how the session
+eventually ended.
 
-Root cause (see `host/cemu-patches/README.md`'s matching entry for the
-full reasoning): `VulkanRenderer::CaptureSurfaceBGRA()` allocated and
-freed a fresh Vulkan staging buffer on every single call -- the exact
-same pattern Cemu's own pre-existing `HandleScreenshotRequest()` uses,
-but that function only ever runs once per rare, explicit user action,
-while this one runs continuously at up to 60 times a second (both
-screens combined) for as long as a client is connected. Sustained
-allocate/free churn at that rate is a known way to destabilize a Vulkan
-driver's internal allocator, consistent with the crash appearing after
-~15-20 seconds of streaming rather than immediately. Fixed by making
-the staging buffer persistent (`VulkanRenderer`'s new
+**Second theory, ruled out.** Suspected `RemoteServerBridge` being torn
+down and rebuilt on every Cafe OS `LaunchForegroundTitle()`/
+`ShutdownTitle()` event (e.g. title-to-title or applet transitions).
+Ruled out once the user clarified: "I was loaded into the game's main
+menu when it was doing it" -- a single, stable, already-loaded title's
+own in-game menu, not a title relaunch.
+
+**Root cause (current best diagnosis): the adapter IPC frame-size cap
+was too small for Cemu's real capture resolution.**
+`adapter-sdk/ipc/include/.../ipc_protocol.h` defined
+`kMaxIpcFramePixelBytes` as 16 MiB, sized off an assumption that Wii U's
+TV surface tops out at 1920x1080 (8,294,400 bytes). `CemuAdapter`
+actually captures the TV surface at Cemu's *actual* internal render
+resolution (`GetEffectiveSize()`), which tracks whatever
+resolution-enhancing graphics pack is active in the Cemu community --
+commonly 1440p, 4K, or higher for popular titles, not capped at 1080p.
+`parseSurfaceFrame()` rejects any declared frame over the cap as
+malformed, and both `AdapterIpcClient::readLoop()` and the server's own
+receive loop treat a failed parse as "this connection is over." That
+matches every observed symptom: Cemu's process itself is completely
+unaffected (matching the user's correction, since this is purely a local
+Unix-socket IPC parse-rejection, not a crash); the connection completes
+its small Hello/HelloAck handshake, `ModeCoordinator` switches to
+Emulation, then the very first oversized TV-surface `Frame` message gets
+rejected and the connection drops back to HostControl; and it is
+unrelated to which screen is displayed, matching the user's clarification
+that it happened while sitting stably in the game's own main menu. The
+observed ~1-second reconnect cadence is itself just an artifact of
+`RemoteServerBridge::start()`'s reconnect loop resetting its backoff to
+1000ms on every successful `connect()` -- not evidence the connection
+survived a full second before dying.
+
+Fixed by raising `kMaxIpcFramePixelBytes` from 16 MiB to 128 MiB (comment
+in `ipc_protocol.h` has the full sizing rationale, including that this
+is purely local same-machine IPC, so a generous cap costs nothing on the
+network). The same 16 MiB cap was independently too small for Azahar
+too, now that its capture scale auto-follows `resolution_factor` (see
+the entry above) -- at 10x, even the 3DS's smaller screen exceeds it.
+Both Cemu's and Azahar's patches vendor their own copy of this header and
+were updated identically. **Not yet confirmed against the user's
+hardware or against a graphics-pack-enabled game** -- this is the
+current best theory, consistent with every log detail gathered so far,
+but hasn't been directly validated the way the earlier two theories were
+ruled out.
+
+Separately, `VulkanRenderer::CaptureSurfaceBGRA()` allocated and freed a
+fresh Vulkan staging buffer on every single call -- the exact same
+pattern Cemu's own pre-existing `HandleScreenshotRequest()` uses, but
+that function only ever runs once per rare, explicit user action, while
+this one runs continuously at up to 60 times a second (both screens
+combined) for as long as a client is connected. Sustained allocate/free
+churn at that rate is a known way to destabilize a Vulkan driver's
+internal allocator, consistent with the one real crash seen after
+~15-20 seconds of streaming. This is a real bug, fixed by making the
+staging buffer persistent (`VulkanRenderer`'s new
 `m_dualDeckCaptureStagingBuffer` members, freed only in its own
-destructor) instead of allocating and destroying it every call; also
-fixed `CreateBuffer()`'s previously-unchecked return value on this path.
+destructor) instead of allocating and destroying it every call, and by
+fixing `CreateBuffer()`'s previously-unchecked return value on this
+path -- but it is a secondary bug, not the explanation for the
+repeatedly-reported flashing (see above).
 
 **Not yet verified**: this project cannot build or run Cemu in its own
-sandbox (confirmed repeatedly throughout this integration), so this fix
-has only been reasoned through and diffed against the previously-
-committed patch, not compiled or tested against a real crash. Needs a
-CI build followed by a real retest to confirm both that it compiles and
-that streaming no longer crashes.
+sandbox (confirmed repeatedly throughout this integration), so both
+fixes have only been reasoned through and diffed against the
+previously-committed patch, not compiled or tested against a real
+device. Needs a CI build followed by a real retest to confirm both that
+it compiles and that the flashing and the crash are both actually gone.
 
 ## Things intentionally out of scope for v0.1
 
