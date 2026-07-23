@@ -18,7 +18,9 @@
 
 #include <chrono>
 #include <functional>
+#include <mutex>
 #include <thread>
+#include <utility>
 
 #include "host/logging_input_sink.h"
 #include "host/logging_mic_audio_sink.h"
@@ -296,4 +298,72 @@ MDR_TEST(net_client_detects_a_dead_server_connection) {
     MDR_CHECK(waitUntil([&] { return !client.isConnected(); }, 5000));
 
     client.disconnect();
+}
+
+// Real end-to-end proof of the client log-forwarding feature
+// (client/src/client_log.h): a real NetClient::sendClientLog() call
+// reaches a real NetServer over the real control-channel socket and gets
+// parsed back into the exact same line -- not just that
+// serializeClientLogPayload()/parseClientLogPayload() round-trip in
+// isolation (see protocol/tests/test_client_log.cpp for that). Doesn't
+// reuse ServerFixture above since none of its other tests need
+// onClientLogLine wired up.
+MDR_TEST(net_client_forwards_a_log_line_to_the_host) {
+    std::mutex receivedMutex;
+    std::vector<std::pair<std::string, std::string>> received;
+
+    LoggingInputSink sink;
+    NullFrameSource frame;
+    LoggingMicAudioSink micSink;
+    NetServerConfig config;
+    config.bindAddress = "127.0.0.1";
+    config.controlPort = freePort();
+    config.inputPort = freePort();
+    config.videoPort = freePort();
+    config.discoveryEnabled = false;
+    config.micSupported = false;
+    config.authToken = "test-token";
+    config.onClientLogLine = [&](const std::string& address, const std::string& line) {
+        std::lock_guard<std::mutex> lock(receivedMutex);
+        received.emplace_back(address, line);
+    };
+    NetServer server(config, sink, frame, micSink);
+    server.start();
+
+    NetClientConfig clientConfig;
+    clientConfig.hostAddress = "127.0.0.1";
+    clientConfig.controlPort = config.controlPort;
+    clientConfig.inputPort = config.inputPort;
+    clientConfig.videoPort = config.videoPort;
+    clientConfig.authToken = config.authToken;
+    clientConfig.heartbeatIntervalMs = 200;
+    NetClient client(clientConfig);
+    MDR_CHECK(client.connect());
+
+    client.sendClientLog("hello from a test client\n");
+
+    MDR_CHECK(waitUntil([&] {
+        std::lock_guard<std::mutex> lock(receivedMutex);
+        return !received.empty();
+    }));
+    {
+        std::lock_guard<std::mutex> lock(receivedMutex);
+        MDR_CHECK(received.size() == 1);
+        MDR_CHECK(received[0].first == "127.0.0.1");
+        MDR_CHECK(received[0].second == "hello from a test client\n");
+    }
+
+    client.disconnect();
+    server.stop();
+}
+
+// A line enqueued before connect() (or after disconnect()) is silently
+// dropped, per sendClientLog()'s own documented best-effort contract --
+// there is no connection to forward it over, and it must never be
+// queued up to send "whenever a connection eventually exists."
+MDR_TEST(net_client_drops_a_log_line_when_not_connected) {
+    NetClient client(NetClientConfig{});
+    client.sendClientLog("this should be dropped, not queued\n");
+    // No observable effect to assert beyond "this doesn't crash or
+    // block" -- there is no server to receive anything from, by design.
 }

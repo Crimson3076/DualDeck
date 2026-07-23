@@ -77,6 +77,19 @@ enum class PacketType : uint16_t {
     // channel post-handshake simply never consumes these bytes; they sit
     // harmlessly unread rather than causing any error.
     ModeChanged = 11,
+    // client -> host, control channel, one already-formatted log line
+    // forwarded for host-side debugging/app development (see
+    // client/src/client_log.h) -- e.g. "SDL_CreateTexture failed: ...",
+    // "handshake rejected by host: ...". Sent best-effort: the client
+    // silently drops a line locally rather than blocking or growing an
+    // unbounded queue if its outbound queue is already full or it isn't
+    // connected (see NetClient::sendClientLog()) -- losing a diagnostic
+    // message is a vastly smaller problem than losing or delaying a
+    // real control/input packet. Like ModeChanged above, this is a
+    // brand new packet type an older peer simply never sends/reads --
+    // no existing struct's shape changed, so this doesn't need a
+    // kProtocolVersion bump either.
+    ClientLog = 12,
 };
 
 // Which of two states the host is currently in (GitHub issue #4): a live
@@ -411,6 +424,24 @@ struct ModeChangedPayload {
     AdapterIdentity adapter;
 };
 
+// Generous enough for a full formatted client log line (client_log.h's
+// fixed formatting buffer is 1024 bytes, but real lines from this
+// client's own call sites today top out well under 256) without giving
+// a buggy/malicious sender an excuse to make the host allocate
+// something huge -- deliberately distinct from kMaxProtocolStringLength
+// above, which exists for short identity/name fields, not a nearly-
+// freeform diagnostic string.
+inline constexpr size_t kMaxClientLogLineLength = 512;
+
+// ClientLog (client -> host) payload: a single already-formatted log
+// line, forwarded as-is (see PacketType::ClientLog above and
+// client/src/client_log.h) -- the host prints/logs it prefixed with the
+// sending client's own identity so multiple clients' lines can't be
+// confused with each other, but does not otherwise interpret it.
+struct ClientLogPayload {
+    std::string line; // up to kMaxClientLogLineLength bytes; truncated if longer
+};
+
 struct PacketHeader {
     uint32_t magic = kPacketMagic;
     uint16_t protocolVersion = kProtocolVersion;
@@ -520,5 +551,17 @@ std::optional<ModeChangedPayload> parseModeChangedPayload(const uint8_t* data, s
 
 // Builds a complete ModeChanged packet (header + serialized body).
 ByteBuffer buildModeChangedPacket(const ModeChangedPayload& modeChanged);
+
+// Serializes a ClientLogPayload (header not included). `log.line` is
+// truncated to kMaxClientLogLineLength bytes first if longer.
+void serializeClientLogPayload(ByteBuffer& out, const ClientLogPayload& log);
+
+// Parses a ClientLogPayload. Returns std::nullopt if the buffer is too
+// short for its own declared length, the declared length exceeds
+// kMaxClientLogLineLength, or there's trailing garbage past the line.
+std::optional<ClientLogPayload> parseClientLogPayload(const uint8_t* data, size_t size);
+
+// Builds a complete ClientLog packet (header + serialized body).
+ByteBuffer buildClientLogPacket(const ClientLogPayload& log);
 
 } // namespace melonds_remote

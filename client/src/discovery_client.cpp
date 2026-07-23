@@ -7,10 +7,13 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <unordered_map>
 
+#include "client_log.h"
 #include "melonds_remote/protocol.h"
 
 namespace melonds_remote::client {
@@ -28,7 +31,7 @@ std::vector<DiscoveredHost> discoverHosts(uint16_t discoveryPort, int timeoutMs,
 
     int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) {
-        std::perror("socket (discovery)");
+        logLine("socket (discovery): %s\n", std::strerror(errno));
         return {};
     }
 

@@ -27,6 +27,7 @@ add_executable(melonds_remote_net_client_tests
     main.cpp
     test_net_client.cpp
     ../src/net_client.cpp
+    ../src/client_log.cpp
 )
 
 target_include_directories(melonds_remote_net_client_tests PRIVATE

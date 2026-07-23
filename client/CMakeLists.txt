@@ -7,6 +7,7 @@ add_executable(dualdeck-client
     src/discovery_client.cpp
     src/discovery_store.cpp
     src/client_settings.cpp
+    src/client_log.cpp
     src/wizard_state.cpp
     src/bitmap_font.cpp
     src/mic_capture.cpp

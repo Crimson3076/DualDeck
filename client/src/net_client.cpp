@@ -1,13 +1,17 @@
 #include "net_client.h"
 
+#include "client_log.h"
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <turbojpeg.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <thread>
 
 namespace melonds_remote::client {
@@ -38,18 +42,18 @@ bool decompressJpegToBgra(tjhandle decompressor, const uint8_t* jpeg, size_t jpe
     int jpegSubsamp = 0, jpegColorspace = 0;
     if (tjDecompressHeader3(decompressor, jpeg, static_cast<unsigned long>(jpegSize), &outWidth,
                              &outHeight, &jpegSubsamp, &jpegColorspace) != 0) {
-        std::fprintf(stderr, "video: tjDecompressHeader3 failed: %s\n", tjGetErrorStr2(decompressor));
+        logLine("video: tjDecompressHeader3 failed: %s\n", tjGetErrorStr2(decompressor));
         return false;
     }
     if (outWidth <= 0 || outHeight <= 0) {
-        std::fprintf(stderr, "video: decoded JPEG has invalid dimensions %dx%d\n", outWidth, outHeight);
+        logLine("video: decoded JPEG has invalid dimensions %dx%d\n", outWidth, outHeight);
         return false;
     }
 
     outBgra.resize(static_cast<size_t>(outWidth) * outHeight * 4);
     if (tjDecompress2(decompressor, jpeg, static_cast<unsigned long>(jpegSize), outBgra.data(), outWidth,
                        /*pitch=*/0, outHeight, TJPF_BGRA, TJFLAG_FASTDCT) != 0) {
-        std::fprintf(stderr, "video: tjDecompress2 failed: %s\n", tjGetErrorStr2(decompressor));
+        logLine("video: tjDecompress2 failed: %s\n", tjGetErrorStr2(decompressor));
         return false;
     }
     return true;
@@ -110,7 +114,7 @@ bool NetClient::connect() {
     // reconnect thread sole ownership of connection attempts.
     bool expected = false;
     if (!connectionAttemptInProgress_.compare_exchange_strong(expected, true)) {
-        std::fprintf(stderr, "connection attempt already in progress; ignoring duplicate request\n");
+        logLine("connection attempt already in progress; ignoring duplicate request\n");
         return false;
     }
     struct AttemptGuard {
@@ -153,7 +157,7 @@ bool NetClient::connect() {
 
     controlFd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     if (controlFd_ < 0) {
-        std::perror("socket (control)");
+        logLine("socket (control): %s\n", std::strerror(errno));
         closePartialConnection();
         return false;
     }
@@ -162,13 +166,13 @@ bool NetClient::connect() {
     addr.sin_family = AF_INET;
     addr.sin_port = htons(config_.controlPort);
     if (::inet_pton(AF_INET, config_.hostAddress.c_str(), &addr.sin_addr) != 1) {
-        std::fprintf(stderr, "invalid host address: %s\n", config_.hostAddress.c_str());
+        logLine("invalid host address: %s\n", config_.hostAddress.c_str());
         closePartialConnection();
         return false;
     }
 
     if (::connect(controlFd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-        std::perror("connect (control)");
+        logLine("connect (control): %s\n", std::strerror(errno));
         closePartialConnection();
         return false;
     }
@@ -183,33 +187,33 @@ bool NetClient::connect() {
     helloPayload.videoQuality = config_.videoQuality;
     ByteBuffer hello = buildHelloPacket(helloPayload);
     if (!sendAll(controlFd_, hello.data(), hello.size())) {
-        std::fprintf(stderr, "failed to send Hello\n");
+        logLine("failed to send Hello\n");
         closePartialConnection();
         return false;
     }
 
     uint8_t ackHeaderBuf[kPacketHeaderWireSize];
     if (!recvExact(controlFd_, ackHeaderBuf, sizeof(ackHeaderBuf))) {
-        std::fprintf(stderr, "failed to receive HelloAck\n");
+        logLine("failed to receive HelloAck\n");
         closePartialConnection();
         return false;
     }
     auto ackHeader = parseHeader(ackHeaderBuf, sizeof(ackHeaderBuf));
     if (!ackHeader || ackHeader->type != PacketType::HelloAck || ackHeader->payloadSize > 256) {
-        std::fprintf(stderr, "handshake rejected by host (bad response header)\n");
+        logLine("handshake rejected by host (bad response header)\n");
         closePartialConnection();
         return false;
     }
 
     ByteBuffer ackPayloadBuf(ackHeader->payloadSize);
     if (!ackPayloadBuf.empty() && !recvExact(controlFd_, ackPayloadBuf.data(), ackPayloadBuf.size())) {
-        std::fprintf(stderr, "failed to receive HelloAck payload\n");
+        logLine("failed to receive HelloAck payload\n");
         closePartialConnection();
         return false;
     }
     auto ack = parseHelloAckPayload(ackPayloadBuf.data(), ackPayloadBuf.size());
     if (!ack) {
-        std::fprintf(stderr, "handshake rejected by host (malformed HelloAck payload)\n");
+        logLine("handshake rejected by host (malformed HelloAck payload)\n");
         closePartialConnection();
         return false;
     }
@@ -230,16 +234,14 @@ bool NetClient::connect() {
     hostNativeHeight_ = ack->nativeHeight;
     if (!ack->accepted) {
         if (ack->rejectReason == HelloRejectReason::ApprovalRequired) {
-            std::fprintf(stderr,
-                          "handshake rejected by host: awaiting approval -- a human at the host "
-                          "needs to approve this device, no action needed here\n");
+            logLine("handshake rejected by host: awaiting approval -- a human at the host "
+                    "needs to approve this device, no action needed here\n");
         } else if (ack->rejectReason == HelloRejectReason::AppVersionMismatch) {
-            std::fprintf(stderr,
-                          "handshake rejected by host: version mismatch (host is %s, this client is "
-                          "%s) -- update one side to match the other\n",
-                          ack->appVersion.c_str(), config_.appVersion.c_str());
+            logLine("handshake rejected by host: version mismatch (host is %s, this client is "
+                    "%s) -- update one side to match the other\n",
+                    ack->appVersion.c_str(), config_.appVersion.c_str());
         } else {
-            std::fprintf(stderr, "handshake rejected by host (reason code %d)\n",
+            logLine("handshake rejected by host (reason code %d)\n",
                           static_cast<int>(ack->rejectReason));
         }
         closePartialConnection();
@@ -256,14 +258,14 @@ bool NetClient::connect() {
     videoAddr.sin_port = htons(config_.videoPort);
     videoFd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     if (videoFd_ < 0 || ::connect(videoFd_, reinterpret_cast<sockaddr*>(&videoAddr), sizeof(videoAddr)) < 0) {
-        std::perror("connect (video)");
+        logLine("connect (video): %s\n", std::strerror(errno));
         closePartialConnection();
         return false;
     }
 
     udpFd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
     if (udpFd_ < 0) {
-        std::perror("socket (udp input)");
+        logLine("socket (udp input): %s\n", std::strerror(errno));
         closePartialConnection();
         return false;
     }
@@ -273,21 +275,21 @@ bool NetClient::connect() {
         // connect() on a UDP socket just fixes the destination for later
         // send() calls; failure here means the address family/setup is
         // wrong, not an actual network condition.
-        std::perror("connect (udp input)");
+        logLine("connect (udp input): %s\n", std::strerror(errno));
         closePartialConnection();
         return false;
     }
 
     udpAudioFd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
     if (udpAudioFd_ < 0) {
-        std::perror("socket (udp audio)");
+        logLine("socket (udp audio): %s\n", std::strerror(errno));
         closePartialConnection();
         return false;
     }
     sockaddr_in audioAddr = addr;
     audioAddr.sin_port = htons(config_.audioPort);
     if (::connect(udpAudioFd_, reinterpret_cast<sockaddr*>(&audioAddr), sizeof(audioAddr)) < 0) {
-        std::perror("connect (udp audio)");
+        logLine("connect (udp audio): %s\n", std::strerror(errno));
         closePartialConnection();
         return false;
     }
@@ -337,8 +339,47 @@ void NetClient::heartbeatLoop() {
         }
         for (uint32_t waited = 0; waited < config_.heartbeatIntervalMs && connected_.load(); waited += 50) {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            // Drained every 50ms tick, not just once per full
+            // heartbeatIntervalMs, so a forwarded log line reaches the
+            // host promptly enough to actually be useful for live
+            // debugging rather than arriving in a burst up to a second
+            // late.
+            if (!sendQueuedLogLines()) {
+                connected_ = false;
+                break;
+            }
         }
     }
+}
+
+bool NetClient::sendQueuedLogLines() {
+    std::deque<std::string> toSend;
+    {
+        std::lock_guard<std::mutex> lock(logQueueMutex_);
+        toSend.swap(logQueue_);
+    }
+    for (const auto& line : toSend) {
+        ClientLogPayload payload;
+        payload.line = line;
+        ByteBuffer packet = buildClientLogPacket(payload);
+        if (!sendAll(controlFd_, packet.data(), packet.size())) {
+            return false;
+        }
+    }
+    return true;
+}
+
+namespace {
+// See sendClientLog()'s header comment for why an over-cap line is
+// dropped rather than queued or blocked on.
+constexpr size_t kMaxQueuedLogLines = 64;
+} // namespace
+
+void NetClient::sendClientLog(const std::string& line) {
+    if (!connected_.load()) return;
+    std::lock_guard<std::mutex> lock(logQueueMutex_);
+    if (logQueue_.size() >= kMaxQueuedLogLines) return;
+    logQueue_.push_back(line);
 }
 
 void NetClient::sendControllerState(const ControllerState& state) {
@@ -403,7 +444,7 @@ void NetClient::videoReceiveLoop() {
     // loop runs once per incoming frame.
     tjhandle jpegDecompressor = tjInitDecompress();
     if (!jpegDecompressor) {
-        std::fprintf(stderr, "video: tjInitDecompress failed, cannot receive video\n");
+        logLine("video: tjInitDecompress failed, cannot receive video\n");
         connected_ = false;
         return;
     }
@@ -426,7 +467,7 @@ void NetClient::videoReceiveLoop() {
         auto header = parseHeader(headerBuf.data(), headerBuf.size());
         if (!header || header->type != PacketType::VideoFrame || header->payloadSize == 0 ||
             header->payloadSize > rawFrameBytes) {
-            std::fprintf(stderr, "video: dropping unexpected packet, closing connection\n");
+            logLine("video: dropping unexpected packet, closing connection\n");
             break;
         }
 
@@ -438,7 +479,7 @@ void NetClient::videoReceiveLoop() {
         int decodedWidth = 0, decodedHeight = 0;
         if (!decompressJpegToBgra(jpegDecompressor, payloadBuf.data(), payloadBuf.size(), decodedFrame,
                                    decodedWidth, decodedHeight)) {
-            std::fprintf(stderr, "video: dropping undecodable frame, closing connection\n");
+            logLine("video: dropping undecodable frame, closing connection\n");
             break;
         }
         // Real bug this fixes: hostNativeWidth_/hostNativeHeight_ used to
@@ -484,7 +525,7 @@ void NetClient::controlReceiveLoop() {
         // largest payload ever expected here (mode byte + two identity
         // structs), well under this.
         if (!header || header->payloadSize > 512) {
-            std::fprintf(stderr, "control: dropping malformed packet, closing connection\n");
+            logLine("control: dropping malformed packet, closing connection\n");
             break;
         }
 
@@ -496,7 +537,7 @@ void NetClient::controlReceiveLoop() {
         if (header->type == PacketType::ModeChanged) {
             auto modeChanged = parseModeChangedPayload(payloadBuf.data(), payloadBuf.size());
             if (!modeChanged) {
-                std::fprintf(stderr, "control: dropping malformed ModeChanged packet\n");
+                logLine("control: dropping malformed ModeChanged packet\n");
                 continue;
             }
             hostMode_ = modeChanged->mode;

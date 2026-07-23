@@ -137,6 +137,18 @@ struct NetServerConfig {
     // must marshal to the UI thread itself (e.g. Qt::QueuedConnection).
     std::function<void(bool)> onClientConnectionChanged;
 
+    // Optional hook for a received ClientLog packet (client log-
+    // forwarding, for host-side debugging/app development -- see
+    // client/src/client_log.h), fired with the sending client's address
+    // and the already-formatted log line (unmodified, including its own
+    // trailing newline). Always logged to stderr regardless of whether
+    // this is set (see controlLoop()); set this too for a host-side UI
+    // that wants to show it somewhere else, or a test that wants to
+    // assert on it without scraping stderr. Invoked synchronously on
+    // NetServer's control-connection thread -- if the callback touches
+    // UI state, it must marshal to the UI thread itself.
+    std::function<void(const std::string&, const std::string&)> onClientLogLine;
+
     // If a control-channel connection is silent (no heartbeat, no other
     // control traffic) for longer than this, it is dropped. Distinct from
     // inputTimeoutUs, which governs the UDP input stream.

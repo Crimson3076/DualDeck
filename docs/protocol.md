@@ -32,6 +32,7 @@ same fixed-size header.
 | 9     | `DiscoveryResponse` | host -> client (UDP unicast)   | discovery | see "Discovery payload" below |
 | 10    | `MicAudioFrame`   | client -> host  | UDP audio | see "MicAudioFrame payload" below |
 | 11    | `ModeChanged`     | host -> client  | TCP control | see "ModeChanged payload" below |
+| 12    | `ClientLog`       | client -> host  | TCP control | see "ClientLog payload" below |
 
 ## ControllerState payload (29 bytes)
 
@@ -259,8 +260,8 @@ an emulator starting or exiting instead of having to reconnect --
 (see `docs/known-limitations.md`'s matching entry and
 `docs/adr/0001-host-service-and-adapter-architecture.md` section 6).
 
-Unlike every other packet type in this document, adding `ModeChanged`
-did **not** bump `protocolVersion`: it carries no negotiated-payload
+Unlike most other packet types in this document (see also `ClientLog`
+below), adding `ModeChanged` did **not** bump `protocolVersion`: it carries no negotiated-payload
 compatibility concern the way a new *field* on `HelloPayload`/
 `HelloAckPayload`/`DiscoveryResponsePayload` would (those are parsed
 during the version-gated handshake itself). `ModeChanged` is sent later,
@@ -289,9 +290,40 @@ stale value left over from the last handshake.
 A Phase-E-or-later client build (see `HelloAck payload` above for how it
 learns the *initial* mode before any `ModeChanged` could ever arrive)
 reads this packet via `NetClient::controlReceiveLoop()` and shows a
-distinct "HOST CONTROL" screen in place of the video texture while
-`mode == HostControl` -- see `docs/known-limitations.md`'s matching
-entry for what that UI does and doesn't do.
+distinct "WAITING FOR EMULATOR" screen in place of the video texture
+while `mode == HostControl` -- see `docs/known-limitations.md`'s
+matching entry for what that UI does and doesn't do.
+
+## ClientLog payload
+
+Forwards one already-formatted client-side log line to the host, for
+host-side debugging and app development (see `client/src/client_log.h`)
+-- e.g. so a developer can see what a Steam Deck client is doing without
+physical access to it or a visible terminal in Gaming Mode. Sent
+client -> host on the TCP control channel, best-effort: the client
+drops a line locally rather than blocking or growing an unbounded queue
+if it isn't connected or its own outbound queue is already full (see
+`NetClient::sendClientLog()`), so a burst of logging can never affect
+real control/input traffic. Like `ModeChanged` above, this is a new
+packet type an older peer simply never sends/reads -- it does not
+change any existing struct's shape, so it did not require a
+`protocolVersion` bump either.
+
+| Offset | Size | Field  | Notes |
+|-------:|-----:|--------|-------|
+| 0      | 2    | length | Number of bytes in `line` that follow. |
+| 2      | var. | `line` | Up to `kMaxClientLogLineLength` (512) bytes, UTF-8, not length-prefix-nested (a raw byte string, not a `readString()`-style field capped at the smaller `kMaxProtocolStringLength` used for identity fields elsewhere in this document). Sent exactly as formatted client-side, including its own trailing newline. |
+
+The host (`NetServer::controlLoop()`) prints each received line to its
+own stderr, prefixed with the sending client's address (e.g.
+`[client 192.168.1.42] connection attempt already in progress; ignoring
+duplicate request`), and additionally invokes
+`NetServerConfig::onClientLogLine` if one is set, for a host-side UI (or
+a test) that wants to react to it directly instead of scraping stderr.
+A malformed `ClientLog` payload (declared length over the max, or
+trailing garbage) is dropped with its own stderr warning; the
+connection itself is not torn down for it, matching how a Heartbeat's
+own occasional oddities are tolerated.
 
 ## Emulator identity model
 

@@ -5204,6 +5204,81 @@ identically to before (same `ModeCoordinator` poll loop, same
 virtual-gamepad input path that was never functional in this sandbox
 to begin with.
 
+## 2026-07-23: Client-side persistent log file + log forwarding to the host
+
+Reported by the user: latency and Wii U touch problems needed better
+diagnosis, and "client should send logs to the host for host debugging
+and app development." Before this, the client logged exclusively via
+`std::fprintf(stderr, ...)` (~40 call sites across `main.cpp`/
+`net_client.cpp`, plus one in `discovery_client.cpp`), deliberately not
+stdout (an existing comment explains stdout's buffering risk once
+redirected to a file). No log file was ever created for a run, and
+`run-client.sh` just `exec`s the binary with no redirection -- in Steam
+Big Picture/Gaming Mode, where there is no visible terminal, this meant
+every one of those diagnostic lines was completely unrecoverable after
+the fact.
+
+**Local log file** (`client/src/client_log.h`/`.cpp`, new files): a
+shared `logLine()` function replaces every one of those ~41 call sites
+(`std::fprintf(stderr, ...)`/`std::perror(...)`), writing the same
+formatted line to stderr (unchanged behavior) and, if `initClientLog()`
+succeeded at startup, appending it to `~/.config/dualdeck-client/
+client.log` too -- truncated fresh each run rather than appended
+forever, matching this client's existing practice of not persisting
+more than one run's worth of diagnostic state. Thread-safe (a single
+mutex covers both destinations) since `net_client.cpp`'s background
+receive threads and `main.cpp`'s main thread all log concurrently.
+Falls back to stderr-only, silently, if `$HOME` is unset or the
+directory can't be created.
+
+**Log forwarding to the host** (GitHub-issue-style feature, not tied to
+a specific numbered issue): a new `PacketType::ClientLog` (client ->
+host, TCP control channel, see `docs/protocol.md`'s matching section)
+carries one already-formatted log line. `client_log.h` gained
+`setLogForwardSink()`, wired up in `main.cpp` right after each
+`NetClient` is constructed to call `NetClient::sendClientLog()`, with a
+scope-guard clearing it again before that same `NetClient` is destroyed
+(picking a new host, or reconnecting, must never leave a sink holding a
+reference to an already-destroyed object). `sendClientLog()` is
+best-effort and non-blocking by design: it silently drops a line if not
+currently connected or its own bounded queue (64 lines) is already
+full, since losing a diagnostic message is a vastly smaller problem
+than this call stalling a hot path or building an unbounded backlog
+while disconnected. The queue is drained every ~50ms by the existing
+heartbeat thread (already waking that often) rather than a new thread.
+
+Like `ModeChanged` before it, `ClientLog` is a brand new packet type an
+older peer simply never sends/reads -- it does not change any existing
+struct's shape, so it did **not** require a `kProtocolVersion` bump
+(stayed at 9). The host (`NetServer::controlLoop()`) prints each
+received line to its own stderr prefixed with the sending client's
+address, and also invokes a new optional `NetServerConfig::
+onClientLogLine` hook. This required the control loop's post-handshake
+read loop to actually read off a packet's declared payload for the
+first time (previously only `Heartbeat`/`Disconnect`, both payload-free,
+ever arrived there) -- bounded at 4096 bytes to reject an implausible
+declared size before allocating for it.
+
+**Verified**: `protocol/tests/test_client_log.cpp` covers
+serialize/parse round-trips, truncation of an overlong line, and every
+malformed-input rejection path (short buffer, declared length over the
+max, truncated payload, trailing garbage) — mirroring the coverage
+`test_mode_changed.cpp` already has for `ModeChanged`. A real end-to-end
+test (`client/tests/test_net_client.cpp`'s
+`net_client_forwards_a_log_line_to_the_host`) proves a real
+`NetClient::sendClientLog()` call reaches a real `NetServer` over a real
+loopback socket and arrives via `onClientLogLine` with the exact
+address and line, not just that the wire encoding round-trips in
+isolation; a second test confirms a line sent while never connected is
+silently dropped rather than queued or blocking. All 6 host/client
+ctest suites pass. A full GUI-client run (the actual `dualdeck-client`
+SDL binary) was not exercised end-to-end in this sandbox -- no display
+and no gamepad device nodes are available here, the same limitation
+this project has hit for every other client-UI change; the real
+`NetClient`/`NetServer` proof above exercises the identical networking
+code path the GUI binary uses, just without SDL's windowing/input layer
+around it.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

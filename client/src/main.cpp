@@ -25,7 +25,10 @@
 //    work, see docs/architecture.md "Known gaps") -- stderr specifically,
 //    not stdout, since stdout is fully buffered once redirected to a file
 //    (the common case for troubleshooting), which can delay or lose these
-//    messages entirely for a while; stderr isn't.
+//    messages entirely for a while; stderr isn't. Every one of these log
+//    lines also goes to a persistent ~/.config/dualdeck-client/client.log
+//    (see client_log.h) -- Steam Big Picture/Gaming Mode has no visible
+//    terminal, so stderr alone is otherwise unrecoverable after the fact.
 //  - Implements device-approval authentication (spec section 13,
 //    replacing an earlier 6-digit-code-entry screen that required typing
 //    on the client -- unworkable since Steam Input doesn't reliably bring
@@ -49,6 +52,7 @@
 #include <vector>
 
 #include "bitmap_font.h"
+#include "client_log.h"
 #include "client_settings.h"
 #include "device_identity.h"
 #include "discovery_client.h"
@@ -1315,6 +1319,8 @@ bool runSetupWizard(SDL_Window* window, SDL_Renderer* renderer, SDL_Texture* tex
 } // namespace
 
 int main(int argc, char** argv) {
+    initClientLog();
+
     NetClientConfig netConfig;
     // Set from DUALDECK_VERSION (exported by run-client.sh, read from
     // the archive's VERSION file) rather than baked in at compile time
@@ -1338,7 +1344,7 @@ int main(int argc, char** argv) {
         std::string arg = argv[i];
         auto nextArg = [&]() -> std::string {
             if (i + 1 >= argc) {
-                std::fprintf(stderr, "missing value for %s\n", arg.c_str());
+                logLine("missing value for %s\n", arg.c_str());
                 std::exit(1);
             }
             return argv[++i];
@@ -1362,7 +1368,7 @@ int main(int argc, char** argv) {
             netConfig.hostAddress = arg;
             hostExplicit = true;
         } else {
-            std::fprintf(stderr, "unrecognized argument: %s\n", arg.c_str());
+            logLine("unrecognized argument: %s\n", arg.c_str());
             return 1;
         }
     }
@@ -1375,21 +1381,21 @@ int main(int argc, char** argv) {
     // actually stream microphone audio no matter what the user picks in
     // Settings.
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) {
-        std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
+        logLine("SDL_Init failed: %s\n", SDL_GetError());
         return 1;
     }
 
     SDL_Window* window = SDL_CreateWindow("DualDeck", kWindowWidth, kWindowHeight,
                                            SDL_WINDOW_FULLSCREEN);
     if (!window) {
-        std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
+        logLine("SDL_CreateWindow failed: %s\n", SDL_GetError());
         SDL_Quit();
         return 1;
     }
 
     SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
     if (!renderer) {
-        std::fprintf(stderr, "SDL_CreateRenderer failed: %s\n", SDL_GetError());
+        logLine("SDL_CreateRenderer failed: %s\n", SDL_GetError());
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
@@ -1415,7 +1421,7 @@ int main(int argc, char** argv) {
     // of the real window, independent of its actual pixel size.
     if (!SDL_SetRenderLogicalPresentation(renderer, kWindowWidth, kWindowHeight,
                                            SDL_LOGICAL_PRESENTATION_LETTERBOX)) {
-        std::fprintf(stderr, "SDL_SetRenderLogicalPresentation failed: %s\n", SDL_GetError());
+        logLine("SDL_SetRenderLogicalPresentation failed: %s\n", SDL_GetError());
     }
 
     // The wire format (docs/protocol.md) and melonDS's own software-renderer
@@ -1432,7 +1438,7 @@ int main(int argc, char** argv) {
     SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGRA32,
                                               SDL_TEXTUREACCESS_STREAMING, kDSWidth, kDSHeight);
     if (!texture) {
-        std::fprintf(stderr, "SDL_CreateTexture failed: %s\n", SDL_GetError());
+        logLine("SDL_CreateTexture failed: %s\n", SDL_GetError());
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         SDL_Quit();
@@ -1454,7 +1460,7 @@ int main(int argc, char** argv) {
     // 3DS alike) since this texture only ever holds an already-composited
     // screen capture that was never meant to be translucent.
     if (!SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_NONE)) {
-        std::fprintf(stderr, "SDL_SetTextureBlendMode failed: %s\n", SDL_GetError());
+        logLine("SDL_SetTextureBlendMode failed: %s\n", SDL_GetError());
         return 1;
     }
     // Starts at DS's native size (matching the texture just created above)
@@ -1473,7 +1479,7 @@ int main(int argc, char** argv) {
     SDL_JoystickID* gamepadIds = SDL_GetGamepads(&gamepadCount);
     if (gamepadIds && gamepadCount > 0) {
         gamepad = SDL_OpenGamepad(gamepadIds[0]);
-        std::fprintf(stderr, "[input] opened gamepad: %s\n", gamepad ? SDL_GetGamepadName(gamepad) : "?");
+        logLine("[input] opened gamepad: %s\n", gamepad ? SDL_GetGamepadName(gamepad) : "?");
     }
     if (gamepadIds) SDL_free(gamepadIds);
 
@@ -1552,7 +1558,7 @@ int main(int argc, char** argv) {
             if (wizardCompleted) {
                 markSetupComplete(wizardStatePath);
             } else {
-                std::fprintf(stderr, "[wizard] cancelled during first run -- exiting\n");
+                logLine("[wizard] cancelled during first run -- exiting\n");
                 quitApp = true;
                 break;
             }
@@ -1569,7 +1575,7 @@ int main(int argc, char** argv) {
             std::string lastHost = loadLastHost(discoveryStorePath).value_or("");
             auto selected = discoverAndSelectHost(renderer, gamepad, discoveryPort, lastHost);
             if (!selected) {
-                std::fprintf(stderr, "[discovery] cancelled before a host was chosen -- exiting\n");
+                logLine("[discovery] cancelled before a host was chosen -- exiting\n");
                 quitApp = true;
                 break;
             }
@@ -1593,7 +1599,7 @@ int main(int argc, char** argv) {
             // issue #21).
             renderConnecting(renderer, netConfig.hostAddress);
             saveLastHost(discoveryStorePath, netConfig.hostAddress);
-            std::fprintf(stderr, "[discovery] selected host \"%s\" at %s\n", selected->hostName.c_str(),
+            logLine("[discovery] selected host \"%s\" at %s\n", selected->hostName.c_str(),
                         netConfig.hostAddress.c_str());
         } else {
             // Explicit-host/scripted launches skip the picker but should
@@ -1609,6 +1615,17 @@ int main(int argc, char** argv) {
         // gets changed.
         netConfig.videoQuality = static_cast<uint8_t>(clientSettings.videoQuality);
         NetClient net(netConfig);
+
+        // Forwards every logLine() call to the host as a ClientLog packet
+        // (host debugging/app development) for as long as this particular
+        // `net` is alive -- cleared by the guard below before `net` itself
+        // is destroyed, since a sink still holding a reference to an
+        // already-destroyed NetClient would dangle the moment this loop
+        // picks a new host or exits.
+        setLogForwardSink([&net](const std::string& line) { net.sendClientLog(line); });
+        struct LogForwardGuard {
+            ~LogForwardGuard() { setLogForwardSink({}); }
+        } logForwardGuard;
 
         // Auto-reconnect (spec section 7.2): connect() does several blocking
         // socket calls, so retries run on their own thread rather than
@@ -1629,10 +1646,10 @@ int main(int argc, char** argv) {
             constexpr uint32_t kMaxBackoffMs = 5000;
             while (!shuttingDown.load()) {
                 if (!net.isConnected()) {
-                    std::fprintf(stderr, "[net] attempting to (re)connect to %s...\n",
+                    logLine("[net] attempting to (re)connect to %s...\n",
                                 netConfig.hostAddress.c_str());
                     if (net.connect()) {
-                        std::fprintf(stderr, "[net] connected (session %u)\n", net.sessionId());
+                        logLine("[net] connected (session %u)\n", net.sessionId());
                         backoffMs = 1000;
                     } else {
                         backoffMs = std::min(backoffMs * 2, kMaxBackoffMs);
@@ -1696,17 +1713,16 @@ int main(int argc, char** argv) {
                 // fall back to the old dimensions rather than leaving
                 // texture null and crashing the next SDL_UpdateTexture/
                 // RenderTexture call below.
-                std::fprintf(stderr,
-                              "SDL_CreateTexture failed while resizing for new host "
-                              "dimensions: %s\n",
-                              SDL_GetError());
+                logLine("SDL_CreateTexture failed while resizing for new host "
+                        "dimensions: %s\n",
+                        SDL_GetError());
                 texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGRA32,
                                              SDL_TEXTUREACCESS_STREAMING, textureWidth, textureHeight);
             } else {
                 textureWidth = newWidth;
                 textureHeight = newHeight;
                 testPattern.assign(static_cast<size_t>(textureWidth) * textureHeight * 4, 0x40);
-                std::fprintf(stderr, "[video] texture resized to %dx%d for this host\n", textureWidth,
+                logLine("[video] texture resized to %dx%d for this host\n", textureWidth,
                               textureHeight);
             }
             // Every fresh texture needs the same opaque blend mode as the
@@ -1714,7 +1730,7 @@ int main(int argc, char** argv) {
             // to its own per-format default on each new SDL_CreateTexture
             // call, it isn't inherited from the destroyed texture.
             if (texture && !SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_NONE)) {
-                std::fprintf(stderr, "SDL_SetTextureBlendMode failed: %s\n", SDL_GetError());
+                logLine("SDL_SetTextureBlendMode failed: %s\n", SDL_GetError());
             }
         };
 
@@ -1880,14 +1896,14 @@ int main(int argc, char** argv) {
                     case SDL_EVENT_GAMEPAD_ADDED:
                         if (!gamepad) {
                             gamepad = SDL_OpenGamepad(event.gdevice.which);
-                            std::fprintf(stderr, "[input] gamepad connected\n");
+                            logLine("[input] gamepad connected\n");
                         }
                         break;
                     case SDL_EVENT_GAMEPAD_REMOVED:
                         if (gamepad && SDL_GetGamepadID(gamepad) == event.gdevice.which) {
                             SDL_CloseGamepad(gamepad);
                             gamepad = nullptr;
-                            std::fprintf(stderr, "[input] gamepad disconnected\n");
+                            logLine("[input] gamepad disconnected\n");
                         }
                         break;
                     case SDL_EVENT_FINGER_DOWN:
@@ -2201,7 +2217,7 @@ int main(int argc, char** argv) {
                     // worth its own line for the same "Gaming Mode has no
                     // visible terminal, stdout is what we've got" reason
                     // as every other status line in this loop.
-                    std::fprintf(stderr, "[net] host mode changed to %s\n",
+                    logLine("[net] host mode changed to %s\n",
                                   nowHostMode == HostMode::HostControl ? "WAITING FOR EMULATOR" : "EMULATION");
                 }
 
@@ -2228,7 +2244,7 @@ int main(int argc, char** argv) {
             // issue #2's "stop capture ... when the session disconnects."
             if (net.isConnected() && net.hostMicSupported() && !micCapture.isOpen()) {
                 if (!micCapture.open(clientSettings.micDeviceName)) {
-                    std::fprintf(stderr, "[mic] failed to open capture device \"%s\": %s\n",
+                    logLine("[mic] failed to open capture device \"%s\": %s\n",
                                 clientSettings.micDeviceName.c_str(), SDL_GetError());
                 }
             }
@@ -2424,11 +2440,11 @@ int main(int argc, char** argv) {
         net.disconnect();
 
         if (changeHostRequested) {
-            std::fprintf(stderr, "[menu] changing host -- returning to discovery\n");
+            logLine("[menu] changing host -- returning to discovery\n");
         }
 
         if (setupWizardRequested) {
-            std::fprintf(stderr, "[menu] launching setup wizard\n");
+            logLine("[menu] launching setup wizard\n");
             bool wizardCompleted = runSetupWizard(window, renderer, texture, gamepad, discoveryPort, netConfig,
                                                    discoveryStorePath);
             // Unlike the automatic first-run case, a cancelled re-invocation

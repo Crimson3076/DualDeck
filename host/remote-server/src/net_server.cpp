@@ -549,8 +549,48 @@ void NetServer::controlLoop() {
                 if (hdr->type == PacketType::Disconnect) {
                     break;
                 }
-                // Heartbeat or unrecognized-but-valid type: keep the
-                // connection open.
+
+                // Read off (and act on) this packet's payload before
+                // looping back to read the next header -- ClientLog
+                // (client log-forwarding) is the first packet a client
+                // sends on this post-handshake loop that actually
+                // carries one; skipping it would desync the stream,
+                // since its bytes would otherwise be misread as the
+                // start of the next packet's header. Bounded well below
+                // any sane control-channel payload to reject an
+                // implausible/corrupt declared size before ever
+                // allocating for it (spec section 13).
+                constexpr uint32_t kMaxControlPayloadSize = 4096;
+                if (hdr->payloadSize > kMaxControlPayloadSize) {
+                    std::fprintf(stderr,
+                                  "NetServer: dropping control packet with implausible payload size\n");
+                    break;
+                }
+                ByteBuffer payload(hdr->payloadSize);
+                if (!payload.empty()) {
+                    ssize_t got = ::recv(clientFd, payload.data(), payload.size(), MSG_WAITALL);
+                    if (got != static_cast<ssize_t>(payload.size())) {
+                        break; // peer closed, link error, or heartbeat timeout mid-payload
+                    }
+                }
+
+                if (hdr->type == PacketType::ClientLog) {
+                    auto log = parseClientLogPayload(payload.data(), payload.size());
+                    // No trailing "\n" added here -- every client_log.h
+                    // logLine() call already ends its format string with
+                    // one, so `line` arrives with it intact.
+                    if (log) {
+                        std::fprintf(stderr, "[client %s] %s", ipStr, log->line.c_str());
+                        if (config_.onClientLogLine) {
+                            config_.onClientLogLine(ipStr, log->line);
+                        }
+                    } else {
+                        std::fprintf(stderr, "NetServer: dropping malformed ClientLog packet\n");
+                    }
+                }
+                // Heartbeat or any other recognized-but-payload-free/
+                // unrecognized type: keep the connection open, the
+                // payload (if any) already consumed above.
             }
         }
 

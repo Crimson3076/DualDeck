@@ -10,6 +10,7 @@ add_executable(dualdeck_protocol_tests
     test_mic_audio.cpp
     test_identity.cpp
     test_mode_changed.cpp
+    test_client_log.cpp
 )
 
 target_link_libraries(dualdeck_protocol_tests PRIVATE dualdeck_protocol)

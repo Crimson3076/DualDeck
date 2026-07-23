@@ -487,4 +487,51 @@ ByteBuffer buildModeChangedPacket(const ModeChangedPayload& modeChanged) {
     return buildPacket(PacketType::ModeChanged, payload);
 }
 
+void serializeClientLogPayload(ByteBuffer& out, const ClientLogPayload& log) {
+    // Truncated here rather than trusting the caller, same posture as
+    // appendString()'s callers being responsible for their own
+    // kMaxProtocolStringLength truncation -- this is the one place a
+    // ClientLogPayload actually goes on the wire.
+    std::string line = log.line;
+    if (line.size() > kMaxClientLogLineLength) {
+        line.resize(kMaxClientLogLineLength);
+    }
+    appendU16(out, static_cast<uint16_t>(line.size()));
+    out.insert(out.end(), line.begin(), line.end());
+}
+
+std::optional<ClientLogPayload> parseClientLogPayload(const uint8_t* data, size_t size) {
+    if (data == nullptr || size < 2) {
+        return std::nullopt;
+    }
+
+    size_t offset = 0;
+    uint16_t len = readU16(data, offset);
+    offset += 2;
+
+    if (len > kMaxClientLogLineLength) {
+        return std::nullopt;
+    }
+    if (offset + len > size) {
+        return std::nullopt;
+    }
+
+    ClientLogPayload log;
+    log.line.assign(reinterpret_cast<const char*>(data + offset), len);
+    offset += len;
+
+    if (offset != size) {
+        // trailing garbage: reject rather than silently ignore
+        return std::nullopt;
+    }
+
+    return log;
+}
+
+ByteBuffer buildClientLogPacket(const ClientLogPayload& log) {
+    ByteBuffer payload;
+    serializeClientLogPayload(payload, log);
+    return buildPacket(PacketType::ClientLog, payload);
+}
+
 } // namespace melonds_remote

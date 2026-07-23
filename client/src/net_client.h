@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -155,10 +156,28 @@ public:
     // connected, matching every pre-issue-#4 host's only behavior.
     HostMode hostMode() const { return hostMode_.load(); }
 
+    // Enqueues `line` (already formatted -- see client_log.h) to be
+    // forwarded to the host as a ClientLog packet on the control
+    // channel, for host-side debugging/app development. Best-effort and
+    // never blocks: silently dropped if not currently connected or the
+    // queue is already at kMaxQueuedLogLines -- losing a diagnostic
+    // message is a vastly smaller problem than this call stalling
+    // whatever hot path just tried to log something, or an unbounded
+    // queue building up while disconnected. Actually sent by
+    // heartbeatLoop(), which already wakes every 50ms regardless of
+    // connection activity.
+    void sendClientLog(const std::string& line);
+
 private:
     void videoReceiveLoop();
     void controlReceiveLoop();
     void heartbeatLoop();
+    // Drains the queue sendClientLog() fills and sends each line as its
+    // own ClientLog packet. Returns false the instant a send fails (the
+    // connection is dead), matching how a Heartbeat send failure is
+    // already treated in heartbeatLoop() -- losing the rest of a batch
+    // of queued log lines to a dead socket is not worth a partial retry.
+    bool sendQueuedLogLines();
     void closePartialConnection();
 
     NetClientConfig config_;
@@ -197,6 +216,13 @@ private:
     std::mutex frameMutex_;
     std::vector<uint8_t> latestFrame_;
     bool hasFrame_ = false;
+
+    // Guards logQueue_ -- filled by sendClientLog() (any thread), drained
+    // by heartbeatLoop() (its own thread) every ~50ms. Capped at
+    // kMaxQueuedLogLines (see sendClientLog()'s own comment for why an
+    // over-cap line is simply dropped rather than queued or blocked on).
+    std::mutex logQueueMutex_;
+    std::deque<std::string> logQueue_;
 
     // Guards lastRejectReason_; connect() holds connectMutex_ for its
     // whole body anyway, but lastRejectReason() may be called from a
