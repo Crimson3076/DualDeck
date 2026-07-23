@@ -125,14 +125,18 @@ public:
     SystemIdentity hostSystemIdentity() const;
     AdapterIdentity hostAdapterIdentity() const;
 
-    // The host's own reported native video dimensions (GitHub issue: "no
-    // video on real hardware" for Azahar/3DS -- the host used to always
-    // default to DS's 256x192 in HelloAck regardless of what it actually
-    // streamed, so a 320x240 3DS frame was silently rejected by both this
-    // class's own payload-size check and main.cpp's fixed-size texture).
-    // Same availability convention as hostSystemIdentity() above: default
-    // 256x192 if no HelloAck has been received yet, matching every
-    // pre-this-fix host's only behavior.
+    // The most recently decoded video frame's real dimensions. Originally
+    // just HelloAck's one-time-negotiated value (GitHub issue: "no video
+    // on real hardware" for Azahar/3DS -- the host used to always default
+    // to DS's 256x192 in HelloAck regardless of what it actually streamed,
+    // so a 320x240 3DS frame was silently rejected). Now also updated by
+    // videoReceiveLoop() after every successfully decoded frame (real bug
+    // this fixes: CemuAdapter's actual capture resolution isn't known at
+    // Hello time and can differ from whatever was negotiated then -- see
+    // adapter_contract.h's SurfaceFrame comment) -- so, like hostMode()
+    // below, callers should poll this every frame rather than only once
+    // per connection, to react to a real size change without a reconnect.
+    // Defaults to 256x192 if no frame has been decoded yet.
     uint16_t hostNativeWidth() const;
     uint16_t hostNativeHeight() const;
 

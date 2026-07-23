@@ -286,6 +286,8 @@ std::optional<GenericInputState> parseGenericInputState(const uint8_t* data, siz
 void serializeSurfaceFrame(ByteBuffer& out, const SurfaceFrame& frame) {
     appendString(out, frame.surfaceId);
     appendU64(out, frame.frameIndex);
+    appendU16(out, frame.width);
+    appendU16(out, frame.height);
     appendU32(out, static_cast<uint32_t>(frame.pixels.size()));
     out.insert(out.end(), frame.pixels.begin(), frame.pixels.end());
 }
@@ -297,10 +299,12 @@ std::optional<SurfaceFrame> parseSurfaceFrame(const uint8_t* data, size_t size) 
     auto surfaceId = readString(data, size, offset);
     if (!surfaceId) return std::nullopt;
 
-    if (offset + 8 + 4 > size) return std::nullopt;
+    if (offset + 8 + 2 + 2 + 4 > size) return std::nullopt;
     SurfaceFrame frame;
     frame.surfaceId = std::move(*surfaceId);
     frame.frameIndex = readU64(data, offset); offset += 8;
+    frame.width = readU16(data, offset); offset += 2;
+    frame.height = readU16(data, offset); offset += 2;
     uint32_t pixelCount = readU32(data, offset); offset += 4;
 
     if (pixelCount > kMaxIpcFramePixelBytes) return std::nullopt;

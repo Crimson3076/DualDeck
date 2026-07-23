@@ -181,7 +181,8 @@ void HostControlAdapter::releaseAll() {
     emitState(HostControlGamepadState{});
 }
 
-bool HostControlAdapter::getLatestFrame(std::vector<uint8_t>& /*outFrame*/, uint64_t& /*outFrameIndex*/) {
+bool HostControlAdapter::getLatestFrame(std::vector<uint8_t>& /*outFrame*/, uint64_t& /*outFrameIndex*/,
+                                        uint16_t& /*outWidth*/, uint16_t& /*outHeight*/) {
     return false;
 }
 

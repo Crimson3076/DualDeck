@@ -86,13 +86,34 @@ void AdapterBridge::releaseAll() {
     adapter_.releaseAllInputs();
 }
 
-bool AdapterBridge::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) {
+bool AdapterBridge::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
+                                   uint16_t& outWidth, uint16_t& outHeight) {
     melonds_remote::adapter::SurfaceFrame frame;
     if (!adapter_.latestFrame(targetSurfaceId(), frame)) {
         return false;
     }
     outFrame = std::move(frame.pixels);
     outFrameIndex = frame.frameIndex;
+    // Real, shipped bug this fixes: frameDimensions() below is a coarse
+    // value negotiated once per connection (see its own comment) --
+    // CemuAdapter's actual captured GamePad resolution depends on the
+    // specific title running and isn't known at Hello time (that
+    // connection is rebuilt fresh per title-launch, and the IPC
+    // handshake all but always completes before the title has rendered
+    // even one real frame), so a value sampled once at connection start
+    // could never reliably reflect the truth for the rest of that
+    // session. SurfaceFrame::width/height (adapter contract v2) is this
+    // specific frame's own real size, straight from whatever the adapter
+    // actually captured -- use it if the adapter populated it, falling
+    // back to frameDimensions()'s declared value only for an adapter that
+    // hasn't been updated to set it (it would otherwise be 0x0, which
+    // would corrupt or crash the JPEG encoder in net_server.cpp).
+    if (frame.width != 0 && frame.height != 0) {
+        outWidth = frame.width;
+        outHeight = frame.height;
+    } else {
+        frameDimensions(outWidth, outHeight);
+    }
     return true;
 }
 

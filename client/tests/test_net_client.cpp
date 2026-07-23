@@ -39,7 +39,7 @@ namespace {
 // host::SyntheticFrameSource's real generator thread.
 class NullFrameSource : public IFrameSource {
 public:
-    bool getLatestFrame(std::vector<uint8_t>&, uint64_t&) override { return false; }
+    bool getLatestFrame(std::vector<uint8_t>&, uint64_t&, uint16_t&, uint16_t&) override { return false; }
 };
 
 // Real bug this exists to catch: AzaharAdapter's actual 320x240 bottom
@@ -62,10 +62,13 @@ public:
         outHeight = height_;
     }
 
-    bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) override {
+    bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
+                        uint16_t& outWidth, uint16_t& outHeight) override {
         if (!hasFrame_) return false;
         outFrame = frame_;
         outFrameIndex = 0;
+        outWidth = width_;
+        outHeight = height_;
         return true;
     }
 

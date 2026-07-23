@@ -159,11 +159,15 @@ MDR_TEST(ipc_frame_relayed_from_adapter_to_server) {
     MDR_CHECK(client.connect());
     MDR_CHECK(waitUntil([&] { return server.hasConnectedAdapter(); }));
 
-    ds.pushFrame("bottom", {9, 8, 7});
+    ds.pushFrame("bottom", {9, 8, 7}, 256, 192);
 
     SurfaceFrame outFrame;
     MDR_CHECK(waitUntil([&] { return server.latestFrame("bottom", outFrame) && !outFrame.pixels.empty(); }));
     MDR_CHECK(outFrame.pixels == std::vector<uint8_t>({9, 8, 7}));
+    // Contract v2: width/height ride along with the frame itself over the
+    // real IPC socket, not just in the in-process serialize/parse tests.
+    MDR_CHECK_EQ(outFrame.width, 256);
+    MDR_CHECK_EQ(outFrame.height, 192);
 
     client.disconnect();
     server.stop();

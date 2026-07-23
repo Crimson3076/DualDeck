@@ -86,7 +86,8 @@ public:
     // own local UI instead (GitHub issue #4 Phase E). Always returns
     // false; NetServer's videoLoop() already treats that as "nothing to
     // send this tick" with no special-casing needed here.
-    bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) override;
+    bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
+                        uint16_t& outWidth, uint16_t& outHeight) override;
 
 private:
     void emitState(const HostControlGamepadState& state);

@@ -918,10 +918,20 @@ void NetServer::videoLoop() {
             auto tickStart = std::chrono::steady_clock::now();
 
             uint64_t frameIndex = 0;
+            // Real per-frame width/height, not the once-negotiated
+            // `frameWidth`/`frameHeight` sampled before this loop started --
+            // see AdapterBridge::getLatestFrame()'s comment for why that
+            // once-negotiated value can never be trusted for the rest of a
+            // Cemu session. Defaults to the once-negotiated value so a
+            // source that never updates them (SyntheticFrameSource,
+            // HostControlAdapter's always-false stub) keeps behaving
+            // exactly as before.
+            uint16_t currentFrameWidth = frameWidth;
+            uint16_t currentFrameHeight = frameHeight;
             bool gotFrame;
             {
                 std::lock_guard<std::mutex> lock(targetMutex_);
-                gotFrame = frameSource_->getLatestFrame(frame, frameIndex);
+                gotFrame = frameSource_->getLatestFrame(frame, frameIndex, currentFrameWidth, currentFrameHeight);
             }
             // Skip re-sending a frame whose index hasn't changed since the
             // last tick: getLatestFrame() is "return the most recent one,
@@ -938,7 +948,7 @@ void NetServer::videoLoop() {
             if (gotFrame && lastSentFrameIndex && frameIndex == *lastSentFrameIndex) {
                 gotFrame = false;
             }
-            if (gotFrame && !compressFrameBgraToJpeg(jpegCompressor, frame.data(), frameWidth, frameHeight,
+            if (gotFrame && !compressFrameBgraToJpeg(jpegCompressor, frame.data(), currentFrameWidth, currentFrameHeight,
                                                       currentVideoQuality_.load(), jpegFrame)) {
                 // Logged inside compressFrameBgraToJpeg(); skip this tick
                 // rather than tearing down the connection, same treatment

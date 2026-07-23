@@ -257,10 +257,10 @@ index 673c513..f3f6884 100644
      // The path to the game currently running
 diff --git a/src/citra_qt/remote_server/AzaharAdapter.cpp b/src/citra_qt/remote_server/AzaharAdapter.cpp
 new file mode 100644
-index 0000000..e6c0186
+index 0000000..298900e
 --- /dev/null
 +++ b/src/citra_qt/remote_server/AzaharAdapter.cpp
-@@ -0,0 +1,427 @@
+@@ -0,0 +1,434 @@
 +#include "citra_qt/remote_server/AzaharAdapter.h"
 +
 +#include <algorithm>
@@ -576,6 +576,13 @@ index 0000000..e6c0186
 +    }
 +    outFrame.surfaceId = kBottomSurfaceId;
 +    outFrame.frameIndex = frameIndex_;
++    // Contract v2: same width/height captureLoop() itself captures at and
++    // capabilities() declares -- captureScale_ is fixed for this adapter's
++    // whole lifetime, so this is always consistent (see
++    // adapter_contract.h's SurfaceFrame comment for why other adapters,
++    // e.g. Cemu's, can't make the same claim).
++    outFrame.width = static_cast<uint16_t>(kBottomScreenWidth * captureScale_);
++    outFrame.height = static_cast<uint16_t>(kBottomScreenHeight * captureScale_);
 +    outFrame.pixels = latestFrame_;
 +    return true;
 +}
@@ -1065,10 +1072,10 @@ index 0000000..e4dde1c
 +} // namespace CitraQt::RemoteServer
 diff --git a/src/citra_qt/remote_server/adapter_sdk/include/melonds_remote/adapter/adapter_contract.h b/src/citra_qt/remote_server/adapter_sdk/include/melonds_remote/adapter/adapter_contract.h
 new file mode 100644
-index 0000000..7c29ea7
+index 0000000..1346dab
 --- /dev/null
 +++ b/src/citra_qt/remote_server/adapter_sdk/include/melonds_remote/adapter/adapter_contract.h
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,129 @@
 +#pragma once
 +
 +// The versioned Emulator Adapter Contract (GitHub issue #28). Part of
@@ -1105,7 +1112,7 @@ index 0000000..7c29ea7
 +// independent axes of "what version is this," matching the same
 +// reasoning protocol.h's HelloAckPayload comments already give for
 +// appVersion vs. kProtocolVersion.
-+inline constexpr uint16_t kAdapterContractVersion = 1;
++inline constexpr uint16_t kAdapterContractVersion = 2;
 +
 +// Everything the Host Service needs to know about an adapter before
 +// negotiating a session with it: identity, declared video surfaces, and
@@ -1132,12 +1139,23 @@ index 0000000..7c29ea7
 +// A single frame for a specific surface, latest-frame-wins per surface
 +// (issue #28: "Frame submission using latest-frame-wins behavior" and
 +// the required test "Per-surface latest-frame-wins behavior"). Payload
-+// is raw pixels in the surface's declared PixelFormat/width/height --
-+// no compression, matching protocol.h's existing Stage-1 raw-buffer
-+// choice for the live VideoFrame payload.
++// is raw pixels in the surface's declared PixelFormat -- no compression,
++// matching protocol.h's existing Stage-1 raw-buffer choice for the live
++// VideoFrame payload.
++//
++// width/height (contract v2) are THIS frame's actual pixel dimensions,
++// not necessarily the same as whatever the surface's VideoSurfaceDescriptor
++// declared in AdapterCapabilities -- see the Host Service's own
++// adapter_contract.h (adapter-sdk/include/melonds_remote/adapter/) for
++// the full real-usage-bug rationale (capabilities() is negotiated once
++// per connection, essentially always before a title has rendered even
++// one real frame, so it can never reliably reflect the truth for the
++// rest of that connection's lifetime).
 +struct SurfaceFrame {
 +    std::string surfaceId;
 +    uint64_t frameIndex = 0; // monotonically increasing per surface, starts at 0
++    uint16_t width = 0;
++    uint16_t height = 0;
 +    std::vector<uint8_t> pixels;
 +};
 +
@@ -2506,10 +2524,10 @@ index 0000000..2db237e
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/citra_qt/remote_server/adapter_sdk/src/ipc_protocol.cpp b/src/citra_qt/remote_server/adapter_sdk/src/ipc_protocol.cpp
 new file mode 100644
-index 0000000..2abaf55
+index 0000000..4cac76e
 --- /dev/null
 +++ b/src/citra_qt/remote_server/adapter_sdk/src/ipc_protocol.cpp
-@@ -0,0 +1,333 @@
+@@ -0,0 +1,337 @@
 +#include "melonds_remote/adapter/ipc/ipc_protocol.h"
 +
 +using melonds_remote::ByteBuffer;
@@ -2798,6 +2816,8 @@ index 0000000..2abaf55
 +void serializeSurfaceFrame(ByteBuffer& out, const SurfaceFrame& frame) {
 +    appendString(out, frame.surfaceId);
 +    appendU64(out, frame.frameIndex);
++    appendU16(out, frame.width);
++    appendU16(out, frame.height);
 +    appendU32(out, static_cast<uint32_t>(frame.pixels.size()));
 +    out.insert(out.end(), frame.pixels.begin(), frame.pixels.end());
 +}
@@ -2809,10 +2829,12 @@ index 0000000..2abaf55
 +    auto surfaceId = readString(data, size, offset);
 +    if (!surfaceId) return std::nullopt;
 +
-+    if (offset + 8 + 4 > size) return std::nullopt;
++    if (offset + 8 + 2 + 2 + 4 > size) return std::nullopt;
 +    SurfaceFrame frame;
 +    frame.surfaceId = std::move(*surfaceId);
 +    frame.frameIndex = readU64(data, offset); offset += 8;
++    frame.width = readU16(data, offset); offset += 2;
++    frame.height = readU16(data, offset); offset += 2;
 +    uint32_t pixelCount = readU32(data, offset); offset += 4;
 +
 +    if (pixelCount > kMaxIpcFramePixelBytes) return std::nullopt;

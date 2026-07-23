@@ -34,7 +34,7 @@ namespace melonds_remote::adapter {
 // independent axes of "what version is this," matching the same
 // reasoning protocol.h's HelloAckPayload comments already give for
 // appVersion vs. kProtocolVersion.
-inline constexpr uint16_t kAdapterContractVersion = 1;
+inline constexpr uint16_t kAdapterContractVersion = 2;
 
 // Everything the Host Service needs to know about an adapter before
 // negotiating a session with it: identity, declared video surfaces, and
@@ -61,12 +61,32 @@ struct AdapterCapabilities {
 // A single frame for a specific surface, latest-frame-wins per surface
 // (issue #28: "Frame submission using latest-frame-wins behavior" and
 // the required test "Per-surface latest-frame-wins behavior"). Payload
-// is raw pixels in the surface's declared PixelFormat/width/height --
-// no compression, matching protocol.h's existing Stage-1 raw-buffer
-// choice for the live VideoFrame payload.
+// is raw pixels in the surface's declared PixelFormat -- no compression,
+// matching protocol.h's existing Stage-1 raw-buffer choice for the live
+// VideoFrame payload.
+//
+// width/height (contract v2) are THIS frame's actual pixel dimensions,
+// not necessarily the same as whatever the surface's VideoSurfaceDescriptor
+// declared in AdapterCapabilities. Real-usage bug this fixes: capabilities()
+// is negotiated once per connection (see AdapterBridge::frameDimensions()),
+// and CemuAdapter's actual captured GamePad resolution depends on the
+// specific title running, not a fixed value -- capabilities() is queried
+// (via the Hello handshake) essentially the instant a title starts
+// booting, almost always before that title has rendered even one real
+// frame, so there was no reliable way for the declared surface size to
+// ever reflect the truth for the rest of that connection's lifetime
+// (the connection is rebuilt per title-launch, not once per adapter
+// process lifetime -- see CafeSystem.cpp's LaunchForegroundTitle()/
+// ShutdownTitle() hooks). The consumer (NetServer's videoLoop(), see
+// net_server.cpp) now reads width/height fresh off each SurfaceFrame
+// instead of trusting a value sampled once at connection start, so a
+// mismatch here can no longer desync the video encoder's JPEG width/
+// pitch from the actual pixel buffer's real layout.
 struct SurfaceFrame {
     std::string surfaceId;
     uint64_t frameIndex = 0; // monotonically increasing per surface, starts at 0
+    uint16_t width = 0;
+    uint16_t height = 0;
     std::vector<uint8_t> pixels;
 };
 

@@ -148,7 +148,8 @@ MDR_TEST(host_control_adapter_degrades_gracefully_without_uinput_access) {
         adapter.releaseAll();
         std::vector<uint8_t> frame;
         uint64_t frameIndex = 0;
-        MDR_CHECK(!adapter.getLatestFrame(frame, frameIndex));
+        uint16_t width = 0, height = 0;
+        MDR_CHECK(!adapter.getLatestFrame(frame, frameIndex, width, height));
     }
     // If this ever runs somewhere uinput *is* available (a real Linux
     // dev machine with the right permissions, not this sandbox/CI), the

@@ -40,8 +40,14 @@ public:
     // own frameIndex. Silently accepted even for an undeclared surface
     // ID (mirrors production code choosing not to crash on an
     // unexpected-but-harmless value -- see the ADR's "malformed input
-    // must not crash the Host Service" note).
-    void pushFrame(const std::string& surfaceId, std::vector<uint8_t> pixels);
+    // must not crash the Host Service" note). width/height default to
+    // 0x0 (an adapter that hasn't set SurfaceFrame's own real size --
+    // see adapter_contract.h's contract v2 comment) since most tests
+    // don't care about it; pass real values to test the width/height
+    // path itself (e.g. AdapterBridge's own real-size-over-declared-
+    // default fix).
+    void pushFrame(const std::string& surfaceId, std::vector<uint8_t> pixels,
+                   uint16_t width = 0, uint16_t height = 0);
 
     // Attempts the transition via isValidTransition(); returns whether
     // it was applied. An invalid transition leaves state() unchanged

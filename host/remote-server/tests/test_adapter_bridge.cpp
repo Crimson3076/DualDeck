@@ -200,7 +200,8 @@ MDR_TEST(adapter_bridge_get_latest_frame_false_when_none_pushed) {
 
     std::vector<uint8_t> outFrame;
     uint64_t outIndex = 0;
-    MDR_CHECK(!bridge.getLatestFrame(outFrame, outIndex));
+    uint16_t outWidth = 0, outHeight = 0;
+    MDR_CHECK(!bridge.getLatestFrame(outFrame, outIndex, outWidth, outHeight));
 }
 
 MDR_TEST(adapter_bridge_get_latest_frame_proxies_pushed_frame) {
@@ -211,14 +212,43 @@ MDR_TEST(adapter_bridge_get_latest_frame_proxies_pushed_frame) {
 
     std::vector<uint8_t> outFrame;
     uint64_t outIndex = 999;
-    MDR_CHECK(bridge.getLatestFrame(outFrame, outIndex));
+    uint16_t outWidth = 0, outHeight = 0;
+    MDR_CHECK(bridge.getLatestFrame(outFrame, outIndex, outWidth, outHeight));
     MDR_CHECK(outFrame == std::vector<uint8_t>({1, 2, 3, 4}));
     MDR_CHECK_EQ(outIndex, 0u);
 
     ds.pushFrame("bottom", {5, 6, 7, 8});
-    MDR_CHECK(bridge.getLatestFrame(outFrame, outIndex));
+    MDR_CHECK(bridge.getLatestFrame(outFrame, outIndex, outWidth, outHeight));
     MDR_CHECK(outFrame == std::vector<uint8_t>({5, 6, 7, 8}));
     MDR_CHECK_EQ(outIndex, 1u);
+}
+
+// Real, shipped bug this covers (see SurfaceFrame's comment in
+// adapter_contract.h and AdapterBridge::getLatestFrame()'s comment):
+// frameDimensions() is only a coarse value negotiated once per
+// connection, sampled before an adapter like CemuAdapter necessarily
+// knows its own title's real capture resolution -- getLatestFrame() must
+// report THIS frame's own actual width/height instead, straight off
+// SurfaceFrame, not whatever was declared once via capabilities().
+MDR_TEST(adapter_bridge_get_latest_frame_reports_this_frames_real_size) {
+    FakeDsAdapter ds; // declares 256x192 via capabilities()
+    AdapterBridge bridge(ds);
+
+    ds.pushFrame("bottom", {1, 2, 3, 4}, 320, 240); // real captured size differs from the declared default
+    std::vector<uint8_t> outFrame;
+    uint64_t outIndex = 0;
+    uint16_t outWidth = 0, outHeight = 0;
+    MDR_CHECK(bridge.getLatestFrame(outFrame, outIndex, outWidth, outHeight));
+    MDR_CHECK_EQ(outWidth, 320);
+    MDR_CHECK_EQ(outHeight, 240);
+
+    // An adapter that never sets SurfaceFrame::width/height (0x0, e.g. one
+    // not yet updated for contract v2) falls back to the declared value
+    // instead of handing net_server.cpp a 0x0 frame it can't encode.
+    ds.pushFrame("bottom", {5, 6, 7, 8});
+    MDR_CHECK(bridge.getLatestFrame(outFrame, outIndex, outWidth, outHeight));
+    MDR_CHECK_EQ(outWidth, 256);
+    MDR_CHECK_EQ(outHeight, 192);
 }
 
 // Real bug this covers: AzaharAdapter reports its bottom surface as
@@ -260,12 +290,13 @@ MDR_TEST(adapter_bridge_resolves_surface_after_late_adapter_connection) {
 
     std::vector<uint8_t> outFrame;
     uint64_t outIndex = 0;
-    MDR_CHECK(!bridge.getLatestFrame(outFrame, outIndex)); // nothing yet, correctly
+    uint16_t outWidth = 0, outHeight = 0;
+    MDR_CHECK(!bridge.getLatestFrame(outFrame, outIndex, outWidth, outHeight)); // nothing yet, correctly
 
     adapter.connectNow();
     adapter.pushFrame("bottom", {10, 20, 30, 40});
 
-    MDR_CHECK(bridge.getLatestFrame(outFrame, outIndex));
+    MDR_CHECK(bridge.getLatestFrame(outFrame, outIndex, outWidth, outHeight));
     MDR_CHECK(outFrame == std::vector<uint8_t>({10, 20, 30, 40}));
     MDR_CHECK(bridge.targetSurfaceId() == "bottom");
 }

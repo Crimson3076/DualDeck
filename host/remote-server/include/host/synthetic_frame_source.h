@@ -25,7 +25,8 @@ public:
     void start();
     void stop();
 
-    bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) override;
+    bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
+                        uint16_t& outWidth, uint16_t& outHeight) override;
 
 private:
     void generatorLoop();

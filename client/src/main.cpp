@@ -1673,6 +1673,50 @@ int main(int argc, char** argv) {
         // recreation of texture below also resizes this alongside it.
         std::vector<uint8_t> testPattern(static_cast<size_t>(textureWidth) * textureHeight * 4, 0x40);
 
+        // Recreates `texture` (and its matching testPattern filler) at
+        // newWidth x newHeight if that differs from what's currently
+        // allocated -- a no-op cheap enough to call every frame. Used both
+        // at the connect/mode-transition edge below (an Azahar/3DS host's
+        // 320x240 vs. a melonDS/DS one's 256x192) and, per-frame, for a
+        // genuine mid-session resize (real bug this fixes: CemuAdapter's
+        // actual capture resolution isn't known at Hello time and can
+        // differ from whatever was negotiated then -- see
+        // adapter_contract.h's SurfaceFrame comment -- so the correct size
+        // may only become known partway through a connection, not at its
+        // start).
+        auto resizeTextureIfNeeded = [&](int newWidth, int newHeight) {
+            if (newWidth == textureWidth && newHeight == textureHeight) return;
+            SDL_DestroyTexture(texture);
+            texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGRA32,
+                                         SDL_TEXTUREACCESS_STREAMING, newWidth, newHeight);
+            if (!texture) {
+                // Extremely unlikely (the original creation at startup
+                // already proved the renderer can make textures at all) --
+                // fall back to the old dimensions rather than leaving
+                // texture null and crashing the next SDL_UpdateTexture/
+                // RenderTexture call below.
+                std::fprintf(stderr,
+                              "SDL_CreateTexture failed while resizing for new host "
+                              "dimensions: %s\n",
+                              SDL_GetError());
+                texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGRA32,
+                                             SDL_TEXTUREACCESS_STREAMING, textureWidth, textureHeight);
+            } else {
+                textureWidth = newWidth;
+                textureHeight = newHeight;
+                testPattern.assign(static_cast<size_t>(textureWidth) * textureHeight * 4, 0x40);
+                std::fprintf(stderr, "[video] texture resized to %dx%d for this host\n", textureWidth,
+                              textureHeight);
+            }
+            // Every fresh texture needs the same opaque blend mode as the
+            // startup one (see its own comment) -- SDL3 resets blend mode
+            // to its own per-format default on each new SDL_CreateTexture
+            // call, it isn't inherited from the destroyed texture.
+            if (texture && !SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_NONE)) {
+                std::fprintf(stderr, "SDL_SetTextureBlendMode failed: %s\n", SDL_GetError());
+            }
+        };
+
         const uint64_t inputIntervalUs = 1'000'000 / 120; // spec section 6.3
         uint64_t lastInputSendUs = SDL_GetTicksNS() / 1000;
 
@@ -2160,48 +2204,15 @@ int main(int argc, char** argv) {
                                   nowHostMode == HostMode::HostControl ? "HOST CONTROL" : "EMULATION");
                 }
 
-                // Recreate the video texture (and its matching test-pattern
-                // filler) at whatever native size this HelloAck actually
-                // reported, if it differs from what's currently allocated --
-                // e.g. connecting to an Azahar/3DS host (320x240) after a
-                // melonDS/DS one (256x192), or vice versa. Same edge as the
-                // identity refresh above, for the same reason: this is a
-                // real (if occasional) resize, not per-frame work.
-                int newWidth = net.hostNativeWidth();
-                int newHeight = net.hostNativeHeight();
-                if (newWidth != textureWidth || newHeight != textureHeight) {
-                    SDL_DestroyTexture(texture);
-                    texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGRA32,
-                                                 SDL_TEXTUREACCESS_STREAMING, newWidth, newHeight);
-                    if (!texture) {
-                        // Extremely unlikely (the original creation at
-                        // startup already proved the renderer can make
-                        // textures at all) -- fall back to the old
-                        // dimensions rather than leaving texture null and
-                        // crashing the next SDL_UpdateTexture/RenderTexture
-                        // call below.
-                        std::fprintf(stderr,
-                                      "SDL_CreateTexture failed while resizing for new host "
-                                      "dimensions: %s\n",
-                                      SDL_GetError());
-                        texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGRA32,
-                                                     SDL_TEXTUREACCESS_STREAMING, textureWidth, textureHeight);
-                    } else {
-                        textureWidth = newWidth;
-                        textureHeight = newHeight;
-                        testPattern.assign(static_cast<size_t>(textureWidth) * textureHeight * 4, 0x40);
-                        std::fprintf(stderr, "[video] texture resized to %dx%d for this host\n", textureWidth,
-                                      textureHeight);
-                    }
-                    // Every fresh texture needs the same opaque blend mode
-                    // as the startup one above (see its comment) -- SDL3
-                    // resets blend mode to its own per-format default on
-                    // each new SDL_CreateTexture call, it isn't inherited
-                    // from the destroyed texture.
-                    if (texture && !SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_NONE)) {
-                        std::fprintf(stderr, "SDL_SetTextureBlendMode failed: %s\n", SDL_GetError());
-                    }
-                }
+                // Recreate the video texture at whatever native size this
+                // HelloAck actually reported, if it differs from what's
+                // currently allocated -- e.g. connecting to an Azahar/3DS
+                // host (320x240) after a melonDS/DS one (256x192), or vice
+                // versa. (A genuine mid-session resize is also handled,
+                // every frame, by the identical call further down below --
+                // this one just means a fresh connection doesn't have to
+                // wait a frame to show correctly-sized video.)
+                resizeTextureIfNeeded(net.hostNativeWidth(), net.hostNativeHeight());
             }
             wasConnected = nowConnected;
             lastHostMode = nowHostMode;
@@ -2323,6 +2334,18 @@ int main(int argc, char** argv) {
             if (nowConnected && nowHostMode == HostMode::HostControl) {
                 renderHostControlScreen(renderer, identityLine());
                 continue;
+            }
+
+            // Real bug this fixes: a genuine mid-session resize (see
+            // resizeTextureIfNeeded()'s declaration comment) only becomes
+            // visible once a new-sized frame has actually been decoded --
+            // checking every frame here, not just on the connect edge
+            // above, means it's picked up the moment it happens instead of
+            // silently falling back to the test pattern below forever
+            // (frame.size() would never again match testPattern.size()
+            // otherwise).
+            if (nowConnected) {
+                resizeTextureIfNeeded(net.hostNativeWidth(), net.hostNativeHeight());
             }
 
             const uint8_t* pixels = testPattern.data();

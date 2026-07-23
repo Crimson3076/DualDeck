@@ -28,13 +28,15 @@ void SyntheticFrameSource::stop() {
     }
 }
 
-bool SyntheticFrameSource::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) {
+bool SyntheticFrameSource::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
+                                          uint16_t& outWidth, uint16_t& outHeight) {
     std::lock_guard<std::mutex> lock(bufferMutex_);
     if (!hasFrame_) {
         return false;
     }
     outFrame = latestFrame_;
     outFrameIndex = latestFrameIndex_;
+    frameDimensions(outWidth, outHeight); // fixed size, matches this class's declared kFrameWidth/kFrameHeight
     return true;
 }
 

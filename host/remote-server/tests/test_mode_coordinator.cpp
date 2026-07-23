@@ -126,7 +126,7 @@ struct Fixture {
     LoggingInputSink hostControlInputSink;
     class NullFrameSource : public IFrameSource {
     public:
-        bool getLatestFrame(std::vector<uint8_t>&, uint64_t&) override { return false; }
+        bool getLatestFrame(std::vector<uint8_t>&, uint64_t&, uint16_t&, uint16_t&) override { return false; }
     } hostControlFrameSource;
 
     std::string socketPath = uniqueSocketPath();

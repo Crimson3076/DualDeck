@@ -5025,25 +5025,81 @@ size on every frame (`CapturedSurface::width/height`, updated in
 already documented the *intended* fallback-to-real-size behavior that
 the code never actually implemented.
 
-Fixed by having `capabilities()` report the real last-captured
-width/height for the TV and GamePad surfaces once at least one frame of
-each has been captured, falling back to the compile-time default only
-before the very first frame (in practice always resolved by the time a
-client's Hello handshake arrives, since Cemu renders continuously from
-the moment a title boots -- well before a user gets around to opening
-the DualDeck client). This required marking `CapturedSurface::mutex`
-`mutable` so the const `capabilities()` method can lock it. No protocol,
-wire-format, or client-side change needed -- Azahar and melonDS/DS don't
-have this class of bug (their declared and actual capture sizes are
-already always consistent: DS/3DS have one genuinely fixed native
-resolution, and Azahar's declared size already derives from the same
-`captureScale_` its actual capture uses).
+**First fix, tested and found insufficient**: had `capabilities()`
+report the real last-captured width/height for the TV and GamePad
+surfaces once at least one frame of each had been captured, falling back
+to the compile-time default only before the very first frame -- reasoned
+(wrongly) to always resolve in practice by the time a client's Hello
+handshake arrives, since Cemu renders continuously from the moment a
+title boots. The user retested against Twilight Princess HD once this
+shipped and it was **still bugged**, unchanged. Re-examining the actual
+connection lifecycle explains why: `RemoteServerBridge` (and the
+IPC-connected `CemuAdapter` alongside it) isn't a single long-lived
+connection for Cemu's whole process lifetime -- it's rebuilt fresh
+inside `LaunchForegroundTitle()` on every single title boot (see
+`CafeSystem.cpp`'s hooks). The very first `AdapterIpcClient::connect()`
+attempt after that typically succeeds within milliseconds (the Host
+Service is already listening), while the title itself takes much
+longer -- often seconds -- to initialize its own renderer and produce
+its first real GamePad frame. So `capabilities()`'s one-time Hello-time
+snapshot was, in practice, *always* taken before `hasFrame` had ever
+been set, making the "fall back to a default until the real size is
+known" logic effectively dead code: every session's declared value
+stayed the wrong hardcoded default for its entire lifetime, exactly
+reproducing the original bug.
 
-**Not yet verified**: same sandbox limitation as every other Cemu fix
-this session -- reasoned through and diffed against the previously-
-committed patch, not compiled or tested. Needs a CI build and a real
-retest against Twilight Princess HD and Pokemon Rumble U specifically to
-confirm the tearing is gone.
+**Actual fix**: the real per-frame width/height now travels *with the
+frame itself*, not as a value negotiated once at Hello time.
+`SurfaceFrame` (the adapter contract, `adapter_contract.h`) gained
+`width`/`height` fields -- contract version bumped 1 -> 2 -- carried
+across the adapter IPC wire format (`ipc_protocol.h`/`.cpp`'s
+`serializeSurfaceFrame`/`parseSurfaceFrame`). `CemuAdapter::latestFrame()`
+now populates them from the same `CapturedSurface::width/height` every
+call (the data was always being captured correctly -- it just wasn't
+reaching anywhere that mattered before). On the Host Service side,
+`IFrameSource::getLatestFrame()` gained matching `outWidth`/`outHeight`
+out-parameters, and `AdapterBridge` forwards the real per-frame values
+(falling back to the declared default only if an adapter reports 0x0,
+i.e. hasn't been updated for contract v2). `NetServer::videoLoop()` now
+re-reads these on every single tick instead of once before the
+connection's inner loop, and feeds the *current* frame's real size into
+`tjCompress2` for JPEG encoding -- so the encoder can never again be
+told the wrong width for the buffer it's actually reading.
+
+The client side needed a matching fix: it used to require an exact match
+between a decoded JPEG's real dimensions and the one value HelloAck
+negotiated at connect time, closing the connection outright on any
+mismatch (which the corrected host-side behavior would now trigger
+constantly, since the real per-frame size and the once-negotiated value
+legitimately differ). `decompressJpegToBgra()` now decodes at whatever
+size the JPEG itself actually declares (already read via
+`tjDecompressHeader3()`, previously only used to validate against the
+expected size, not to drive the decode). `NetClient` keeps
+`hostNativeWidth()`/`hostNativeHeight()` in sync with the most recently
+decoded frame's real size, and `main.cpp`'s render loop now checks them
+every frame (not just on connect/mode-transition) and recreates its SDL
+texture the moment they change -- so a genuine mid-session resolution
+change is picked up within a frame or two instead of needing a
+reconnect, and Cemu's real capture size never has to match a value
+guessed before the title even finished loading.
+
+This required marking `CapturedSurface::mutex` `mutable` (kept from the
+first fix, still needed for `capabilities()`'s own fallback reporting).
+Azahar and melonDS/DS don't have the underlying bug this fully fixes
+(their declared and actual capture sizes were already always
+consistent: DS/3DS have one genuinely fixed native resolution, Azahar's
+declared size already derives from the same `captureScale_` its actual
+capture uses) but both were updated to populate `SurfaceFrame::width/
+height` too, for contract-v2 completeness and because the new
+per-frame path is what the whole pipeline now relies on.
+
+**Verified**: Azahar and melonDS both rebuild clean in this project's
+sandbox (both are real, compilable checkouts here) after this change;
+all 6 host/client ctest suites pass. **Cemu still cannot be built or run
+in this sandbox** (confirmed repeatedly throughout this integration), so
+only that one patch is diff-verified, not compiled -- still needs a CI
+build and, ideally this time, a confirmed-successful retest against
+Twilight Princess HD and Pokemon Rumble U before calling this resolved.
 
 ## 2026-07-23: Discovery silently found zero hosts across a client/host protocol-version mismatch (all adapters, not melonDS-specific)
 

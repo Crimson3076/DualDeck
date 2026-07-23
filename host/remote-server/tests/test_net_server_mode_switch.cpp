@@ -39,9 +39,12 @@ class FakeFrameSource : public IFrameSource {
 public:
     explicit FakeFrameSource(uint8_t fillByte) : fillByte_(fillByte) {}
 
-    bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) override {
+    bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
+                        uint16_t& outWidth, uint16_t& outHeight) override {
         outFrame.assign(kFrameSizeBytes, fillByte_);
         outFrameIndex = ++frameIndex_;
+        outWidth = static_cast<uint16_t>(kFrameWidth);
+        outHeight = static_cast<uint16_t>(kFrameHeight);
         return true;
     }
 

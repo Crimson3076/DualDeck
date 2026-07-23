@@ -170,6 +170,8 @@ MDR_TEST(surface_frame_round_trip) {
     SurfaceFrame frame;
     frame.surfaceId = "bottom";
     frame.frameIndex = 42;
+    frame.width = 320;
+    frame.height = 240;
     frame.pixels = {1, 2, 3, 4, 5};
 
     ByteBuffer buf;
@@ -178,6 +180,8 @@ MDR_TEST(surface_frame_round_trip) {
     MDR_CHECK(parsed.has_value());
     MDR_CHECK(parsed->surfaceId == "bottom");
     MDR_CHECK_EQ(parsed->frameIndex, 42u);
+    MDR_CHECK_EQ(parsed->width, 320);
+    MDR_CHECK_EQ(parsed->height, 240);
     MDR_CHECK(parsed->pixels == std::vector<uint8_t>({1, 2, 3, 4, 5}));
 }
 
@@ -189,6 +193,8 @@ MDR_TEST(surface_frame_rejects_oversized_declared_pixel_count) {
     ByteBuffer buf;
     appendString(buf, "bottom");
     appendU64(buf, 0);
+    appendU16(buf, 0); // width (contract v2)
+    appendU16(buf, 0); // height (contract v2)
     appendU32(buf, kMaxIpcFramePixelBytes + 1);
     // No actual pixel bytes follow -- the declared count alone must be
     // enough to reject this before parseSurfaceFrame() would ever try

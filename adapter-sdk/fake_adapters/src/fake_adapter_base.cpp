@@ -36,12 +36,15 @@ bool FakeAdapterBase::latestFrame(const std::string& surfaceId, SurfaceFrame& ou
     return true;
 }
 
-void FakeAdapterBase::pushFrame(const std::string& surfaceId, std::vector<uint8_t> pixels) {
+void FakeAdapterBase::pushFrame(const std::string& surfaceId, std::vector<uint8_t> pixels,
+                                uint16_t width, uint16_t height) {
     std::lock_guard<std::mutex> lock(mutex_);
     uint64_t index = nextFrameIndex_[surfaceId]++;
     SurfaceFrame frame;
     frame.surfaceId = surfaceId;
     frame.frameIndex = index;
+    frame.width = width;
+    frame.height = height;
     frame.pixels = std::move(pixels);
     latestFrames_[surfaceId] = std::move(frame);
 }

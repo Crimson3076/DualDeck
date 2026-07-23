@@ -870,10 +870,10 @@ index 0000000..d7c39c0
 +)
 diff --git a/src/remote_server/CemuAdapter.cpp b/src/remote_server/CemuAdapter.cpp
 new file mode 100644
-index 0000000..83d6275
+index 0000000..33a460d
 --- /dev/null
 +++ b/src/remote_server/CemuAdapter.cpp
-@@ -0,0 +1,300 @@
+@@ -0,0 +1,309 @@
 +#include "remote_server/CemuAdapter.h"
 +
 +#include <algorithm>
@@ -1143,6 +1143,15 @@ index 0000000..83d6275
 +    }
 +    outFrame.surfaceId = surfaceId;
 +    outFrame.frameIndex = surface->frameIndex;
++    // Contract v2: this frame's own real captured size, not whatever
++    // capabilities() declared -- the definitive fix for the same
++    // real-usage bug capabilities()'s own hasFrame-gated fallback above
++    // only partially covers (that one only helps once, at Hello time;
++    // this one is correct for every single frame of the whole session,
++    // including if a title's real GamePad/DRC resolution ever changes
++    // after the first one). See adapter_contract.h's SurfaceFrame comment.
++    outFrame.width = static_cast<uint16_t>(surface->width);
++    outFrame.height = static_cast<uint16_t>(surface->height);
 +    outFrame.pixels = surface->pixels;
 +    return true;
 +}
@@ -1888,10 +1897,10 @@ index 0000000..19291de
 +} // namespace DualDeck::RemoteServer
 diff --git a/src/remote_server/adapter_sdk/include/melonds_remote/adapter/adapter_contract.h b/src/remote_server/adapter_sdk/include/melonds_remote/adapter/adapter_contract.h
 new file mode 100644
-index 0000000..7c29ea7
+index 0000000..1346dab
 --- /dev/null
 +++ b/src/remote_server/adapter_sdk/include/melonds_remote/adapter/adapter_contract.h
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,129 @@
 +#pragma once
 +
 +// The versioned Emulator Adapter Contract (GitHub issue #28). Part of
@@ -1928,7 +1937,7 @@ index 0000000..7c29ea7
 +// independent axes of "what version is this," matching the same
 +// reasoning protocol.h's HelloAckPayload comments already give for
 +// appVersion vs. kProtocolVersion.
-+inline constexpr uint16_t kAdapterContractVersion = 1;
++inline constexpr uint16_t kAdapterContractVersion = 2;
 +
 +// Everything the Host Service needs to know about an adapter before
 +// negotiating a session with it: identity, declared video surfaces, and
@@ -1955,12 +1964,23 @@ index 0000000..7c29ea7
 +// A single frame for a specific surface, latest-frame-wins per surface
 +// (issue #28: "Frame submission using latest-frame-wins behavior" and
 +// the required test "Per-surface latest-frame-wins behavior"). Payload
-+// is raw pixels in the surface's declared PixelFormat/width/height --
-+// no compression, matching protocol.h's existing Stage-1 raw-buffer
-+// choice for the live VideoFrame payload.
++// is raw pixels in the surface's declared PixelFormat -- no compression,
++// matching protocol.h's existing Stage-1 raw-buffer choice for the live
++// VideoFrame payload.
++//
++// width/height (contract v2) are THIS frame's actual pixel dimensions,
++// not necessarily the same as whatever the surface's VideoSurfaceDescriptor
++// declared in AdapterCapabilities -- see the Host Service's own
++// adapter_contract.h (adapter-sdk/include/melonds_remote/adapter/) for
++// the full real-usage-bug rationale (capabilities() is negotiated once
++// per connection, essentially always before a title has rendered even
++// one real frame, so it can never reliably reflect the truth for the
++// rest of that connection's lifetime).
 +struct SurfaceFrame {
 +    std::string surfaceId;
 +    uint64_t frameIndex = 0; // monotonically increasing per surface, starts at 0
++    uint16_t width = 0;
++    uint16_t height = 0;
 +    std::vector<uint8_t> pixels;
 +};
 +
@@ -3331,10 +3351,10 @@ index 0000000..2db237e
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/remote_server/adapter_sdk/src/ipc_protocol.cpp b/src/remote_server/adapter_sdk/src/ipc_protocol.cpp
 new file mode 100644
-index 0000000..2abaf55
+index 0000000..4cac76e
 --- /dev/null
 +++ b/src/remote_server/adapter_sdk/src/ipc_protocol.cpp
-@@ -0,0 +1,333 @@
+@@ -0,0 +1,337 @@
 +#include "melonds_remote/adapter/ipc/ipc_protocol.h"
 +
 +using melonds_remote::ByteBuffer;
@@ -3623,6 +3643,8 @@ index 0000000..2abaf55
 +void serializeSurfaceFrame(ByteBuffer& out, const SurfaceFrame& frame) {
 +    appendString(out, frame.surfaceId);
 +    appendU64(out, frame.frameIndex);
++    appendU16(out, frame.width);
++    appendU16(out, frame.height);
 +    appendU32(out, static_cast<uint32_t>(frame.pixels.size()));
 +    out.insert(out.end(), frame.pixels.begin(), frame.pixels.end());
 +}
@@ -3634,10 +3656,12 @@ index 0000000..2abaf55
 +    auto surfaceId = readString(data, size, offset);
 +    if (!surfaceId) return std::nullopt;
 +
-+    if (offset + 8 + 4 > size) return std::nullopt;
++    if (offset + 8 + 2 + 2 + 4 > size) return std::nullopt;
 +    SurfaceFrame frame;
 +    frame.surfaceId = std::move(*surfaceId);
 +    frame.frameIndex = readU64(data, offset); offset += 8;
++    frame.width = readU16(data, offset); offset += 2;
++    frame.height = readU16(data, offset); offset += 2;
 +    uint32_t pixelCount = readU32(data, offset); offset += 4;
 +
 +    if (pixelCount > kMaxIpcFramePixelBytes) return std::nullopt;

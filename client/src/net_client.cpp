@@ -18,28 +18,37 @@ namespace {
 // kProtocolVersion comment) back into raw BGRA8888 -- TJPF_BGRA as the
 // output format means no manual channel reordering, matching this
 // project's existing BGRA8888-everywhere convention. `outBgra` is resized
-// to exactly width*height*4 regardless of its previous contents. Returns
-// false (leaving outBgra unspecified) if `jpeg` isn't a valid JPEG image of
-// exactly width x height -- a mismatched size is treated as a decode
-// failure rather than silently cropped/padded, since it would otherwise
-// silently corrupt the frame the caller renders.
-bool decompressJpegToBgra(tjhandle decompressor, const uint8_t* jpeg, size_t jpegSize, int width,
-                           int height, std::vector<uint8_t>& outBgra) {
-    int jpegWidth = 0, jpegHeight = 0, jpegSubsamp = 0, jpegColorspace = 0;
-    if (tjDecompressHeader3(decompressor, jpeg, static_cast<unsigned long>(jpegSize), &jpegWidth,
-                             &jpegHeight, &jpegSubsamp, &jpegColorspace) != 0) {
+// to exactly outWidth*outHeight*4 regardless of its previous contents.
+// Returns false (leaving outBgra/outWidth/outHeight unspecified) if `jpeg`
+// isn't decodable at all.
+//
+// Decodes at the JPEG's own real embedded dimensions (outWidth/outHeight),
+// not a caller-supplied expected size -- this used to require an exact
+// match against the size HelloAck negotiated once at connection time and
+// reject the frame otherwise, which broke the instant a host's real
+// per-frame size legitimately differs from that one-time negotiated value
+// (see adapter_contract.h's SurfaceFrame comment for why CemuAdapter's
+// real capture size can't be known that early). The caller
+// (videoReceiveLoop() below) is responsible for reacting to outWidth/
+// outHeight changing between calls (see NetClient::hostNativeWidth()/
+// hostNativeHeight()'s updated comment and main.cpp's per-frame texture
+// resize check).
+bool decompressJpegToBgra(tjhandle decompressor, const uint8_t* jpeg, size_t jpegSize,
+                           std::vector<uint8_t>& outBgra, int& outWidth, int& outHeight) {
+    int jpegSubsamp = 0, jpegColorspace = 0;
+    if (tjDecompressHeader3(decompressor, jpeg, static_cast<unsigned long>(jpegSize), &outWidth,
+                             &outHeight, &jpegSubsamp, &jpegColorspace) != 0) {
         std::fprintf(stderr, "video: tjDecompressHeader3 failed: %s\n", tjGetErrorStr2(decompressor));
         return false;
     }
-    if (jpegWidth != width || jpegHeight != height) {
-        std::fprintf(stderr, "video: decoded JPEG is %dx%d, expected %dx%d\n", jpegWidth, jpegHeight,
-                     width, height);
+    if (outWidth <= 0 || outHeight <= 0) {
+        std::fprintf(stderr, "video: decoded JPEG has invalid dimensions %dx%d\n", outWidth, outHeight);
         return false;
     }
 
-    outBgra.resize(static_cast<size_t>(width) * height * 4);
-    if (tjDecompress2(decompressor, jpeg, static_cast<unsigned long>(jpegSize), outBgra.data(), width,
-                       /*pitch=*/0, height, TJPF_BGRA, TJFLAG_FASTDCT) != 0) {
+    outBgra.resize(static_cast<size_t>(outWidth) * outHeight * 4);
+    if (tjDecompress2(decompressor, jpeg, static_cast<unsigned long>(jpegSize), outBgra.data(), outWidth,
+                       /*pitch=*/0, outHeight, TJPF_BGRA, TJFLAG_FASTDCT) != 0) {
         std::fprintf(stderr, "video: tjDecompress2 failed: %s\n", tjGetErrorStr2(decompressor));
         return false;
     }
@@ -426,11 +435,22 @@ void NetClient::videoReceiveLoop() {
             break;
         }
 
-        if (!decompressJpegToBgra(jpegDecompressor, payloadBuf.data(), payloadBuf.size(),
-                                   hostNativeWidth_.load(), hostNativeHeight_.load(), decodedFrame)) {
+        int decodedWidth = 0, decodedHeight = 0;
+        if (!decompressJpegToBgra(jpegDecompressor, payloadBuf.data(), payloadBuf.size(), decodedFrame,
+                                   decodedWidth, decodedHeight)) {
             std::fprintf(stderr, "video: dropping undecodable frame, closing connection\n");
             break;
         }
+        // Real bug this fixes: hostNativeWidth_/hostNativeHeight_ used to
+        // only ever be set once, from HelloAck -- if a frame's real
+        // decoded size ever differed (see decompressJpegToBgra()'s
+        // comment), every subsequent frame was rejected outright and the
+        // connection torn down. Now kept in sync with whatever the most
+        // recently decoded frame's real size actually is; main.cpp's
+        // render loop checks these every frame (not just on connect) and
+        // resizes its texture the moment they change.
+        hostNativeWidth_ = static_cast<uint16_t>(decodedWidth);
+        hostNativeHeight_ = static_cast<uint16_t>(decodedHeight);
 
         std::lock_guard<std::mutex> lock(frameMutex_);
         latestFrame_.swap(decodedFrame);

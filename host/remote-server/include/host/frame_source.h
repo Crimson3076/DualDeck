@@ -23,16 +23,27 @@ public:
     virtual ~IFrameSource() = default;
 
     // Fills `outFrame` with the most recent available frame (resized to
-    // kFrameSizeBytes if needed) and `outFrameIndex` with a monotonically
+    // kFrameSizeBytes if needed), `outFrameIndex` with a monotonically
     // increasing index identifying it (starting at 0 for the first frame
-    // ever produced), and returns true; or returns false if no frame is
+    // ever produced), and `outWidth`/`outHeight` with THIS frame's actual
+    // pixel dimensions, and returns true; or returns false if no frame is
     // available yet. Never blocks -- this exists so a network thread can
     // poll it without stalling on the frame producer, per the
     // "latest-frame-wins" / bounded-queue requirement (spec section
     // 15/16). The frame index lets a caller that polls slower than frames
     // are produced compute how many frames it skipped (spec section 14:
     // log dropped frames), without needing the frames themselves.
-    virtual bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) = 0;
+    //
+    // outWidth/outHeight (added alongside AdapterBridge's real fix for a
+    // shipped bug -- see SurfaceFrame's comment in adapter_contract.h)
+    // are the authoritative per-frame size a caller must use to interpret
+    // `outFrame`'s bytes (e.g. as the width/pitch passed to a JPEG
+    // encoder) -- NOT necessarily the same value frameDimensions() below
+    // reports, which is only a coarse, once-negotiated estimate. Sources
+    // with a genuinely fixed frame size (this default, SyntheticFrameSource,
+    // HostControlAdapter) just echo frameDimensions() here every call.
+    virtual bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
+                                uint16_t& outWidth, uint16_t& outHeight) = 0;
 
     // The pixel dimensions of frames this source produces, reported to a
     // connecting client in HelloAck (see net_server.cpp) so it can size its

@@ -674,22 +674,60 @@ was the *intended* behavior ("these are only the AdapterCapabilities
 defaults reported before the first frame is captured... onSurfaceRendered()
 records whatever the real captured texture size turns out to be").
 
-Fixed by having `capabilities()` report the real last-captured
-width/height once at least one TV/GamePad frame exists, falling back to
-the compile-time default only before the first one ever arrives (in
-practice always resolved by the time a client's Hello reaches Cemu,
-since capture starts as soon as the title boots -- well before a user
-gets around to launching the DualDeck client). Required marking
-`CapturedSurface::mutex` `mutable` so the const `capabilities()` method
-can lock it to read `width`/`height`/`hasFrame` safely. No protocol,
-IPC wire-format, or client-side change needed here -- this is purely a
-Cemu-side bug: Azahar and melonDS/DS both already keep their declared
-and actual capture sizes consistent (DS/3DS have one genuinely fixed
-native resolution; Azahar's declared surface size already derives from
-the same `captureScale_` value its actual capture uses).
+**First fix, retested and found insufficient.** Had `capabilities()`
+report the real last-captured width/height once at least one TV/GamePad
+frame existed, falling back to the compile-time default only before the
+first one ever arrives -- reasoned (wrongly) to always resolve in
+practice by the time a client's Hello reaches Cemu, since capture starts
+as soon as the title boots. The user retested against Twilight Princess
+HD once this shipped: **still bugged, unchanged**. The actual connection
+lifecycle explains why the reasoning was wrong: `RemoteServerBridge` (and
+the IPC-connected `CemuAdapter` with it) isn't a single long-lived
+connection for Cemu's whole process lifetime -- it's rebuilt fresh
+inside `LaunchForegroundTitle()` on every title boot. The very first
+`AdapterIpcClient::connect()` attempt after that typically succeeds
+within milliseconds (the Host Service is already listening), while the
+title itself takes much longer -- often seconds -- to initialize its own
+renderer and produce a first real GamePad frame. So `capabilities()`'s
+one-time Hello-time snapshot was, in practice, *always* taken before
+`hasFrame` had ever been set -- the "fall back to a default until the
+real size is known" logic was effectively dead code, and every session's
+declared value stayed the wrong hardcoded default for its whole
+lifetime.
 
-**Not yet verified**: same sandbox limitation as every fix above --
-diffed against the previously-committed patch to confirm an isolated
-change, not compiled or tested. Needs a CI build and a real retest
-against Twilight Princess HD and Pokemon Rumble U specifically to
-confirm the tearing is gone and Wind Waker still works.
+**Actual fix: the real per-frame width/height now travels with the
+frame itself, not as a value negotiated once at Hello time.**
+`SurfaceFrame` (`adapter_contract.h`, vendored under this patch's own
+`adapter_sdk/`) gained `width`/`height` fields -- contract version bumped
+1 -> 2 -- carried across the adapter IPC wire format itself
+(`ipc_protocol.h`/`.cpp`'s `serializeSurfaceFrame`/`parseSurfaceFrame`).
+`CemuAdapter::latestFrame()` now populates them straight from
+`CapturedSurface::width/height` on every single call -- the real
+captured size was always being computed correctly, it just never
+reached anywhere that mattered before. On the Host Service side (main
+repo, not this patch), `IFrameSource::getLatestFrame()` gained matching
+output parameters and `NetServer::videoLoop()` now re-reads them on
+every tick instead of once before the connection's inner loop, feeding
+the *current* frame's real size into the JPEG encoder every time. The
+client side was updated to match: it used to reject any frame whose
+decoded size didn't exactly equal the size negotiated once at connect
+time, which the corrected host behavior would now trip constantly (the
+real per-frame size and the once-negotiated value legitimately differ)
+-- it now decodes at whatever size the JPEG itself declares and resizes
+its texture live, every frame, the moment that changes.
+
+Required marking `CapturedSurface::mutex` `mutable` (kept from the first
+fix, still needed for `capabilities()`'s own fallback reporting when no
+frame exists yet). Azahar and melonDS/DS don't have the underlying bug
+this fully fixes (their declared and actual capture sizes were already
+always consistent) but both had their own `latestFrame()` updated to
+populate `SurfaceFrame::width/height` too, since the whole pipeline now
+relies on that field being populated by every adapter.
+
+**Verified**: Azahar and melonDS both rebuild clean in this project's
+sandbox (real, compilable checkouts, unlike Cemu) after this change; all
+6 host/client ctest suites pass. **Cemu still cannot be built or run
+here** -- diff-verified only (confirmed an isolated change against the
+previously-committed patch), not compiled. Needs a CI build and,
+ideally this time, a confirmed-successful retest against Twilight
+Princess HD and Pokemon Rumble U before calling this resolved.
