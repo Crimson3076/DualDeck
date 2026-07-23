@@ -504,3 +504,67 @@ past `CaptureSurfaceBGRA()`'s file (`VulkanRenderer.cpp`, the 305th of
 544) hasn't been compiled yet as of this fix. Expect this to need at
 least one more round of real build-error troubleshooting, the same as
 every previous base-commit/major-change round of this patch has.
+
+**First real end-to-end run against `v2.6`: reproducible crash on the Vulkan renderer.**
+Reported directly from a user's host-service log: after roughly 15-20
+seconds of streaming, Cemu segfaults inside `__libc_free`, called (per
+the crash's own stack trace) from `CemuAdapter::onSurfaceRendered()` ->
+`LatteCP_itHLECopyColorBufferToScanBuffer()` -> `LatteCP_ProcessRingbuffer()`.
+The IPC-reconnect loop this produces (Cemu crashes, the launcher restarts
+it, `RemoteServerBridge`/`AdapterIpcClient` reconnects, `ModeCoordinator`
+flips back to `Emulation`, Cemu crashes again a few seconds later) is
+what a client actually sees as "flashes between connecting and host
+control, controls don't work" -- not a genuinely flaky IPC connection,
+Cemu itself dying repeatedly underneath it.
+
+Root cause (well-reasoned from reading the actual code both files
+involved, not confirmed with a debugger against a live crash -- this
+project has no way to build or run Cemu in its own sandbox, only CI):
+`VulkanRenderer::CaptureSurfaceBGRA()` allocates a fresh Vulkan staging
+buffer (`memoryManager->CreateBuffer()` + `vkMapMemory()`) and destroys
+it (`vkUnmapMemory()`/`vkFreeMemory()`/`vkDestroyBuffer()`) on *every
+single call* -- structurally identical to `HandleScreenshotRequest()`
+just above it in the same file, which does the exact same allocate/
+free-per-call pattern. The difference is call frequency:
+`HandleScreenshotRequest()` only ever runs once per a rare, explicit
+user action (pressing the screenshot key), while `CaptureSurfaceBGRA()`
+runs continuously at up to `CEMU_REMOTE_CAPTURE_FPS` (default 30) times
+a second, per surface (TV + GamePad) -- up to 60 full Vulkan
+allocate-blit-submit-wait-free cycles a second, sustained for as long as
+a client is connected. Repeatedly allocating and freeing GPU-visible
+memory at that rate is exactly the kind of driver-level churn a
+one-shot screenshot feature was never designed or tested against, and
+is a well-known way to destabilize a Vulkan driver's internal allocator
+over time (consistent with the ~15-20 second delay before the crash,
+rather than an immediate first-call failure).
+
+Fixed by making the staging buffer persistent: `VulkanRenderer` gains
+`m_dualDeckCaptureStagingBuffer`/`..Memory`/`..Size`/`..Ptr` members
+(mirroring how `m_textureReadbackBuffer` already persists for a similar
+reason), allocated once and only reallocated if a later call needs more
+space than it currently has, freed only in `VulkanRenderer`'s own
+destructor alongside its other persistent buffers. The blit-target
+`image`/`imageMemory` (only used for the non-directly-readable-format
+branch, a smaller fraction of calls, and whose Vulkan image *layout*
+would need correct tracking across reuse -- more involved than a plain
+buffer, which has none) is deliberately left as per-call allocation for
+now, not part of this fix. Also fixed in the same pass: `CreateBuffer()`'s
+return value, previously unchecked (matching `HandleScreenshotRequest()`'s
+own unchecked call, safe there only because it's rare) -- now checked,
+failing the capture cleanly on allocation failure instead of proceeding
+to map/copy through a `VK_NULL_HANDLE`.
+
+**Verified**: regenerated via the established scratch-clone workflow --
+diffed against the previously-committed patch to confirm only these
+lines changed (`VulkanRenderer.cpp`'s `CaptureSurfaceBGRA()`/destructor,
+`VulkanRenderer.h`'s new members). **Not verified**: this patch cannot
+be compiled in this project's own sandbox (Cemu's vcpkg-based dependency
+graph is unreachable here, confirmed repeatedly throughout this
+integration) -- only CI, and ultimately a real user's hardware, can
+confirm both that it compiles and that it actually resolves the crash.
+If streaming still crashes after this fix, the next thing worth trying
+is reducing `CEMU_REMOTE_CAPTURE_FPS` (e.g. to 15) to see whether the
+crash becomes rarer/later (supporting the allocation-churn theory) or
+is unaffected (pointing elsewhere, e.g. the blit-target `image` path
+this fix left untouched, or the render-pass/command-buffer state at the
+specific point in Cemu's pipeline this hook runs from).

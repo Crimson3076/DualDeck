@@ -4879,7 +4879,7 @@ correspondingly at quality >= 90, since 4:4:4's larger compressed output
 would otherwise be under-estimated by the heuristic tuned for the
 default quality's 4:2:0 case.
 
-## 2026-07-23: Cemu GamePad screen flashes between "connecting" and host-control, controls don't work -- root cause not yet found
+## 2026-07-23: Cemu GamePad screen flashes between "connecting" and host-control, controls don't work -- root-caused to a Vulkan capture crash, fixed (unverified)
 
 Reported after the v2.6-based Cemu build was first tested for real:
 "Wii U second screen still does not work, it flashes between the
@@ -4890,19 +4890,42 @@ screen (the one shown when no emulator adapter is connected and the
 client is just driving the host's own input directly) -- which, per
 `ModeCoordinator`'s design (see the Host Service architecture ADR), only
 happens if the host repeatedly gains and loses its adapter connection to
-Cemu. `RemoteServerBridge`'s `AdapterIpcClient` already has a
-reconnect-with-backoff loop for exactly this kind of transient failure
-(`host/cemu-patches/0001-remote-server-integration.patch`, mirroring
-Azahar's own equivalent loop) -- consistent with what's described, but
-this project has no way to reproduce Cemu locally (no sandbox access to
-build/run it, confirmed repeatedly throughout this integration's
-development), so the actual cause of *why* the IPC connection keeps
-dropping is unconfirmed: could be Cemu itself crash-looping, a socket
-permission/path issue specific to the v2.6 rebase, a timing race between
-Cemu's own startup and the host adapter-socket becoming ready, or
-something else. Needs the host-service process's own stderr/console
-output captured during the flashing to diagnose further -- not
-speculatively fixed here.
+Cemu.
+
+Diagnosed from a captured host-service log (`dualdeck-host.sh 2>&1 |
+tee ~/dualdeck-host.log`): Cemu itself was crashing, not the IPC
+connection flaking on its own. The log showed the exact
+attempt-connect / connect / switch-to-Emulation / switch-back-to-
+HostControl cycle the report described, ending in a real segfault
+inside `__libc_free`, with a stack trace through
+`CemuAdapter::onSurfaceRendered()` -> `LatteCP_itHLECopyColorBufferToScanBuffer()`
+-> `LatteCP_ProcessRingbuffer()` -- i.e. Cemu's own graphics command
+processor thread. `RemoteServerBridge`'s `AdapterIpcClient`
+reconnect-with-backoff loop was doing exactly what it's supposed to
+after each crash (matching Azahar's own equivalent loop); the actual
+bug was upstream of it.
+
+Root cause (see `host/cemu-patches/README.md`'s matching entry for the
+full reasoning): `VulkanRenderer::CaptureSurfaceBGRA()` allocated and
+freed a fresh Vulkan staging buffer on every single call -- the exact
+same pattern Cemu's own pre-existing `HandleScreenshotRequest()` uses,
+but that function only ever runs once per rare, explicit user action,
+while this one runs continuously at up to 60 times a second (both
+screens combined) for as long as a client is connected. Sustained
+allocate/free churn at that rate is a known way to destabilize a Vulkan
+driver's internal allocator, consistent with the crash appearing after
+~15-20 seconds of streaming rather than immediately. Fixed by making
+the staging buffer persistent (`VulkanRenderer`'s new
+`m_dualDeckCaptureStagingBuffer` members, freed only in its own
+destructor) instead of allocating and destroying it every call; also
+fixed `CreateBuffer()`'s previously-unchecked return value on this path.
+
+**Not yet verified**: this project cannot build or run Cemu in its own
+sandbox (confirmed repeatedly throughout this integration), so this fix
+has only been reasoned through and diffed against the previously-
+committed patch, not compiled or tested against a real crash. Needs a
+CI build followed by a real retest to confirm both that it compiles and
+that streaming no longer crashes.
 
 ## Things intentionally out of scope for v0.1
 

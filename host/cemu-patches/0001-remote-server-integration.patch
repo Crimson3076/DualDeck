@@ -290,10 +290,23 @@ index 77d588b..11758b8 100644
  												bool padView, bool clearBackground) = 0;
  	virtual bool BeginFrame(bool mainWindow) = 0;
 diff --git a/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.cpp b/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.cpp
-index 4ff2faa..3241e02 100644
+index 4ff2faa..264f61e 100644
 --- a/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.cpp
 +++ b/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.cpp
-@@ -1074,6 +1074,313 @@ void VulkanRenderer::HandleScreenshotRequest(LatteTextureView* texView, bool pad
+@@ -665,6 +665,12 @@ VulkanRenderer::~VulkanRenderer()
+ 	memoryManager->DeleteBuffer(m_xfbRingBuffer, m_xfbRingBufferMemory);
+ 	memoryManager->DeleteBuffer(m_occlusionQueries.bufferQueryResults, m_occlusionQueries.memoryQueryResults);
+ 	memoryManager->DeleteBuffer(m_bufferCache, m_bufferCacheMemory);
++	// DualDeck: see CaptureSurfaceBGRA()'s persistent staging buffer comment.
++	if (m_dualDeckCaptureStagingBuffer != VK_NULL_HANDLE)
++	{
++		vkUnmapMemory(m_logicalDevice, m_dualDeckCaptureStagingBufferMemory);
++		memoryManager->DeleteBuffer(m_dualDeckCaptureStagingBuffer, m_dualDeckCaptureStagingBufferMemory);
++	}
+ 
+ 	m_padSwapchainInfo = nullptr;
+ 	m_mainSwapchainInfo = nullptr;
+@@ -1074,6 +1080,343 @@ void VulkanRenderer::HandleScreenshotRequest(LatteTextureView* texView, bool pad
  		SaveScreenshot(rgb_data, width, height, !padView);
  }
  
@@ -507,12 +520,42 @@ index 4ff2faa..3241e02 100644
 +	region.imageOffset = { 0,0,0 };
 +	region.imageExtent = { (uint32)width,(uint32)height,1 };
 +
-+	void* bufferPtr = nullptr;
-+
-+	VkBuffer buffer = nullptr;
-+	VkDeviceMemory bufferMemory = nullptr;
-+	memoryManager->CreateBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT, buffer, bufferMemory);
-+	vkMapMemory(m_logicalDevice, bufferMemory, 0, VK_WHOLE_SIZE, 0, &bufferPtr);
++	// DualDeck: (re)allocate the persistent staging buffer only when it
++	// doesn't exist yet or is too small for this call's `size` -- see
++	// VulkanRenderer.h's m_dualDeckCaptureStagingBuffer comment for why
++	// this is cached across calls rather than a fresh vkCreateBuffer/
++	// vkAllocateMemory every time, unlike this function's blit-target
++	// `image` above (still per-call: only exercised for non-directly-
++	// readable formats, a smaller fraction of calls, and correctly
++	// tracking its layout across reuse is more involved than a buffer,
++	// which has none). CreateBuffer()'s return value is checked here
++	// (HandleScreenshotRequest() above doesn't check its own equivalent
++	// call, but that one only ever runs once per rare user action -- this
++	// one runs continuously, so a transient allocation failure needs to
++	// fail this call cleanly instead of mapping/copying through a
++	// VK_NULL_HANDLE).
++	if (m_dualDeckCaptureStagingBuffer == VK_NULL_HANDLE || m_dualDeckCaptureStagingBufferSize < size)
++	{
++		if (m_dualDeckCaptureStagingBuffer != VK_NULL_HANDLE)
++		{
++			vkUnmapMemory(m_logicalDevice, m_dualDeckCaptureStagingBufferMemory);
++			memoryManager->DeleteBuffer(m_dualDeckCaptureStagingBuffer, m_dualDeckCaptureStagingBufferMemory);
++			m_dualDeckCaptureStagingBufferSize = 0;
++		}
++		if (!memoryManager->CreateBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT, m_dualDeckCaptureStagingBuffer, m_dualDeckCaptureStagingBufferMemory))
++		{
++			cemuLog_log(LogType::Force, "DualDeck: capture failed: could not allocate staging buffer");
++			if (image)
++				vkDestroyImage(m_logicalDevice, image, nullptr);
++			if (imageMemory)
++				vkFreeMemory(m_logicalDevice, imageMemory, nullptr);
++			return false;
++		}
++		m_dualDeckCaptureStagingBufferSize = size;
++		vkMapMemory(m_logicalDevice, m_dualDeckCaptureStagingBufferMemory, 0, VK_WHOLE_SIZE, 0, &m_dualDeckCaptureStagingBufferPtr);
++	}
++	VkBuffer buffer = m_dualDeckCaptureStagingBuffer;
++	void* bufferPtr = m_dualDeckCaptureStagingBufferPtr;
 +
 +	if (dumpImage == baseImage)
 +	{
@@ -561,9 +604,9 @@ index 4ff2faa..3241e02 100644
 +		break;
 +	}
 +
-+	vkUnmapMemory(m_logicalDevice, bufferMemory);
-+	vkFreeMemory(m_logicalDevice, bufferMemory, nullptr);
-+	vkDestroyBuffer(m_logicalDevice, buffer, nullptr);
++	// DualDeck: m_dualDeckCaptureStagingBuffer/buffer is intentionally NOT
++	// unmapped/freed/destroyed here -- see its allocation above, kept
++	// alive across calls instead.
 +
 +	if (image)
 +		vkDestroyImage(m_logicalDevice, image, nullptr);
@@ -608,7 +651,7 @@ index 4ff2faa..3241e02 100644
  
  std::vector<VkDeviceQueueCreateInfo> VulkanRenderer::CreateQueueCreateInfos(const std::set<sint32>& uniqueQueueFamilies) const
 diff --git a/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.h b/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.h
-index f145048..d7f5655 100644
+index f145048..39f46d0 100644
 --- a/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.h
 +++ b/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.h
 @@ -189,6 +189,7 @@ public:
@@ -619,6 +662,25 @@ index f145048..d7f5655 100644
  
  	void QueryMemoryInfo();
  	void QueryAvailableFormats();
+@@ -610,6 +611,18 @@ private:
+ 	uint8* m_textureReadbackBufferPtr = nullptr;
+ 	uint32 m_textureReadbackBufferWriteIndex = 0;
+ 
++	// DualDeck (github.com/crimson3076/DualDeck): persistent staging
++	// buffer for CaptureSurfaceBGRA(), reused across calls instead of a
++	// fresh vkCreateBuffer/vkAllocateMemory (and matching vkDestroyBuffer/
++	// vkFreeMemory) every single call -- see CaptureSurfaceBGRA()'s own
++	// comment on why that per-call churn, at up to CEMU_REMOTE_CAPTURE_FPS
++	// times a second per surface, is not something HandleScreenshotRequest()
++	// (a rare, one-shot user action) ever needed to avoid.
++	VkBuffer m_dualDeckCaptureStagingBuffer = VK_NULL_HANDLE;
++	VkDeviceMemory m_dualDeckCaptureStagingBufferMemory = VK_NULL_HANDLE;
++	VkDeviceSize m_dualDeckCaptureStagingBufferSize = 0;
++	void* m_dualDeckCaptureStagingBufferPtr = nullptr;
++
+ 	// placeholder objects to simulate NULL buffers and textures
+ 	struct NullTexture
+ 	{
 diff --git a/src/gui/MainWindow.cpp b/src/gui/MainWindow.cpp
 index 4801706..7f9e0a3 100644
 --- a/src/gui/MainWindow.cpp
