@@ -39,6 +39,8 @@ source "${repo_root}/scripts/lib/pinned_commits.sh"
 source "${repo_root}/scripts/lib/ensure-packages.sh"
 # shellcheck source=scripts/lib/build_emulator.sh
 source "${repo_root}/scripts/lib/build_emulator.sh"
+# shellcheck source=scripts/lib/build_cache.sh
+source "${repo_root}/scripts/lib/build_cache.sh"
 # shellcheck source=scripts/lib/emudeck_paths.sh
 source "${repo_root}/scripts/lib/emudeck_paths.sh"
 # shellcheck source=scripts/lib/appimage_pack.sh
@@ -311,14 +313,22 @@ print(json.load(open('${appimage_path}.dualdeck.json'))['original_sha256'])
     local patched_bin app_name real_bin_name apprun_path extra_bins=""
     case "${emulator}" in
         melonds)
-            build_melonds patched_bin "${work_dir}" "${repo_root}" "${MELONDS_COMMIT}"
+            local melonds_patch_file="${repo_root}/host/melonds-patches/0001-remote-server-integration.patch"
+            if ! try_cached_build patched_bin melonds "${melonds_patch_file}" "${MELONDS_COMMIT}"; then
+                build_melonds patched_bin "${work_dir}" "${repo_root}" "${MELONDS_COMMIT}"
+                save_build_cache melonds "${melonds_patch_file}" "${MELONDS_COMMIT}" "${patched_bin}"
+            fi
             app_name="melonDS"
             real_bin_name="melonDS"
             apprun_path="${work_dir}/AppRun-melonds"
             generate_apprun_melonds "${apprun_path}"
             ;;
         azahar)
-            build_azahar patched_bin "${work_dir}" "${repo_root}" "${AZAHAR_COMMIT}"
+            local azahar_patch_file="${repo_root}/host/azahar-patches/0001-remote-server-integration.patch"
+            if ! try_cached_build patched_bin azahar "${azahar_patch_file}" "${AZAHAR_COMMIT}"; then
+                build_azahar patched_bin "${work_dir}" "${repo_root}" "${AZAHAR_COMMIT}"
+                save_build_cache azahar "${azahar_patch_file}" "${AZAHAR_COMMIT}" "${patched_bin}"
+            fi
             ensure_host_service_binary
             app_name="azahar"
             real_bin_name="azahar"
@@ -327,7 +337,11 @@ print(json.load(open('${appimage_path}.dualdeck.json'))['original_sha256'])
             extra_bins="${host_service_bin}"
             ;;
         cemu)
-            build_cemu patched_bin "${work_dir}" "${repo_root}" "${CEMU_COMMIT}"
+            local cemu_patch_file="${repo_root}/host/cemu-patches/0001-remote-server-integration.patch"
+            if ! try_cached_build patched_bin cemu "${cemu_patch_file}" "${CEMU_COMMIT}"; then
+                build_cemu patched_bin "${work_dir}" "${repo_root}" "${CEMU_COMMIT}"
+                save_build_cache cemu "${cemu_patch_file}" "${CEMU_COMMIT}" "${patched_bin}"
+            fi
             ensure_host_service_binary
             app_name="cemu"
             real_bin_name="cemu"

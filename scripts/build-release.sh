@@ -2152,6 +2152,7 @@ cp "${repo_root}/scripts/emudeck-check-drift.sh" "${emudeck_bundle_dir}/scripts/
 cp "${repo_root}/scripts/lib/pinned_commits.sh" "${emudeck_bundle_dir}/scripts/lib/"
 cp "${repo_root}/scripts/lib/ensure-packages.sh" "${emudeck_bundle_dir}/scripts/lib/"
 cp "${repo_root}/scripts/lib/build_emulator.sh" "${emudeck_bundle_dir}/scripts/lib/"
+cp "${repo_root}/scripts/lib/build_cache.sh" "${emudeck_bundle_dir}/scripts/lib/"
 cp "${repo_root}/scripts/lib/emudeck_paths.sh" "${emudeck_bundle_dir}/scripts/lib/"
 cp "${repo_root}/scripts/lib/appimage_pack.sh" "${emudeck_bundle_dir}/scripts/lib/"
 cp "${repo_root}/scripts/lib/appimage_manifest.py" "${emudeck_bundle_dir}/scripts/lib/"
@@ -2209,6 +2210,12 @@ installed AppImage (losing DualDeck's patch), and re-patch it if so:
 
     ./emudeck-check-drift.sh
     ./emudeck-check-drift.sh --fix
+
+Re-patching after drift like this does **not** recompile from scratch:
+a compiled build is cached in \`~/.cache/dualdeck/emudeck-builds/\` and
+reused as long as DualDeck's own pinned commit and patch haven't
+changed, regardless of what stock version EmuDeck's updater grabbed.
+Applies to all three emulators.
 EMUDECK_README
 
 echo "Bundled EmuDeck integration tool at host/emudeck-integration/"

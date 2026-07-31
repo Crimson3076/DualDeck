@@ -5654,6 +5654,55 @@ build gets further with this fix applied. Cemu's build (much larger
 dependency graph, ~108 vcpkg packages) hadn't been reached yet at the
 time of this fix.
 
+## 2026-07-31: Persistent build cache for emudeck-replace-in-place.sh -- drift re-patches skip recompilation
+
+`emudeck-check-drift.sh --fix` re-invokes `emudeck-replace-in-place.sh`
+whenever EmuDeck's own "Manage Emulators" updater silently replaces an
+installed AppImage with a newer stock build. Until now that meant a
+full recompile every time -- expensive for melonDS/Azahar and very
+expensive for Cemu -- even though DualDeck's own patched binary is
+usually still exactly what's needed, since EmuDeck updating its stock
+AppImage has no bearing on what DualDeck itself builds.
+
+Added `scripts/lib/build_cache.sh`: a persistent, cross-invocation
+cache under `~/.cache/dualdeck/emudeck-builds/<emulator>/`, storing the
+raw compiled binary from `build_melonds()`/`build_azahar()`/
+`build_cemu()` (not the packaged AppImage -- packaging/`AppRun`
+generation is cheap and always re-run fresh) keyed on a fingerprint of
+`sha256(patch file):pinned commit`. `replace_in_place_one()` in
+`scripts/emudeck-replace-in-place.sh` now calls `try_cached_build()`
+before each `build_*` call and `save_build_cache()` after a fresh
+build, for all three emulators uniformly.
+
+This is deliberately a *different* cache from `build_azahar()`/
+`build_cemu()`'s own existing cache-hit check in
+`scripts/lib/build_emulator.sh` (a `git apply --reverse --check`
+against that single run's own scratch `work_dir`, deleted on exit by
+this script's `EXIT` trap) -- that one only avoids re-cloning within
+one invocation; this one is what actually makes a *later* invocation
+(e.g. a drift-triggered re-patch, potentially days or weeks after the
+first install) skip rebuilding entirely.
+
+The fingerprint is intentionally decoupled from whatever stock version
+EmuDeck's updater grabbed: a cache hit is correct precisely when
+neither DualDeck's own pinned commit (`scripts/lib/pinned_commits.sh`)
+nor the patch file content has changed, regardless of what changed on
+EmuDeck's side. If DualDeck itself bumps a pinned commit or edits a
+patch, the fingerprint changes and the next build is a normal full
+compile that then repopulates the cache.
+
+Verified in isolation (mocking `save_build_cache`/`try_cached_build`
+against a scratch `$HOME`, not a real emulator build): cache miss on
+first call, hit after a save with the same patch+commit, independent
+copy returned (mutating it doesn't corrupt the cache entry), miss after
+either the commit or the patch content changes, and separate cache
+namespaces per emulator. Bundled into the release archive alongside the
+rest of `host/emudeck-integration/` (`scripts/build-release.sh`).
+
+**Not yet verified**: a real cache hit on real EmuDeck-drift hardware
+end to end (this was implemented and unit-tested in isolation, ahead of
+a real drift event to exercise it against).
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
