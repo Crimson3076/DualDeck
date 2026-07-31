@@ -5703,6 +5703,45 @@ rest of `host/emudeck-integration/` (`scripts/build-release.sh`).
 end to end (this was implemented and unit-tested in isolation, ahead of
 a real drift event to exercise it against).
 
+## 2026-07-31: EmuDeck replace-in-place installer is now a DualDeck Host launcher menu option
+
+Previously the only way to run `emudeck-replace-in-place.sh` from a
+packaged release was to open a terminal and `cd` into
+`host/emudeck-integration/scripts/` manually -- undiscoverable next to
+`dualdeck-host.sh`'s existing "the one thing to double-click" menu
+(GitHub issue #10's own goal, which every other host action already
+follows). Added a "Patch my EmuDeck-installed emulators (experimental)"
+choice to `dualdeck-host.sh`'s top-level menu (`choose_action()`, both
+the kdialog and terminal-numbered-prompt versions), wired to a new
+`internal/launch-emudeck-integration.sh`.
+
+This menu choice is a different shape from every other one already
+there: it's a long (minutes, worse for Cemu), verbose source build with
+its own per-emulator y/N confirmation read from the terminal, not a
+quick kdialog-driven action. `launch-emudeck-integration.sh` handles
+both ways `dualdeck-host.sh` itself can end up running:
+- If a terminal is already attached (`[[ -t 1 ]]`) -- e.g. launched
+  from a terminal, or a file manager that runs `.sh` files "in a
+  terminal" -- it execs the bundled `emudeck-replace-in-place.sh`
+  directly in that same terminal, same as every other menu choice.
+- If not -- the common case when launched from Steam/Gaming Mode, which
+  attaches no terminal at all -- it re-launches itself inside a
+  terminal emulator window (tries `konsole`, `xterm`,
+  `x-terminal-emulator`, `gnome-terminal`, in that order; SteamOS and
+  Bazzite are both KDE Plasma, so `konsole` is expected to be the
+  common case) so the build output and confirmation prompts are
+  actually visible. If none of those exist, falls back to a kdialog
+  error message giving the exact command to run manually, rather than
+  silently hanging waiting for terminal input nobody can see (the same
+  "surface failures visibly" posture as this script's own `on_error`
+  trap and every other `dualdeck-host.sh` action).
+
+**Not yet verified**: launching this specific menu choice from inside a
+real Steam Gaming Mode session on real hardware (confirmed only via
+`bash -n` and extracting/syntax-checking the generated heredoc script
+in isolation) -- in particular, whether `konsole -e` reliably opens and
+stays focused when invoked from a process Steam itself launched.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

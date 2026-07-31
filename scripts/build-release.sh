@@ -1212,6 +1212,76 @@ esac
 WRAP
 chmod +x "${pkg_dir}/host/internal/launch-custom-emulator.sh"
 
+cat > "${pkg_dir}/host/internal/launch-emudeck-integration.sh" <<'WRAP'
+#!/usr/bin/env bash
+# Entry point for ../../dualdeck-host.sh's "Patch my EmuDeck-installed
+# emulators" menu choice -- runs the bundled
+# emudeck-integration/scripts/emudeck-replace-in-place.sh (see
+# scripts/build-release.sh's "Bundling EmuDeck integration tool" step in
+# the DualDeck repository, and docs/known-limitations.md's Phase A
+# entry there for the full design).
+#
+# Unlike every other dualdeck-host.sh menu choice, this one is a long
+# (can be many minutes, especially Cemu), verbose source build with its
+# own per-emulator y/N confirmation prompts read from the terminal --
+# not a quick kdialog-driven action. If this script is already running
+# with a visible terminal attached (e.g. launched from a terminal, or a
+# file manager that runs .sh files "in a terminal"), that terminal is
+# reused directly. Otherwise (typically: launched from Steam/Gaming
+# Mode, which attaches no terminal at all) this re-launches itself
+# inside a terminal emulator window so the build output and prompts are
+# actually visible, falling back to a kdialog message with the exact
+# command to run manually if no terminal emulator can be found.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+host_root="$(cd .. && pwd)"
+
+have_kdialog() { command -v kdialog >/dev/null 2>&1; }
+
+tool="${host_root}/emudeck-integration/scripts/emudeck-replace-in-place.sh"
+if [[ ! -x "${tool}" ]]; then
+    msg="The EmuDeck integration tool is missing from this install (host/emudeck-integration/scripts/emudeck-replace-in-place.sh) -- re-download the release archive."
+    if have_kdialog; then
+        kdialog --title "DualDeck Host" --error "${msg}" 2>/dev/null || true
+    else
+        echo "error: ${msg}" >&2
+    fi
+    exit 1
+fi
+
+# Already has a real terminal (stdout is a tty) -- just run it here,
+# same as every other menu choice in this script.
+if [[ -t 1 ]]; then
+    exec "${tool}"
+fi
+
+# No terminal attached -- re-launch inside whichever terminal emulator
+# is available, trying the ones most likely to exist on SteamOS/Bazzite
+# (both KDE Plasma, so konsole) first.
+for term_cmd in "konsole -e" "xterm -e" "x-terminal-emulator -e" "gnome-terminal --"; do
+    # shellcheck disable=SC2086
+    set -- ${term_cmd}
+    term_bin="$1"
+    if command -v "${term_bin}" >/dev/null 2>&1; then
+        exec "$@" "${tool}"
+    fi
+done
+
+msg="This needs a terminal window to show build progress and ask y/N
+before replacing each emulator, but no terminal emulator (konsole,
+xterm, gnome-terminal) was found to open one automatically.
+
+Open a terminal yourself and run:
+${tool}"
+if have_kdialog; then
+    kdialog --title "DualDeck Host" --error "${msg}" 2>/dev/null || true
+else
+    echo "error: ${msg}" >&2
+fi
+exit 1
+WRAP
+chmod +x "${pkg_dir}/host/internal/launch-emudeck-integration.sh"
+
 cat > "${pkg_dir}/host/internal/install-host-distrobox.sh" <<'WRAP'
 #!/usr/bin/env bash
 # Runs the DualDeck host inside a Distrobox container, for
@@ -1507,6 +1577,7 @@ choose_action() {
             steam-add "Add to Steam (Big Picture / Gaming Mode)" \
             steam-remove "Remove from Steam / uninstall" \
             update "Check for updates / update" \
+            emudeck "Patch my EmuDeck-installed emulators (experimental)" \
             2>/dev/null || echo "cancel"
     else
         # All of this goes to stderr, not stdout -- the caller captures
@@ -1520,14 +1591,16 @@ choose_action() {
             echo "  2) Add to Steam (Big Picture / Gaming Mode)"
             echo "  3) Remove from Steam / uninstall"
             echo "  4) Check for updates / update"
-            echo "  5) Exit"
+            echo "  5) Patch my EmuDeck-installed emulators (experimental)"
+            echo "  6) Exit"
         } >&2
-        read -rp "Choice [1-5]: " choice
+        read -rp "Choice [1-6]: " choice
         case "${choice}" in
             1) echo "launch" ;;
             2) echo "steam-add" ;;
             3) echo "steam-remove" ;;
             4) echo "update" ;;
+            5) echo "emudeck" ;;
             *) echo "cancel" ;;
         esac
     fi
@@ -1679,6 +1752,9 @@ Install ${latest_version} now? This downloads it from GitHub and also adds/updat
         else
             info "${update_report}"
         fi
+        ;;
+    emudeck)
+        exec ./internal/launch-emudeck-integration.sh
         ;;
     *)
         exit 0
