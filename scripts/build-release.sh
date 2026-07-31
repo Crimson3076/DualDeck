@@ -2115,7 +2115,97 @@ See \`README.md\` for how to actually run this. In short:
 double-click \`host/dualdeck-host.sh\` on your HTPC and
 \`client/dualdeck-client.sh\` on your Steam Deck -- each opens a
 menu that covers launching, Steam integration, and updates.
+
+Also includes \`host/emudeck-integration/\` (experimental): installs
+DualDeck's patched emulators directly over an existing EmuDeck
+install so its Steam shortcuts keep working unedited, instead of a
+separate DualDeck-managed install. See that directory's own README.md.
 NOTES
+
+echo "== Bundling EmuDeck integration tool (host/emudeck-integration/) =="
+# Ships scripts/emudeck-replace-in-place.sh + scripts/emudeck-check-drift.sh
+# (and their scripts/lib/ dependencies + the three patch files they
+# apply) as part of the release archive itself, mirroring the exact
+# relative layout those scripts already expect from a real source
+# checkout (<root>/scripts/..., <root>/host/<emulator>-patches/...) so
+# neither script needs any changes to work unmodified from inside a
+# packaged, downloaded release. host/'s existing install/update path
+# (install-steam-shortcut.sh's/install-host-distrobox.sh's
+# `cp -a "${host_root}/."`) already recursively copies any new
+# subdirectory here into ~/.config/dualdeck/install/ on every future
+# "Check for updates" -- zero changes needed to those install/update
+# scripts either.
+emudeck_bundle_dir="${pkg_dir}/host/emudeck-integration"
+mkdir -p "${emudeck_bundle_dir}/scripts/lib" \
+         "${emudeck_bundle_dir}/host/melonds-patches" \
+         "${emudeck_bundle_dir}/host/azahar-patches" \
+         "${emudeck_bundle_dir}/host/cemu-patches"
+
+cp "${repo_root}/scripts/emudeck-replace-in-place.sh" "${emudeck_bundle_dir}/scripts/"
+cp "${repo_root}/scripts/emudeck-check-drift.sh" "${emudeck_bundle_dir}/scripts/"
+cp "${repo_root}/scripts/lib/pinned_commits.sh" "${emudeck_bundle_dir}/scripts/lib/"
+cp "${repo_root}/scripts/lib/ensure-packages.sh" "${emudeck_bundle_dir}/scripts/lib/"
+cp "${repo_root}/scripts/lib/build_emulator.sh" "${emudeck_bundle_dir}/scripts/lib/"
+cp "${repo_root}/scripts/lib/emudeck_paths.sh" "${emudeck_bundle_dir}/scripts/lib/"
+cp "${repo_root}/scripts/lib/appimage_pack.sh" "${emudeck_bundle_dir}/scripts/lib/"
+cp "${repo_root}/scripts/lib/appimage_manifest.py" "${emudeck_bundle_dir}/scripts/lib/"
+chmod +x "${emudeck_bundle_dir}/scripts/emudeck-replace-in-place.sh" \
+         "${emudeck_bundle_dir}/scripts/emudeck-check-drift.sh"
+
+cp "${repo_root}/host/melonds-patches/0001-remote-server-integration.patch" \
+   "${emudeck_bundle_dir}/host/melonds-patches/"
+cp "${repo_root}/host/azahar-patches/0001-remote-server-integration.patch" \
+   "${emudeck_bundle_dir}/host/azahar-patches/"
+cp "${repo_root}/host/cemu-patches/0001-remote-server-integration.patch" \
+   "${emudeck_bundle_dir}/host/cemu-patches/"
+
+# Read by emudeck-replace-in-place.sh's own version-detection fallback
+# (no .git directory exists inside a packaged release) -- same
+# version_tag every other part of this release reports.
+echo "${version_tag}" > "${emudeck_bundle_dir}/VERSION"
+
+cat > "${emudeck_bundle_dir}/README.md" <<EMUDECK_README
+# EmuDeck integration (experimental)
+
+Installs DualDeck's patched melonDS/Azahar/Cemu directly at the same
+path your existing EmuDeck installation's Steam shortcuts and launcher
+scripts already point to (\`~/Applications/*.AppImage\`), so they keep
+working unedited -- no need to change any EmuDeck shortcut, no separate
+DualDeck-managed install directory for these emulators.
+
+This is a **source-build tool**: it clones and compiles melonDS/Azahar/
+Cemu from source on your machine (it will offer to install build tools
+via apt/dnf/pacman), the same way this release itself was built. It is
+not instant, and Cemu's build in particular can take a long time.
+
+**Not yet verified against a real EmuDeck install** -- see
+\`docs/known-limitations.md\`'s "EmuDeck replace-in-place installer"
+entry (bundled a few directories up, at the release archive's own
+\`docs/\`) for exactly what is and isn't confirmed.
+
+## Usage
+
+    cd emudeck-integration/scripts
+    ./emudeck-replace-in-place.sh --dry-run
+
+Start with \`--dry-run\` -- it only detects your EmuDeck installs and
+reports what it would do, with zero side effects (it won't even
+install build dependencies). Once you're happy with the plan:
+
+    ./emudeck-replace-in-place.sh
+
+Add \`--emulator melonds\` / \`--emulator azahar\` / \`--emulator cemu\`
+(repeatable) to target specific emulators instead of every one EmuDeck
+has installed. Add \`--yes\` to skip the confirmation prompt.
+
+To check later whether EmuDeck's own updater has silently replaced an
+installed AppImage (losing DualDeck's patch), and re-patch it if so:
+
+    ./emudeck-check-drift.sh
+    ./emudeck-check-drift.sh --fix
+EMUDECK_README
+
+echo "Bundled EmuDeck integration tool at host/emudeck-integration/"
 
 # The archive itself gets a *constant* filename (unlike the internal
 # directory name above, which embeds the commit for clarity once

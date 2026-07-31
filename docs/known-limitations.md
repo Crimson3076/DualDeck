@@ -5569,6 +5569,50 @@ returns `false`); and the Decky plugin becoming a full discovery/connect
 client. Each is substantially more work than this phase, and each is
 independently scoped rather than folded in here.
 
+## 2026-07-31: EmuDeck integration tool bundled into the packaged release
+
+Reported directly: after downloading a release to test the EmuDeck
+replace-in-place installer above, "let's package it so I can just use
+the existing script without any other downloads" -- until this point,
+`emudeck-replace-in-place.sh` was source-tree-only; using it meant a
+separate `git clone` of this repo alongside whatever release archive
+was already installed.
+
+`scripts/build-release.sh` now bundles `emudeck-replace-in-place.sh`/
+`emudeck-check-drift.sh` and their `scripts/lib/` dependencies (plus
+the three emulator patch files they apply) into every release archive,
+at `host/emudeck-integration/`, mirroring the exact relative layout
+those scripts already expect from a real source checkout
+(`<root>/scripts/...`, `<root>/host/<emulator>-patches/...`) -- so
+neither script needed any path-handling changes, only a version-
+detection fix (see below). This location was chosen deliberately, not
+arbitrarily: `install-steam-shortcut.sh`'s and
+`install-host-distrobox.sh`'s existing host update/install path
+(`cp -a "${host_root}/."`) already recursively copies *any* new
+subdirectory under `host/` into `~/.config/dualdeck/install/` -- so
+this bundle reaches an existing install via the ordinary "Check for
+updates" flow already covered above, with zero changes needed to
+either install/update script.
+
+**Fixed alongside**: `emudeck-replace-in-place.sh` computed its own
+version via `git describe`/`git rev-parse`, which would have hard-
+failed under `set -e` when run from a packaged release archive (no
+`.git` directory at all). Now prefers a `VERSION` file (written by the
+packaging step above, same `version_tag` every other part of the
+release reports) when present, falling back to `git describe`/
+`git rev-parse` only from a real source checkout, and never hard-fails
+either way.
+
+**Verified**: bundled the packaging step's output in isolation (without
+running the full multi-hour emulator build) against a mock
+`~/Applications/` directory -- `--help` and `--dry-run` both run
+correctly from the bundled `host/emudeck-integration/scripts/`
+location, confirming `repo_root`/patch-path resolution works
+unmodified from that location, and the version-detection fix correctly
+reads the bundled `VERSION` file instead of attempting `git`. Not yet
+verified as part of an actual full release build/download/"Check for
+updates" cycle end to end.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

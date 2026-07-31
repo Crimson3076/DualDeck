@@ -11,9 +11,13 @@
 # inside this repo -- see scripts/lib/emudeck_paths.sh's own header).
 #
 # This is a source-build tool (like scripts/build-release.sh and
-# scripts/patch-existing-emulator.sh), not something shipped inside the
-# packaged release archive -- run it from a checkout of this repo, on the
-# same machine EmuDeck is installed on.
+# scripts/patch-existing-emulator.sh) -- it clones and compiles from
+# source, it does not just drop in a prebuilt binary. Runnable either
+# from a checkout of this repo (as build-release.sh itself uses it), or
+# from the packaged copy build-release.sh bundles into every release
+# archive at host/emudeck-integration/ (see that packaging step's own
+# comment for why the copy works unmodified in both locations). Either
+# way, run it on the same machine EmuDeck is installed on.
 #
 # Usage:
 #   ./scripts/emudeck-replace-in-place.sh [--emulator melonds|azahar|cemu]... [--yes] [--dry-run]
@@ -41,7 +45,20 @@ source "${repo_root}/scripts/lib/emudeck_paths.sh"
 source "${repo_root}/scripts/lib/appimage_pack.sh"
 
 manifest_py="${repo_root}/scripts/lib/appimage_manifest.py"
-dualdeck_version="$(cd "${repo_root}" && git describe --tags --always --dirty 2>/dev/null || git rev-parse --short HEAD)"
+
+# Prefers a VERSION file (present when this is run from a packaged
+# release's host/emudeck-integration/ bundle, which has no .git
+# directory at all) over `git describe`, so this works both from a
+# real source checkout (build-release.sh's own use case) and from an
+# extracted release archive (a packaged, downloadable copy of this same
+# tool -- see build-release.sh's "EmuDeck integration bundle" packaging
+# step). Never hard-fails even if neither is available.
+if [[ -f "${repo_root}/VERSION" ]]; then
+    dualdeck_version="$(cat "${repo_root}/VERSION")"
+else
+    dualdeck_version="$(cd "${repo_root}" && git describe --tags --always --dirty 2>/dev/null || \
+        git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
+fi
 
 log_dir="${HOME}/.config/dualdeck"
 log_file="${log_dir}/emudeck-replace.log"
