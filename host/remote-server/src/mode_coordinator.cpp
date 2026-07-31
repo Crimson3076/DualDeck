@@ -10,6 +10,35 @@ HostMode computeDesiredMode(bool adapterConnected, bool manualHostControlOverrid
     return adapterConnected ? HostMode::Emulation : HostMode::HostControl;
 }
 
+HostSessionState computeDesiredHostSessionState(bool adapterConnected,
+                                                 melonds_remote::adapter::SessionState adapterState,
+                                                 bool manualHostControlOverride) {
+    // Matches computeDesiredMode()'s own override-always-wins rule.
+    // CompanionModeActive (not Connected) since a forced override with
+    // no adapter connected is exactly "operator stepped into host
+    // navigation" -- the same real-world situation Connected -> the
+    // no-adapter-yet case also describes, but distinguishable here
+    // because the override is a deliberate act, not just "nothing has
+    // connected yet."
+    if (manualHostControlOverride) return HostSessionState::CompanionModeActive;
+    if (!adapterConnected) return HostSessionState::Connected;
+
+    switch (adapterState) {
+        case melonds_remote::adapter::SessionState::Available: return HostSessionState::Connected;
+        case melonds_remote::adapter::SessionState::Starting:  return HostSessionState::Launching;
+        case melonds_remote::adapter::SessionState::Running:   return HostSessionState::EmulatorRunning;
+        // No separate wire concept for "emulating but paused" yet --
+        // still EmulatorRunning from the host-session perspective; the
+        // adapter-level distinction stays visible via
+        // AdapterIpcServer::currentState() directly for anything that
+        // needs it.
+        case melonds_remote::adapter::SessionState::Paused:    return HostSessionState::EmulatorRunning;
+        case melonds_remote::adapter::SessionState::Stopped:   return HostSessionState::Connected;
+        case melonds_remote::adapter::SessionState::Error:     return HostSessionState::Error;
+    }
+    return HostSessionState::Error;
+}
+
 ModeCoordinator::ModeCoordinator(NetServer& server, melonds_remote::adapter::ipc::AdapterIpcServer& adapterServer,
                                   IEmulatorInputSink& emulationInputSink, IFrameSource& emulationFrameSource,
                                   IEmulatorInputSink& hostControlInputSink, IFrameSource& hostControlFrameSource,
@@ -73,6 +102,11 @@ void ModeCoordinator::pollLoop() {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
+}
+
+HostSessionState ModeCoordinator::currentSessionState() const {
+    return computeDesiredHostSessionState(adapterServer_.hasConnectedAdapter(), adapterServer_.currentState(),
+                                           manualOverride_.load());
 }
 
 void ModeCoordinator::applyMode(HostMode mode) {

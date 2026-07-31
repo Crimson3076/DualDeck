@@ -187,6 +187,40 @@ MDR_TEST(compute_desired_mode_override_with_no_adapter_is_still_host_control) {
               HostMode::HostControl);
 }
 
+MDR_TEST(compute_desired_host_session_state_no_adapter_no_override_is_connected) {
+    MDR_CHECK(computeDesiredHostSessionState(/*adapterConnected=*/false, melonds_remote::adapter::SessionState::Error,
+                                              /*manualHostControlOverride=*/false) == HostSessionState::Connected);
+}
+
+MDR_TEST(compute_desired_host_session_state_override_wins_even_with_adapter_connected) {
+    MDR_CHECK(computeDesiredHostSessionState(/*adapterConnected=*/true,
+                                              melonds_remote::adapter::SessionState::Running,
+                                              /*manualHostControlOverride=*/true) ==
+              HostSessionState::CompanionModeActive);
+}
+
+MDR_TEST(compute_desired_host_session_state_ignores_stale_adapter_state_once_disconnected) {
+    // AdapterIpcServer deliberately leaves the last-known SessionState in
+    // place across a disconnect (see adapter_ipc_server.cpp) -- a stale
+    // Running here must not leak into the result once adapterConnected
+    // is false.
+    MDR_CHECK(computeDesiredHostSessionState(/*adapterConnected=*/false,
+                                              melonds_remote::adapter::SessionState::Running,
+                                              /*manualHostControlOverride=*/false) == HostSessionState::Connected);
+}
+
+MDR_TEST(compute_desired_host_session_state_maps_every_adapter_session_state) {
+    using melonds_remote::adapter::SessionState;
+    MDR_CHECK(computeDesiredHostSessionState(true, SessionState::Available, false) == HostSessionState::Connected);
+    MDR_CHECK(computeDesiredHostSessionState(true, SessionState::Starting, false) == HostSessionState::Launching);
+    MDR_CHECK(computeDesiredHostSessionState(true, SessionState::Running, false) ==
+              HostSessionState::EmulatorRunning);
+    MDR_CHECK(computeDesiredHostSessionState(true, SessionState::Paused, false) ==
+              HostSessionState::EmulatorRunning);
+    MDR_CHECK(computeDesiredHostSessionState(true, SessionState::Stopped, false) == HostSessionState::Connected);
+    MDR_CHECK(computeDesiredHostSessionState(true, SessionState::Error, false) == HostSessionState::Error);
+}
+
 MDR_TEST(coordinator_starts_in_host_control_mode) {
     Fixture fixture;
     MDR_CHECK(fixture.server.currentMode() == HostMode::HostControl);
@@ -281,4 +315,24 @@ MDR_TEST(fresh_handshake_reports_the_connected_adapters_own_identity_in_emulatio
     MDR_CHECK(ack.mode == HostMode::Emulation);
 
     client.disconnect();
+}
+
+MDR_TEST(coordinator_current_session_state_reflects_a_real_connected_adapter) {
+    // SyntheticEmulatorAdapter always reports SessionState::Running once
+    // connected (see its own header comment) -- confirms
+    // ModeCoordinator::currentSessionState() actually reads through the
+    // real AdapterIpcServer::currentState() proxy end to end, not just
+    // that the pure computeDesiredHostSessionState() function is correct
+    // in isolation (already covered above).
+    Fixture fixture;
+    MDR_CHECK(fixture.coordinator.currentSessionState() == HostSessionState::Connected);
+
+    SyntheticEmulatorAdapter syntheticAdapter;
+    AdapterIpcClient client(syntheticAdapter, fixture.socketPath);
+    MDR_CHECK(client.connect());
+    MDR_CHECK(waitUntil(
+        [&] { return fixture.coordinator.currentSessionState() == HostSessionState::EmulatorRunning; }));
+
+    client.disconnect();
+    MDR_CHECK(waitUntil([&] { return fixture.coordinator.currentSessionState() == HostSessionState::Connected; }));
 }

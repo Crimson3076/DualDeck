@@ -7,6 +7,8 @@ add_library(dualdeck_host STATIC
     src/adapter_bridge.cpp
     src/host_control_adapter.cpp
     src/mode_coordinator.cpp
+    src/host_session_state.cpp
+    src/capability_bridge.cpp
     src/kdialog_approval_prompt.cpp
 )
 

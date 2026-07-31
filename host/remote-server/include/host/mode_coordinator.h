@@ -12,6 +12,7 @@
 #include <atomic>
 #include <thread>
 
+#include "host/host_session_state.h"
 #include "host/net_server.h"
 #include "melonds_remote/adapter/ipc/adapter_ipc_server.h"
 
@@ -31,6 +32,21 @@ inline const AdapterIdentity kHostControlAdapterIdentity{"host-control", "Host C
 // host navigation without having to disconnect the emulator adapter
 // first).
 HostMode computeDesiredMode(bool adapterConnected, bool manualHostControlOverride);
+
+// Same pure-decision style as computeDesiredMode() above, but for the
+// richer HostSessionState (host_session_state.h) rather than the wire's
+// 2-value HostMode -- see that header for the full state list and why
+// most of it has no real signal source yet. `adapterState` is only
+// meaningful when `adapterConnected` is true: AdapterIpcServer
+// deliberately leaves its last-known SessionState in place across a
+// disconnect (see adapter_ipc_server.cpp's resetSessionLocked() comment)
+// rather than resetting it, so a stale Running/Starting/etc. value can
+// still be sitting there after the adapter that reported it is long
+// gone -- computeDesiredHostSessionState() ignores adapterState entirely
+// once adapterConnected is false, rather than trusting that stale value.
+HostSessionState computeDesiredHostSessionState(bool adapterConnected,
+                                                 melonds_remote::adapter::SessionState adapterState,
+                                                 bool manualHostControlOverride);
 
 class ModeCoordinator {
 public:
@@ -68,6 +84,17 @@ public:
     void clearOverride();
 
     bool isOverridden() const { return manualOverride_.load(); }
+
+    // Derived live from adapterServer_.hasConnectedAdapter()/
+    // currentState() and the current override, via
+    // computeDesiredHostSessionState() above -- not cached, so this
+    // always reflects the live signals rather than whatever HostMode was
+    // last actually applied to NetServer (those two can disagree for up
+    // to one poll interval, ~100ms, after a real transition). Not yet
+    // wired to anything client-visible (see host_session_state.h);
+    // exposed today for logging/diagnostics and so this class's own
+    // adapter-state-awareness is independently testable.
+    HostSessionState currentSessionState() const;
 
 private:
     void pollLoop();

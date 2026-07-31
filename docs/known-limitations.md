@@ -5375,6 +5375,102 @@ C in this file's earlier entries) already treats real host-desktop
 capture/navigation as substantial, independently-risked follow-up work,
 not something this restoration alone makes production-ready.
 
+## 2026-07-31: Capability-negotiation protocol revision, Phase 0 (foundational, zero wire-format change)
+
+Follow-up to the EmuDeck replace-in-place phase above, on a separate,
+explicitly parallel track: an architectural revision requesting a
+platform-agnostic, capability-negotiated protocol (generic displays/
+input/features instead of DS/Wii-U-specific concepts), a pluggable
+`IStreamingBackend` abstraction, a richer host state machine, role-based
+client behavior, and telemetry -- see `docs/adr/0001-host-service-and-
+adapter-architecture.md` for the architecture this builds on.
+
+**Key finding before any of this was designed**: most of the requested
+capability/plugin architecture already exists, unwired to the wire
+protocol -- `adapter-sdk`'s `IEmulatorAdapter`/`AdapterCapabilities`/
+`GenericInputState`/`VideoSurfaceDescriptor`/`SessionState` (built for
+GitHub issue #28) already form a generic, proven, out-of-process-capable
+contract (Azahar and Cemu are both out-of-process-only against it
+today). ADR 0001 section 4 deliberately chose a DS-compatibility
+translator (`AdapterBridge`) over touching the wire protocol, reasoning
+that no second real adapter existed yet to validate a generic wire
+format against. That reasoning no longer fully holds -- three real
+adapters exist now, one (Cemu) already carrying real multi-surface data
+that never reaches the client. This reframes the whole effort as
+extending an existing, proven internal seam out to the wire protocol,
+not inventing a new architecture from scratch. Full design + phased plan
+(Phases 0-4, plus explicitly flagged tensions with the literal request,
+e.g. true cross-version wire interoperability was explicitly decided
+against -- hard-reject on `kProtocolVersion` mismatch stays exactly as
+every prior version bump handled it) is not reproduced here in full; see
+the design record for `capability_bridge.h`/`host_session_state.h`'s own
+header comments for the parts that shipped.
+
+**What Phase 0 actually ships** (foundational, additive, no wire-format
+change, verified by a real `-DDUALDECK_BUILD_HOST=ON` build + `ctest` +
+both smoke tests, all passing):
+
+- `host/remote-server/include/host/host_session_state.h`/`.cpp`: a new
+  `HostSessionState` enum (Idle/Discoverable/Pairing/Connected/
+  Streaming/Launching/EmulatorRunning/CompanionModeActive/Suspending/
+  Sleeping/Error) plus `isValidTransition()`, mirroring adapter-sdk's
+  `SessionState`/`isValidTransition()` pattern exactly. Not yet sent
+  over the wire (`HostMode`'s existing 2 values are still what
+  `HelloAckPayload`/`ModeChangedPayload` actually carry) -- several
+  states (Discoverable/Pairing/Streaming/CompanionModeActive/
+  Suspending/Sleeping) have no real signal source in the codebase yet
+  and are defined now specifically so wiring them up later doesn't
+  require inventing new states under time pressure.
+- `ModeCoordinator` gains `computeDesiredHostSessionState()` (a pure
+  function alongside the existing `computeDesiredMode()`) and a new
+  `currentSessionState()` accessor that reads
+  `AdapterIpcServer::currentState()` in addition to the
+  `hasConnectedAdapter()` bool `computeDesiredMode()` already used --
+  the first real consumer of that adapter-state proxy outside
+  adapter-sdk's own tests. Deliberately ignores the adapter's
+  last-known `SessionState` once `hasConnectedAdapter()` goes false
+  (`resetSessionLocked()` leaves it stale on disconnect rather than
+  resetting it -- a real trap this function avoids on purpose, not an
+  oversight).
+- `protocol.h` gains a new, self-contained "Capability negotiation data
+  model" section: `WireDisplayDescriptor`/`WireClientCapabilities`/
+  `WireHostCapabilities`/`WireDisplayRole`/`WirePixelFormat`/
+  `WireCodec`, mirroring adapter-sdk's `VideoSurfaceDescriptor`/
+  `AdapterCapabilities` shapes without `#include`-ing adapter-sdk (which
+  already depends on `protocol.h` for `SystemIdentity`/`AdapterIdentity`
+  -- the reverse dependency would be circular). No serialize()/parse()
+  functions exist for these yet and neither `HelloPayload` nor
+  `HelloAckPayload` carries them -- purely a stable data model for a
+  later negotiation phase to extend those payloads into, so that phase
+  is an additive field-add plus one version bump rather than also
+  inventing this shape under time pressure. `WireDisplayRole` keeps the
+  existing Nintendo-hardware-flavored values (Top/Bottom/Tv/GamePad)
+  rather than renaming them -- renaming would force a matching change in
+  every already-shipped adapter's own `capabilities()` for no functional
+  gain -- while adding generic Primary/Secondary values alongside them
+  for future non-Nintendo-shaped clients.
+- `host/remote-server/include/host/capability_bridge.h`/`.cpp`: the
+  translation layer between the two shapes above (`toWireDisplayRole()`,
+  `toWirePixelFormat()`, `toWireDisplayDescriptor()`,
+  `toWireHostCapabilities()`) -- the one place allowed to depend on both
+  `adapter-sdk` and `protocol.h`'s new types, same architectural role as
+  `AdapterBridge` one level down (translating generic input/frames to
+  the DS-specific wire shape) applied one level up (translating generic
+  capabilities to the not-yet-sent Wire* shape). Not called by anything
+  yet, but the translation logic itself is real and unit-tested now,
+  including against Cemu's real two-surface (Tv + GamePad) shape.
+
+**Explicitly not done in this phase** (later phases, per the full design
+record): the actual `kProtocolVersion` bump and `Hello`/`HelloAck`
+negotiation wiring; a real `GenericServerBridge` alongside `AdapterBridge`
+for negotiated-capable clients; role derivation and client-side additive
+render branches; `IStreamingBackend` extraction of the existing JPEG
+pipeline; real display enhancement (CAS/NIS/integer scaling); telemetry;
+and the plugin manifest/launch-hooks/configuration surface for emulator
+adapters. None of these are blocked technically by anything in Phase 0 --
+they're sequenced later because each is a larger, independently-risky
+unit of work in its own right.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

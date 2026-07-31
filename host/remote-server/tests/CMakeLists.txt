@@ -4,6 +4,8 @@ add_executable(melonds_remote_host_tests
     test_net_server_mode_switch.cpp
     test_host_control_adapter.cpp
     test_mode_coordinator.cpp
+    test_host_session_state.cpp
+    test_capability_bridge.cpp
     test_kdialog_approval_prompt.cpp
 )
 

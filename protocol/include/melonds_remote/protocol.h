@@ -217,6 +217,107 @@ struct AdapterIdentity {
     std::string adapterVersion;
 };
 
+// ---- Capability negotiation data model ----
+//
+// Not yet wired into Hello/HelloAck -- no serialize()/parse() functions
+// exist for any of these types yet, and neither payload below carries
+// them. Defined now as a stable shape a future negotiation phase can
+// extend Hello/HelloAck into, so that phase is a pure additive field-add
+// (plus one kProtocolVersion bump) rather than also having to invent
+// this data model under time pressure. See docs/known-limitations.md for
+// the full design this is the foundation of.
+//
+// Deliberately self-contained here, not #include-ing adapter-sdk's
+// VideoSurfaceDescriptor/AdapterCapabilities (adapter_contract.h) even
+// though the shapes below intentionally mirror them closely --
+// adapter-sdk already depends on this header for SystemIdentity/
+// AdapterIdentity, so the reverse dependency would be circular. A
+// translation function (host/remote-server/include/host/
+// capability_bridge.h, the one layer that can depend on both) converts
+// between the two shapes.
+
+// Mirrors melonds_remote::adapter::SurfaceRole. Keeps the existing
+// Nintendo-hardware-flavored values (Top/Bottom/Tv/GamePad) rather than
+// renaming them -- renaming would force a matching change in every
+// already-shipped adapter's own capabilities() for no functional gain --
+// while adding a Primary/Secondary/Auxiliary vocabulary alongside them
+// for future non-Nintendo-shaped clients (e.g. a PC-native capture
+// backend) to use instead of stretching the Nintendo-shaped names to fit.
+enum class WireDisplayRole : uint8_t {
+    Top = 0,
+    Bottom = 1,
+    Tv = 2,
+    GamePad = 3,
+    Auxiliary = 4,
+    Primary = 5,
+    Secondary = 6,
+};
+
+// Mirrors adapter::PixelFormat. Only one value exists today; kept as an
+// enum rather than hardcoded so a future pixel format doesn't need this
+// struct's shape to change.
+enum class WirePixelFormat : uint8_t {
+    Bgra8888 = 0,
+};
+
+// Codec bits for WireClientCapabilities::supportedCodecs /
+// WireHostCapabilities::availableCodecs -- a bitmask so "this side
+// supports more than one codec, negotiate the best mutually supported
+// one" is representable without another wire-format change once a second
+// codec actually exists. Only Jpeg is implemented anywhere in this
+// codebase today (protocol v8's existing VideoFrame payload); the rest
+// are reserved names for a future IStreamingBackend
+// (docs/known-limitations.md).
+enum WireCodec : uint32_t {
+    WireCodec_Jpeg = 1u << 0,
+    WireCodec_H264 = 1u << 1,
+    WireCodec_Av1 = 1u << 2,
+};
+
+// One display/surface's negotiable properties -- mirrors
+// adapter::VideoSurfaceDescriptor. scalingStrategy/requestedCodec/
+// requestedBitrateKbps/targetRefreshHz are reserved for the
+// display-pipeline/enhancement work: always "no enhancement, host picks
+// everything" today (every field left at its zero/None default), present
+// now so a later phase implementing real enhancement only has to start
+// honoring these fields instead of adding them to an already-negotiated
+// wire struct.
+struct WireDisplayDescriptor {
+    std::string surfaceId;
+    WireDisplayRole role = WireDisplayRole::Bottom;
+    uint16_t width = 0;
+    uint16_t height = 0;
+    WirePixelFormat pixelFormat = WirePixelFormat::Bgra8888;
+    bool touchSupported = false;
+
+    enum class ScalingStrategy : uint8_t { None = 0, Integer = 1, Cas = 2, Nis = 3 };
+    ScalingStrategy scalingStrategy = ScalingStrategy::None;
+    uint32_t requestedCodec = 0;       // 0 = unset (host picks)
+    uint32_t requestedBitrateKbps = 0; // 0 = unset (host picks)
+    uint16_t targetRefreshHz = 0;      // 0 = unset (host picks)
+};
+
+// What a connecting client would declare it can handle, once Hello grows
+// a field for this.
+struct WireClientCapabilities {
+    uint32_t supportedCodecs = WireCodec_Jpeg;
+    uint16_t maxResolutionWidth = 0; // 0 = unset/unknown
+    uint16_t maxResolutionHeight = 0;
+    uint16_t maxRefreshHz = 0;
+    bool touchSupported = false;
+    bool motionSupported = false;
+    bool hdrSupported = false;
+    uint8_t maxDisplayCount = 1;
+    bool audioCaptureSupported = false; // microphone
+};
+
+// What the host would declare it can offer, once HelloAck grows a field
+// for this.
+struct WireHostCapabilities {
+    uint32_t availableCodecs = WireCodec_Jpeg;
+    std::vector<WireDisplayDescriptor> displays;
+};
+
 // Hello (client -> host) handshake payload. See docs/protocol.md
 // "Handshake" for the full negotiation description; this is the minimal
 // version implemented so far -- capability negotiation fields beyond
