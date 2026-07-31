@@ -5550,13 +5550,20 @@ given; `--dry-run` performs detection and reports the plan with zero
 side effects (in particular, it never triggers a build-dependency
 install).
 
-**Not yet verified** (this project's development sandbox has no real
-EmuDeck install to test against): whether EmuDeck's actual AppImage
-naming/glob convention matches what `emudeck_paths.sh` assumes from
-EmuDeck's own public docs/launcher-script source. This needs confirming
-against a real EmuDeck install before this installer can be considered
-done, not just reasoned through -- see `scripts/lib/emudeck_paths.sh`'s
-own header comment.
+**Verified against a real EmuDeck install** (2026-07-31, Fedora): the
+user ran `--dry-run` from the packaged `host/emudeck-integration/`
+bundle (see the entry below) against their own real EmuDeck setup and
+confirmed detection works correctly -- found `azahar.AppImage` and
+`Cemu.AppImage` under `~/Applications/`, correctly reported the backup
+paths it would create (`azahar.AppImage.dualdeck-original`,
+`Cemu.AppImage.dualdeck-original`, both outside the `*.AppImage`
+detection glob as designed), and stopped cleanly with zero side
+effects. melonDS wasn't installed via EmuDeck on this machine, so that
+detection path (and a real, non-dry-run install of any emulator)
+remains unverified. This was previously this phase's single biggest
+open risk (this project's own development sandbox has no EmuDeck
+install to test against) -- it no longer is, for Azahar/Cemu's naming
+convention specifically.
 
 **Deliberately out of scope for this phase** (see the broader
 orchestration-layer roadmap this phase is the first part of): a

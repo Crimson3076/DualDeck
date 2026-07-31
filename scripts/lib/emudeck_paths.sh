@@ -9,11 +9,11 @@
 # mtime rather than one fixed filename (EmuDeck's own tools/launchers/*.sh
 # do this, e.g. cemu.sh) -- so detection here matches by a case-insensitive
 # name fragment + newest-mtime, the same convention, rather than assuming
-# one exact filename. This has NOT been verified against a real EmuDeck
-# install from inside this repo (no such install available in this
-# project's development sandbox) -- see docs/known-limitations.md's Phase A
-# entry. Confirm the glob patterns below actually match a real install
-# before relying on this in production.
+# one exact filename. Verified against a real EmuDeck install (2026-07-31,
+# Fedora) for Azahar (azahar.AppImage) and Cemu (Cemu.AppImage) -- see
+# docs/known-limitations.md's Phase A entry. melonDS wasn't installed via
+# EmuDeck on that machine, so find_emudeck_melonds_appimage() remains
+# unverified against a real install.
 #
 # Deliberately excludes anything not ending in exactly ".AppImage" from
 # every glob below (in particular, backup/manifest files this same phase's
