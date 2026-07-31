@@ -274,9 +274,8 @@ public:
     // disturbing any already-connected client's control/input/video
     // sockets (GitHub issue #4 Phase B). This is what lets a Host
     // Service outlive a single emulator process: it can start pointed at
-    // NoAdapterInputSink/NoAdapterFrameSource (`mode` ==
-    // HostMode::HostControl, no emulator running yet), then swap to a
-    // real adapter once one connects
+    // a HostControlAdapter (`mode` == HostMode::HostControl, no emulator
+    // running yet), then swap to a real adapter once one connects
     // (`mode` == HostMode::Emulation), and swap back when it disconnects
     // -- all while a client stays connected throughout instead of having
     // to reconnect.

@@ -261,15 +261,13 @@ chmod +x "${pkg_dir}/host/cemu"
 ldd "${cemu_src}/bin/Cemu_release" | awk '{print $1}' | sort -u \
     > "${pkg_dir}/host/internal/cemu-shared-library-dependencies.txt"
 
-# The standalone Host Service binary (GitHub issue #4): not used by
-# melonDS's default launch path (melonDS still runs its own in-process
-# server, see EmuInstance::startRemoteServer()), but required by
-# run-host-azahar.sh and run-host-cemu.sh, which always run their
-# emulator as an out-of-process adapter over this binary's --adapter-ipc
-# mode -- without shipping this, neither Azahar nor Cemu could be
-# launched at all from a downloaded release, only from a source build.
-# Statically linked against melonds_remote_protocol/_host, so no extra
-# runtime library dependencies beyond libc/libstdc++/pthread.
+# The standalone Host Service binary (GitHub issue #4): not used by the
+# default launch path (melonDS still runs its own in-process server, see
+# EmuInstance::startRemoteServer()), but required for run-host.sh's
+# opt-in "host-control mode" -- without shipping this, that mode could
+# never actually be used from a downloaded release, only from a source
+# build. Statically linked against melonds_remote_protocol/_host, so no
+# extra runtime library dependencies beyond libc/libstdc++/pthread.
 cp "${repo_build}/host/remote-server/dualdeck-host-service" "${pkg_dir}/host/internal/dualdeck-host-service"
 chmod +x "${pkg_dir}/host/internal/dualdeck-host-service"
 
@@ -856,6 +854,57 @@ export MELONDS_REMOTE_ENABLE=1
 # check-for-updates.sh's own VERSION lookup.
 export MELONDS_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
 
+# Host-control mode (GitHub issue #4, experimental): set by
+# ../dualdeck-host.sh's "Launch with host-control mode" menu
+# choice, not on by default. Starts the standalone dualdeck-host-service
+# binary in --adapter-ipc mode *before* melonDS, then points melonDS at
+# it as an out-of-process adapter (MELONDS_REMOTE_OUT_OF_PROCESS=1) --
+# see host/melonds-patches/0001-remote-server-integration.patch's
+# EmuInstance::startRemoteServer() and docs/adr/
+# 0001-host-service-and-adapter-architecture.md section 10 for why this
+# has to be a separate process that outlives melonDS itself, rather than
+# something melonDS could do on its own: a client needs somewhere to
+# connect and navigate *before* an emulator has even started. Uses the
+# same zero-typing device-approval flow as melonDS's own in-process
+# dialog -- a kdialog Yes/No popup on the host's own desktop (see
+# kdialog_approval_prompt.h) -- unless MELONDS_REMOTE_AUTH_TOKEN is set,
+# in which case that static shared secret is used instead.
+# --state-dir points at the same directory melonDS's own device-approval
+# uses, so a device approved once is approved for every emulator.
+if [[ "${DUALDECK_HOST_CONTROL:-0}" == "1" ]]; then
+    if [[ ! -x "${host_root}/internal/dualdeck-host-service" ]]; then
+        echo "error: host/internal/dualdeck-host-service is missing from this" >&2
+        echo "install -- re-download the release archive." >&2
+        exit 1
+    fi
+
+    run_dir="${HOME}/.config/dualdeck/run"
+    mkdir -p "${run_dir}"
+    adapter_socket="${run_dir}/adapter.sock"
+    rm -f "${adapter_socket}"
+
+    auth_token_args=()
+    if [[ -n "${MELONDS_REMOTE_AUTH_TOKEN:-}" ]]; then
+        auth_token_args=(--auth-token "${MELONDS_REMOTE_AUTH_TOKEN}")
+    fi
+
+    echo "Starting the standalone Host Service (host-control mode, experimental) ..." >&2
+    "${host_root}/internal/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
+        --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
+        --app-version "${MELONDS_REMOTE_VERSION}" &
+    host_service_pid=$!
+    # Not exec'd below in this branch specifically so this trap can still
+    # run once melonDS exits -- exec would replace this shell (and its
+    # traps) with melonDS itself, leaving the Host Service orphaned.
+    trap 'kill "${host_service_pid}" 2>/dev/null || true' EXIT
+    sleep 0.5 # let the listener bind before melonDS tries to connect
+
+    export MELONDS_REMOTE_OUT_OF_PROCESS=1
+    export MELONDS_REMOTE_ADAPTER_SOCKET="${adapter_socket}"
+    "${host_root}/melonDS" "$@"
+    exit $?
+fi
+
 exec "${host_root}/melonDS" "$@"
 WRAP
 chmod +x "${pkg_dir}/host/internal/run-host.sh"
@@ -1271,6 +1320,23 @@ if [[ ! -f /run/ostree-booted ]] && ! command -v rpm-ostree >/dev/null 2>&1; the
     exit 1
 fi
 
+# Host-control mode (GitHub issue #4, experimental -- see run-host.sh's
+# matching comment for the full explanation) isn't wired up for the
+# Distrobox path yet: it would need the standalone dualdeck-host-service
+# binary running *outside* the container (a client should be able to
+# reach it before melonDS/the container even starts) with a socket
+# shared into the container for melonDS to connect to, which hasn't been
+# built or tested. Fail loudly instead of silently falling back to
+# ordinary in-process mode, which would otherwise look like host-control
+# mode "worked" right up until a client tried to use it with no emulator
+# running.
+if [[ "${DUALDECK_HOST_CONTROL:-0}" == "1" ]]; then
+    echo "error: host-control mode isn't supported yet on immutable/Distrobox" >&2
+    echo "systems (see host/internal/run-host.sh's comment) -- only the regular," >&2
+    echo "non-Distrobox launch path (./run-host.sh) supports it so far." >&2
+    exit 1
+fi
+
 if ! command -v distrobox >/dev/null 2>&1; then
     echo "error: 'distrobox' not found. Bazzite ships it by default; on other" >&2
     echo "rpm-ostree systems, install it first -- see" >&2
@@ -1531,11 +1597,12 @@ choose_action() {
 
 # GitHub issue "rework the host launcher so it does not boot into
 # melonDS": picks which system/emulator to actually launch, instead of
-# always going straight to melonDS. Azahar (3DS) and Cemu (Wii U) both
-# use the standalone Host Service's own kdialog-based device-approval
-# popup (see internal/run-host-azahar.sh's/run-host-cemu.sh's comments
-# and kdialog_approval_prompt.h) -- the same zero-typing flow melonDS's
-# own in-process dialog already has.
+# always going straight to melonDS. Azahar (3DS), Cemu (Wii U), and
+# "host control only" all use the standalone Host Service's own
+# kdialog-based device-approval popup (see
+# internal/run-host-azahar.sh's/run-host-cemu.sh's comments and
+# kdialog_approval_prompt.h) -- the same zero-typing flow melonDS's own
+# in-process dialog already has.
 choose_emulator() {
     local custom_conf="${HOME}/.config/dualdeck/custom-emulator.conf"
     local custom_label="Custom (patch my own emulator)"
@@ -1550,6 +1617,7 @@ choose_emulator() {
             ds "Nintendo DS (melonDS)" \
             n3ds "Nintendo 3DS (Azahar, experimental)" \
             wiiu "Nintendo Wii U (Cemu, experimental)" \
+            hostcontrol "Host control only -- no emulator (experimental)" \
             custom "${custom_label}" \
             2>/dev/null || echo "cancel"
     else
@@ -1558,15 +1626,17 @@ choose_emulator() {
             echo "  1) Nintendo DS (melonDS)"
             echo "  2) Nintendo 3DS (Azahar, experimental)"
             echo "  3) Nintendo Wii U (Cemu, experimental)"
-            echo "  4) ${custom_label}"
-            echo "  5) Back"
+            echo "  4) Host control only -- no emulator (experimental)"
+            echo "  5) ${custom_label}"
+            echo "  6) Back"
         } >&2
-        read -rp "Choice [1-5]: " choice
+        read -rp "Choice [1-6]: " choice
         case "${choice}" in
             1) echo "ds" ;;
             2) echo "n3ds" ;;
             3) echo "wiiu" ;;
-            4) echo "custom" ;;
+            4) echo "hostcontrol" ;;
+            5) echo "custom" ;;
             *) echo "cancel" ;;
         esac
     fi
@@ -1606,6 +1676,18 @@ case "${action}" in
                 # launch path yet -- called directly, not through
                 # launch-host.sh's melonDS-specific dispatch.
                 exec ./internal/run-host-cemu.sh
+                ;;
+            hostcontrol)
+                # Exported before the same launch-host.sh dispatch the
+                # "ds" case above uses -- DUALDECK_HOST_CONTROL is
+                # an environment variable, so run-host.sh (or
+                # install-host-distrobox.sh's rejection check, on an
+                # immutable system) sees it either way without
+                # launch-host.sh itself needing to know this mode
+                # exists. No auth token exported here either, same
+                # zero-typing kdialog approval as the n3ds case above.
+                export DUALDECK_HOST_CONTROL=1
+                exec ./internal/launch-host.sh
                 ;;
             custom)
                 exec ./internal/launch-custom-emulator.sh
@@ -1768,8 +1850,8 @@ cat > "${pkg_dir}/host/internal/install-steam-shortcut.sh" <<'WRAP'
 # directory install-host-distrobox.sh already uses on immutable
 # systems) and points the shortcut at dualdeck-host.sh there --
 # the same single entry point a double-click normally runs, showing its
-# "Which system?" picker (DS/melonDS, 3DS/Azahar, Wii U/Cemu, or a
-# custom emulator) -- not at melonDS, run-host.sh, or
+# "Which system?" picker (DS/melonDS, 3DS/Azahar, host-control-only, or
+# a custom emulator) -- not at melonDS, run-host.sh, or
 # internal/launch-host.sh directly, so a Steam-launched session gets
 # the same choice a manually-launched one does instead of always
 # booting straight into melonDS. Re-running this from a newer release's

@@ -3,18 +3,11 @@
 // GitHub issue #4 Phase D: watches whether an adapter is connected over
 // the local IPC channel and swaps NetServer's active target accordingly
 // -- HostMode::Emulation (a real adapter, e.g. melonDS, driving the
-// session) whenever one is connected, HostMode::HostControl (no adapter
-// connected -- see no_adapter_target.h) otherwise. This is what lets a
-// client stay connected across an emulator starting and exiting, per
+// session) whenever one is connected, HostMode::HostControl (a virtual
+// gamepad for navigating the host's own UI -- see host_control_adapter.h,
+// GitHub issue #4 Phase C) otherwise. This is what lets a client stay
+// connected across an emulator starting and exiting, per
 // docs/adr/0001-host-service-and-adapter-architecture.md sections 6-8.
-//
-// HostMode::HostControl used to mean "navigate the host's own desktop via
-// a virtual gamepad" (GitHub issue #4 Phase C's HostControlAdapter,
-// removed -- see no_adapter_target.h's comment and
-// docs/known-limitations.md). The manual "hostcontrol"/"resume" console
-// override that used to force that mode on demand was removed along with
-// it -- forcing "no adapter connected" manually while a real adapter *is*
-// connected has no use once there's nothing to navigate to.
 
 #include <atomic>
 #include <thread>
@@ -26,15 +19,18 @@ namespace melonds_remote::host {
 
 // Fixed identity reported while HostMode::HostControl is active -- no
 // emulator is running, so there's no real SystemIdentity/AdapterIdentity
-// to report; these are the fixed placeholders a client UI keys off of to
-// show its "waiting for emulator" screen (see main.cpp's
-// renderHostControlScreen()).
-inline const SystemIdentity kNoAdapterSystemIdentity{"none", ""};
-inline const AdapterIdentity kNoAdapterAdapterIdentity{"none", "Waiting for emulator", ""};
+// to report; these are the fixed placeholders a client UI can key off of
+// (GitHub issue #4 Phase E, not yet built).
+inline const SystemIdentity kHostControlSystemIdentity{"host", "Host Menu"};
+inline const AdapterIdentity kHostControlAdapterIdentity{"host-control", "Host Control", ""};
 
 // Pure decision, no I/O -- unit-tested directly (test_mode_coordinator.cpp)
-// without needing a real AdapterIpcServer/NetServer at all.
-HostMode computeDesiredMode(bool adapterConnected);
+// without needing a real AdapterIpcServer/NetServer at all. Manual
+// override always wins, even while an adapter is connected: that is the
+// entire point of a "manual override" (an operator stepping back out to
+// host navigation without having to disconnect the emulator adapter
+// first).
+HostMode computeDesiredMode(bool adapterConnected, bool manualHostControlOverride);
 
 class ModeCoordinator {
 public:
@@ -64,6 +60,15 @@ public:
     void start();
     void stop();
 
+    // Manual override (GitHub issue #4 Phase D): force HostMode::HostControl
+    // regardless of adapter connection state, or clear that override and
+    // let auto-detection resume immediately. Safe from any thread (e.g.
+    // a console command handler running on its own thread).
+    void forceHostControl();
+    void clearOverride();
+
+    bool isOverridden() const { return manualOverride_.load(); }
+
 private:
     void pollLoop();
     void applyMode(HostMode mode);
@@ -80,6 +85,7 @@ private:
     AdapterIdentity fallbackAdapterIdentity_;
 
     std::atomic<bool> running_{false};
+    std::atomic<bool> manualOverride_{false};
     std::thread pollThread_;
 };
 

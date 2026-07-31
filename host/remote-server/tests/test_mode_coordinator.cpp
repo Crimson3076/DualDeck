@@ -115,13 +115,12 @@ bool handshakeAndGetAck(uint16_t controlPort, HelloAckPayload& outAck) {
 }
 
 // Bundles everything a ModeCoordinator test needs: a real AdapterIpcServer
-// (the emulation-side target's data source), a fake no-adapter-connected
-// target (LoggingInputSink -- ModeCoordinator is generic over "some
-// IEmulatorInputSink/IFrameSource pair" regardless of which concrete
-// class it is, so this stands in for the real NoAdapterInputSink/
-// NoAdapterFrameSource used in production), and a real NetServer +
-// ModeCoordinator wired together. Torn down in reverse construction
-// order automatically.
+// (the emulation-side target's data source), a fake host-control target
+// (LoggingInputSink -- HostControlAdapter itself needs real uinput
+// access this sandbox doesn't have, and ModeCoordinator is generic over
+// "some IEmulatorInputSink/IFrameSource pair" regardless of which
+// concrete class it is), and a real NetServer + ModeCoordinator wired
+// together. Torn down in reverse construction order automatically.
 struct Fixture {
     LoggingMicAudioSink micSink;
     LoggingInputSink hostControlInputSink;
@@ -168,17 +167,30 @@ struct Fixture {
 
 } // namespace
 
-MDR_TEST(compute_desired_mode_no_adapter_is_host_control) {
-    MDR_CHECK(computeDesiredMode(/*adapterConnected=*/false) == HostMode::HostControl);
+MDR_TEST(compute_desired_mode_no_adapter_no_override_is_host_control) {
+    MDR_CHECK(computeDesiredMode(/*adapterConnected=*/false, /*manualHostControlOverride=*/false) ==
+              HostMode::HostControl);
 }
 
-MDR_TEST(compute_desired_mode_adapter_connected_is_emulation) {
-    MDR_CHECK(computeDesiredMode(/*adapterConnected=*/true) == HostMode::Emulation);
+MDR_TEST(compute_desired_mode_adapter_connected_no_override_is_emulation) {
+    MDR_CHECK(computeDesiredMode(/*adapterConnected=*/true, /*manualHostControlOverride=*/false) ==
+              HostMode::Emulation);
+}
+
+MDR_TEST(compute_desired_mode_override_wins_even_with_adapter_connected) {
+    MDR_CHECK(computeDesiredMode(/*adapterConnected=*/true, /*manualHostControlOverride=*/true) ==
+              HostMode::HostControl);
+}
+
+MDR_TEST(compute_desired_mode_override_with_no_adapter_is_still_host_control) {
+    MDR_CHECK(computeDesiredMode(/*adapterConnected=*/false, /*manualHostControlOverride=*/true) ==
+              HostMode::HostControl);
 }
 
 MDR_TEST(coordinator_starts_in_host_control_mode) {
     Fixture fixture;
     MDR_CHECK(fixture.server.currentMode() == HostMode::HostControl);
+    MDR_CHECK(!fixture.coordinator.isOverridden());
 }
 
 MDR_TEST(coordinator_switches_to_emulation_when_an_adapter_connects) {
@@ -206,12 +218,51 @@ MDR_TEST(coordinator_switches_back_to_host_control_when_the_adapter_disconnects)
     MDR_CHECK(waitUntil([&] { return fixture.server.currentMode() == HostMode::HostControl; }));
 }
 
-MDR_TEST(fresh_handshake_reports_no_adapter_identity_before_any_adapter_connects) {
+MDR_TEST(coordinator_manual_override_forces_host_control_even_while_adapter_connected) {
+    Fixture fixture;
+
+    SyntheticEmulatorAdapter syntheticAdapter;
+    AdapterIpcClient client(syntheticAdapter, fixture.socketPath);
+    MDR_CHECK(client.connect());
+    MDR_CHECK(waitUntil([&] { return fixture.server.currentMode() == HostMode::Emulation; }));
+
+    fixture.coordinator.forceHostControl();
+    MDR_CHECK(fixture.coordinator.isOverridden());
+    MDR_CHECK(waitUntil([&] { return fixture.server.currentMode() == HostMode::HostControl; }));
+
+    // The adapter is still connected the whole time -- confirms this is
+    // a real override, not just "no adapter" being (mis)detected.
+    MDR_CHECK(fixture.adapterServer.hasConnectedAdapter());
+
+    client.disconnect();
+}
+
+MDR_TEST(coordinator_clearing_override_resumes_auto_detection) {
+    Fixture fixture;
+
+    SyntheticEmulatorAdapter syntheticAdapter;
+    AdapterIpcClient client(syntheticAdapter, fixture.socketPath);
+    MDR_CHECK(client.connect());
+    MDR_CHECK(waitUntil([&] { return fixture.server.currentMode() == HostMode::Emulation; }));
+
+    fixture.coordinator.forceHostControl();
+    MDR_CHECK(waitUntil([&] { return fixture.server.currentMode() == HostMode::HostControl; }));
+
+    fixture.coordinator.clearOverride();
+    MDR_CHECK(!fixture.coordinator.isOverridden());
+    // Adapter is still connected -- clearing the override should swap
+    // straight back to Emulation without needing a reconnect.
+    MDR_CHECK(waitUntil([&] { return fixture.server.currentMode() == HostMode::Emulation; }));
+
+    client.disconnect();
+}
+
+MDR_TEST(fresh_handshake_reports_host_control_identity_before_any_adapter_connects) {
     Fixture fixture;
     HelloAckPayload ack;
     MDR_CHECK(handshakeAndGetAck(fixture.config.controlPort, ack));
-    MDR_CHECK(ack.system.systemId == kNoAdapterSystemIdentity.systemId);
-    MDR_CHECK(ack.adapter.adapterId == kNoAdapterAdapterIdentity.adapterId);
+    MDR_CHECK(ack.system.systemId == kHostControlSystemIdentity.systemId);
+    MDR_CHECK(ack.adapter.adapterId == kHostControlAdapterIdentity.adapterId);
     MDR_CHECK(ack.mode == HostMode::HostControl);
 }
 

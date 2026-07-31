@@ -540,38 +540,6 @@ cross-process device-approval gap section 10 flagged -- Azahar's static
 shared secret sidesteps it the same way host-control mode already does,
 rather than closing it.
 
-### 12. HostControlAdapter removed; sections 8-10's "host-control mode" now means "waiting for emulator" only
-
-**Superseded**: sections 8-10 documented `HostControlAdapter`, a
-uinput-based virtual gamepad letting a client navigate the host's own
-desktop UI while `HostMode::HostControl` was active. Real usage never
-materialized -- see `docs/known-limitations.md`'s 2026-07-23 entry for
-the full removal writeup -- so it was deleted outright and replaced
-with a trivial no-op placeholder pair, `NoAdapterInputSink`/
-`NoAdapterFrameSource` (`host/remote-server/include/host/
-no_adapter_target.h`), that discards input and reports no video frame.
-
-Everything sections 7 and 9 actually argued for -- `NetServer`'s
-runtime-swappable target, and `ModeCoordinator` automatically detecting
-an adapter connecting/disconnecting over the local IPC channel and
-swapping to it -- is completely unaffected: `HostMode::HostControl`
-still exists as a wire-protocol value and still means "no adapter
-connected right now," `ModeChanged` still notifies an already-connected
-client, and `HelloAckPayload::mode` still tells a freshly-connecting
-one. Only *what a client sees and can do* during that mode changed: a
-plain "waiting for emulator" screen with no interactive fallback,
-instead of a virtual gamepad it could use to poke around the host's
-desktop. Section 9's manual `hostcontrol`/`resume` override commands
-(and `ModeCoordinator::isOverridden()`) were removed for the same
-reason forcing "no adapter connected" while a real adapter *is*
-connected stopped making sense once there was nothing left to navigate
-to. Section 11's comparisons to "host-control mode" as an accepted
-device-approval trade-off remain historically accurate descriptions of
-what was true when that section was written; they are not affected by
-this section, since Azahar's/Cemu's static-shared-secret fallback for
-out-of-process device approval was never actually tied to
-`HostControlAdapter` itself, only to running out-of-process at all.
-
 ## Consequences
 
 **Positive**: a concrete, testable target contract exists for a future

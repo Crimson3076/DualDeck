@@ -235,22 +235,21 @@ void renderConnecting(SDL_Renderer* renderer, const std::string& hostAddress) {
 
 // GitHub issue #4 Phase E: shown in place of the video texture whenever
 // net.hostMode() == HostMode::HostControl -- there is no video to show
-// (NoAdapterFrameSource::getLatestFrame() always returns false, see
-// host/remote-server/include/host/no_adapter_target.h). No controller
-// input goes anywhere useful while this screen is up either (the host's
-// NoAdapterInputSink discards it -- there used to be a virtual gamepad
-// to navigate the host's own UI here, removed; see that same header's
-// comment for why), but ControllerState packets are still sent every
-// frame exactly as in Emulation mode (the render loop below doesn't
-// gate that on mode) so input resumes instantly the moment an adapter
-// connects and the mode flips.
+// (HostControlAdapter::getLatestFrame() always returns false, see
+// host/remote-server/src/host_control_adapter.cpp), but ControllerState
+// packets are still being sent every frame exactly as in Emulation mode
+// (the render loop below doesn't gate that on mode), so a controller
+// plugged into a real host will already be navigating that host's own UI
+// via HostControlAdapter's virtual gamepad while this screen is up.
 void renderHostControlScreen(SDL_Renderer* renderer, const std::string& identity) {
     SDL_SetRenderDrawColor(renderer, 20, 24, 20, 255);
     SDL_RenderClear(renderer);
-    renderCenteredBitmapText(renderer, "WAITING FOR EMULATOR", static_cast<float>(kWindowHeight) / 2.0f - 60.0f, 4,
+    renderCenteredBitmapText(renderer, "HOST CONTROL", static_cast<float>(kWindowHeight) / 2.0f - 60.0f, 4,
                               SDL_Color{120, 210, 150, 255});
-    renderCenteredBitmapText(renderer, "AN EMULATION SESSION WILL APPEAR HERE AUTOMATICALLY WHEN ONE STARTS",
+    renderCenteredBitmapText(renderer, "USE YOUR CONTROLLER TO NAVIGATE THE HOST",
                               static_cast<float>(kWindowHeight) / 2.0f, 2, SDL_Color{200, 200, 200, 255});
+    renderCenteredBitmapText(renderer, "AN EMULATION SESSION WILL APPEAR HERE AUTOMATICALLY WHEN ONE STARTS",
+                              static_cast<float>(kWindowHeight) / 2.0f + 34.0f, 2, SDL_Color{140, 140, 140, 255});
     if (!identity.empty()) {
         renderCenteredBitmapText(renderer, identity, static_cast<float>(kWindowHeight) / 2.0f + 80.0f, 2,
                                   SDL_Color{150, 170, 210, 255});
@@ -2198,7 +2197,7 @@ int main(int argc, char** argv) {
             // edge (or a mode transition, issue #4 Phase E -- a
             // ModeChanged packet carries its own fresh identity, e.g.
             // switching from a real adapter's identity to
-            // kNoAdapterSystemIdentity/kNoAdapterAdapterIdentity or
+            // kHostControlSystemIdentity/kHostControlAdapterIdentity or
             // back), not every frame, since hostSystemIdentity()/
             // hostAdapterIdentity() each take a mutex; sessionSystemName/
             // sessionAdapterName are deliberately left alone otherwise
@@ -2218,7 +2217,7 @@ int main(int argc, char** argv) {
                     // visible terminal, stdout is what we've got" reason
                     // as every other status line in this loop.
                     logLine("[net] host mode changed to %s\n",
-                                  nowHostMode == HostMode::HostControl ? "WAITING FOR EMULATOR" : "EMULATION");
+                                  nowHostMode == HostMode::HostControl ? "HOST CONTROL" : "EMULATION");
                 }
 
                 // Recreate the video texture at whatever native size this
@@ -2344,8 +2343,8 @@ int main(int argc, char** argv) {
             // GitHub issue #4 Phase E: while the host is in HostControl
             // mode there is no video to show (see renderHostControlScreen()'s
             // comment) -- ControllerState was just sent above unconditionally,
-            // same as in Emulation mode, but the host's NoAdapterInputSink
-            // just discards it; only the on-screen presentation
+            // same as in Emulation mode, so a real host's HostControlAdapter
+            // is already receiving input; only the on-screen presentation
             // differs. Falls through to the normal texture path the instant
             // nowHostMode flips back to Emulation (e.g. an adapter connects).
             if (nowConnected && nowHostMode == HostMode::HostControl) {

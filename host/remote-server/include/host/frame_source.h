@@ -41,7 +41,7 @@ public:
     // encoder) -- NOT necessarily the same value frameDimensions() below
     // reports, which is only a coarse, once-negotiated estimate. Sources
     // with a genuinely fixed frame size (this default, SyntheticFrameSource,
-    // NoAdapterFrameSource) just echo frameDimensions() here every call.
+    // HostControlAdapter) just echo frameDimensions() here every call.
     virtual bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
                                 uint16_t& outWidth, uint16_t& outHeight) = 0;
 

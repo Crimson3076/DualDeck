@@ -1001,7 +1001,7 @@ void NetServer::videoLoop() {
             // once-negotiated value can never be trusted for the rest of a
             // Cemu session. Defaults to the once-negotiated value so a
             // source that never updates them (SyntheticFrameSource,
-            // NoAdapterFrameSource's always-false stub) keeps behaving
+            // HostControlAdapter's always-false stub) keeps behaving
             // exactly as before.
             uint16_t currentFrameWidth = frameWidth;
             uint16_t currentFrameHeight = frameHeight;
