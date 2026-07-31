@@ -5620,6 +5620,40 @@ reads the bundled `VERSION` file instead of attempting `git`. Not yet
 verified as part of an actual full release build/download/"Check for
 updates" cycle end to end.
 
+## 2026-07-31: Fedora Azahar build fix -- missing qt6-qtbase-private-devel
+
+First real end-to-end run of `emudeck-replace-in-place.sh` on real
+Fedora hardware (following the detection verification above) hit a
+genuine build failure compiling Azahar: `cmake` failed configuring
+`src/citra_qt` with "Failed to find required Qt component GuiPrivate"
+-- `Qt6GuiPrivateConfig.cmake` wasn't present anywhere on the system.
+
+Root cause: the apt (Debian/Ubuntu) build-dependency list has carried
+`qt6-base-private-dev` for Azahar's `Qt6::GuiPrivate` requirement, but
+the dnf (Fedora) list never got the equivalent package added -- exactly
+the class of "the two lists silently drifted apart" bug this project
+has hit more than once this same day (the wayland-client/turbojpeg
+dnf-list bugs earlier this session were the same shape). Confirmed via
+web search (not guessed, after getting a Fedora package name wrong
+once already this session) that `qt6-qtbase-private-devel` is the
+correct package -- it's what actually ships
+`Qt6GuiPrivateConfig.cmake` on Fedora.
+
+Added to all three places this dependency list is duplicated:
+`scripts/build-release.sh`'s top-level `ensure_packages "build"` call,
+its Distrobox-container dnf install list (for immutable/Bazzite hosts),
+and `scripts/emudeck-replace-in-place.sh`'s own copy of the same list.
+This was previously the last explicitly-flagged "Fedora/Arch names are
+best-effort and unverified" gap for Azahar's build dependencies (see
+`docs/azahar-integration-analysis.md`) -- confirmed and fixed against
+real hardware rather than reasoned through.
+
+**Not yet verified**: whether this was the *only* remaining Fedora
+dependency gap in Azahar's build, or whether more turn up once the
+build gets further with this fix applied. Cemu's build (much larger
+dependency graph, ~108 vcpkg packages) hadn't been reached yet at the
+time of this fix.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
