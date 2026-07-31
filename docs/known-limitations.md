@@ -4792,6 +4792,104 @@ original "unwanted extra window" complaint likely means rendering
 instead of a real window swapchain, a nontrivial Cemu-rendering change
 outside this fix's scope.
 
+## 2026-07-31: EmuDeck replace-in-place installer (Phase A of the orchestration-layer pivot)
+
+Until now, using DualDeck meant installing its own separately-built copy
+of melonDS/Azahar/Cemu, with no relationship at all to any emulators or
+ROMs a user already had set up via EmuDeck -- a real usability gap,
+raised directly: users with an existing EmuDeck library had to manually
+point DualDeck at their games instead of just launching them through the
+EmuDeck/Steam shortcuts they already had.
+
+`scripts/emudeck-replace-in-place.sh` (new) addresses this by building
+DualDeck's already-patched melonDS/Azahar/Cemu the same way
+`scripts/build-release.sh` does (both now share the actual build logic
+via `scripts/lib/build_emulator.sh` and the pinned-commit constants via
+`scripts/lib/pinned_commits.sh`, rather than two copies that could
+silently drift apart -- see `build_azahar()`'s own comment for why that
+class of bug has bitten this project before), then installs the result
+**directly at the exact path EmuDeck's own launcher scripts and Steam
+shortcuts already point to** (`~/Applications/*.AppImage`, packaged as a
+proper AppImage via `scripts/lib/appimage_pack.sh`), instead of a
+separate DualDeck-managed install directory. Nothing about an existing
+EmuDeck install or its Steam shortcuts needs to change -- they simply run
+DualDeck's remote-streaming-capable binary the next time they're
+launched.
+
+**Detection** (`scripts/lib/emudeck_paths.sh`): matches EmuDeck's own
+"newest AppImage by mtime matching a name fragment" convention (the same
+one EmuDeck's own launcher scripts, e.g. `tools/launchers/cemu.sh`, use)
+rather than assuming one fixed filename. Cemu's Flatpak-fallback install
+shape (EmuDeck's own AppImage-then-Flatpak-then-Proton priority order) is
+detected and cleanly refused rather than silently doing nothing -- a
+Flatpak's sandboxing and `flatpak run <app-id>` launch model is a
+materially different install shape this phase doesn't attempt to handle.
+
+**melonDS vs. Azahar/Cemu, at the `AppRun` level**: melonDS already has a
+persisted Qt-config toggle (`MelonDSRemote.Enable`) and runs its remote
+server in-process by default, so its `AppRun` is a trivial passthrough
+exec. Azahar and Cemu have no in-process path at all -- they always need
+a running Host Service to connect to over adapter-ipc -- so their
+`AppRun` first probes the *default shared* adapter socket
+(`adapter-sdk/ipc/src/socket_path.cpp`'s `defaultAdapterSocketPath()`)
+for an already-running persistent daemon, and only falls back to
+spawning a private, ephemeral `dualdeck-host-service` (killed on exit,
+exactly like today's packaged `run-host-azahar.sh`/`run-host-cemu.sh`) if
+none is found. No persistent daemon exists yet as of this phase (that's
+separately-scoped follow-up work) -- today, every launch takes the
+ephemeral fallback path, same as before this installer existed. Once a
+persistent daemon does exist, every `AppRun`-launched emulator picks it
+up automatically with no need to rebuild or reinstall the AppImage.
+
+**Drift detection** (`scripts/lib/appimage_manifest.py`,
+`scripts/emudeck-check-drift.sh`): a sidecar JSON manifest
+(`<name>.AppImage.dualdeck.json`, deliberately *not* embedded inside the
+AppImage itself, so it survives EmuDeck's own "Manage Emulators" updater
+doing a straight file replace) records the patched and original sha256
+hashes. `emudeck-check-drift.sh` compares the live file against both on
+demand; a mismatch against both means EmuDeck's updater replaced the
+file with a newer stock build DualDeck has never patched, and needs
+re-patching (`--fix`) to regain remote-server capability. This can only
+ever detect drift *after* it happens -- if EmuDeck's updater runs and the
+user launches the game before the next drift check, they transiently get
+an unpatched emulator with no remote-server capability, not a crash or
+error. That degrade-to-stock behavior is an accepted tradeoff, not an
+oversight.
+
+**Safety**: the very first install backs up the true original AppImage
+(`<name>.AppImage.dualdeck-original`, named so it can never be
+accidentally picked back up as "the newest install" by the detection
+glob above, which only ever matches `*.AppImage`). Every later run
+reuses that same backup and the manifest's recorded `original_sha256`
+rather than re-deriving "original" from whatever is currently
+installed -- otherwise a second run after the first would back up
+DualDeck's *own* patched build as if it were the stock original,
+permanently losing the ability to restore true stock. If a manifest
+exists but its backup is missing, the installer refuses outright rather
+than guessing. Requires interactive confirmation unless `--yes` is
+given; `--dry-run` performs detection and reports the plan with zero
+side effects (in particular, it never triggers a build-dependency
+install).
+
+**Not yet verified** (this project's development sandbox has no real
+EmuDeck install to test against): whether EmuDeck's actual AppImage
+naming/glob convention matches what `emudeck_paths.sh` assumes from
+EmuDeck's own public docs/launcher-script source. This needs confirming
+against a real EmuDeck install before this installer can be considered
+done, not just reasoned through -- see `scripts/lib/emudeck_paths.sh`'s
+own header comment.
+
+**Deliberately out of scope for this phase** (see the broader
+orchestration-layer roadmap this phase is the first part of): a
+persistent host-service daemon (so `AppRun`'s default-socket probe above
+actually finds something to connect to on a normal, direct EmuDeck/Steam
+shortcut launch); moving melonDS off its in-process default; the host
+booting real Steam Big Picture; actual host-desktop screen capture for
+HostControl mode (`HostControlAdapter::getLatestFrame()` still always
+returns `false`); and the Decky plugin becoming a full discovery/connect
+client. Each is substantially more work than this phase, and each is
+independently scoped rather than folded in here.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
