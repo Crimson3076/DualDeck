@@ -11,18 +11,19 @@
 # needed before running this.
 set -euo pipefail
 
-MELONDS_COMMIT="10a173b5536fc75cd93f8a3868349dad963542ef"
-AZAHAR_COMMIT="75134fca82eab4e1a86dca0aaa4a188cefff5469"
-CEMU_COMMIT="a6fb0a48eb437a8a41c13b782ac8ae0433bf8f98" # v2.6, latest stable release
 SDL3_TAG="release-3.2.16"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib/pinned_commits.sh
+source "${repo_root}/scripts/lib/pinned_commits.sh"
 work_dir="${BUILD_RELEASE_WORKDIR:-$(mktemp -d)}"
 out_dir="${BUILD_RELEASE_OUTPUT_DIR:-${repo_root}/release-out}"
 mkdir -p "${work_dir}" "${out_dir}"
 
 # shellcheck source=scripts/lib/ensure-packages.sh
 source "${repo_root}/scripts/lib/ensure-packages.sh"
+# shellcheck source=scripts/lib/build_emulator.sh
+source "${repo_root}/scripts/lib/build_emulator.sh"
 
 echo "== [0/6] Checking build dependencies =="
 ensure_packages "build" \
@@ -101,14 +102,7 @@ else
 fi
 
 echo "== [2/6] Patched melonDS host (commit ${MELONDS_COMMIT}) =="
-melonds_src="${work_dir}/melonds-src"
-rm -rf "${melonds_src}"
-git clone https://github.com/melonDS-emu/melonDS.git "${melonds_src}"
-(cd "${melonds_src}" && git checkout "${MELONDS_COMMIT}")
-(cd "${melonds_src}" && git apply "${repo_root}/host/melonds-patches/0001-remote-server-integration.patch")
-cmake -S "${melonds_src}" -B "${melonds_src}/build" -DCMAKE_BUILD_TYPE=Release \
-    "${cmake_launcher_args[@]}"
-cmake --build "${melonds_src}/build" -j"$(nproc)"
+build_melonds melonds_bin "${work_dir}" "${repo_root}" "${MELONDS_COMMIT}"
 
 echo "== [3/6] Patched Azahar host (Nintendo 3DS, commit ${AZAHAR_COMMIT}) =="
 # See docs/azahar-integration-analysis.md and
@@ -116,42 +110,14 @@ echo "== [3/6] Patched Azahar host (Nintendo 3DS, commit ${AZAHAR_COMMIT}) =="
 # section for what this patch actually does. This is a much heavier
 # build than melonDS's (36 git submodules -- Vulkan, boost, dynarmic,
 # spirv-tools, etc. -- for real 3D emulation instead of the DS's mostly
-# software-rendered 2D), so it's cached across runs by commit the same
-# way SDL3 already is (see azahar_src/build's existence check below),
-# not just re-cloned+rebuilt from scratch every time like melonDS's
-# still-cheap-enough-not-to-bother step above.
-#
-# The cache-hit check below verifies the CURRENT patch file is actually
-# what's applied in the cached tree (via `git apply --reverse --check`,
-# the same idempotency technique patch-existing-emulator.sh already
-# uses), not just that a binary happens to exist at this path -- a real
-# bug shipped two releases (v0.1.39, v0.1.40) with byte-for-byte
+# software-rendered 2D), so it's cached across runs by commit + patch
+# hash (see build_azahar() in scripts/lib/build_emulator.sh -- shared
+# with scripts/emudeck-replace-in-place.sh so both use the exact same
+# cache-hit/patch-correctness logic, not two silently-drifting copies of
+# it, after a real bug once shipped two releases with byte-for-byte
 # identical azahar binaries despite the patch changing in between,
-# confirmed via md5sum, because the old check only tested file
-# existence: once a binary was cached, every later change to the patch
-# was silently ignored. .github/workflows/release.yml's own cache key
-# needed the matching fix (hashFiles() on this same patch file), since
-# a stale GitHub Actions cache restore recreates exactly this same
-# stale-file-exists condition even before this script's own check runs.
-azahar_src="${work_dir}/azahar-src"
-azahar_patch_file="${repo_root}/host/azahar-patches/0001-remote-server-integration.patch"
-azahar_cache_hit=0
-if [[ -f "${azahar_src}/build/bin/Release/azahar" ]] && \
-   (cd "${azahar_src}" && git apply --reverse --check "${azahar_patch_file}" 2>/dev/null); then
-    echo "already built at ${azahar_src} with the current patch applied, skipping (cache hit)"
-    azahar_cache_hit=1
-fi
-if [[ "${azahar_cache_hit}" -eq 0 ]]; then
-    rm -rf "${azahar_src}"
-    git clone https://github.com/azahar-emu/azahar.git "${azahar_src}"
-    (cd "${azahar_src}" && git checkout "${AZAHAR_COMMIT}")
-    (cd "${azahar_src}" && git submodule update --init --recursive --depth 1)
-    (cd "${azahar_src}" && git apply "${azahar_patch_file}")
-    cmake -S "${azahar_src}" -B "${azahar_src}/build" -DCMAKE_BUILD_TYPE=Release \
-        -DENABLE_QT_TRANSLATION=OFF \
-        "${cmake_launcher_args[@]}"
-    cmake --build "${azahar_src}/build" -j"$(nproc)"
-fi
+# because an earlier version of this check only tested file existence).
+build_azahar azahar_bin "${work_dir}" "${repo_root}" "${AZAHAR_COMMIT}"
 
 echo "== [4/6] Patched Cemu host (Nintendo Wii U, commit ${CEMU_COMMIT}) =="
 # See host/cemu-patches/README.md and docs/known-limitations.md's
@@ -163,43 +129,9 @@ echo "== [4/6] Patched Cemu host (Nintendo Wii U, commit ${CEMU_COMMIT}) =="
 # first time it's actually being built, on whatever machine runs this
 # script -- expect this step to need troubleshooting the first few
 # times it runs for real (see Cemu's own BUILD.md "Troubleshooting
-# Steps" section for common vcpkg issues).
-#
-# Cached across runs by commit + patch hash, same technique and same
-# rationale as Azahar's step above (an even heavier build: Cemu's own
-# vcpkg submodule resolves to roughly 108 packages).
-#
-# That source+build cache is keyed on the patch file's content, so it's
-# invalidated by every patch iteration -- exactly the case this project
-# is in most often (fixing a bug found during end-to-end testing, not
-# touching the pinned upstream commit). Without a *separate* cache for
-# vcpkg's own built dependency binaries, each of those iterations would
-# also rebuild all ~108 vcpkg packages from source, even though neither
-# the pinned Cemu commit nor its vcpkg manifest/baseline changed at all.
-# vcpkg's binary caching is enabled by default and, unless overridden,
-# reads/writes a local archive cache at $HOME/.cache/vcpkg/archives --
-# outside cemu_src entirely, so it survives the `rm -rf cemu_src` below
-# on a patch-hash cache miss. .github/workflows/release.yml caches that
-# directory separately, keyed on the Cemu commit (not the patch hash),
-# so a from-scratch clone still restores already-built package binaries
-# instead of recompiling wxWidgets/OpenSSL/etc. from source every time.
-cemu_src="${work_dir}/cemu-src"
-cemu_patch_file="${repo_root}/host/cemu-patches/0001-remote-server-integration.patch"
-cemu_cache_hit=0
-if [[ -f "${cemu_src}/bin/Cemu_release" ]] && \
-   (cd "${cemu_src}" && git apply --reverse --check "${cemu_patch_file}" 2>/dev/null); then
-    echo "already built at ${cemu_src} with the current patch applied, skipping (cache hit)"
-    cemu_cache_hit=1
-fi
-if [[ "${cemu_cache_hit}" -eq 0 ]]; then
-    rm -rf "${cemu_src}"
-    git clone --recurse-submodules https://github.com/cemu-project/Cemu.git "${cemu_src}"
-    (cd "${cemu_src}" && git checkout "${CEMU_COMMIT}" && git submodule update --init --recursive)
-    (cd "${cemu_src}" && git apply "${cemu_patch_file}")
-    cmake -S "${cemu_src}" -B "${cemu_src}/build" -DCMAKE_BUILD_TYPE=release -G Ninja \
-        "${cmake_launcher_args[@]}"
-    cmake --build "${cemu_src}/build" -j"$(nproc)"
-fi
+# Steps" section for common vcpkg issues). Cached the same way Azahar's
+# step above is -- see build_cemu() in scripts/lib/build_emulator.sh.
+build_cemu cemu_bin "${work_dir}" "${repo_root}" "${CEMU_COMMIT}"
 
 echo "== [5/6] Client + host prototype (this repo) =="
 repo_build="${work_dir}/repo-build"
@@ -235,9 +167,9 @@ mkdir -p "${pkg_dir}/host/internal" "${pkg_dir}/client/lib" "${pkg_dir}/client/i
 # published GitHub release.
 echo "${version_tag}" > "${pkg_dir}/VERSION"
 
-cp "${melonds_src}/build/melonDS" "${pkg_dir}/host/melonDS"
+cp "${melonds_bin}" "${pkg_dir}/host/melonDS"
 chmod +x "${pkg_dir}/host/melonDS"
-ldd "${melonds_src}/build/melonDS" | awk '{print $1}' | sort -u \
+ldd "${melonds_bin}" | awk '{print $1}' | sort -u \
     > "${pkg_dir}/host/internal/host-shared-library-dependencies.txt"
 
 # Azahar (Nintendo 3DS, GitHub issue #4 follow-up) -- top-level
@@ -246,9 +178,9 @@ ldd "${melonds_src}/build/melonDS" | awk '{print $1}' | sort -u \
 # See host/internal/run-host-azahar.sh for how it's actually launched
 # (always as an out-of-process adapter -- see that script's own comment
 # for why).
-cp "${azahar_src}/build/bin/Release/azahar" "${pkg_dir}/host/azahar"
+cp "${azahar_bin}" "${pkg_dir}/host/azahar"
 chmod +x "${pkg_dir}/host/azahar"
-ldd "${azahar_src}/build/bin/Release/azahar" | awk '{print $1}' | sort -u \
+ldd "${azahar_bin}" | awk '{print $1}' | sort -u \
     > "${pkg_dir}/host/internal/azahar-shared-library-dependencies.txt"
 
 # Cemu (Nintendo Wii U) -- top-level alongside melonDS/azahar, same
@@ -256,9 +188,9 @@ ldd "${azahar_src}/build/bin/Release/azahar" | awk '{print $1}' | sort -u \
 # host/internal/run-host-cemu.sh for how it's actually launched (always
 # as an out-of-process adapter, same as Azahar -- see host/cemu-patches/
 # README.md for why Cemu has no in-process device-approval path).
-cp "${cemu_src}/bin/Cemu_release" "${pkg_dir}/host/cemu"
+cp "${cemu_bin}" "${pkg_dir}/host/cemu"
 chmod +x "${pkg_dir}/host/cemu"
-ldd "${cemu_src}/bin/Cemu_release" | awk '{print $1}' | sort -u \
+ldd "${cemu_bin}" | awk '{print $1}' | sort -u \
     > "${pkg_dir}/host/internal/cemu-shared-library-dependencies.txt"
 
 # The standalone Host Service binary (GitHub issue #4): not used by the
