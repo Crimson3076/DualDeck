@@ -207,10 +207,20 @@ if [[ "${dry_run}" -ne 1 ]]; then
             "vulkan-headers vulkan-icd-loader boost pulseaudio alsa-lib"
     fi
     if [[ " ${emulators[*]} " == *" cemu "* ]]; then
+        # linux-libc-dev/kernel-headers/linux-headers: real Bazzite hardware
+        # test -- Cemu's vcpkg-built openssl dependency needs Linux kernel
+        # headers (its ./Configure script probes for them, e.g. AF_ALG
+        # socket support), which a minimal Fedora Distrobox image doesn't
+        # ship by default (unlike a typical Debian/Ubuntu install, which
+        # usually has linux-libc-dev pulled in transitively already) --
+        # openssl's own vcpkg portfile prints a hint about this ("openssl
+        # requires Linux kernel headers from the system package manager")
+        # right before the actual configure command fails, easy to miss
+        # among vcpkg's otherwise-routine warnings.
         ensure_packages "cemu build" \
-            "freeglut3-dev libbluetooth-dev libgcrypt20-dev libglm-dev libgtk-3-dev libpulse-dev libsecret-1-dev libsystemd-dev libtool nasm libusb-1.0-0-dev" \
-            "freeglut-devel bluez-libs-devel libgcrypt-devel glm-devel gtk3-devel pulseaudio-libs-devel libsecret-devel systemd-devel libtool nasm libusb1-devel perl-IPC-Cmd" \
-            "freeglut bluez-libs libgcrypt glm gtk3 libpulse libsecret systemd libtool nasm libusb"
+            "freeglut3-dev libbluetooth-dev libgcrypt20-dev libglm-dev libgtk-3-dev libpulse-dev libsecret-1-dev libsystemd-dev libtool nasm libusb-1.0-0-dev linux-libc-dev" \
+            "freeglut-devel bluez-libs-devel libgcrypt-devel glm-devel gtk3-devel pulseaudio-libs-devel libsecret-devel systemd-devel libtool nasm libusb1-devel perl-IPC-Cmd kernel-headers" \
+            "freeglut bluez-libs libgcrypt glm gtk3 libpulse libsecret systemd libtool nasm libusb linux-headers"
     fi
 
     if command -v sccache >/dev/null 2>&1; then

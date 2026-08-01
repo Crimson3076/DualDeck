@@ -6293,6 +6293,25 @@ this file's own history went through `install-host-distrobox.sh`
 instead, a different code path that never calls `pack_appimage()` at
 all, so it never happened to exercise this bug).
 
+**Fourth issue, same day, Cemu specifically**: attempting Cemu next
+(after Azahar's full success above), its vcpkg-based dependency build
+failed partway through on `openssl:x64-linux` -- `./Configure` exits 2
+with a preceding warning vcpkg's own `openssl` portfile prints
+unprompted: "openssl requires Linux kernel headers from the system
+package manager" (with install hints for Alpine/Ubuntu, but not
+Fedora). A minimal `fedora:latest` Distrobox image doesn't ship
+`kernel-headers` by default the way a typical Debian/Ubuntu install
+usually already has `linux-libc-dev` pulled in transitively. Added
+`kernel-headers` (Fedora) / `linux-libc-dev` (Debian/Ubuntu) /
+`linux-headers` (Arch) to the existing `"cemu build"` extra
+`ensure_packages` call (Cemu-specific, not the generic list, since
+neither melonDS nor Azahar touch vcpkg/openssl at all). **Not yet
+verified against a real from-scratch Cemu build** -- Cemu's ~108-package
+vcpkg dependency graph takes well over an hour to build from scratch,
+long enough that re-running it just to confirm this one specific fix
+wasn't done as part of this same investigation; next real Cemu attempt
+on real hardware is the actual verification this still needs.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
