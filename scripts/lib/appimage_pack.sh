@@ -255,6 +255,30 @@ pack_appimage() {
         for dir in ${extra_dirs}; do
             [[ -d "${dir}" ]] || { echo "pack_appimage: no such extra directory: ${dir}" >&2; return 1; }
             cp -a "${dir}" "${appdir}/usr/bin/$(basename "${dir}")"
+
+            # Real user report, 2026-08-01: melonDS/Azahar got past
+            # "Could not find the Qt platform plugin" (the extra_dirs
+            # bundling fix that added Qt's platforms/ directory here)
+            # only to hit "Could not LOAD the Qt platform plugin ...
+            # even though it was found" -- libqxcb.so/libqwayland-*.so
+            # are themselves real ELF shared objects with their own large
+            # dependency chains (libQt6XcbQpa.so.6, a dozen libxcb-*.so,
+            # libxkbcommon.so, libEGL.so, libfontconfig.so, ...) that
+            # bundle_library_dependencies() never saw, because it only
+            # ever ran against the *main binary* above -- a dlopen()'d
+            # plugin's own dependencies are invisible to `ldd
+            # <main binary>` no matter how thorough that pass is, since
+            # the plugin is a separate ELF file loaded later, not part of
+            # the main binary's own dynamic dependency graph at all.
+            # Scans every extra_dir for actual shared-library files
+            # (*.so, *.so.N) and bundles each one's own dependencies too
+            # -- a no-op for Cemu's resources/gameProfiles (plain data,
+            # no .so files in there), but load-bearing for melonDS/
+            # Azahar's bundled Qt platform plugins.
+            local plugin_so
+            while IFS= read -r -d '' plugin_so; do
+                bundle_library_dependencies "${plugin_so}" "${appdir}/usr/lib"
+            done < <(find "${dir}" -type f \( -name '*.so' -o -name '*.so.*' \) -print0)
         done
     fi
 

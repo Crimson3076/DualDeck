@@ -7200,6 +7200,56 @@ machine's fallback would or wouldn't have found on its own.
 **Not yet verified:** against the real hardware that reported this bug
 -- needs an actual re-test of both melonDS and Azahar once this ships.
 
+## 2026-08-01: melonDS still aborted after the Qt-plugin-bundling fix shipped -- "Could not LOAD" instead of "Could not find"
+
+The very re-test the previous entry called for came back with a *different*
+crash, on the same real Bazzite/Fedora HTPC:
+
+```
+qt.qpa.plugin: Could not load the Qt platform plugin "wayland" in "" even though it was found.
+qt.qpa.plugin: Could not load the Qt platform plugin "xcb" in "" even though it was found.
+This application failed to start because no Qt platform plugin could be initialized.
+
+Available platform plugins are: eglfs, linuxfb, minimal, minimalegl, offscreen, vkkhrdisplay, vnc, wayland-egl, wayland, xcb.
+```
+
+Progress, not a regression: `QT_PLUGIN_PATH` now correctly points at the
+bundled `platforms/` directory and Qt's plugin loader finds `libqxcb.so`
+there -- the previous fix worked. But loading a plugin means `dlopen()`ing
+its own `.so` file, which pulls in *that file's own* shared-library
+dependencies, completely separately from the main `melonDS`/`azahar`
+binary's dependency graph. Confirmed directly: `ldd .../qt6/plugins/
+platforms/libqxcb.so` lists a large chain never bundled by the previous
+fix -- `libQt6XcbQpa.so.6`, a dozen `libxcb-*.so`, `libxkbcommon.so`,
+`libEGL.so`, `libfontconfig.so`, and more. `bundle_library_dependencies()`
+only ever ran against the *main binary* passed into `pack_appimage()` --
+a `dlopen()`'d plugin is a separate ELF file loaded later, invisible to
+`ldd <main binary>` no matter how thorough that one pass is, so none of
+`libqxcb.so`'s own dependencies were ever bundled in the first place.
+
+**Fix:** `pack_appimage()`'s `extra_dirs` handling (`scripts/lib/
+appimage_pack.sh`) now scans every extra dir it copies in for actual
+shared-library files (`*.so`, `*.so.N`) via `find` and runs
+`bundle_library_dependencies()` against each one it finds, exactly like it
+already does for the main binary. A no-op for Cemu's `resources/
+gameProfiles` extra dir (plain data, no `.so` files in there at all) --
+load-bearing for melonDS/Azahar's bundled `platforms/` plugin directory,
+where every `.so` file is itself a real, dependency-laden shared object.
+
+**Verified:** rebuilt the same real, minimal Qt6 GUI app used in the
+previous entry, packaged it through the now-fixed `pack_appimage()`
+pipeline with the same bundled `platforms/` directory, and confirmed
+`libQt6XcbQpa.so.6` plus the full xcb/xkbcommon/fontconfig chain now
+appear in the AppImage's bundled `usr/lib` (112 libraries total, versus
+far fewer before this fix). Ran the resulting AppImage under a fresh Xvfb
+display with `QT_PLUGIN_PATH`/`QT_QPA_PLATFORM_PLUGIN_PATH` explicitly
+unset in the *outer* environment (so nothing outside the AppImage's own
+AppRun could be silently supplying a working plugin path) -- initialized
+cleanly (`QT_INIT_OK`, exit 0), no platform-plugin error.
+
+**Not yet verified:** against the real hardware that reported this bug --
+needs an actual re-test of both melonDS and Azahar once this ships.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
