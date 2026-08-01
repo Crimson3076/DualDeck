@@ -6579,6 +6579,88 @@ confirmation runs, and Cemu's installed AppImage still needs an actual
 in-game launch to confirm the remote server itself works, not just that
 installation succeeded.
 
+## 2026-08-01: Cemu never launched at all after replace-in-place -- resources/gameProfiles were silently dropped from every packaged copy
+
+Direct follow-up to the entry immediately above (the prebuilt-AppImage
+rearchitecture) and its own real-hardware confirmation entry: the user
+installed the new `v0.1.92` Cemu AppImage successfully (that part worked,
+per the confirmation above), then reported Cemu "now does not launch in
+any capacity, not via steam or any other shortcut."
+
+**Root cause, found by downloading the actual published AppImage and
+testing it directly** (extracted it, ran `usr/bin/cemu` by hand under
+Xvfb since this sandbox has no real display/GPU): the process started,
+stayed alive, opened a socket, sat in a normal event-loop poll -- but
+never produced a window or any output at all, indefinitely. Checked
+Cemu's own upstream `src/CMakeLists.txt` directly (`cemu-project/Cemu`
+tag `v2.6`) rather than guessing: it ships static `resources/` and
+`gameProfiles/` directories committed in the source tree under `bin/`,
+alongside where `Cemu_release` itself gets built. The macOS build step
+explicitly copies both (`file(COPY ...)`/`add_custom_command` from
+`${CMAKE_SOURCE_DIR}/bin/{gameProfiles,resources}`) into the `.app`
+bundle's `SharedSupport/` -- *because* macOS relocates the binary away
+from that directory. Linux never needed an equivalent copy step, for the
+opposite reason: `Cemu_release` already lands directly inside that same
+`bin/` directory, so `resources/`/`gameProfiles/` are already sitting
+right next to it with zero extra work, as long as nobody moves the
+binary somewhere else afterward.
+
+Every place this project ever packaged Cemu for distribution did exactly
+that -- moved the binary somewhere else afterward, without its two
+sibling directories: `pack_appimage()` (`scripts/lib/appimage_pack.sh`)
+copied only the raw binary plus its `ldd`-resolved shared library
+dependencies into `AppDir/usr/bin/`; `build-release.sh`'s plain
+`host/cemu` copy (used by `host/internal/run-host-cemu.sh`, the non-
+EmuDeck DualDeck-managed launch path) did the same. Cemu can't finish
+initializing its GUI without `resources/` (translations, icons/theming
+assets for its GTK-backed UI) -- it doesn't crash or print an error, it
+just never gets far enough to show a window, which is consistent with
+both the sandbox repro above and the user's "does not launch in any
+capacity, no error" report. This bug predates this session's prebuilt-
+AppImage change -- it existed in the exact same `pack_appimage()` the
+old locally-compiled `emudeck-replace-in-place.sh` already used -- but
+was never actually caught before because nobody had launched a packaged
+copy of Cemu end to end until this real-hardware test; every earlier
+"Cemu builds and runs" verification (2026-07-22 entries) ran the freshly
+built `${cemu_src}/bin/Cemu_release` in place, where its sibling
+directories were still naturally present.
+
+**Fix:**
+
+- `pack_appimage()` gained a new optional `extra_dirs` parameter
+  (colon-separated directory paths, each copied into `AppDir/usr/bin/`
+  under its own basename -- the same directory the main binary and
+  `extra_binaries` already land in, matching where Cemu expects to find
+  them relative to its own executable).
+- `build-release.sh`'s Cemu AppImage packaging call now passes
+  `${cemu_bin_dir}/resources:${cemu_bin_dir}/gameProfiles` (derived from
+  `dirname("${cemu_bin}")`, i.e. `${cemu_src}/bin` -- no changes needed
+  to `build_emulator.sh` itself, since that directory already has both
+  as build-time siblings).
+- The plain `host/cemu` copy (the non-AppImage, DualDeck-managed launch
+  path `run-host-cemu.sh` uses) got the identical fix: both directories
+  are now also copied to `host/resources`/`host/gameProfiles`, siblings
+  of `host/cemu`, from the same source. melonDS and Azahar need no
+  equivalent directories -- their own upstream builds don't ship any.
+
+**Verified:** `pack_appimage()`'s new `extra_dirs` bundling tested
+end-to-end with a fake binary (real ELF linked against `libz`, matching
+this project's existing fake-binary AppImage test convention) plus fake
+`resources/foo/bar.txt` and `gameProfiles/profile.ini` fixtures -- the
+built AppImage's `AppRun` confirmed both landed at
+`usr/bin/resources/foo/bar.txt` and `usr/bin/gameProfiles/profile.ini`
+exactly as expected, then successfully exec'd the fake binary.
+
+**Not yet verified:** against real Cemu itself on real hardware -- this
+fix hasn't shipped in a release yet, and the actual GUI-initialization
+failure mode (missing resources causing no window, no error) was
+diagnosed by reading Cemu's own CMakeLists.txt and reasoning from a
+partial sandbox repro (no real GPU/desktop available here), not by
+confirming a real Cemu instance actually shows its main window once
+`resources/`/`gameProfiles/` are present. The next real-hardware
+replace-in-place run against the release this fix ships in is the actual
+confirmation still needed.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

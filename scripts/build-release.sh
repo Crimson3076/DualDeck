@@ -203,6 +203,23 @@ chmod +x "${pkg_dir}/host/cemu"
 ldd "${cemu_bin}" | awk '{print $1}' | sort -u \
     > "${pkg_dir}/host/internal/cemu-shared-library-dependencies.txt"
 
+# Cemu's build places static `resources/`/`gameProfiles/` directories
+# directly alongside Cemu_release in its own bin/ (confirmed by its
+# CMakeLists.txt's macOS packaging step, which explicitly copies
+# `${CMAKE_SOURCE_DIR}/bin/{gameProfiles,resources}` into the .app bundle
+# for exactly this reason -- Linux never needed an equivalent copy step
+# because the binary already lands in that directory) -- Cemu expects
+# both to sit next to its own executable at runtime and can't fully
+# initialize its GUI without them. cemu_bin's own directory
+# (`${cemu_src}/bin`, from build_cemu()) still has both as siblings at
+# this point, so they're copied from there, not re-derived. See
+# pack_appimage()'s matching fix (extra_dirs) for the AppImage path
+# below, and docs/known-limitations.md for the real-hardware repro that
+# caught this being silently dropped everywhere Cemu was packaged.
+cemu_bin_dir="$(dirname "${cemu_bin}")"
+cp -a "${cemu_bin_dir}/resources" "${pkg_dir}/host/resources"
+cp -a "${cemu_bin_dir}/gameProfiles" "${pkg_dir}/host/gameProfiles"
+
 # The standalone Host Service binary (GitHub issue #4): not used by the
 # default launch path (melonDS still runs its own in-process server, see
 # EmuInstance::startRemoteServer()), but required for run-host.sh's
@@ -255,8 +272,12 @@ generate_apprun_out_of_process CEMU cemu cemu-apprun-adapter.sock "${cemu_apprun
 cemu_staged="${work_dir}/staged-cemu/cemu"
 mkdir -p "$(dirname "${cemu_staged}")"
 cp "${cemu_bin}" "${cemu_staged}"
+# resources/gameProfiles (extra_dirs) land in AppDir/usr/bin/, alongside
+# usr/bin/cemu -- see the "resources/gameProfiles" comment on the
+# `host/cemu` copy above for why Cemu needs both there at runtime.
 pack_appimage "${cemu_staged}" "${out_dir}/dualdeck-cemu-patched-linux-x86_64.AppImage" \
-    cemu "${cemu_apprun}" "${repo_build}/host/remote-server/dualdeck-host-service"
+    cemu "${cemu_apprun}" "${repo_build}/host/remote-server/dualdeck-host-service" \
+    "${cemu_bin_dir}/resources:${cemu_bin_dir}/gameProfiles"
 
 cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/host/internal/ensure-packages.sh"
 cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/host/internal/steam_shortcut.py"

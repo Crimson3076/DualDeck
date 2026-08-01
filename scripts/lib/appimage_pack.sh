@@ -101,7 +101,7 @@ bundle_library_dependencies() {
     done < <(ldd "${binary_path}" 2>/dev/null || true)
 }
 
-# pack_appimage <binary_path> <output_appimage_path> <app_name> <apprun_script_path>
+# pack_appimage <binary_path> <output_appimage_path> <app_name> <apprun_script_path> [extra_binaries] [extra_dirs]
 #
 # <apprun_script_path> must already be a complete, executable AppRun
 # script (its content becomes AppDir/AppRun verbatim) -- see the callers
@@ -117,6 +117,23 @@ bundle_library_dependencies() {
 # scripts/emudeck-replace-in-place.sh), melonDS's doesn't need it at all,
 # and a future adapter might need more than one extra binary.
 #
+# <extra_dirs> is an optional colon-separated list of directory paths to
+# copy into AppDir/usr/bin/ (each under its own basename), needed because
+# not every emulator is fully self-contained in its binary alone -- real
+# bug, caught by an actual real-hardware Cemu launch attempt after this
+# tool switched to prebuilt AppImages: Cemu's own CMakeLists.txt ships a
+# `resources/` and `gameProfiles/` directory as static content sitting
+# directly next to `Cemu_release` in its build output (confirmed by its
+# macOS packaging step, which explicitly copies
+# `${CMAKE_SOURCE_DIR}/bin/{gameProfiles,resources}` into the .app
+# bundle for exactly this reason -- Linux builds never needed an
+# equivalent copy step because the binary already lands in that same
+# directory). `pack_appimage()` previously copied only the raw binary,
+# silently dropping both directories -- Cemu can't fully initialize its
+# GUI without them (no window ever appears, no error printed; see
+# docs/known-limitations.md's entry on this for the real-hardware
+# repro). melonDS/Azahar need no extra directories.
+#
 # Uses a placeholder 1x1 PNG icon (appimagetool requires SOME icon file to
 # exist and be referenced by the .desktop file, and this project has no
 # real icon asset yet -- cosmetic only, doesn't affect functionality, but
@@ -124,6 +141,7 @@ bundle_library_dependencies() {
 pack_appimage() {
     local binary_path="$1" output_path="$2" app_name="$3" apprun_script_path="$4"
     local extra_binaries="${5:-}"
+    local extra_dirs="${6:-}"
 
     [[ -f "${binary_path}" ]] || { echo "pack_appimage: no such binary: ${binary_path}" >&2; return 1; }
     [[ -f "${apprun_script_path}" ]] || { echo "pack_appimage: no such AppRun script: ${apprun_script_path}" >&2; return 1; }
@@ -157,6 +175,15 @@ pack_appimage() {
             cp "${extra}" "${appdir}/usr/bin/$(basename "${extra}")"
             chmod +x "${appdir}/usr/bin/$(basename "${extra}")"
             bundle_library_dependencies "${extra}" "${appdir}/usr/lib"
+        done
+    fi
+
+    if [[ -n "${extra_dirs}" ]]; then
+        local IFS=":"
+        local dir
+        for dir in ${extra_dirs}; do
+            [[ -d "${dir}" ]] || { echo "pack_appimage: no such extra directory: ${dir}" >&2; return 1; }
+            cp -a "${dir}" "${appdir}/usr/bin/$(basename "${dir}")"
         done
     fi
 
