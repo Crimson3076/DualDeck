@@ -29,6 +29,33 @@
 # touching something the user didn't directly point at" posture.
 set -euo pipefail
 
+# Real user report, two different symptoms on two different machines,
+# same actual cause: this tool is normally launched from a Steam
+# shortcut, so Steam's own LD_PRELOAD (32-bit overlay-injection libs,
+# e.g. gameoverlayrenderer.so) and LD_LIBRARY_PATH are present in this
+# whole process's environment from the start -- inherited by, and
+# printing their own "wrong ELF class"/ld.so warnings from, every
+# single child process this script spawns for its entire run, not just
+# the one `distrobox enter` call this was first noticed against (see
+# run_in_distrobox_build_container's own comment below, and
+# docs/known-limitations.md's 2026-08-01 entries for that first
+# instance). Second instance, on a genuinely different (non-immutable,
+# so never touching Distrobox at all) machine: Cemu's vcpkg dependency
+# install runs `git show <rev>:baseline.json` as a child process to
+# read a version-pinning file, and that ld.so warning text -- printed
+# by git's own dynamic loader picking up the same inherited LD_PRELOAD
+# -- ended up prepended to vcpkg's captured output, corrupting what was
+# supposed to be pure JSON ("baseline.json:1:1: error: Unexpected
+# character; expected value") and failing the whole build over
+# something that has nothing to do with Cemu, vcpkg, or anything this
+# script does on purpose. Unset once, unconditionally, as the very
+# first thing this script does -- before the arg-parsing loop, before
+# is_immutable_system() is ever checked, before any child process
+# (native build tools or a re-exec into Distrobox) can inherit either
+# variable -- rather than only right before the one call site that
+# first surfaced this.
+unset LD_PRELOAD LD_LIBRARY_PATH
+
 # Saved before anything (the arg-parsing loop below) consumes "$@" --
 # needed verbatim if this re-execs itself inside a Distrobox build
 # container on an immutable system (see run_in_distrobox_build_container
@@ -123,10 +150,12 @@ emudeck_build_container_name="dualdeck-emudeck-build"
 # until the ensure_packages "build" call further down), so ld.so's
 # preload fails hard. That took down `env` itself, the very first thing
 # exec'd inside the container, before this script's own code ever ran
-# (exit 127, "cannot open shared object file"). LD_LIBRARY_PATH is
-# unset for the same reason -- Steam also points it at its own bundled
-# runtime, which is just as capable of shadowing a library the
-# container's package manager needs.
+# (exit 127, "cannot open shared object file"). Both vars are already
+# unset unconditionally at the very top of this script now (a second,
+# broader real-world case -- see that comment), so there is nothing
+# left to strip here specifically before the exec below; this is the
+# call site that first surfaced the problem, though, so the story stays
+# here rather than only at the top.
 run_in_distrobox_build_container() {
     if ! command -v distrobox >/dev/null 2>&1; then
         echo "error: 'distrobox' not found. Bazzite ships it by default; on other" >&2
@@ -142,7 +171,6 @@ run_in_distrobox_build_container() {
 
     local self_path="${repo_root}/scripts/$(basename "${BASH_SOURCE[0]}")"
     rm -rf "${work_dir}"
-    unset LD_PRELOAD LD_LIBRARY_PATH
     exec distrobox enter "${emudeck_build_container_name}" -- \
         env DUALDECK_INSIDE_EMUDECK_BUILD_CONTAINER=1 \
         "${self_path}" "${original_args[@]}"

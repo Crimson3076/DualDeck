@@ -6401,6 +6401,56 @@ prerequisite for being able to *see* the real error on the next
 attempt, which is what's actually needed to diagnose this properly
 instead of guessing at more package names.
 
+**Sixth issue: the preserved-work-dir fix worked, and the real error
+turned out to be the LD_PRELOAD leak again, in a third place, on a
+third kind of machine.** Real user report, a genuinely different
+machine this time: a native (non-immutable) Fedora 43 install, never
+touching Distrobox at all -- confirmed by the log jumping straight to
+`== Checking build dependencies ==` with no `rpm-ostree`/Distrobox
+messages first. The preserved-work-dir fix worked exactly as intended
+and surfaced the real error: `baseline.json:1:1: error: Unexpected
+character; expected value`, with the "value" in question being
+literally `ERROR: ld.so: object '.../gameoverlayrenderer.so' ...
+ignored.` -- Steam's own LD_PRELOAD warning text, prepended to what
+should have been pure JSON. Cemu's vcpkg dependency install runs `git
+show <rev>:baseline.json` as a child process to read a version-pinning
+file; git's own dynamic loader inherits the same Steam LD_PRELOAD this
+whole script's environment has had all along (since it's normally
+launched from a Steam shortcut), prints its own ld.so warning, and
+vcpkg's captured output ends up with that warning text mixed into what
+it expected to be clean JSON -- failing the whole build over something
+that has nothing to do with Cemu, vcpkg, or anything this script does
+on purpose.
+
+The two earlier LD_PRELOAD fixes (`run_in_distrobox_build_container()`
+here, and `install-host-distrobox.sh` separately) were both scoped to
+one specific `distrobox enter` call site each -- correct for what they
+were fixing at the time, but this third instance proves the actual
+problem is broader: *any* child process anywhere in this script's
+execution, on *any* machine (immutable or not, Distrobox or not), can
+have Steam's LD_PRELOAD leak into it and corrupt its output or crash
+it outright depending on what that specific tool does with a stray
+ld.so warning line. Fixed properly this time: `unset LD_PRELOAD
+LD_LIBRARY_PATH` moved to the very first thing this script does --
+before argument parsing, before `is_immutable_system()` is ever
+checked, before literally any child process (native build tooling, or
+a re-exec into Distrobox) can inherit either variable. The now-
+redundant `unset` inside `run_in_distrobox_build_container()` was
+removed (its own comment updated to point at the top-level one instead
+of repeating it) rather than left as silent, confusing duplication.
+
+Verified for real: ran the script (via `source`, dry-run-style) with a
+fake `LD_PRELOAD` injected, confirmed the only "wrong ELF class"
+warnings that appear are from bash's own process startup itself
+(unavoidable -- the dynamic loader reads `LD_PRELOAD` before even the
+first line of any script can run), and that zero such warnings appear
+from any subprocess the script itself spawns afterward (package-
+manager calls, etc.) -- confirming the leak is genuinely closed for
+every child process this script creates, not just the one call site
+each previous fix addressed. **Not yet verified against a real Cemu
+vcpkg build reaching past this exact point on real hardware** -- next
+attempt is the actual end-to-end confirmation.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
