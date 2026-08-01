@@ -6158,20 +6158,62 @@ Cemu on the Fedora laptop were reported as "working": that was very
 likely a client that hadn't yet auto-updated past v7 itself, not
 genuine version-10 compatibility.
 
-**Fix in progress for melonDS** (the one actively being tested):
-regenerating `host/melonds-patches/0001-remote-server-integration.patch`
-so its embedded `protocol/`/`adapter_sdk/`/`host/remote-server/` copy
-is replaced with the live top-level content verbatim, keeping only the
-melonDS-specific integration files (`EmuInstance.*`, `Window.cpp`,
-`remote_server/MelonDSAdapter.*`, `remote_server/
-MelonDSFrameSource.*`, etc.) as glue, with real compile verification
-(not just a text edit) given the new libjpeg-turbo dependency and
-whatever else changed in the shared interfaces between v7 and v10.
+**How the drift happened**: several earlier entries in this file
+(the AdapterBridge/adapter-sdk IPC work, GitHub issue #28) explicitly
+confirmed via `git diff --stat` that `host/melonds-patches/` was left
+untouched as evidence of clean scoping -- true and correct at the
+time (`kProtocolVersion` was `6` then), but nobody ever went back to
+resync the patch as the live shared library kept moving (6 -> 7 -> 8
+-> 9 -> 10) in later, unrelated changes. "The patch is untouched" was
+being read as a good sign in each individual change without anyone
+tracking that it was simultaneously falling further behind with every
+one of those live-library changes elsewhere.
+
+**Fixed for melonDS**: regenerated
+`host/melonds-patches/0001-remote-server-integration.patch` by cloning
+melonDS at its pinned commit, applying the old patch as a starting
+point, replacing the vendored `protocol/`/`adapter_sdk/`/
+`host/{net_server,device_approval_manager,adapter_bridge}.*`/
+`host/{emulator_input_sink,frame_source,mic_audio_sink}.h` files with
+the live top-level content verbatim (byte-for-byte copies, same
+relative paths), and adding the `CMakeLists.txt` hunk needed for
+libjpeg-turbo (`find_path`/`find_library`/`TurboJPEG::TurboJPEG`
+imported target, mirroring the top-level `CMakeLists.txt`'s own
+discovery) since v8's JPEG compression was a dependency the frozen v7
+copy never needed. One real interface break surfaced by an actual
+compile (not caught by inspection alone): `IFrameSource::
+getLatestFrame()` gained `outWidth`/`outHeight` params (a real bugfix
+that shipped between v7 and v10, for `AzaharAdapter`'s non-DS-sized
+frames) that melonDS's `MelonDSFrameSource`/`MelonDSAdapter` glue
+still called/implemented with the old 2-arg signature -- fixed by
+having `MelonDSFrameSource::getLatestFrame()` echo `kFrameWidth`/
+`kFrameHeight` (DS's frame size is fixed, matching how
+`SyntheticFrameSource` already handles this per `frame_source.h`'s own
+comment) and updating `MelonDSAdapter::latestFrame()`'s call site.
+
+Verified for real, not just "it compiled": a completely clean
+from-scratch build (fresh `git clone` of melonDS at the pinned commit,
+`git apply` of the regenerated patch, `cmake -S -B` configure,
+`cmake --build`) succeeded end to end via `scripts/lib/
+build_emulator.sh`'s actual `build_melonds()` function (the same code
+path `build-release.sh` and `emudeck-replace-in-place.sh` both use),
+and the resulting binary's embedded `protocol.h` copy confirmed at
+`kProtocolVersion = 10`, matching the live header, via both a direct
+grep of the applied patch and `strings` on the compiled binary showing
+the v10-era `net_server.cpp` log lines. **Not yet verified against a
+real client on real hardware** -- this was built and compile-verified
+in a sandboxed CI-like environment (no real melonDS GUI/GPU available
+there), not yet re-tested end-to-end against an actual Steam Deck
+client by the user.
+
 **Azahar and Cemu have the identical bug** (confirmed via the same
 `kProtocolVersion = 7` grep against their patch files) and need the
 same regeneration treatment -- not done yet as of this entry, tracked
-as a fast-follow once melonDS's fix is verified working end-to-end on
-real hardware.
+as a fast-follow once melonDS's fix is confirmed working end-to-end on
+real hardware. Given how this drift happened, a real fix should also
+add *some* mechanism (a CI check comparing each patch's embedded
+`kProtocolVersion` against the live header, at minimum) so this can't
+silently recur a second time.
 
 ## Things intentionally out of scope for v0.1
 

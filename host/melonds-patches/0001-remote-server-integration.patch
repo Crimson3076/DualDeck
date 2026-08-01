@@ -1,5 +1,5 @@
 diff --git a/src/frontend/qt_sdl/CMakeLists.txt b/src/frontend/qt_sdl/CMakeLists.txt
-index 31207f86..c56d44cb 100644
+index 31207f86..41a6a1d3 100644
 --- a/src/frontend/qt_sdl/CMakeLists.txt
 +++ b/src/frontend/qt_sdl/CMakeLists.txt
 @@ -60,6 +60,25 @@ set(SOURCES_QT_SDL
@@ -28,7 +28,7 @@ index 31207f86..c56d44cb 100644
  )
  
  option(USE_QT6 "Use Qt 6 instead of Qt 5" ON)
-@@ -185,6 +204,18 @@ target_include_directories(melonDS PUBLIC
+@@ -185,6 +204,33 @@ target_include_directories(melonDS PUBLIC
      "${CMAKE_CURRENT_SOURCE_DIR}"
      "${CMAKE_CURRENT_SOURCE_DIR}/..")
  
@@ -43,6 +43,21 @@ index 31207f86..c56d44cb 100644
 +    "${CMAKE_CURRENT_SOURCE_DIR}/remote_server")
 +find_package(Threads REQUIRED)
 +target_link_libraries(melonDS PRIVATE Threads::Threads)
++
++# JPEG-compresses video frames before they go out over the wire (protocol
++# v8) -- see remote_server/host/net_server.cpp's videoLoop(). Same
++# discovery pattern as the standalone melonds-remote repo's top-level
++# CMakeLists.txt.
++find_path(TURBOJPEG_INCLUDE_DIR NAMES turbojpeg.h)
++find_library(TURBOJPEG_LIBRARY NAMES turbojpeg)
++if(NOT TURBOJPEG_INCLUDE_DIR OR NOT TURBOJPEG_LIBRARY)
++    message(FATAL_ERROR "turbojpeg.h/libturbojpeg not found -- video streaming needs libjpeg-turbo's turbojpeg API. Install libturbojpeg0-dev (Debian/Ubuntu), turbojpeg-devel (Fedora), or libjpeg-turbo (Arch).")
++endif()
++add_library(TurboJPEG::TurboJPEG UNKNOWN IMPORTED)
++set_target_properties(TurboJPEG::TurboJPEG PROPERTIES
++    IMPORTED_LOCATION "${TURBOJPEG_LIBRARY}"
++    INTERFACE_INCLUDE_DIRECTORIES "${TURBOJPEG_INCLUDE_DIR}")
++target_link_libraries(melonDS PRIVATE TurboJPEG::TurboJPEG)
 +
  if (USE_QT6)
      target_include_directories(melonDS PUBLIC ${Qt6Gui_PRIVATE_INCLUDE_DIRS})
@@ -1419,10 +1434,10 @@ index 00000000..2aece359
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSAdapter.cpp b/src/frontend/qt_sdl/remote_server/MelonDSAdapter.cpp
 new file mode 100644
-index 00000000..922e011b
+index 00000000..2fee09ed
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/MelonDSAdapter.cpp
-@@ -0,0 +1,133 @@
+@@ -0,0 +1,134 @@
 +#include "MelonDSAdapter.h"
 +
 +// For MELONDS_VERSION, reported as this adapter's own version -- see
@@ -1534,7 +1549,8 @@ index 00000000..922e011b
 +    if (surfaceId != kBottomSurfaceId) return false;
 +    std::vector<uint8_t> frame;
 +    uint64_t frameIndex = 0;
-+    if (!frameSource_.getLatestFrame(frame, frameIndex)) return false;
++    uint16_t frameWidth = 0, frameHeight = 0;
++    if (!frameSource_.getLatestFrame(frame, frameIndex, frameWidth, frameHeight)) return false;
 +    outFrame.surfaceId = kBottomSurfaceId;
 +    outFrame.frameIndex = frameIndex;
 +    // Contract v2: DS has one genuinely fixed native resolution, matching
@@ -1611,10 +1627,10 @@ index 00000000..184a2ee9
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.cpp b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.cpp
 new file mode 100644
-index 00000000..6ad11d13
+index 00000000..01c2fc06
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.cpp
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,32 @@
 +#include "MelonDSFrameSource.h"
 +
 +#include <cstring>
@@ -1633,23 +1649,26 @@ index 00000000..6ad11d13
 +    hasFrame_ = true;
 +}
 +
-+bool MelonDSFrameSource::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) {
++bool MelonDSFrameSource::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
++                                         uint16_t& outWidth, uint16_t& outHeight) {
 +    std::lock_guard<std::mutex> lock(mutex_);
 +    if (!hasFrame_) {
 +        return false;
 +    }
 +    outFrame = latestFrame_;
 +    outFrameIndex = frameIndex_;
++    outWidth = static_cast<uint16_t>(melonds_remote::host::kFrameWidth);
++    outHeight = static_cast<uint16_t>(melonds_remote::host::kFrameHeight);
 +    return true;
 +}
 +
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.h b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.h
 new file mode 100644
-index 00000000..ab423560
+index 00000000..3b30cbb2
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.h
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,37 @@
 +#pragma once
 +
 +// Push-driven IFrameSource: EmuThread calls pushFrame() once per emulated
@@ -1676,7 +1695,8 @@ index 00000000..ab423560
 +    // melonds_remote::host::kFrameSizeBytes.
 +    void pushFrame(const void* bgraData, size_t sizeBytes);
 +
-+    bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) override;
++    bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
++                         uint16_t& outWidth, uint16_t& outHeight) override;
 +
 +private:
 +    std::mutex mutex_;
@@ -2186,10 +2206,10 @@ index 00000000..c89c42a8
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/adapter_contract.h b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/adapter_contract.h
 new file mode 100644
-index 00000000..1346dab6
+index 00000000..73a9402a
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/adapter_contract.h
-@@ -0,0 +1,129 @@
+@@ -0,0 +1,138 @@
 +#pragma once
 +
 +// The versioned Emulator Adapter Contract (GitHub issue #28). Part of
@@ -2259,12 +2279,21 @@ index 00000000..1346dab6
 +//
 +// width/height (contract v2) are THIS frame's actual pixel dimensions,
 +// not necessarily the same as whatever the surface's VideoSurfaceDescriptor
-+// declared in AdapterCapabilities -- see the Host Service's own
-+// adapter_contract.h (adapter-sdk/include/melonds_remote/adapter/) for
-+// the full real-usage-bug rationale (capabilities() is negotiated once
-+// per connection, essentially always before a title has rendered even
-+// one real frame, so it can never reliably reflect the truth for the
-+// rest of that connection's lifetime).
++// declared in AdapterCapabilities. Real-usage bug this fixes: capabilities()
++// is negotiated once per connection (see AdapterBridge::frameDimensions()),
++// and CemuAdapter's actual captured GamePad resolution depends on the
++// specific title running, not a fixed value -- capabilities() is queried
++// (via the Hello handshake) essentially the instant a title starts
++// booting, almost always before that title has rendered even one real
++// frame, so there was no reliable way for the declared surface size to
++// ever reflect the truth for the rest of that connection's lifetime
++// (the connection is rebuilt per title-launch, not once per adapter
++// process lifetime -- see CafeSystem.cpp's LaunchForegroundTitle()/
++// ShutdownTitle() hooks). The consumer (NetServer's videoLoop(), see
++// net_server.cpp) now reads width/height fresh off each SurfaceFrame
++// instead of trusting a value sampled once at connection start, so a
++// mismatch here can no longer desync the video encoder's JPEG width/
++// pitch from the actual pixel buffer's real layout.
 +struct SurfaceFrame {
 +    std::string surfaceId;
 +    uint64_t frameIndex = 0; // monotonically increasing per surface, starts at 0
@@ -2432,10 +2461,10 @@ index 00000000..1945b0b5
 +} // namespace melonds_remote::adapter
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/adapter_ipc_client.h b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/adapter_ipc_client.h
 new file mode 100644
-index 00000000..692bf692
+index 00000000..5afcaceb
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/adapter_ipc_client.h
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,77 @@
 +#pragma once
 +
 +// The adapter-process side of the local adapter IPC channel (GitHub
@@ -2454,6 +2483,7 @@ index 00000000..692bf692
 +
 +#include <atomic>
 +#include <cstdint>
++#include <functional>
 +#include <string>
 +#include <thread>
 +#include <unordered_map>
@@ -2483,8 +2513,15 @@ index 00000000..692bf692
 +    void disconnect();
 +    bool isConnected() const { return connected_.load(); }
 +
++    // Optional -- if set, invoked from readLoop()'s own thread (never
++    // the caller's) whenever a ClientConnectionChanged message arrives.
++    // Set this before connect() so an early message right after the
++    // handshake isn't missed. No-op (message is just dropped) if unset,
++    // same as any other message type this adapter doesn't care about.
++    void setConnectionStateCallback(std::function<void(bool)> callback);
++
 +private:
-+    void readLoop();  // blocking recv: InputState/ReleaseInputs/Heartbeat/Disconnect -> localAdapter
++    void readLoop();  // blocking recv: InputState/ReleaseInputs/ClientConnectionChanged/Heartbeat/Disconnect -> localAdapter
 +    void writeLoop(); // periodic: localAdapter's frames/state -> Frame/StateChanged/Heartbeat messages
 +
 +    IEmulatorAdapter& localAdapter_;
@@ -2500,15 +2537,17 @@ index 00000000..692bf692
 +    // one -- avoids re-sending an unchanged frame every poll tick.
 +    std::unordered_map<std::string, uint64_t> lastSentFrameIndex_;
 +    SessionState lastSentState_ = SessionState::Available;
++
++    std::function<void(bool)> connectionStateCallback_;
 +};
 +
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/ipc_protocol.h b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/ipc_protocol.h
 new file mode 100644
-index 00000000..67e8489a
+index 00000000..095af9c7
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/ipc_protocol.h
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,159 @@
 +#pragma once
 +
 +// Wire format for the Host-Service<->adapter local IPC channel (GitHub
@@ -2561,6 +2600,14 @@ index 00000000..67e8489a
 +    StateChanged  = 6, // adapter -> service: SessionState
 +    Heartbeat     = 7, // either direction: no payload
 +    Disconnect    = 8, // either direction: no payload, graceful teardown
++    // service -> adapter: 1 byte, 1 = a remote client is now connected
++    // and streaming, 0 = disconnected. Lets an out-of-process adapter's
++    // own frontend (e.g. Azahar's Qt window) mirror melonDS's in-process
++    // "show only the top screen locally while a client is streaming"
++    // behavior, even though the adapter's own process has no other way
++    // to know a client is connected -- that state lives entirely in the
++    // separate Host Service process (NetServer), not here.
++    ClientConnectionChanged = 9,
 +};
 +
 +struct IpcHeader {
@@ -2579,13 +2626,46 @@ index 00000000..67e8489a
 +// for payload-less types (Heartbeat, Disconnect, ReleaseInputs).
 +melonds_remote::ByteBuffer buildIpcMessage(IpcMessageType type, const melonds_remote::ByteBuffer& payload);
 +
-+// Upper bound on a single Frame message's pixel payload (16 MiB) --
-+// comfortably above any surface this project defines today (the
-+// largest fixture, Wii U's 1920x1080 BGRA8888 TV surface, is 1920 * 1080
-+// * 4 = 8,294,400 bytes) while still bounding it before ever allocating,
-+// per the same "validate every declared size before trusting it"
-+// discipline protocol.h already documents.
-+inline constexpr uint32_t kMaxIpcFramePixelBytes = 16u * 1024u * 1024u;
++// Upper bound on a single Frame message's pixel payload (128 MiB).
++//
++// Real-usage bug (GitHub-reported): the previous value here (16 MiB,
++// sized off a Wii U TV surface assumed to top out at 1920x1080 ==
++// 8,294,400 bytes) silently broke Cemu on any title whose actual
++// internal render-target size exceeds that -- CemuAdapter captures the
++// TV surface at Cemu's real internal render resolution
++// (LatteTextureVk::GetEffectiveSize()), which is NOT always a fixed
++// 1080p. The most obvious way to hit this is a user-installed 4K/5K/8K
++// resolution-enhancing graphics pack, but it doesn't require one: some
++// Wii U titles render their own internal framebuffer above their
++// display output resolution as part of the *game's own* built-in
++// anti-aliasing/supersampling (confirmed via a user report -- Twilight
++// Princess HD hit this bug with zero graphics packs installed, while
++// Wind Waker HD on the same setup did not, pointing at a per-title
++// native render-resolution difference rather than any pack). Either
++// way, a game whose real internal size is even 1440p
++// (2560x1440x4 = 14,745,600 bytes) already exceeded the old cap.
++// parseSurfaceFrame() rejects an over-cap payload
++// as malformed, which both AdapterIpcClient::readLoop() and
++// AdapterIpcServer's own receive loop treat as "this connection is
++// over" -- so every attempted TV-surface Frame message failed instantly
++// after a fresh handshake succeeded, producing a client that looked
++// like it was rapidly bouncing between Emulation and HostControl mode
++// forever, indistinguishable at a glance from a genuinely flaky
++// connection (see docs/known-limitations.md's matching entry). The same
++// class of bug applies to AzaharAdapter now that its capture scale
++// auto-follows Settings::values.resolution_factor (up to 10x native
++// 400x240 = 4000x2400x4 = 38,400,000 bytes, also over the old cap) --
++// see the 2026-07-23 "Azahar capture scale now follows resolution_factor
++// automatically" entry in known-limitations.md. 128 MiB comfortably
++// covers even an 8K TV surface (7680x4320x4 = 132,710,400 bytes is the
++// one real case this doesn't cover; 128 MiB was chosen to stay a round
++// number rather than chase that specific figure, and nothing this
++// project defines gets remotely close to it otherwise) -- this is purely
++// local Unix-socket IPC between the emulator process and the Host
++// Service on the same machine, not anything sent over the network, so
++// the memory cost of a generous cap here is a non-issue on any machine
++// capable of rendering at that resolution in the first place.
++inline constexpr uint32_t kMaxIpcFramePixelBytes = 128u * 1024u * 1024u;
 +
 +// Upper bound on how many VideoSurfaceDescriptors one AdapterCapabilities
 +// may declare -- generous for any real system (DS: 1, 3DS/Wii U: 2) while
@@ -2622,6 +2702,9 @@ index 00000000..67e8489a
 +
 +void serializeSessionState(melonds_remote::ByteBuffer& out, SessionState state);
 +std::optional<SessionState> parseSessionState(const uint8_t* data, size_t size);
++
++void serializeClientConnectionChanged(melonds_remote::ByteBuffer& out, bool connected);
++std::optional<bool> parseClientConnectionChanged(const uint8_t* data, size_t size);
 +
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/socket_path.h b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/socket_path.h
@@ -2785,10 +2868,10 @@ index 00000000..a4412965
 +} // namespace melonds_remote::adapter
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/src/adapter_ipc_client.cpp b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/adapter_ipc_client.cpp
 new file mode 100644
-index 00000000..d16d5d08
+index 00000000..2db237ef
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/adapter_ipc_client.cpp
-@@ -0,0 +1,284 @@
+@@ -0,0 +1,301 @@
 +#include "melonds_remote/adapter/ipc/adapter_ipc_client.h"
 +
 +#include <sys/socket.h>
@@ -2876,6 +2959,10 @@ index 00000000..d16d5d08
 +
 +AdapterIpcClient::~AdapterIpcClient() {
 +    disconnect();
++}
++
++void AdapterIpcClient::setConnectionStateCallback(std::function<void(bool)> callback) {
++    connectionStateCallback_ = std::move(callback);
 +}
 +
 +bool AdapterIpcClient::connect() {
@@ -2999,6 +3086,13 @@ index 00000000..d16d5d08
 +            case IpcMessageType::ReleaseInputs:
 +                localAdapter_.releaseAllInputs();
 +                break;
++            case IpcMessageType::ClientConnectionChanged: {
++                auto connected = parseClientConnectionChanged(msg->second.data(), msg->second.size());
++                if (connected && connectionStateCallback_) {
++                    connectionStateCallback_(*connected);
++                }
++                break;
++            }
 +            case IpcMessageType::Heartbeat:
 +                break;
 +            case IpcMessageType::Disconnect:
@@ -3011,12 +3105,18 @@ index 00000000..d16d5d08
 +}
 +
 +void AdapterIpcClient::writeLoop() {
-+    // ~60Hz poll -- not tied to any one declared surface's own
++    // ~250Hz poll -- not tied to any one declared surface's own
 +    // nominalFps/maxFps (an adapter may have surfaces at different
 +    // rates); this just governs how often writeLoop() checks whether
 +    // there's anything new to send, not how often frames actually
-+    // change.
-+    constexpr auto kPollInterval = std::chrono::milliseconds(16);
++    // change. Each iteration that finds nothing new (the per-surface
++    // lastSentFrameIndex_ check below) is just a mutex-guarded
++    // struct/vector copy and comparison -- no message is sent -- so
++    // polling this often costs CPU wakeups, not bandwidth. Kept well
++    // below the video-loop's own tick rate on the host side
++    // (NetServerConfig::videoSendFps) so this stage is never the
++    // bottleneck in the capture -> IPC -> relay -> send latency chain.
++    constexpr auto kPollInterval = std::chrono::milliseconds(4);
 +    constexpr auto kHeartbeatInterval = std::chrono::seconds(1);
 +    auto lastHeartbeat = std::chrono::steady_clock::now();
 +
@@ -3075,10 +3175,10 @@ index 00000000..d16d5d08
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/src/ipc_protocol.cpp b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/ipc_protocol.cpp
 new file mode 100644
-index 00000000..679e6c84
+index 00000000..4cac76e0
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/ipc_protocol.cpp
-@@ -0,0 +1,328 @@
+@@ -0,0 +1,337 @@
 +#include "melonds_remote/adapter/ipc/ipc_protocol.h"
 +
 +using melonds_remote::ByteBuffer;
@@ -3406,6 +3506,15 @@ index 00000000..679e6c84
 +    return static_cast<SessionState>(value);
 +}
 +
++void serializeClientConnectionChanged(ByteBuffer& out, bool connected) {
++    out.push_back(connected ? 1 : 0);
++}
++
++std::optional<bool> parseClientConnectionChanged(const uint8_t* data, size_t size) {
++    if (data == nullptr || size != 1) return std::nullopt;
++    return data[0] != 0;
++}
++
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/src/session_state.cpp b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/session_state.cpp
 new file mode 100644
@@ -3517,10 +3626,10 @@ index 00000000..42214503
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/frontend/qt_sdl/remote_server/host/adapter_bridge.cpp b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.cpp
 new file mode 100644
-index 00000000..2263a15a
+index 00000000..34fd8b11
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.cpp
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,125 @@
 +#include "host/adapter_bridge.h"
 +
 +namespace melonds_remote::host {
@@ -3533,6 +3642,23 @@ index 00000000..2263a15a
 +    }
 +    if (!caps.surfaces.empty()) return caps.surfaces.front().surfaceId;
 +    return {};
++}
++
++// Looks up targetId's own declared width/height among caps.surfaces,
++// falling back to DS's native 256x192 only if it's genuinely not found
++// (e.g. an adapter with zero surfaces) -- never silently assumes DS for
++// an adapter that clearly declared something else.
++void lookupTargetDimensions(const melonds_remote::adapter::AdapterCapabilities& caps,
++                            const std::string& targetId, uint16_t& outWidth, uint16_t& outHeight) {
++    for (const auto& s : caps.surfaces) {
++        if (s.surfaceId == targetId) {
++            outWidth = s.width;
++            outHeight = s.height;
++            return;
++        }
++    }
++    outWidth = 256;
++    outHeight = 192;
 +}
 +
 +// Explicit bit-by-bit table rather than a raw bitmask cast: DSButton's
@@ -3563,8 +3689,8 @@ index 00000000..2263a15a
 +
 +} // namespace
 +
-+AdapterBridge::AdapterBridge(melonds_remote::adapter::IEmulatorAdapter& adapter) : adapter_(adapter) {
-+    targetSurfaceId_ = pickTargetSurface(adapter_.capabilities());
++std::string AdapterBridge::targetSurfaceId() const {
++    return pickTargetSurface(adapter_.capabilities());
 +}
 +
 +void AdapterBridge::applyControllerState(const ControllerState& state) {
@@ -3578,7 +3704,7 @@ index 00000000..2263a15a
 +    generic.rightStickY = state.rightStickY;
 +    if (state.touchActive) {
 +        generic.touches.push_back(
-+            melonds_remote::adapter::TouchContact{targetSurfaceId_, state.touchX, state.touchY});
++            melonds_remote::adapter::TouchContact{targetSurfaceId(), state.touchX, state.touchY});
 +    }
 +    // Bit layout is intentionally identical between EmulatorAction
 +    // (protocol.h) and GenericEmulatorAction (generic_input.h) -- see
@@ -3592,23 +3718,49 @@ index 00000000..2263a15a
 +    adapter_.releaseAllInputs();
 +}
 +
-+bool AdapterBridge::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) {
++bool AdapterBridge::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
++                                   uint16_t& outWidth, uint16_t& outHeight) {
 +    melonds_remote::adapter::SurfaceFrame frame;
-+    if (!adapter_.latestFrame(targetSurfaceId_, frame)) {
++    if (!adapter_.latestFrame(targetSurfaceId(), frame)) {
 +        return false;
 +    }
 +    outFrame = std::move(frame.pixels);
 +    outFrameIndex = frame.frameIndex;
++    // Real, shipped bug this fixes: frameDimensions() below is a coarse
++    // value negotiated once per connection (see its own comment) --
++    // CemuAdapter's actual captured GamePad resolution depends on the
++    // specific title running and isn't known at Hello time (that
++    // connection is rebuilt fresh per title-launch, and the IPC
++    // handshake all but always completes before the title has rendered
++    // even one real frame), so a value sampled once at connection start
++    // could never reliably reflect the truth for the rest of that
++    // session. SurfaceFrame::width/height (adapter contract v2) is this
++    // specific frame's own real size, straight from whatever the adapter
++    // actually captured -- use it if the adapter populated it, falling
++    // back to frameDimensions()'s declared value only for an adapter that
++    // hasn't been updated to set it (it would otherwise be 0x0, which
++    // would corrupt or crash the JPEG encoder in net_server.cpp).
++    if (frame.width != 0 && frame.height != 0) {
++        outWidth = frame.width;
++        outHeight = frame.height;
++    } else {
++        frameDimensions(outWidth, outHeight);
++    }
 +    return true;
++}
++
++void AdapterBridge::frameDimensions(uint16_t& outWidth, uint16_t& outHeight) const {
++    const auto caps = adapter_.capabilities();
++    lookupTargetDimensions(caps, pickTargetSurface(caps), outWidth, outHeight);
 +}
 +
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/adapter_bridge.h b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.h
 new file mode 100644
-index 00000000..b82f3ea2
+index 00000000..44733239
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.h
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,92 @@
 +#pragma once
 +
 +// The "DS compatibility adapter" decided in
@@ -3618,21 +3770,40 @@ index 00000000..b82f3ea2
 +// melonds_remote::adapter::IEmulatorAdapter (in-process, or
 +// out-of-process via adapter-sdk/ipc's AdapterIpcServer -- this class
 +// doesn't know or care which). This is what lets NetServer, and the
-+// live client<->host wire protocol it speaks (kProtocolVersion 6,
-+// unchanged by this class), be driven by any adapter implementing the
++// live client<->host wire protocol it speaks (kProtocolVersion, unchanged
++// by this class), be driven by any adapter implementing the
 +// generic contract instead of only the built-in
 +// LoggingInputSink/SyntheticFrameSource stand-ins -- without the wire
 +// protocol itself needing to become surface/generic-input-aware yet.
 +//
-+// Only valid for a DS-shaped adapter today: exactly one primary video
-+// surface is selected at construction time (the first one flagged
-+// remotelyDisplayed, or the first surface at all if none is) and used
-+// for every subsequent getLatestFrame()/touch call -- there is no
-+// mechanism here for surface selection, multiple simultaneous
-+// surfaces, or non-DS touch-coordinate-range rescaling, since the wire
-+// protocol this feeds is still fixed at the native 256x192 DS
-+// resolution. A true multi-surface Host Service is later work (see the
-+// ADR's "What this ADR does not decide yet").
++// Only one primary video surface at a time: the target surface (the
++// first one flagged remotelyDisplayed, or the first surface at all if
++// none is) is re-resolved from adapter.capabilities() on every call --
++// never cached at construction -- there is no mechanism here for
++// surface selection or multiple simultaneous surfaces. The wire
++// protocol itself is no longer fixed at DS's native 256x192, though:
++// frameDimensions() reports the target surface's own declared
++// width/height (e.g. 320x240 for AzaharAdapter's 3DS bottom screen),
++// which net_server.cpp relays to the client in HelloAck so it can size
++// its receive buffer/texture to match instead of assuming DS. A true
++// multi-surface Host Service is later work (see the ADR's "What this
++// ADR does not decide yet").
++//
++// Re-resolving on every call (rather than caching once) is not an
++// optimization -- it's required for correctness. This class is
++// constructed once at process startup in --adapter-ipc mode (GitHub
++// issue #4), long before any real adapter has connected over the IPC
++// channel: `adapter.capabilities()` at that point has an empty
++// `surfaces` list, so caching the picked surface ID/dimensions in the
++// constructor permanently locks them to "" / DS's 256x192 default --
++// silently breaking getLatestFrame() forever (empty-string surface ID
++// never matches the real one, e.g. "bottom", once the adapter actually
++// connects) while leaving input/touch mostly working, since neither
++// depends on the frame actually arriving. This was a real, shipped bug:
++// confirmed via AzaharAdapter's own capture-loop diagnostics showing
++// 100% successful captures on the Azahar side while NetServer's video
++// stats stayed at zero sent frames the entire session -- see
++// docs/known-limitations.md.
 +//
 +// Microphone audio is deliberately NOT bridged here: the generic
 +// contract's GenericInputState only carries a micActive flag, not raw
@@ -3651,27 +3822,34 @@ index 00000000..b82f3ea2
 +
 +class AdapterBridge : public IEmulatorInputSink, public IFrameSource {
 +public:
-+    // `adapter` must outlive this object and must already have valid
-+    // capabilities() (i.e. be connected, for an AdapterIpcServer-backed
-+    // instance) by the time this constructor runs, since the target
-+    // surface is picked once here, not re-picked per call.
-+    explicit AdapterBridge(melonds_remote::adapter::IEmulatorAdapter& adapter);
++    // `adapter` must outlive this object. Unlike an earlier version of
++    // this class, `adapter` does NOT need to already be connected/have
++    // valid capabilities() by the time this constructor runs -- see the
++    // class comment above for why that used to be a real, silently
++    // broken precondition.
++    explicit AdapterBridge(melonds_remote::adapter::IEmulatorAdapter& adapter) : adapter_(adapter) {}
 +
 +    // IEmulatorInputSink
 +    void applyControllerState(const ControllerState& state) override;
 +    void releaseAll() override;
 +
 +    // IFrameSource
-+    bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) override;
++    bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
++                        uint16_t& outWidth, uint16_t& outHeight) override;
++    // Overrides IFrameSource's DS-sized default with the target surface's
++    // actual declared width/height (from the adapter's own capabilities()
++    // -- e.g. AzaharAdapter reports 320x240, not DS's 256x192).
++    void frameDimensions(uint16_t& outWidth, uint16_t& outHeight) const override;
 +
-+    // The surface ID this bridge reads frames from / attaches touch
-+    // contacts to -- exposed for logging/diagnostics, not required for
-+    // normal use.
-+    const std::string& targetSurfaceId() const { return targetSurfaceId_; }
++    // The surface ID this bridge currently reads frames from / attaches
++    // touch contacts to -- re-resolved from adapter_.capabilities() on
++    // every call (see class comment), so this reflects live state, not
++    // a value fixed at construction. Exposed for logging/diagnostics,
++    // not required for normal use.
++    std::string targetSurfaceId() const;
 +
 +private:
 +    melonds_remote::adapter::IEmulatorAdapter& adapter_;
-+    std::string targetSurfaceId_;
 +};
 +
 +} // namespace melonds_remote::host
@@ -4029,10 +4207,10 @@ index 00000000..b6f99b86
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/frame_source.h b/src/frontend/qt_sdl/remote_server/host/frame_source.h
 new file mode 100644
-index 00000000..903d848a
+index 00000000..3c0abbda
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/frame_source.h
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,63 @@
 +#pragma once
 +
 +// Seam between the network layer and wherever the bottom-screen pixels come
@@ -4058,16 +4236,41 @@ index 00000000..903d848a
 +    virtual ~IFrameSource() = default;
 +
 +    // Fills `outFrame` with the most recent available frame (resized to
-+    // kFrameSizeBytes if needed) and `outFrameIndex` with a monotonically
++    // kFrameSizeBytes if needed), `outFrameIndex` with a monotonically
 +    // increasing index identifying it (starting at 0 for the first frame
-+    // ever produced), and returns true; or returns false if no frame is
++    // ever produced), and `outWidth`/`outHeight` with THIS frame's actual
++    // pixel dimensions, and returns true; or returns false if no frame is
 +    // available yet. Never blocks -- this exists so a network thread can
 +    // poll it without stalling on the frame producer, per the
 +    // "latest-frame-wins" / bounded-queue requirement (spec section
 +    // 15/16). The frame index lets a caller that polls slower than frames
 +    // are produced compute how many frames it skipped (spec section 14:
 +    // log dropped frames), without needing the frames themselves.
-+    virtual bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex) = 0;
++    //
++    // outWidth/outHeight (added alongside AdapterBridge's real fix for a
++    // shipped bug -- see SurfaceFrame's comment in adapter_contract.h)
++    // are the authoritative per-frame size a caller must use to interpret
++    // `outFrame`'s bytes (e.g. as the width/pitch passed to a JPEG
++    // encoder) -- NOT necessarily the same value frameDimensions() below
++    // reports, which is only a coarse, once-negotiated estimate. Sources
++    // with a genuinely fixed frame size (this default, SyntheticFrameSource,
++    // HostControlAdapter) just echo frameDimensions() here every call.
++    virtual bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
++                                uint16_t& outWidth, uint16_t& outHeight) = 0;
++
++    // The pixel dimensions of frames this source produces, reported to a
++    // connecting client in HelloAck (see net_server.cpp) so it can size its
++    // receive buffer/texture correctly instead of assuming DS's fixed
++    // 256x192 -- a real gap found when AzaharAdapter (320x240, GitHub
++    // issue #28's 3DS follow-on) was first run on real hardware: every
++    // frame it produced was silently rejected downstream because nothing
++    // ever told the client it wasn't DS-sized. Defaults to
++    // kFrameWidth/kFrameHeight so every pre-existing source (DS-only, and
++    // genuinely fixed at that resolution) keeps working unchanged.
++    virtual void frameDimensions(uint16_t& outWidth, uint16_t& outHeight) const {
++        outWidth = static_cast<uint16_t>(kFrameWidth);
++        outHeight = static_cast<uint16_t>(kFrameHeight);
++    }
 +};
 +
 +} // namespace melonds_remote::host
@@ -4114,10 +4317,10 @@ index 00000000..34cb8a58
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.cpp b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
 new file mode 100644
-index 00000000..5b5e2fae
+index 00000000..41b4be03
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
-@@ -0,0 +1,883 @@
+@@ -0,0 +1,1142 @@
 +#include "host/net_server.h"
 +
 +#include <arpa/inet.h>
@@ -4127,11 +4330,14 @@ index 00000000..5b5e2fae
 +#include <sys/time.h>
 +#include <unistd.h>
 +
++#include <turbojpeg.h>
++
 +#include <algorithm>
 +#include <chrono>
 +#include <cstdio>
 +#include <cstring>
 +#include <optional>
++#include <utility>
 +
 +#include "melonds_remote/protocol.h"
 +
@@ -4234,6 +4440,42 @@ index 00000000..5b5e2fae
 +    return diff == 0;
 +}
 +
++// JPEG-compresses one raw BGRA8888 frame (protocol v8, see protocol.h's
++// kProtocolVersion comment). `compressor` is reused across calls -- see
++// videoLoop()'s comment on why -- so this function is only ever called
++// from that one thread. TJPF_BGRA as both input format and (implicitly,
++// via JCS_EXT_BGRA under the hood) how libjpeg-turbo reads it means no
++// manual channel reordering is needed, matching this project's existing
++// BGRA8888-everywhere convention. Returns false (leaving outJpeg
++// untouched) on a compression failure, which should only happen for a
++// malformed width/height.
++bool compressFrameBgraToJpeg(tjhandle compressor, const uint8_t* bgra, int width, int height,
++                              int quality, ByteBuffer& outJpeg) {
++    // 4:2:0 chroma subsampling (half resolution in both chroma axes) is
++    // invisible at typical photo/game content and quality settings, but
++    // real-world feedback on DS/3DS -- small enough surfaces that
++    // bandwidth was never the constraint compression exists for -- found
++    // it visibly softens sharp pixel-art edges and text even at quality
++    // 100, since subsampling is a structural choice independent of the
++    // quality scalar. At a high requested quality (client is explicitly
++    // asking for close-to-lossless, protocol v9's HelloPayload::
++    // videoQuality), use full-resolution 4:4:4 chroma instead -- still
++    // cheap at these frame sizes -- so "quality" actually reaches
++    // full fidelity rather than being capped by subsampling artifacts.
++    const TJSAMP subsampling = quality >= 90 ? TJSAMP_444 : TJSAMP_420;
++    unsigned char* jpegBuf = nullptr;
++    unsigned long jpegSize = 0;
++    int result = tjCompress2(compressor, bgra, width, /*pitch=*/0, height, TJPF_BGRA,
++                              &jpegBuf, &jpegSize, subsampling, quality, TJFLAG_FASTDCT);
++    if (result != 0) {
++        std::fprintf(stderr, "NetServer: tjCompress2 failed: %s\n", tjGetErrorStr2(compressor));
++        return false;
++    }
++    outJpeg.assign(jpegBuf, jpegBuf + jpegSize);
++    tjFree(jpegBuf);
++    return true;
++}
++
 +bool sendAll(int fd, const uint8_t* data, size_t size) {
 +    size_t sent = 0;
 +    while (sent < size) {
@@ -4248,13 +4490,41 @@ index 00000000..5b5e2fae
 +
 +} // namespace
 +
++// Real, live tuning gap this closes: `NetServerConfig::videoJpegQuality`
++// (default 80) is the *only* value ever actually used for a client that
++// doesn't send its own HelloPayload::videoQuality override -- there is
++// no `--video-quality` CLI flag on this binary at all, so every one of
++// run-host.sh/run-host-azahar.sh/run-host-cemu.sh launches with the
++// exact same compiled-in default regardless of which adapter is
++// actually driving the session. That default was picked (see
++// videoJpegQuality's own comment) for DS/3DS-sized surfaces (49k-77k
++// pixels); applying it unchanged to Cemu's much larger GamePad surface
++// (854x480, ~410k pixels -- ~5-8x more pixels than DS/3DS) produces
++// proportionally larger JPEGs at the same quality, directly adding to
++// per-frame encode time, network transmit time, and how often
++// SO_SNDBUF's backpressure (see videoLoop()'s own comment) has to
++// actually kick in -- a real, concrete contributor to reported
++// "latency is poor" complaints on Wii U sessions specifically. Resolved
++// once per connection, from that connection's own real negotiated
++// frame size (HelloAck's nativeWidth/nativeHeight), not the emulated
++// system's identity -- correct for any future adapter with an
++// unusually large or small surface too, not just today's known ones.
++int defaultVideoQualityForFrameSize(int configuredDefault, uint16_t width, uint16_t height) {
++    constexpr int kLargeSurfacePixelThreshold = 150'000; // comfortably above 3DS's 76,800, below Cemu's 409,920
++    constexpr int kLargeSurfaceQuality = 60; // still legible on Cemu's GamePad UI text at typical viewing distance
++    const int pixels = static_cast<int>(width) * height;
++    return pixels > kLargeSurfacePixelThreshold ? std::min(configuredDefault, kLargeSurfaceQuality)
++                                                 : configuredDefault;
++}
++
 +NetServer::NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFrameSource& frameSource,
 +                     IMicAudioSink& micSink)
 +    : config_(std::move(config)), inputSink_(&inputSink), frameSource_(&frameSource),
 +      currentSystemIdentity_(config_.systemIdentity), currentAdapterIdentity_(config_.adapterIdentity),
 +      micSink_(micSink),
 +      deviceApproval_(config_.approvalStateFilePath, config_.pendingRequestTtl),
-+      rateLimiter_(config_.maxConnectionAttemptsPerWindow, config_.connectionAttemptWindowUs) {
++      rateLimiter_(config_.maxConnectionAttemptsPerWindow, config_.connectionAttemptWindowUs),
++      currentVideoQuality_(config_.videoJpegQuality) {
 +    if (!config_.authToken.empty()) {
 +        std::fprintf(stderr,
 +                      "NetServer: static auth token configured -- device-approval flow is disabled, "
@@ -4506,6 +4776,7 @@ index 00000000..5b5e2fae
 +
 +        bool handshakeOk = false;
 +        HelloRejectReason rejectReason = HelloRejectReason::ProtocolVersionMismatch;
++        bool clientRequestedExplicitVideoQuality = false;
 +
 +        uint8_t headerBuf[kPacketHeaderWireSize];
 +        ssize_t n = ::recv(clientFd, headerBuf, sizeof(headerBuf), MSG_WAITALL);
@@ -4558,6 +4829,19 @@ index 00000000..5b5e2fae
 +                                break;
 +                        }
 +                    }
++
++                    if (handshakeOk) {
++                        // Protocol v9: an in-range client request always
++                        // wins. Otherwise, the actual fallback is resolved
++                        // below (see defaultVideoQualityForFrameSize()),
++                        // once this connection's real frame dimensions are
++                        // known -- deferred rather than just using
++                        // config_.videoJpegQuality unconditionally here.
++                        if (hello->videoQuality >= 1 && hello->videoQuality <= 100) {
++                            currentVideoQuality_ = hello->videoQuality;
++                            clientRequestedExplicitVideoQuality = true;
++                        }
++                    }
 +                } else {
 +                    std::fprintf(stderr, "NetServer: rejecting handshake (short Hello payload)\n");
 +                }
@@ -4584,6 +4868,15 @@ index 00000000..5b5e2fae
 +            ack.system = currentSystemIdentity_;
 +            ack.adapter = currentAdapterIdentity_;
 +            ack.mode = currentMode_;
++            // See IFrameSource::frameDimensions()'s comment -- reports the
++            // connected source's real dimensions (e.g. AzaharAdapter's
++            // 320x240) instead of always claiming DS's 256x192, so the
++            // client can size its receive buffer/texture correctly.
++            frameSource_->frameDimensions(ack.nativeWidth, ack.nativeHeight);
++        }
++        if (handshakeOk && !clientRequestedExplicitVideoQuality) {
++            currentVideoQuality_ =
++                defaultVideoQualityForFrameSize(config_.videoJpegQuality, ack.nativeWidth, ack.nativeHeight);
 +        }
 +        ByteBuffer ackPacket = buildHelloAckPacket(ack);
 +        sendAll(clientFd, ackPacket.data(), ackPacket.size());
@@ -4616,8 +4909,48 @@ index 00000000..5b5e2fae
 +                if (hdr->type == PacketType::Disconnect) {
 +                    break;
 +                }
-+                // Heartbeat or unrecognized-but-valid type: keep the
-+                // connection open.
++
++                // Read off (and act on) this packet's payload before
++                // looping back to read the next header -- ClientLog
++                // (client log-forwarding) is the first packet a client
++                // sends on this post-handshake loop that actually
++                // carries one; skipping it would desync the stream,
++                // since its bytes would otherwise be misread as the
++                // start of the next packet's header. Bounded well below
++                // any sane control-channel payload to reject an
++                // implausible/corrupt declared size before ever
++                // allocating for it (spec section 13).
++                constexpr uint32_t kMaxControlPayloadSize = 4096;
++                if (hdr->payloadSize > kMaxControlPayloadSize) {
++                    std::fprintf(stderr,
++                                  "NetServer: dropping control packet with implausible payload size\n");
++                    break;
++                }
++                ByteBuffer payload(hdr->payloadSize);
++                if (!payload.empty()) {
++                    ssize_t got = ::recv(clientFd, payload.data(), payload.size(), MSG_WAITALL);
++                    if (got != static_cast<ssize_t>(payload.size())) {
++                        break; // peer closed, link error, or heartbeat timeout mid-payload
++                    }
++                }
++
++                if (hdr->type == PacketType::ClientLog) {
++                    auto log = parseClientLogPayload(payload.data(), payload.size());
++                    // No trailing "\n" added here -- every client_log.h
++                    // logLine() call already ends its format string with
++                    // one, so `line` arrives with it intact.
++                    if (log) {
++                        std::fprintf(stderr, "[client %s] %s", ipStr, log->line.c_str());
++                        if (config_.onClientLogLine) {
++                            config_.onClientLogLine(ipStr, log->line);
++                        }
++                    } else {
++                        std::fprintf(stderr, "NetServer: dropping malformed ClientLog packet\n");
++                    }
++                }
++                // Heartbeat or any other recognized-but-payload-free/
++                // unrecognized type: keep the connection open, the
++                // payload (if any) already consumed above.
 +            }
 +        }
 +
@@ -4871,6 +5204,19 @@ index 00000000..5b5e2fae
 +    const auto interval = std::chrono::microseconds(
 +        1'000'000 / (config_.videoSendFps > 0 ? config_.videoSendFps : 60));
 +
++    // One compressor handle for this whole thread's lifetime (protocol v8,
++    // see protocol.h's kProtocolVersion comment and compressFrameBgraToJpeg()
++    // above) -- tjInitCompress()/tjDestroy() do real setup/teardown work,
++    // and this loop already runs at up to videoSendFps, so paying that cost
++    // once here instead of per-frame (or even per-connection) matters.
++    // Safe to reuse across reconnects since this thread never calls it
++    // concurrently with itself.
++    tjhandle jpegCompressor = tjInitCompress();
++    if (!jpegCompressor) {
++        std::fprintf(stderr, "NetServer: tjInitCompress failed, video streaming disabled\n");
++        return;
++    }
++
 +    while (running_.load()) {
 +        sockaddr_in clientAddr{};
 +        socklen_t clientLen = sizeof(clientAddr);
@@ -4909,19 +5255,125 @@ index 00000000..5b5e2fae
 +        sendTimeout.tv_usec = 0;
 +        ::setsockopt(clientFd, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, sizeof(sendTimeout));
 +
++        // Bounds how many whole frames the OS can buffer ahead of what's
++        // actually gone out over the wire. Without this, a link too slow to
++        // keep up with the raw (uncompressed) frame rate doesn't drop
++        // frames -- TCP's in-order guarantee means every frame this loop
++        // successfully hands to send() below still gets delivered
++        // eventually, just increasingly late, since each new frame queues
++        // up behind whatever stale ones are still sitting in the kernel's
++        // send buffer. The loop below already only ever fetches the single
++        // truest-latest frame each tick (see its own comment), so nothing
++        // backs up at the application level -- but a large default
++        // SO_SNDBUF (typically hundreds of KB to a few MB) can still let
++        // several frames' worth of now-outdated bytes sit queued in the
++        // kernel, and growing latency under a bandwidth-constrained link
++        // (e.g. handheld Wi-Fi) is exactly what that produces. Sizing the
++        // buffer to roughly two frames' worth means the kernel can accept
++        // at most one frame ahead of what's in flight; once that fills,
++        // send() blocks (bounded by SO_SNDTIMEO above) until the network
++        // actually drains it, and by the time it does, the next loop
++        // iteration reaches for whatever's truly latest rather than
++        // whatever was queued -- so latency stays bounded to roughly one
++        // frame's transmission time instead of growing without limit.
++        uint16_t frameWidth = 0;
++        uint16_t frameHeight = 0;
++        {
++            std::lock_guard<std::mutex> lock(targetMutex_);
++            frameSource_->frameDimensions(frameWidth, frameHeight);
++        }
++        // 4 bytes/pixel raw (PixelFormat::Bgra8888 is the only pixel format
++        // any adapter in this project uses) -- but what actually goes out
++        // over the wire since protocol v8 is a JPEG-compressed frame (see
++        // compressFrameBgraToJpeg() above), typically well under a quarter
++        // of that raw size at the mid-range qualities a bandwidth-
++        // constrained session (e.g. Cemu) would actually use. Sizing this
++        // buffer off the true raw size would let the exact bufferbloat
++        // this SO_SNDBUF sizing exists to prevent creep back in, just at a
++        // smaller absolute scale -- so this estimates a conservative
++        // fraction of raw size instead, floored so tiny (e.g. test-
++        // fixture) frame sizes still get a workable buffer. Protocol v9's
++        // per-session HelloPayload::videoQuality means that fraction can
++        // no longer assume quality 80's compression ratio -- a
++        // near-lossless request (>=90, see compressFrameBgraToJpeg()'s own
++        // 4:4:4-subsampling threshold) compresses far less aggressively,
++        // so this halves rather than quarters the raw estimate there to
++        // avoid under-sizing the buffer for a case this code didn't need
++        // to account for before per-session quality existed.
++        {
++            const size_t rawFrameBytes = static_cast<size_t>(frameWidth) * frameHeight * 4;
++            const size_t rawFrameDivisor = currentVideoQuality_.load() >= 90 ? 2 : 4;
++            const size_t estimatedCompressedFrameBytes =
++                std::max<size_t>(rawFrameBytes / rawFrameDivisor, 16384);
++            if (rawFrameBytes > 0) {
++                int sndBuf = static_cast<int>(std::min<size_t>(estimatedCompressedFrameBytes * 2, 0x7fffffff));
++                ::setsockopt(clientFd, SOL_SOCKET, SO_SNDBUF, &sndBuf, sizeof(sndBuf));
++            }
++        }
++
 +        std::vector<uint8_t> frame;
++        ByteBuffer jpegFrame;
 +        std::optional<uint64_t> lastSentFrameIndex;
 +        while (running_.load()) {
 +            auto tickStart = std::chrono::steady_clock::now();
 +
 +            uint64_t frameIndex = 0;
++            // Real per-frame width/height, not the once-negotiated
++            // `frameWidth`/`frameHeight` sampled before this loop started --
++            // see AdapterBridge::getLatestFrame()'s comment for why that
++            // once-negotiated value can never be trusted for the rest of a
++            // Cemu session. Defaults to the once-negotiated value so a
++            // source that never updates them (SyntheticFrameSource,
++            // HostControlAdapter's always-false stub) keeps behaving
++            // exactly as before.
++            uint16_t currentFrameWidth = frameWidth;
++            uint16_t currentFrameHeight = frameHeight;
 +            bool gotFrame;
 +            {
 +                std::lock_guard<std::mutex> lock(targetMutex_);
-+                gotFrame = frameSource_->getLatestFrame(frame, frameIndex);
++                gotFrame = frameSource_->getLatestFrame(frame, frameIndex, currentFrameWidth, currentFrameHeight);
++            }
++            // Skip re-sending a frame whose index hasn't changed since the
++            // last tick: getLatestFrame() is "return the most recent one,
++            // whatever it is" (latest-frame-wins), not "return a new one
++            // if there is one" -- when this loop's own tick rate (up to
++            // videoSendFps) outpaces the actual source frame rate (e.g.
++            // AzaharAdapter's own ~30fps capture loop vs. this loop's
++            // default 60Hz), sending unconditionally meant roughly half of
++            // every video packet was a byte-for-byte duplicate of the one
++            // before it -- pure wasted bandwidth, worth nothing to the
++            // client (main.cpp/net_client.cpp just redraw the same texture
++            // either way), and reducing the send budget actually available
++            // for genuinely new frames.
++            if (gotFrame && lastSentFrameIndex && frameIndex == *lastSentFrameIndex) {
++                gotFrame = false;
++            }
++            // Taken right before encoding begins (protocol v10, see
++            // protocol.h's kProtocolVersion comment and
++            // VideoFramePayload) -- wall-clock, not steady_clock, so
++            // it's directly comparable against the client's own
++            // wall-clock receipt time the same way
++            // ControllerState::clientTimestampUs already is for input
++            // latency. Deliberately captured even on a tick that ends up
++            // skipping the send below (dead code in that case) rather
++            // than moved inside the `if (gotFrame)` block, so this stays
++            // a single obvious "when did we start working on this
++            // frame" read with no risk of drifting from what it's
++            // actually meant to measure as the surrounding code changes.
++            uint64_t captureTimestampUs = nowMicrosEpoch();
++            if (gotFrame && !compressFrameBgraToJpeg(jpegCompressor, frame.data(), currentFrameWidth, currentFrameHeight,
++                                                      currentVideoQuality_.load(), jpegFrame)) {
++                // Logged inside compressFrameBgraToJpeg(); skip this tick
++                // rather than tearing down the connection, same treatment
++                // as "nothing new to send" below -- a transient encode
++                // failure shouldn't be fatal.
++                gotFrame = false;
 +            }
 +            if (gotFrame) {
-+                ByteBuffer packet = buildPacket(PacketType::VideoFrame, frame);
++                VideoFramePayload videoPayload;
++                videoPayload.captureTimestampUs = captureTimestampUs;
++                videoPayload.jpeg = std::move(jpegFrame);
++                ByteBuffer packet = buildVideoFramePacket(videoPayload);
 +                if (!sendAll(clientFd, packet.data(), packet.size())) {
 +                    break;
 +                }
@@ -4944,6 +5396,8 @@ index 00000000..5b5e2fae
 +        ::close(clientFd);
 +        videoClientFd_ = -1;
 +    }
++
++    tjDestroy(jpegCompressor);
 +}
 +
 +void NetServer::discoveryLoop() {
@@ -4953,7 +5407,7 @@ index 00000000..5b5e2fae
 +        if (::gethostname(hostnameBuf, sizeof(hostnameBuf) - 1) == 0) {
 +            hostName = hostnameBuf;
 +        } else {
-+            hostName = "melonds-remote-host";
++            hostName = "dualdeck-host";
 +        }
 +    }
 +    if (hostName.size() > kMaxProtocolStringLength) {
@@ -4973,8 +5427,16 @@ index 00000000..5b5e2fae
 +        }
 +
 +        auto header = parseHeader(buf.data(), static_cast<size_t>(n));
-+        if (!header || header->protocolVersion != kProtocolVersion ||
-+            header->type != PacketType::DiscoveryRequest) {
++        // Deliberately NOT checking header->protocolVersion here (real-usage
++        // bug: a client left on an older/newer build than a freshly-updated
++        // host silently saw zero hosts in its discovery scan, with no error
++        // anywhere -- this check made a mismatched-but-otherwise-well-formed
++        // DiscoveryRequest indistinguishable from noise on the wire).
++        // Discovery only needs to answer "is there a host here to try" --
++        // actual version compatibility is already enforced, with a real
++        // AppVersionMismatch error shown to the user, by the Hello/HelloAck
++        // handshake a client performs after picking this host from the list.
++        if (!header || header->type != PacketType::DiscoveryRequest) {
 +            continue; // not a well-formed DiscoveryRequest -- ignore silently
 +        }
 +
@@ -5003,10 +5465,10 @@ index 00000000..5b5e2fae
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.h b/src/frontend/qt_sdl/remote_server/host/net_server.h
 new file mode 100644
-index 00000000..cb8c9d42
+index 00000000..25acd39d
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.h
-@@ -0,0 +1,340 @@
+@@ -0,0 +1,391 @@
 +#pragma once
 +
 +// Minimal standalone host server: one TCP control connection (handshake +
@@ -5062,7 +5524,25 @@ index 00000000..cb8c9d42
 +    uint16_t inputPort = 8761;
 +    uint16_t videoPort = 8762;
 +    uint64_t inputTimeoutUs = 500'000; // 500ms, spec section 6.4 / 7.1
-+    int videoSendFps = 60;
++    // How often videoLoop() checks frameSource_->getLatestFrame() for a
++    // new frame index -- NOT a bandwidth cap. Since net_server.cpp's
++    // dedup guard skips re-sending an unchanged frameIndex, a tick that
++    // finds nothing new costs one mutex-guarded comparison and never
++    // touches the socket. Raising this only shrinks the worst-case delay
++    // between a new frame becoming available and this loop noticing it
++    // (relay latency); it does not raise actual send rate, which is
++    // still bounded by how fast frameSource_ itself produces new frames.
++    int videoSendFps = 240;
++
++    // JPEG quality (1-100, libjpeg-turbo's tjCompress2 scale) videoLoop()
++    // compresses every frame at before sending (protocol v8 -- see
++    // protocol.h's kProtocolVersion comment for why: raw BGRA8888 frames
++    // made streaming unusable once Cemu's much larger GamePad surface was
++    // added). 80 is a middle-of-the-road tradeoff between bandwidth and
++    // visible compression artifacts on typical game content; lower this
++    // further for a slower link, or raise it for a fast wired one where
++    // artifacts matter more than bandwidth.
++    int videoJpegQuality = 80;
 +
 +    // Whether this host accepts MicAudioFrame packets at all (GitHub
 +    // issue #2) -- an explicit host-side on/off switch (like
@@ -5127,6 +5607,18 @@ index 00000000..cb8c9d42
 +    // control-connection thread -- if the callback touches UI state, it
 +    // must marshal to the UI thread itself (e.g. Qt::QueuedConnection).
 +    std::function<void(bool)> onClientConnectionChanged;
++
++    // Optional hook for a received ClientLog packet (client log-
++    // forwarding, for host-side debugging/app development -- see
++    // client/src/client_log.h), fired with the sending client's address
++    // and the already-formatted log line (unmodified, including its own
++    // trailing newline). Always logged to stderr regardless of whether
++    // this is set (see controlLoop()); set this too for a host-side UI
++    // that wants to show it somewhere else, or a test that wants to
++    // assert on it without scraping stderr. Invoked synchronously on
++    // NetServer's control-connection thread -- if the callback touches
++    // UI state, it must marshal to the UI thread itself.
++    std::function<void(const std::string&, const std::string&)> onClientLogLine;
 +
 +    // If a control-channel connection is silent (no heartbeat, no other
 +    // control traffic) for longer than this, it is dropped. Distinct from
@@ -5216,6 +5708,17 @@ index 00000000..cb8c9d42
 +        if (latencyUs > latencyMaxUs) latencyMaxUs = latencyUs;
 +    }
 +};
++
++// Pure decision, no I/O -- unit-tested directly (test_net_server.cpp)
++// without needing a real NetServer/connection at all, same pattern as
++// mode_coordinator.h's computeDesiredMode(). Picks the JPEG quality a
++// connecting client gets when it didn't request its own explicit
++// HelloPayload::videoQuality (protocol v9) -- `configuredDefault` is
++// NetServerConfig::videoJpegQuality, `width`/`height` are that
++// connection's real negotiated frame size (HelloAck's nativeWidth/
++// nativeHeight). See its definition in net_server.cpp for the full
++// "why Cemu specifically needs this" reasoning.
++int defaultVideoQualityForFrameSize(int configuredDefault, uint16_t width, uint16_t height);
 +
 +class NetServer {
 +public:
@@ -5344,6 +5847,16 @@ index 00000000..cb8c9d42
 +    // unauthenticated input).
 +    std::atomic<bool> clientAuthenticated_{false};
 +    std::atomic<uint32_t> authenticatedClientAddr_{0}; // sockaddr_in::sin_addr.s_addr, network byte order
++
++    // The effective JPEG quality for the current/most recent session --
++    // either config_.videoJpegQuality, or the connecting client's own
++    // HelloPayload::videoQuality if it sent a nonzero one (protocol v9).
++    // Set once at handshake time, alongside clientAuthenticated_ above;
++    // videoLoop() reads it when a new video connection arrives. Same
++    // single-active-client assumption as the rest of this class (see
++    // clientAuthenticated_'s comment) -- there is no per-connection state
++    // here, just the most recent handshake's outcome.
++    std::atomic<int> currentVideoQuality_{80};
 +};
 +
 +} // namespace melonds_remote::host
@@ -5419,10 +5932,10 @@ index 00000000..48014b9b
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
 new file mode 100644
-index 00000000..b9ffdc73
+index 00000000..e743ba3c
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
-@@ -0,0 +1,492 @@
+@@ -0,0 +1,719 @@
 +#pragma once
 +
 +// DualDeck wire protocol definitions.
@@ -5446,7 +5959,38 @@ index 00000000..b9ffdc73
 +namespace melonds_remote {
 +
 +// Bumped whenever the wire format changes incompatibly.
-+inline constexpr uint16_t kProtocolVersion = 7;
++//
++// v10: VideoFrame's payload gained an 8-byte host wall-clock capture
++// timestamp prepended before the JPEG bytes (see "video-latency
++// instrumentation" -- docs/known-limitations.md), so the client can
++// measure real glass-to-glass-ish latency (network + encode + queue
++// time) instead of only ever having a number for the input path
++// (ControllerState.clientTimestampUs). A genuine payload-shape change
++// (not a new packet type like ModeChanged/ClientLog, which don't need a
++// bump): an old client reading a new-format frame would misinterpret
++// the leading timestamp bytes as JPEG data, and a new client reading an
++// old-format frame would misinterpret the JPEG's own leading bytes as a
++// timestamp -- either way silent corruption, not a graceful ignore.
++//
++// v9: HelloPayload gained videoQuality, letting the client (not just the
++// host's own --video-quality flag) choose the JPEG quality used for that
++// session -- see its own comment below for why. v8's fixed default (80)
++// turned out too aggressive for DS/3DS, whose small frame sizes have
++// plenty of bandwidth headroom to spare for a much higher-fidelity
++// setting, unlike the large-surface link-constrained case v8 was written
++// for.
++//
++// v8: VideoFrame's payload is now a JPEG-compressed image (libjpeg-turbo,
++// TJPF_BGRA) instead of a raw BGRA8888 buffer -- see net_server.cpp's
++// videoLoop() and net_client.cpp's videoReceiveLoop(). A raw
++// width*height*4 payload made streaming unusable on anything less than a
++// very fast, uncontended link once Cemu's much larger GamePad surface
++// (854x480, ~9x the 3DS bottom screen's pixel count) was added: at 60fps
++// that alone needs ~788 Mbps uncompressed. Bumping the version rather than
++// negotiating an optional codec keeps both sides simple, matching how
++// every other incompatible wire-format change in this project has been
++// handled (see the mic-support v5 bump above).
++inline constexpr uint16_t kProtocolVersion = 10;
 +
 +// Sentinel at the start of every packet so malformed/foreign traffic on the
 +// same port can be rejected cheaply before any further parsing.
@@ -5459,7 +6003,10 @@ index 00000000..b9ffdc73
 +    Heartbeat = 4,     // either direction, control channel, keepalive
 +    Disconnect = 5,    // either direction, control channel, graceful teardown
 +    EmulatorAction = 6, // client -> host, control channel, one-shot emulator command
-+    VideoFrame = 7,    // host -> client, video channel, one bottom-screen frame
++    // host -> client, video channel, one JPEG-compressed frame (protocol
++    // v8) prefixed with an 8-byte host capture timestamp (protocol v10)
++    // -- see VideoFramePayload below and kProtocolVersion's v8/v10 notes.
++    VideoFrame = 7,
 +    DiscoveryRequest = 8,  // client -> host, UDP discovery port, broadcast "who's out there"
 +    DiscoveryResponse = 9, // host -> client, UDP discovery port, unicast reply to the sender
 +    // client -> host, UDP audio port, one chunk of captured microphone PCM
@@ -5483,6 +6030,19 @@ index 00000000..b9ffdc73
 +    // channel post-handshake simply never consumes these bytes; they sit
 +    // harmlessly unread rather than causing any error.
 +    ModeChanged = 11,
++    // client -> host, control channel, one already-formatted log line
++    // forwarded for host-side debugging/app development (see
++    // client/src/client_log.h) -- e.g. "SDL_CreateTexture failed: ...",
++    // "handshake rejected by host: ...". Sent best-effort: the client
++    // silently drops a line locally rather than blocking or growing an
++    // unbounded queue if its outbound queue is already full or it isn't
++    // connected (see NetClient::sendClientLog()) -- losing a diagnostic
++    // message is a vastly smaller problem than losing or delaying a
++    // real control/input packet. Like ModeChanged above, this is a
++    // brand new packet type an older peer simply never sends/reads --
++    // no existing struct's shape changed, so this doesn't need a
++    // kProtocolVersion bump either.
++    ClientLog = 12,
 +};
 +
 +// Which of two states the host is currently in (GitHub issue #4): a live
@@ -5595,6 +6155,107 @@ index 00000000..b9ffdc73
 +    std::string adapterVersion;
 +};
 +
++// ---- Capability negotiation data model ----
++//
++// Not yet wired into Hello/HelloAck -- no serialize()/parse() functions
++// exist for any of these types yet, and neither payload below carries
++// them. Defined now as a stable shape a future negotiation phase can
++// extend Hello/HelloAck into, so that phase is a pure additive field-add
++// (plus one kProtocolVersion bump) rather than also having to invent
++// this data model under time pressure. See docs/known-limitations.md for
++// the full design this is the foundation of.
++//
++// Deliberately self-contained here, not #include-ing adapter-sdk's
++// VideoSurfaceDescriptor/AdapterCapabilities (adapter_contract.h) even
++// though the shapes below intentionally mirror them closely --
++// adapter-sdk already depends on this header for SystemIdentity/
++// AdapterIdentity, so the reverse dependency would be circular. A
++// translation function (host/remote-server/include/host/
++// capability_bridge.h, the one layer that can depend on both) converts
++// between the two shapes.
++
++// Mirrors melonds_remote::adapter::SurfaceRole. Keeps the existing
++// Nintendo-hardware-flavored values (Top/Bottom/Tv/GamePad) rather than
++// renaming them -- renaming would force a matching change in every
++// already-shipped adapter's own capabilities() for no functional gain --
++// while adding a Primary/Secondary/Auxiliary vocabulary alongside them
++// for future non-Nintendo-shaped clients (e.g. a PC-native capture
++// backend) to use instead of stretching the Nintendo-shaped names to fit.
++enum class WireDisplayRole : uint8_t {
++    Top = 0,
++    Bottom = 1,
++    Tv = 2,
++    GamePad = 3,
++    Auxiliary = 4,
++    Primary = 5,
++    Secondary = 6,
++};
++
++// Mirrors adapter::PixelFormat. Only one value exists today; kept as an
++// enum rather than hardcoded so a future pixel format doesn't need this
++// struct's shape to change.
++enum class WirePixelFormat : uint8_t {
++    Bgra8888 = 0,
++};
++
++// Codec bits for WireClientCapabilities::supportedCodecs /
++// WireHostCapabilities::availableCodecs -- a bitmask so "this side
++// supports more than one codec, negotiate the best mutually supported
++// one" is representable without another wire-format change once a second
++// codec actually exists. Only Jpeg is implemented anywhere in this
++// codebase today (protocol v8's existing VideoFrame payload); the rest
++// are reserved names for a future IStreamingBackend
++// (docs/known-limitations.md).
++enum WireCodec : uint32_t {
++    WireCodec_Jpeg = 1u << 0,
++    WireCodec_H264 = 1u << 1,
++    WireCodec_Av1 = 1u << 2,
++};
++
++// One display/surface's negotiable properties -- mirrors
++// adapter::VideoSurfaceDescriptor. scalingStrategy/requestedCodec/
++// requestedBitrateKbps/targetRefreshHz are reserved for the
++// display-pipeline/enhancement work: always "no enhancement, host picks
++// everything" today (every field left at its zero/None default), present
++// now so a later phase implementing real enhancement only has to start
++// honoring these fields instead of adding them to an already-negotiated
++// wire struct.
++struct WireDisplayDescriptor {
++    std::string surfaceId;
++    WireDisplayRole role = WireDisplayRole::Bottom;
++    uint16_t width = 0;
++    uint16_t height = 0;
++    WirePixelFormat pixelFormat = WirePixelFormat::Bgra8888;
++    bool touchSupported = false;
++
++    enum class ScalingStrategy : uint8_t { None = 0, Integer = 1, Cas = 2, Nis = 3 };
++    ScalingStrategy scalingStrategy = ScalingStrategy::None;
++    uint32_t requestedCodec = 0;       // 0 = unset (host picks)
++    uint32_t requestedBitrateKbps = 0; // 0 = unset (host picks)
++    uint16_t targetRefreshHz = 0;      // 0 = unset (host picks)
++};
++
++// What a connecting client would declare it can handle, once Hello grows
++// a field for this.
++struct WireClientCapabilities {
++    uint32_t supportedCodecs = WireCodec_Jpeg;
++    uint16_t maxResolutionWidth = 0; // 0 = unset/unknown
++    uint16_t maxResolutionHeight = 0;
++    uint16_t maxRefreshHz = 0;
++    bool touchSupported = false;
++    bool motionSupported = false;
++    bool hdrSupported = false;
++    uint8_t maxDisplayCount = 1;
++    bool audioCaptureSupported = false; // microphone
++};
++
++// What the host would declare it can offer, once HelloAck grows a field
++// for this.
++struct WireHostCapabilities {
++    uint32_t availableCodecs = WireCodec_Jpeg;
++    std::vector<WireDisplayDescriptor> displays;
++};
++
 +// Hello (client -> host) handshake payload. See docs/protocol.md
 +// "Handshake" for the full negotiation description; this is the minimal
 +// version implemented so far -- capability negotiation fields beyond
@@ -5627,6 +6288,19 @@ index 00000000..b9ffdc73
 +    // packaged via scripts/build-release.sh) -- see net_server.cpp's
 +    // comparison logic for how an empty value on either side is handled.
 +    std::string appVersion;
++
++    // JPEG quality (1-100, libjpeg-turbo's tjCompress2 scale) the client
++    // wants this session's video compressed at, or 0 to defer to whatever
++    // the host is configured with (NetServerConfig::videoJpegQuality --
++    // see net_server.cpp's compressFrameBgraToJpeg()). Added (protocol
++    // v9) after v8's fixed default of 80 turned out to over-compress
++    // DS/3DS: those surfaces are small enough that bandwidth was never
++    // the constraint compression was introduced for, so a client
++    // streaming from one has plenty of headroom to ask for much higher
++    // fidelity than a Cemu-sized surface over a slow link would want.
++    // Applied once, at handshake time, for this session's whole lifetime
++    // -- there's no packet type for changing it without reconnecting.
++    uint8_t videoQuality = 0;
 +};
 +
 +enum class HelloRejectReason : uint8_t {
@@ -5758,6 +6432,27 @@ index 00000000..b9ffdc73
 +inline constexpr size_t kControllerStateWireSize =
 +    4 + 8 + 2 + 2 + 2 + 2 + 2 + 2 + 1 + 2 + 2;
 +
++// Wire size of VideoFramePayload's fixed timestamp prefix (protocol
++// v10) -- the JPEG bytes that follow are variable-length, sized however
++// large that frame's compressed output happened to be.
++inline constexpr size_t kVideoFrameTimestampWireSize = 8;
++
++// VideoFrame (host -> client) payload, protocol v10: `captureTimestampUs`
++// is the host's own wall-clock time (same clock as
++// ControllerState::clientTimestampUs, epoch microseconds) taken
++// immediately before this frame's JPEG encoding began -- see
++// net_server.cpp's videoLoop(). Comparing it against the client's own
++// wall-clock receipt time gives an estimate of network + encode + send-
++// queue latency for the video path, the same "assumes synced clocks"
++// caveat the existing input-latency stat already documents (see
++// docs/known-limitations.md) applies here too. `jpeg` is exactly what
++// protocol v8 already sent -- this only adds the timestamp in front of
++// it, nothing about the JPEG encoding itself changed.
++struct VideoFramePayload {
++    uint64_t captureTimestampUs = 0;
++    std::vector<uint8_t> jpeg;
++};
++
 +// Fixed sample format for MicAudioFrame (GitHub issue #2): mono, 16-bit
 +// signed PCM, little-endian on the wire (like every other multi-byte
 +// field here), at a single fixed rate rather than negotiated per-client.
@@ -5802,6 +6497,24 @@ index 00000000..b9ffdc73
 +    HostMode mode = HostMode::Emulation;
 +    SystemIdentity system;
 +    AdapterIdentity adapter;
++};
++
++// Generous enough for a full formatted client log line (client_log.h's
++// fixed formatting buffer is 1024 bytes, but real lines from this
++// client's own call sites today top out well under 256) without giving
++// a buggy/malicious sender an excuse to make the host allocate
++// something huge -- deliberately distinct from kMaxProtocolStringLength
++// above, which exists for short identity/name fields, not a nearly-
++// freeform diagnostic string.
++inline constexpr size_t kMaxClientLogLineLength = 512;
++
++// ClientLog (client -> host) payload: a single already-formatted log
++// line, forwarded as-is (see PacketType::ClientLog above and
++// client/src/client_log.h) -- the host prints/logs it prefixed with the
++// sending client's own identity so multiple clients' lines can't be
++// confused with each other, but does not otherwise interpret it.
++struct ClientLogPayload {
++    std::string line; // up to kMaxClientLogLineLength bytes; truncated if longer
 +};
 +
 +struct PacketHeader {
@@ -5852,6 +6565,21 @@ index 00000000..b9ffdc73
 +
 +// Builds a complete ControllerState packet (header + serialized body).
 +ByteBuffer buildControllerStatePacket(const ControllerState& state);
++
++// Serializes a VideoFramePayload (header not included): the 8-byte
++// timestamp prefix followed by `payload.jpeg` verbatim.
++void serializeVideoFramePayload(ByteBuffer& out, const VideoFramePayload& payload);
++
++// Parses a VideoFramePayload. Returns std::nullopt only if the buffer is
++// shorter than kVideoFrameTimestampWireSize (too short to even hold the
++// timestamp prefix) -- an empty or undecodable `jpeg` portion is not
++// itself rejected here, since validating JPEG content is the decoder's
++// job, not this function's (mirrors how this packet type was never
++// length/content-validated at this layer before v10 either).
++std::optional<VideoFramePayload> parseVideoFramePayload(const uint8_t* data, size_t size);
++
++// Builds a complete VideoFrame packet (header + timestamp + JPEG bytes).
++ByteBuffer buildVideoFramePacket(const VideoFramePayload& payload);
 +
 +// Appends a length-prefixed (u16 length + bytes) string. Rejects (asserts
 +// via caller contract, not enforced here) building a packet with a string
@@ -5914,6 +6642,18 @@ index 00000000..b9ffdc73
 +// Builds a complete ModeChanged packet (header + serialized body).
 +ByteBuffer buildModeChangedPacket(const ModeChangedPayload& modeChanged);
 +
++// Serializes a ClientLogPayload (header not included). `log.line` is
++// truncated to kMaxClientLogLineLength bytes first if longer.
++void serializeClientLogPayload(ByteBuffer& out, const ClientLogPayload& log);
++
++// Parses a ClientLogPayload. Returns std::nullopt if the buffer is too
++// short for its own declared length, the declared length exceeds
++// kMaxClientLogLineLength, or there's trailing garbage past the line.
++std::optional<ClientLogPayload> parseClientLogPayload(const uint8_t* data, size_t size);
++
++// Builds a complete ClientLog packet (header + serialized body).
++ByteBuffer buildClientLogPacket(const ClientLogPayload& log);
++
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/rate_limiter.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/rate_limiter.h
 new file mode 100644
@@ -5966,10 +6706,10 @@ index 00000000..f1dc7418
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/touch_mapping.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/touch_mapping.h
 new file mode 100644
-index 00000000..4f628e84
+index 00000000..18fd6fb6
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/touch_mapping.h
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,43 @@
 +#pragma once
 +
 +// Touch coordinate mapping between a client's rendered display rectangle
@@ -5994,10 +6734,14 @@ index 00000000..4f628e84
 +    double height = 0;
 +};
 +
-+// Computes the largest 4:3 rectangle that fits within `surfaceWidth` x
-+// `surfaceHeight`, centered on the surface. This is the "aspect-correct
-+// fit" display mode and is the default per spec section 7.4.
-+RenderRect computeAspectFitRect(double surfaceWidth, double surfaceHeight);
++// Computes the largest `contentAspect` (width/height) rectangle that fits
++// within `surfaceWidth` x `surfaceHeight`, centered on the surface. This is
++// the "aspect-correct fit" display mode and is the default per spec section
++// 7.4. `contentAspect` defaults to 4:3, the DS/3DS bottom-screen ratio;
++// callers streaming a differently-shaped surface (e.g. the Wii U GamePad's
++// 854x480 output) must pass its real aspect ratio instead.
++RenderRect computeAspectFitRect(double surfaceWidth, double surfaceHeight,
++                                 double contentAspect = 4.0 / 3.0);
 +
 +// Converts a raw touch/pointer position (in the same coordinate space as
 +// `rect`, e.g. window pixels) into normalized DS touchscreen coordinates.
@@ -6066,10 +6810,10 @@ index 00000000..a1aff532
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
 new file mode 100644
-index 00000000..b3d05bdc
+index 00000000..38c4cedd
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
-@@ -0,0 +1,486 @@
+@@ -0,0 +1,560 @@
 +#include "melonds_remote/protocol.h"
 +
 +#include <cstring>
@@ -6211,6 +6955,29 @@ index 00000000..b3d05bdc
 +    return buildPacket(PacketType::ControllerState, payload);
 +}
 +
++void serializeVideoFramePayload(ByteBuffer& out, const VideoFramePayload& payload) {
++    appendU64(out, payload.captureTimestampUs);
++    out.insert(out.end(), payload.jpeg.begin(), payload.jpeg.end());
++}
++
++std::optional<VideoFramePayload> parseVideoFramePayload(const uint8_t* data, size_t size) {
++    if (data == nullptr || size < kVideoFrameTimestampWireSize) {
++        return std::nullopt;
++    }
++
++    VideoFramePayload payload;
++    payload.captureTimestampUs = readU64(data, 0);
++    payload.jpeg.assign(data + kVideoFrameTimestampWireSize, data + size);
++    return payload;
++}
++
++ByteBuffer buildVideoFramePacket(const VideoFramePayload& payload) {
++    ByteBuffer buf;
++    buf.reserve(kVideoFrameTimestampWireSize + payload.jpeg.size());
++    serializeVideoFramePayload(buf, payload);
++    return buildPacket(PacketType::VideoFrame, buf);
++}
++
 +void appendString(ByteBuffer& out, const std::string& s) {
 +    appendU16(out, static_cast<uint16_t>(s.size()));
 +    out.insert(out.end(), s.begin(), s.end());
@@ -6285,6 +7052,7 @@ index 00000000..b3d05bdc
 +    appendU16(out, hello.displayHeight);
 +    appendString(out, hello.authToken);
 +    appendString(out, hello.appVersion);
++    out.push_back(hello.videoQuality);
 +}
 +
 +std::optional<HelloPayload> parseHelloPayload(const uint8_t* data, size_t size) {
@@ -6314,6 +7082,9 @@ index 00000000..b3d05bdc
 +    auto version = readString(data, size, offset);
 +    if (!version) return std::nullopt;
 +    hello.appVersion = std::move(*version);
++
++    if (offset + 1 > size) return std::nullopt;
++    hello.videoQuality = data[offset]; offset += 1;
 +
 +    if (offset != size) {
 +        // trailing garbage: reject rather than silently ignore
@@ -6555,6 +7326,53 @@ index 00000000..b3d05bdc
 +    return buildPacket(PacketType::ModeChanged, payload);
 +}
 +
++void serializeClientLogPayload(ByteBuffer& out, const ClientLogPayload& log) {
++    // Truncated here rather than trusting the caller, same posture as
++    // appendString()'s callers being responsible for their own
++    // kMaxProtocolStringLength truncation -- this is the one place a
++    // ClientLogPayload actually goes on the wire.
++    std::string line = log.line;
++    if (line.size() > kMaxClientLogLineLength) {
++        line.resize(kMaxClientLogLineLength);
++    }
++    appendU16(out, static_cast<uint16_t>(line.size()));
++    out.insert(out.end(), line.begin(), line.end());
++}
++
++std::optional<ClientLogPayload> parseClientLogPayload(const uint8_t* data, size_t size) {
++    if (data == nullptr || size < 2) {
++        return std::nullopt;
++    }
++
++    size_t offset = 0;
++    uint16_t len = readU16(data, offset);
++    offset += 2;
++
++    if (len > kMaxClientLogLineLength) {
++        return std::nullopt;
++    }
++    if (offset + len > size) {
++        return std::nullopt;
++    }
++
++    ClientLogPayload log;
++    log.line.assign(reinterpret_cast<const char*>(data + offset), len);
++    offset += len;
++
++    if (offset != size) {
++        // trailing garbage: reject rather than silently ignore
++        return std::nullopt;
++    }
++
++    return log;
++}
++
++ByteBuffer buildClientLogPacket(const ClientLogPayload& log) {
++    ByteBuffer payload;
++    serializeClientLogPayload(payload, log);
++    return buildPacket(PacketType::ClientLog, payload);
++}
++
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/rate_limiter.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/rate_limiter.cpp
 new file mode 100644
@@ -6602,29 +7420,28 @@ index 00000000..1c0700bf
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/touch_mapping.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/touch_mapping.cpp
 new file mode 100644
-index 00000000..b8723f39
+index 00000000..e1679638
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/touch_mapping.cpp
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,55 @@
 +#include "melonds_remote/touch_mapping.h"
 +
 +#include <algorithm>
 +
 +namespace melonds_remote {
 +
-+RenderRect computeAspectFitRect(double surfaceWidth, double surfaceHeight) {
-+    if (surfaceWidth <= 0 || surfaceHeight <= 0) {
++RenderRect computeAspectFitRect(double surfaceWidth, double surfaceHeight,
++                                 double contentAspect) {
++    if (surfaceWidth <= 0 || surfaceHeight <= 0 || contentAspect <= 0) {
 +        return RenderRect{0, 0, 0, 0};
 +    }
 +
-+    constexpr double kAspect = 4.0 / 3.0;
-+
 +    double width = surfaceWidth;
-+    double height = width / kAspect;
++    double height = width / contentAspect;
 +
 +    if (height > surfaceHeight) {
 +        height = surfaceHeight;
-+        width = height * kAspect;
++        width = height * contentAspect;
 +    }
 +
 +    RenderRect rect;
