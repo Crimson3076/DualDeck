@@ -6107,6 +6107,72 @@ against real Bazzite hardware -- the diagnostics that led here came
 from the user's real machine, but this specific fix hasn't been
 retested there yet.
 
+## 2026-08-01: All three host patches embed a frozen protocol copy 3 versions stale -- likely the real reason nothing has ever fully connected
+
+Real user report, found while chasing the Bazzite host-connectivity saga
+above to its actual conclusion: after every other fix in this file
+landed (host launches cleanly, firewall open, correct ports listening,
+client reaches it), the client still got rejected with "PROTOCOL
+VERSION MISMATCH" -- `HelloRejectReason::ProtocolVersionMismatch`,
+reason code 1 -- against a host that had *just* been built from the
+same v0.1.83 release the client was on. Both a stale-client and a
+stale-host theory were ruled out (full wipe-and-reinstall of the
+client, direct terminal launch of the freshly-built host) before the
+real cause turned up: `host/melonds-patches/0001-remote-server-
+integration.patch` -- and, confirmed by the same grep,
+`host/azahar-patches/` and `host/cemu-patches/`'s patches too --
+doesn't reference this repo's live `protocol/`, `adapter-sdk/`, and
+`host/remote-server/` directories at all. Each patch file *embeds its
+own copy* of that entire subsystem as brand-new files added by the
+diff itself (`src/frontend/qt_sdl/remote_server/{protocol,adapter_sdk,
+host}/...` for melonDS's patch, an analogous vendored tree for the
+other two), frozen at whatever state existed whenever that patch was
+last regenerated -- `inline constexpr uint16_t kProtocolVersion = 7;`
+in all three, vs. `10` in the live header. `scripts/lib/
+build_emulator.sh`'s `build_melonds()`/`build_azahar()`/`build_cemu()`
+(shared by both the official release pipeline and
+`emudeck-replace-in-place.sh`) just `git apply` this patch against a
+pinned upstream commit -- there is no step anywhere that keeps the
+embedded copy in sync with the live shared library as it evolves, so
+every host build from any of the three patches has been three real
+protocol bumps behind every client build for however long this drift
+has existed:
+- v8: `VideoFrame`'s payload changed from raw BGRA8888 to a JPEG-
+  compressed image (libjpeg-turbo) -- a new build dependency the
+  frozen copy's `CMakeLists.txt` hunk was never given.
+- v9: `HelloPayload` gained a client-driven `videoQuality` field.
+- v10: `VideoFrame` gained an 8-byte capture timestamp prepended
+  before the JPEG bytes, for latency instrumentation.
+
+None of these are a version-number tweak -- an old client/host talking
+v7 would either misinterpret new-format bytes as something else
+(v10's timestamp corrupting JPEG decode) or simply never compile
+against the new dependency (v8's JPEG codec needs libjpeg-turbo
+linked, which the frozen `CMakeLists.txt` copy predates). This is very
+likely the actual explanation for the entire connectivity saga
+documented above, not just the Bazzite-specific pieces -- **any** host
+built from any of these three patches, on any machine, has been wire-
+incompatible with the current client the whole time, including
+whatever earlier point in this same troubleshooting session Azahar/
+Cemu on the Fedora laptop were reported as "working": that was very
+likely a client that hadn't yet auto-updated past v7 itself, not
+genuine version-10 compatibility.
+
+**Fix in progress for melonDS** (the one actively being tested):
+regenerating `host/melonds-patches/0001-remote-server-integration.patch`
+so its embedded `protocol/`/`adapter_sdk/`/`host/remote-server/` copy
+is replaced with the live top-level content verbatim, keeping only the
+melonDS-specific integration files (`EmuInstance.*`, `Window.cpp`,
+`remote_server/MelonDSAdapter.*`, `remote_server/
+MelonDSFrameSource.*`, etc.) as glue, with real compile verification
+(not just a text edit) given the new libjpeg-turbo dependency and
+whatever else changed in the shared interfaces between v7 and v10.
+**Azahar and Cemu have the identical bug** (confirmed via the same
+`kProtocolVersion = 7` grep against their patch files) and need the
+same regeneration treatment -- not done yet as of this entry, tracked
+as a fast-follow once melonDS's fix is verified working end-to-end on
+real hardware.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
