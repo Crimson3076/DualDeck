@@ -36,6 +36,43 @@ ensure_appimagetool() {
     echo "${tool_path}"
 }
 
+# find_qt6_plugins_dir
+#
+# Locates Qt6's plugins directory (containing platforms/libqxcb.so etc.)
+# on this build machine, so its "platforms" subdirectory can be bundled
+# into a Qt6-based AppImage (melonDS, Azahar) via pack_appimage()'s
+# extra_dirs. Real user report, 2026-08-01: neither melonDS nor Azahar
+# could start at all on a real Bazzite/Fedora HTPC with no system Qt6 GUI
+# stack installed ("Could not find the Qt platform plugin wayland/xcb in
+# \"\"", then an abort) -- bundle_library_dependencies() only ever
+# bundles ldd-reported *linked* dependencies, and Qt's platform plugins
+# are dlopen()'d at runtime based on QT_PLUGIN_PATH, invisible to ldd, so
+# they were never bundled at all. Prints the plugins directory (the
+# parent of "platforms", not "platforms" itself) on success.
+#
+# Tries qtpaths6 first (Qt's own portable way to query this, present
+# once qt6-base-dev-tools or equivalent is installed), falling back to
+# a search of common distro install prefixes if that's not available.
+find_qt6_plugins_dir() {
+    if command -v qtpaths6 >/dev/null 2>&1; then
+        local dir
+        dir="$(qtpaths6 --query QT_INSTALL_PLUGINS 2>/dev/null || true)"
+        if [[ -n "${dir}" && -d "${dir}/platforms" ]]; then
+            echo "${dir}"
+            return 0
+        fi
+    fi
+
+    local candidate
+    for candidate in /usr/lib/x86_64-linux-gnu/qt6/plugins /usr/lib/qt6/plugins /usr/lib64/qt6/plugins; do
+        if [[ -d "${candidate}/platforms" ]]; then
+            echo "${candidate}"
+            return 0
+        fi
+    done
+    return 1
+}
+
 # bundle_library_dependencies <binary_path> <dest_lib_dir>
 #
 # Real Bazzite hardware bug: this binary was compiled inside a Distrobox

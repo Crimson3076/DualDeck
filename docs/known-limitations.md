@@ -7127,6 +7127,79 @@ entirely, the same technique that diagnosed the melonDS/Cemu issues
 earlier) would capture the actual crash reason instead of Steam's
 opaque Play/Stop/Play cycling.
 
+## 2026-08-01: melonDS and Azahar both abort instantly -- Qt platform plugins were never bundled
+
+Real user report, with actual crash output captured by running both
+launcher scripts directly from a terminal (exactly the diagnostic step
+asked for): both melonDS and Azahar crash identically, immediately
+after the AppRun sequence otherwise completes normally (private host-
+service spawned, `NetServer` listening on all expected ports):
+
+```
+qt.qpa.plugin: Could not find the Qt platform plugin "wayland" in ""
+qt.qpa.plugin: Could not find the Qt platform plugin "xcb" in ""
+This application failed to start because no Qt platform plugin could be initialized.
+
+.../AppRun: line 93: ... Aborted (core dumped) env LD_LIBRARY_PATH=... "${HERE}/usr/bin/azahar" "$@"
+```
+
+**Root cause:** `bundle_library_dependencies()` (`scripts/lib/
+appimage_pack.sh`) only ever bundles `ldd`-reported *linked*
+dependencies -- Qt's platform plugins (`libqxcb.so`, the Wayland ones)
+are `dlopen()`'d at runtime based on `QT_PLUGIN_PATH`/Qt's own compiled-
+in fallback path, invisible to `ldd`, so they were never bundled into
+either AppImage at all. Every previous test of the packaged AppImages in
+this document's earlier entries happened to run inside environments
+(this project's own build/test sandbox) that coincidentally had a fully
+matching system Qt6 install providing a working fallback -- masking the
+gap entirely. Real Bazzite/EmuDeck HTPC machines have no reason to have
+a system Qt6 GUI stack installed at all, so the fallback that had been
+silently saving every earlier test simply doesn't exist there, and Qt
+aborts outright with an empty search-path list ("in \"\""). **Cemu
+(wxWidgets/GTK, not Qt) was completely unaffected** -- exactly matching
+the user's own observation that Cemu was "unaffected and still working
+everywhere" while both Qt-based emulators broke identically, which is
+what actually pinned this down as a Qt-specific packaging gap rather
+than anything AppRun-, exec-, or launcher-specific.
+
+**Fix:** `scripts/lib/appimage_pack.sh` gained `find_qt6_plugins_dir()`
+(tries `qtpaths6 --query QT_INSTALL_PLUGINS` first, falls back to
+searching common distro install prefixes). `build-release.sh`'s
+packaging step stages the real `platforms/` plugin subdirectory once
+(containing `libqxcb.so` plus whatever Wayland platform plugins are
+available) and bundles it into both the melonDS and Azahar AppImages via
+`pack_appimage()`'s existing `extra_dirs` mechanism (the same one
+already proven for Cemu's `resources`/`gameProfiles`) -- landing at
+`AppDir/usr/bin/platforms/`. Both AppRun templates
+(`scripts/lib/apprun_templates.sh`) now export `QT_PLUGIN_PATH="${HERE}
+/usr/bin"` (the *parent* of the bundled `platforms/` directory, matching
+how Qt expects this variable to be laid out) before executing the real
+binary -- harmless for Cemu, which never reads it. Also added
+`qt6-wayland`/`qt6-qtwayland` to the build-dependency list (`ensure_
+packages "build"` in `build-release.sh`) -- Debian/Ubuntu's `qt6-base-
+dev` alone only provides the X11/xcb platform plugin, not Wayland-native
+support, so this ensures the bundled `platforms/` directory covers both
+session types rather than relying on XWayland compatibility alone.
+
+**Verified:** built a real, minimal Qt6 GUI app (`QApplication` +
+`QLabel`), packaged it through the actual `pack_appimage()`/AppRun
+pipeline with the real bundled `platforms/` directory, and ran it with
+`QT_PLUGIN_PATH`/`QT_QPA_PLATFORM_PLUGIN_PATH` explicitly unset in the
+outer environment under Xvfb -- initialized cleanly (`QT_INIT_OK`), no
+platform-plugin error. A same-machine negative-control test (identical
+app, packaged without the bundled plugins) did **not** reproduce the
+original crash here, because this sandbox's own system Qt6 install
+happens to provide a working compiled-in fallback the user's real
+Bazzite/Fedora machine doesn't have -- the real crash log (an empty `in
+""` search path, meaning no fallback existed at all) is what actually
+confirms the mechanism, not this sandbox's imperfect negative
+reproduction. The positive test is what matters: explicitly bundling and
+pointing at real platform plugins works regardless of what a given
+machine's fallback would or wouldn't have found on its own.
+
+**Not yet verified:** against the real hardware that reported this bug
+-- needs an actual re-test of both melonDS and Azahar once this ships.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

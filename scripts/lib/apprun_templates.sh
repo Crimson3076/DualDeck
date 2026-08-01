@@ -48,6 +48,17 @@ HERE="\$(cd "\$(dirname "\$(readlink -f "\${0}")")" && pwd)"
 # comment): system utilities this script might ever call in the future
 # must never inherit a LD_LIBRARY_PATH pointing at bundled libraries.
 bundled_lib_path="\${HERE}/usr/lib"
+# Real user report, 2026-08-01: melonDS aborted instantly on a real
+# Bazzite/Fedora HTPC with no system Qt6 GUI stack installed --
+# "Could not find the Qt platform plugin wayland/xcb in ''". Qt's
+# platform plugins (usr/bin/platforms/, bundled by pack_appimage()'s
+# extra_dirs -- see find_qt6_plugins_dir()'s comment in
+# scripts/lib/appimage_pack.sh) are dlopen()'d at runtime based on this
+# variable, not linked dependencies bundle_library_dependencies() above
+# could ever see -- set to the *parent* of the bundled platforms/
+# directory, matching how Qt itself expects QT_PLUGIN_PATH to be laid
+# out (it looks for "\$QT_PLUGIN_PATH/platforms/libqxcb.so").
+export QT_PLUGIN_PATH="\${HERE}/usr/bin"
 export MELONDS_REMOTE_ENABLE=1
 export MELONDS_REMOTE_VERSION="${dualdeck_version_arg}"
 exec env LD_LIBRARY_PATH="\${bundled_lib_path}\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}" \\
@@ -97,6 +108,17 @@ HERE="$(cd "$(dirname "$(readlink -f "${0}")")" && pwd)"
 # probe, mkdir, rm) always uses the host's own, completely unmodified
 # environment.
 bundled_lib_path="${HERE}/usr/lib"
+# Real user report, 2026-08-01: Azahar aborted instantly on a real
+# Bazzite/Fedora HTPC with no system Qt6 GUI stack installed --
+# "Could not find the Qt platform plugin wayland/xcb in ''". Qt's
+# platform plugins (usr/bin/platforms/, bundled by pack_appimage()'s
+# extra_dirs -- see find_qt6_plugins_dir()'s comment in
+# scripts/lib/appimage_pack.sh) are dlopen()'d at runtime based on this
+# variable, not linked dependencies bundle_library_dependencies() above
+# could ever see. Harmless for Cemu (not a Qt app, and nothing bundles a
+# platforms/ directory into its AppImage) -- this variable simply goes
+# unused there.
+export QT_PLUGIN_PATH="${HERE}/usr/bin"
 
 default_socket="${XDG_RUNTIME_DIR:-}/dualdeck/adapter.sock"
 if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then

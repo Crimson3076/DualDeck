@@ -36,10 +36,26 @@ echo "== [0/6] Checking build dependencies =="
 # apart), confirmed by a real Fedora build failing to configure Azahar
 # ("Failed to find required Qt component GuiPrivate") until this was
 # added. See docs/known-limitations.md's real-world verification entry.
+# qt6-wayland/qt6-qtwayland: real user report, 2026-08-01 -- neither
+# melonDS nor Azahar (both Qt6 apps) could start at all on a real
+# Bazzite/Fedora HTPC with no system Qt6 GUI stack installed
+# ("Could not find the Qt platform plugin wayland/xcb in \"\"", followed
+# by an abort). bundle_library_dependencies() (appimage_pack.sh) only
+# ever bundles ldd-reported *linked* dependencies -- Qt's platform
+# plugins (libqxcb.so, the Wayland ones) are dlopen()'d at runtime based
+# on QT_PLUGIN_PATH, invisible to ldd, so they were never bundled at
+# all, silently relying on the host having a working system Qt6 install
+# -- which most target HTPC machines don't. Cemu (wxWidgets/GTK, not
+# Qt) was unaffected, confirming the diagnosis. qt6-base-dev alone only
+# provides the xcb platform plugin on Debian/Ubuntu -- Wayland-native
+# support needs this separate package, added here so
+# find_qt6_plugins_dir()/pack_appimage()'s bundled platforms/ directory
+# (see the "Packaging prebuilt AppImages" step below) covers both
+# session types rather than relying on XWayland compatibility alone.
 ensure_packages "build" \
-    "cmake extra-cmake-modules ninja-build build-essential git python3 libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev libarchive-dev libenet-dev libzstd-dev libfaad-dev qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-svg-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libdecor-0-dev libturbojpeg0-dev" \
-    "cmake extra-cmake-modules ninja-build gcc-c++ git python3 libcurl-devel libpcap-devel SDL2-devel libarchive-devel enet-devel libzstd-devel faad2-devel qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtmultimedia-devel qt6-qtsvg-devel libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel turbojpeg-devel" \
-    "cmake extra-cmake-modules ninja base-devel git python curl libpcap sdl2 libarchive enet zstd faad2 qt6-base qt6-multimedia qt6-svg libx11 libxext libxrandr libxcursor libxfixes libxi libxss wayland libxkbcommon libdrm mesa libdecor libjpeg-turbo"
+    "cmake extra-cmake-modules ninja-build build-essential git python3 libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev libarchive-dev libenet-dev libzstd-dev libfaad-dev qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-svg-dev qt6-wayland libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libdecor-0-dev libturbojpeg0-dev" \
+    "cmake extra-cmake-modules ninja-build gcc-c++ git python3 libcurl-devel libpcap-devel SDL2-devel libarchive-devel enet-devel libzstd-devel faad2-devel qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtmultimedia-devel qt6-qtsvg-devel qt6-qtwayland libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel turbojpeg-devel" \
+    "cmake extra-cmake-modules ninja base-devel git python curl libpcap sdl2 libarchive enet zstd faad2 qt6-base qt6-multimedia qt6-svg qt6-wayland libx11 libxext libxrandr libxcursor libxfixes libxi libxss wayland libxkbcommon libdrm mesa libdecor libjpeg-turbo"
 
 # Azahar (3DS) additionally needs a Vulkan SDK and Boost headers beyond
 # melonDS's own dependency list above -- see
@@ -251,15 +267,38 @@ chmod +x "${pkg_dir}/host/internal/dualdeck-host-service"
 # happens to have.
 echo "== Packaging prebuilt AppImages (melonDS/Azahar/Cemu) for emudeck-replace-in-place.sh =="
 
+# Real user report, 2026-08-01: neither melonDS nor Azahar (both Qt6
+# apps) could start at all on a real Bazzite/Fedora HTPC with no system
+# Qt6 GUI stack installed -- "Could not find the Qt platform plugin
+# wayland/xcb in ''", then an abort. bundle_library_dependencies() only
+# ever bundles ldd-reported *linked* dependencies; Qt's platform plugins
+# are dlopen()'d at runtime based on QT_PLUGIN_PATH, invisible to ldd,
+# so they were never bundled at all -- silently relying on the host
+# having a working system Qt6 install, which most target HTPC machines
+# don't. Cemu (wxWidgets/GTK, not Qt) was unaffected, confirming the
+# diagnosis. Staged once here and reused for both AppImages below; lands
+# at AppDir/usr/bin/platforms/ via extra_dirs (matching where the AppRun
+# templates below point QT_PLUGIN_PATH), the same mechanism already
+# proven for Cemu's resources/gameProfiles above.
+qt6_plugins_dir="$(find_qt6_plugins_dir)" || {
+    echo "error: could not locate Qt6's plugins directory (platforms/libqxcb.so) on this" >&2
+    echo "build machine -- install qt6-base-dev (or your distro's equivalent) first." >&2
+    exit 1
+}
+qt_platforms_staged="${work_dir}/qt6-platforms/platforms"
+mkdir -p "$(dirname "${qt_platforms_staged}")"
+cp -a "${qt6_plugins_dir}/platforms" "${qt_platforms_staged}"
+
 melonds_apprun="${work_dir}/AppRun-melonds"
 generate_apprun_melonds "${melonds_apprun}" "${version_tag}"
 pack_appimage "${melonds_bin}" "${out_dir}/dualdeck-melonds-patched-linux-x86_64.AppImage" \
-    melonDS "${melonds_apprun}"
+    melonDS "${melonds_apprun}" "" "${qt_platforms_staged}"
 
 azahar_apprun="${work_dir}/AppRun-azahar"
 generate_apprun_out_of_process AZAHAR azahar azahar-apprun-adapter.sock "${azahar_apprun}"
 pack_appimage "${azahar_bin}" "${out_dir}/dualdeck-azahar-patched-linux-x86_64.AppImage" \
-    azahar "${azahar_apprun}" "${repo_build}/host/remote-server/dualdeck-host-service"
+    azahar "${azahar_apprun}" "${repo_build}/host/remote-server/dualdeck-host-service" \
+    "${qt_platforms_staged}"
 
 cemu_apprun="${work_dir}/AppRun-cemu"
 generate_apprun_out_of_process CEMU cemu cemu-apprun-adapter.sock "${cemu_apprun}"
