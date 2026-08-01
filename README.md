@@ -18,11 +18,27 @@ rather than overwriting a shared one, so older builds stay downloadable
 if a newer one turns out to be broken. See `RELEASE_NOTES.md` inside the
 archive for exactly which commit a given release was built from.
 
-The easiest way to install: download **`DualDeck-Installer.sh`** from
-that same Releases page and run it -- it downloads and verifies (via
-`SHA256SUMS`) the rest for you and offers Install Client / Install Host
-/ Install Both / Repair / Uninstall, so you never need to manually
-extract an archive yourself. See `docs/known-limitations.md`'s
+The easiest way to install -- paste this into a terminal on the machine
+you're installing to (no download, no `chmod +x`, nothing to navigate
+with a controller):
+
+```sh
+curl -fsSL https://github.com/Crimson3076/DualDeck/releases/latest/download/DualDeck-Installer.sh | bash
+```
+
+That fetches and runs the same `DualDeck-Installer.sh` published on the
+[**Releases**](../../releases) page (GitHub's `releases/latest/download/`
+URL always resolves to the newest release's copy of a named asset) --
+it downloads and verifies (via `SHA256SUMS`) the actual install archive
+for you and offers Install Client / Install Host / Install Both /
+Repair / Uninstall through a graphical `kdialog`/`zenity` menu on
+SteamOS/Bazzite/KDE desktops, or a plain terminal prompt otherwise.
+Skip the menu entirely by appending `-s -- --host` or `-s -- --client`
+(also `--both`/`--repair`/`--uninstall`) to the command above -- useful
+if a controller-driven menu is awkward to navigate, or for scripting.
+If you'd rather review the script before running it, download
+**`DualDeck-Installer.sh`** from the Releases page and run it locally
+instead -- functionally identical. See `docs/known-limitations.md`'s
 installer section for exactly what it does and doesn't cover yet (it's
 Phase 1 of GitHub issue #26's larger installer/auto-update rework).
 

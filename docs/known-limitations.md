@@ -5742,6 +5742,69 @@ real Steam Gaming Mode session on real hardware (confirmed only via
 in isolation) -- in particular, whether `konsole -e` reliably opens and
 stays focused when invoked from a process Steam itself launched.
 
+## 2026-07-31: Real-hardware feedback (Bazzite HTPC) -- curl-pipe installer, EmuDeck launcher UX, both fixed
+
+First real install on a Bazzite HTPC via `DualDeck-Installer.sh` surfaced two concrete UX problems, both fixed:
+
+**1. Installer required a manual download + `chmod +x`.** Painful to do
+with a Steam Controller instead of a keyboard. `DualDeck-Installer.sh`
+was already safe to `curl | bash` (`set -uo pipefail`, no `-e`, deliberately
+chosen previously) but this wasn't documented, and its terminal-fallback
+`read -rp` prompts (`confirm()`, `choose_action()`) read from plain
+stdin -- which is the pipe carrying the script's own source when run via
+`curl | bash`, already exhausted by the time bash reaches the prompt.
+Fixed by redirecting those reads from `/dev/tty` instead (the standard
+fix every curl-pipe installer needs, e.g. rustup does the same), and
+added the one-liner to `README.md` as the primary documented install
+method, alongside `-s -- --host`/`--client`/etc. to skip the menu
+entirely for anyone who'd rather not navigate it with a controller at
+all. Downloading and running the script locally still works identically
+for anyone who'd rather review it first.
+
+**Found and fixed while testing this**: `read ... < /dev/tty` redirection
+itself fails outright (not just returns empty) when there's no
+controlling terminal at all -- and referencing a `local` variable that a
+failed `read` never assigned is a hard "unbound variable" abort under
+this script's `set -u`, not a graceful empty-string fallback. Both
+`reply` (`confirm()`) and `choice` (`choose_action()`) are now
+pre-initialized (`local reply=""` / `local choice=""`) with `|| true`
+after the read, so a missing controlling terminal degrades to the
+default branch instead of crashing. Caught by actually testing the
+no-tty case, not just reasoning about it.
+
+**2. The "Patch my EmuDeck-installed emulators" launcher menu choice
+opened a terminal that closed almost immediately, with no way to read
+the output, and no way to pick which emulator(s) to patch.**
+`internal/launch-emudeck-integration.sh` (added earlier this same day)
+always ran `emudeck-replace-in-place.sh` with no `--emulator` filter and
+relaunched it inside a fresh terminal emulator with nothing to keep that
+window open once the tool exited -- so a fast exit (e.g. no matching
+emulators found, or an early failure) closed the window before there
+was anything to read. Fixed:
+- Added a `choose_emulators()` step (kdialog `--separate-output
+  --checklist`, all three checked by default; numbered terminal fallback
+  otherwise) that turns the selection into `--emulator` flags instead of
+  always patching everything found.
+- Added a "keep this window open when finished" prompt (kdialog
+  `--yesno`, defaulting to yes; terminal fallback `[Y/n]`). When yes, the
+  tool is run through a small generated wrapper script that captures its
+  exit status, prints a pass/fail summary, and pauses on "Press Enter to
+  close this window..." regardless of success or failure -- the wrapper
+  deliberately does **not** use `set -e` itself, since with it a failing
+  tool invocation would skip straight past the pause instead of leaving
+  the error visible, which was the entire point of the fix.
+
+Verified in isolation (mocking the tool, `kdialog`, and terminal
+emulators, not real emulator builds): the no-tty/no-kdialog default path
+(all three emulators, defaults safely instead of crashing), a real pty
+walking through both terminal-fallback prompts interactively, and a fake
+`kdialog` exercising the checklist + yesno=No path, including confirming
+the wrapper's exit status still propagates correctly when `keep_open=0`.
+
+**Not yet verified**: this exact flow on real Bazzite hardware with a
+real terminal emulator (konsole) and a real EmuDeck install -- isolation
+testing covers the logic, not the real environment.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

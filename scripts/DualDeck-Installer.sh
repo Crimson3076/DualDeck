@@ -81,7 +81,19 @@ confirm() {
     elif have_zenity; then
         zenity --title "DualDeck Installer" --question --text "$1" 2>/dev/null
     else
-        read -rp "$1 [y/N] " reply
+        # < /dev/tty, not plain stdin: when this script is run via
+        # `curl ... | bash` (README's documented one-liner), stdin is
+        # the pipe carrying the script's own source and is already
+        # exhausted by the time bash gets here -- reading the terminal
+        # directly is the standard fix every curl-pipe installer needs.
+        # local reply="" (not just `local reply`): this script runs
+        # under `set -u`, so if /dev/tty can't be opened at all (no
+        # controlling terminal, e.g. a non-interactive CI/test
+        # invocation) the read below fails before ever assigning
+        # reply, and referencing a genuinely-unset local would abort
+        # the whole script instead of just falling through to "no".
+        local reply=""
+        read -rp "$1 [y/N] " reply < /dev/tty || true
         [[ "${reply}" =~ ^[Yy]$ ]]
     fi
 }
@@ -145,7 +157,9 @@ choose_action() {
             echo "  5) Uninstall"
             echo "  6) Exit"
         } >&2
-        read -rp "Choice [1-6]: " choice
+        # < /dev/tty -- see confirm()'s identical comment above.
+        local choice=""
+        read -rp "Choice [1-6]: " choice < /dev/tty || true
         case "${choice}" in
             1) echo "client" ;;
             2) echo "host" ;;
