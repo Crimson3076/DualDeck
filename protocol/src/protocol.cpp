@@ -84,6 +84,9 @@ void serializeControllerState(ByteBuffer& out, const ControllerState& state) {
     out.push_back(state.touchActive ? 1 : 0);
     appendU16(out, state.touchX);
     appendU16(out, state.touchY);
+    appendI16(out, state.mouseDeltaX);
+    appendI16(out, state.mouseDeltaY);
+    out.push_back(state.mouseButtons);
 }
 
 std::optional<ControllerState> parseControllerState(const uint8_t* data, size_t size) {
@@ -116,6 +119,10 @@ std::optional<ControllerState> parseControllerState(const uint8_t* data, size_t 
             return std::nullopt;
         }
     }
+
+    state.mouseDeltaX = readI16(data, offset); offset += 2;
+    state.mouseDeltaY = readI16(data, offset); offset += 2;
+    state.mouseButtons = data[offset]; offset += 1;
 
     return state;
 }

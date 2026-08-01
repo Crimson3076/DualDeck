@@ -13,7 +13,7 @@ same fixed-size header.
 | Offset | Size | Field            | Notes                                   |
 |-------:|-----:|------------------|------------------------------------------|
 | 0      | 4    | `magic`          | Always `0x444D5231` ("DMR1"). Packets with any other value are rejected before further parsing. |
-| 4      | 2    | `protocolVersion`| Currently `10` (bumped from `9` when `VideoFrame`'s payload gained an 8-byte host capture timestamp prefix for video-latency instrumentation -- see "Video payload" below; `9` itself had bumped from `8` when `HelloPayload.videoQuality` was added, letting the client request its own session's JPEG quality instead of always getting the host's one configured default -- see "Hello payload"/"Video payload" below; `8` itself had bumped from `7` when `VideoFrame`'s payload changed from a raw pixel buffer to a JPEG-compressed image -- see "Video payload" below; `7` itself had bumped from `6` when `HelloAckPayload.mode` was added, GitHub issue #4 Phase E -- see "HelloAck payload" below; `6` itself had bumped from `5` when `HelloAckPayload.system`/`.adapter` and `DiscoveryResponsePayload.system`/`.adapter` were added for the emulator identity model, GitHub issue #28 -- see "Emulator identity model" below; `5` itself had bumped from `4` when `HelloAckPayload.micSupported` and `DiscoveryResponsePayload.audioPort` were added for microphone support, GitHub issue #2 -- see "MicAudioFrame payload" below; `4` itself had bumped from `3` when `HelloPayload.appVersion`/`HelloAckPayload.appVersion` were added and `HelloRejectReason::AppVersionMismatch` was introduced -- see "App version mismatch" below; `3` itself had bumped from `2` when `HelloAckPayload.pairingToken` was removed and `HelloRejectReason::PairingRequired` was renamed to `ApprovalRequired`, moving from a typed-code pairing flow to device-approval; `2` itself had bumped from `1` when those pairing-code fields were first added). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
+| 4      | 2    | `protocolVersion`| Currently `11` (bumped from `10` when `ControllerState` gained `mouseDeltaX`/`mouseDeltaY`/`mouseButtons` for host-control-mode mouse support -- see "ControllerState payload" below; `10` itself had bumped from `9` when `VideoFrame`'s payload gained an 8-byte host capture timestamp prefix for video-latency instrumentation -- see "Video payload" below; `9` itself had bumped from `8` when `HelloPayload.videoQuality` was added, letting the client request its own session's JPEG quality instead of always getting the host's one configured default -- see "Hello payload"/"Video payload" below; `8` itself had bumped from `7` when `VideoFrame`'s payload changed from a raw pixel buffer to a JPEG-compressed image -- see "Video payload" below; `7` itself had bumped from `6` when `HelloAckPayload.mode` was added, GitHub issue #4 Phase E -- see "HelloAck payload" below; `6` itself had bumped from `5` when `HelloAckPayload.system`/`.adapter` and `DiscoveryResponsePayload.system`/`.adapter` were added for the emulator identity model, GitHub issue #28 -- see "Emulator identity model" below; `5` itself had bumped from `4` when `HelloAckPayload.micSupported` and `DiscoveryResponsePayload.audioPort` were added for microphone support, GitHub issue #2 -- see "MicAudioFrame payload" below; `4` itself had bumped from `3` when `HelloPayload.appVersion`/`HelloAckPayload.appVersion` were added and `HelloRejectReason::AppVersionMismatch` was introduced -- see "App version mismatch" below; `3` itself had bumped from `2` when `HelloAckPayload.pairingToken` was removed and `HelloRejectReason::PairingRequired` was renamed to `ApprovalRequired`, moving from a typed-code pairing flow to device-approval; `2` itself had bumped from `1` when those pairing-code fields were first added). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
 | 6      | 2    | `packetType`     | See table below.                        |
 | 8      | 4    | `payloadSize`    | Size of the payload that follows, in bytes. Receivers must verify this matches the number of bytes actually available before parsing the payload. |
 
@@ -34,7 +34,7 @@ same fixed-size header.
 | 11    | `ModeChanged`     | host -> client  | TCP control | see "ModeChanged payload" below |
 | 12    | `ClientLog`       | client -> host  | TCP control | see "ClientLog payload" below |
 
-## ControllerState payload (29 bytes)
+## ControllerState payload (34 bytes)
 
 Sent by the client at a fixed rate (recommended 120 Hz, spec section 6.3)
 regardless of whether any input changed, so a lost packet cannot leave a
@@ -53,9 +53,12 @@ button stuck.
 | 24     | 1    | `touchActive`      | 0 or 1. Any other value makes the whole packet malformed and it is dropped. |
 | 25     | 2    | `touchX`           | 0..255. Only validated when `touchActive == 1`; ignored otherwise. |
 | 27     | 2    | `touchY`           | 0..191. Only validated when `touchActive == 1`. |
+| 29     | 2    | `mouseDeltaX`      | Signed, protocol v11+. Host-control mode only (`host::HostControlAdapter`) -- relative host-cursor motion accumulated on the client since the *previous* packet, from a Steam Deck touchpad configured as a mouse (or a real mouse in Desktop Mode). Meaningless outside `HostMode::HostControl`; every emulator adapter ignores it, matching how `HostControlAdapter` ignores `touchX`/`touchY`. Unlike the level-triggered fields above, a dropped UDP packet's delta is genuinely lost, not just stale -- an accepted trade-off for a relative-motion field. |
+| 31     | 2    | `mouseDeltaY`      | Signed, protocol v11+. Same as `mouseDeltaX`. |
+| 33     | 1    | `mouseButtons`     | Bitmask, protocol v11+, 1 = held. Bit 0 = left click, bit 1 = right click. See `MouseButton` in `protocol.h`. |
 
 `kControllerStateWireSize` in `protocol/include/melonds_remote/protocol.h`
-is defined as this same sum (29 bytes) and is checked by
+is defined as this same sum (34 bytes) and is checked by
 `protocol_tests` (`test_controller_state.cpp`); treat the header as the
 source of truth if this document and the code ever disagree.
 

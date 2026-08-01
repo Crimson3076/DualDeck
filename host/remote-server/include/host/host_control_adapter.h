@@ -61,6 +61,24 @@ struct HostControlGamepadState {
 // Pure translation, no I/O -- see HostControlGamepadState's own comment.
 HostControlGamepadState translateControllerState(const ControllerState& state);
 
+// Pure description of "what the virtual mouse should do this tick" --
+// same no-I/O rationale as HostControlGamepadState. dx/dy are relative
+// motion (protocol.h's ControllerState::mouseDeltaX/Y, forwarded
+// unscaled -- both already share the same "screen-independent relative
+// pixels" unit a uinput EV_REL device expects), not accumulated
+// position, so there is no "previous state" for them to diff against the
+// way button/hat/stick fields need; only left/right button-held state is
+// level-triggered and needs diffing (see emitMouseState()).
+struct HostControlMouseState {
+    int16_t dx = 0;
+    int16_t dy = 0;
+    bool leftDown = false;
+    bool rightDown = false;
+};
+
+// Pure translation, no I/O -- see HostControlMouseState's own comment.
+HostControlMouseState translateMouseState(const ControllerState& state);
+
 class HostControlAdapter : public IEmulatorInputSink, public IFrameSource {
 public:
     HostControlAdapter();
@@ -78,6 +96,14 @@ public:
     // optional resource (e.g. net_server.cpp's audioFd_ bind failure).
     bool isDeviceReady() const { return uinputFd_ >= 0; }
 
+    // Same idea, for the separate virtual-mouse uinput device (see
+    // mouseUinputFd_'s own comment on why it's a second device rather
+    // than folded into the gamepad one). Independent of isDeviceReady()
+    // above: a machine can plausibly have one succeed and the other fail
+    // (e.g. a stale udev rule that only grants access to one of two
+    // freshly-created input nodes before the rule reloads).
+    bool isMouseDeviceReady() const { return mouseUinputFd_ >= 0; }
+
     void applyControllerState(const ControllerState& state) override;
     void releaseAll() override;
 
@@ -91,9 +117,22 @@ public:
 
 private:
     void emitState(const HostControlGamepadState& state);
+    void emitMouseState(const HostControlMouseState& state);
 
     int uinputFd_ = -1;
     HostControlGamepadState lastEmitted_;
+
+    // Separate uinput device from uinputFd_'s virtual gamepad: mixing
+    // EV_REL mouse-relative-motion semantics into a device already
+    // advertising itself (via the Xbox 360 vendor/product ID reuse, see
+    // the .cpp) as a gamepad would confuse desktop environments/Steam
+    // Input's own device-type heuristics. A distinct device whose only
+    // capabilities are EV_REL (REL_X/REL_Y) + EV_KEY (BTN_LEFT/BTN_RIGHT)
+    // is unambiguously "a mouse" to anything reading evdev capability
+    // bits, matching how real remote-desktop/KVM tools create a
+    // dedicated virtual mouse node rather than overloading one device.
+    int mouseUinputFd_ = -1;
+    HostControlMouseState lastEmittedMouse_;
 };
 
 } // namespace melonds_remote::host

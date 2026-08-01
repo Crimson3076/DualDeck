@@ -144,6 +144,9 @@ MDR_TEST(host_control_adapter_degrades_gracefully_without_uinput_access) {
         // must still be safe no-ops, not crash.
         ControllerState state;
         state.dsButtons = DSButton_A;
+        state.mouseDeltaX = 5;
+        state.mouseDeltaY = -5;
+        state.mouseButtons = MouseButton_Left;
         adapter.applyControllerState(state);
         adapter.releaseAll();
         std::vector<uint8_t> frame;
@@ -151,9 +154,88 @@ MDR_TEST(host_control_adapter_degrades_gracefully_without_uinput_access) {
         uint16_t width = 0, height = 0;
         MDR_CHECK(!adapter.getLatestFrame(frame, frameIndex, width, height));
     }
+    // Same expectation, same sandbox limitation, for the separate virtual
+    // mouse device -- see isMouseDeviceReady()'s own comment on why it's
+    // independent of isDeviceReady() above.
+    MDR_CHECK(!adapter.isMouseDeviceReady());
     // If this ever runs somewhere uinput *is* available (a real Linux
     // dev machine with the right permissions, not this sandbox/CI), the
     // same calls above still must not crash -- no separate assertion
-    // needed since isDeviceReady() being true just means the "expected"
-    // no-op path isn't exercised this run.
+    // needed since isDeviceReady()/isMouseDeviceReady() being true just
+    // means the "expected" no-op path isn't exercised this run.
+}
+
+// translateMouseState() -- pure ControllerState -> HostControlMouseState
+// mapping, same no-I/O rationale as translateControllerState() above.
+MDR_TEST(translate_mouse_no_input_is_zero_and_released) {
+    ControllerState state;
+    HostControlMouseState out = translateMouseState(state);
+    MDR_CHECK_EQ(out.dx, static_cast<int16_t>(0));
+    MDR_CHECK_EQ(out.dy, static_cast<int16_t>(0));
+    MDR_CHECK(!out.leftDown);
+    MDR_CHECK(!out.rightDown);
+}
+
+MDR_TEST(translate_mouse_deltas_pass_through_unscaled) {
+    ControllerState state;
+    state.mouseDeltaX = -1234;
+    state.mouseDeltaY = 5678;
+    HostControlMouseState out = translateMouseState(state);
+    MDR_CHECK_EQ(out.dx, static_cast<int16_t>(-1234));
+    MDR_CHECK_EQ(out.dy, static_cast<int16_t>(5678));
+}
+
+MDR_TEST(translate_mouse_buttons) {
+    {
+        ControllerState state;
+        state.mouseButtons = MouseButton_Left;
+        HostControlMouseState out = translateMouseState(state);
+        MDR_CHECK(out.leftDown);
+        MDR_CHECK(!out.rightDown);
+    }
+    {
+        ControllerState state;
+        state.mouseButtons = MouseButton_Right;
+        HostControlMouseState out = translateMouseState(state);
+        MDR_CHECK(!out.leftDown);
+        MDR_CHECK(out.rightDown);
+    }
+    {
+        ControllerState state;
+        state.mouseButtons = MouseButton_Left | MouseButton_Right;
+        HostControlMouseState out = translateMouseState(state);
+        MDR_CHECK(out.leftDown);
+        MDR_CHECK(out.rightDown);
+    }
+}
+
+MDR_TEST(translate_mouse_ignores_gamepad_and_touch_fields) {
+    // Symmetric with translate_ignores_touch_and_emulator_actions above:
+    // gamepad/touch input must not leak into the mouse translation, and
+    // vice versa (see translate_ignores_mouse_fields below).
+    ControllerState state;
+    state.dsButtons = DSButton_A | DSButton_Up;
+    state.touchActive = 1;
+    state.touchX = 100;
+    state.touchY = 50;
+    state.leftStickX = 12345;
+    HostControlMouseState out = translateMouseState(state);
+    MDR_CHECK_EQ(out.dx, static_cast<int16_t>(0));
+    MDR_CHECK_EQ(out.dy, static_cast<int16_t>(0));
+    MDR_CHECK(!out.leftDown);
+    MDR_CHECK(!out.rightDown);
+}
+
+MDR_TEST(translate_ignores_mouse_fields) {
+    ControllerState state;
+    state.mouseDeltaX = 999;
+    state.mouseDeltaY = -999;
+    state.mouseButtons = MouseButton_Left | MouseButton_Right;
+    HostControlGamepadState out = translateControllerState(state);
+    MDR_CHECK(!out.south);
+    MDR_CHECK(!out.east);
+    MDR_CHECK(!out.west);
+    MDR_CHECK(!out.north);
+    MDR_CHECK_EQ(out.leftStickX, static_cast<int16_t>(0));
+    MDR_CHECK_EQ(out.leftStickY, static_cast<int16_t>(0));
 }

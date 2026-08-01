@@ -1684,6 +1684,23 @@ int main(int argc, char** argv) {
         // held by the other -- touchActive is the OR of both below.
         bool mouseTouchDown = false;
 
+        // Host-control mode's virtual mouse (see
+        // host::HostControlAdapter): accumulated relative motion since
+        // the last ControllerState packet was sent (reset to 0 on every
+        // send, below), and current left/right button-held state. Unlike
+        // touchX/Y/mouseTouchDown above, this is never gated on the DS
+        // rectangle or on a button already being held -- Host Control has
+        // no notion of either, it's plain cursor motion. Accumulating and
+        // sending unconditionally (not just while nowHostMode ==
+        // HostMode::HostControl) is harmless: HostControlAdapter is the
+        // only thing that ever reads these fields (see
+        // protocol.h::ControllerState's own comment), so a real emulator
+        // adapter simply never looks at them, the same way
+        // HostControlAdapter never looks at touchX/Y.
+        int32_t hostControlMouseDeltaX = 0;
+        int32_t hostControlMouseDeltaY = 0;
+        uint8_t hostControlMouseButtons = 0;
+
         std::vector<uint8_t> frame;
         // Matches texture's current dimensions (textureWidth/textureHeight),
         // whatever they are at this point -- correct as long as every
@@ -1935,10 +1952,25 @@ int main(int argc, char** argv) {
                         // which == SDL_TOUCH_MOUSEID means this button event
                         // was synthesized from a real touch SDL already
                         // delivered as SDL_EVENT_FINGER_DOWN above -- skip it
-                        // here to avoid double-handling the same physical
-                        // touch as two separate input sources.
-                        if (menuActive || settingsActive || event.button.which == SDL_TOUCH_MOUSEID ||
-                            event.button.button != SDL_BUTTON_LEFT) {
+                        // entirely (both the touch-emulation path below and
+                        // the host-control click path) to avoid double-
+                        // handling the same physical touch as two separate
+                        // input sources.
+                        if (menuActive || settingsActive || event.button.which == SDL_TOUCH_MOUSEID) {
+                            break;
+                        }
+                        // Host-control click (see hostControlMouseButtons'
+                        // declaration above): recorded regardless of where
+                        // on screen the click landed -- Host Control has no
+                        // "DS rectangle" concept, unlike the touch-emulation
+                        // path below, which only fires for SDL_BUTTON_LEFT
+                        // inside dsRect.
+                        if (event.button.button == SDL_BUTTON_LEFT) {
+                            hostControlMouseButtons |= MouseButton_Left;
+                        } else if (event.button.button == SDL_BUTTON_RIGHT) {
+                            hostControlMouseButtons |= MouseButton_Right;
+                        }
+                        if (event.button.button != SDL_BUTTON_LEFT) {
                             break;
                         }
                         if (auto mapped = mapPointToDSCoords(event.button.x, event.button.y, dsRect)) {
@@ -1948,9 +1980,22 @@ int main(int argc, char** argv) {
                             mouseTouchDown = true;
                         }
                         // else: click started outside the DS rectangle, same
-                        // as an out-of-bounds finger touch above -- ignored.
+                        // as an out-of-bounds finger touch above -- ignored
+                        // for the touch-screen path (the host-control click
+                        // above was already recorded either way).
                         break;
                     case SDL_EVENT_MOUSE_MOTION:
+                        // Host-control cursor motion (see
+                        // hostControlMouseDeltaX/Y's declaration above):
+                        // accumulated on every real motion event regardless
+                        // of whether a button is held -- a mouse cursor
+                        // moves on plain hover, unlike the touch-drag path
+                        // below, which only cares about motion while
+                        // mouseTouchDown.
+                        if (!menuActive && !settingsActive && event.motion.which != SDL_TOUCH_MOUSEID) {
+                            hostControlMouseDeltaX += static_cast<int32_t>(event.motion.xrel);
+                            hostControlMouseDeltaY += static_cast<int32_t>(event.motion.yrel);
+                        }
                         // Only a drag (button already down) counts as touch
                         // movement -- plain cursor motion with no button
                         // held isn't a touch, unlike SDL_EVENT_FINGER_MOTION
@@ -1968,7 +2013,15 @@ int main(int argc, char** argv) {
                         // last in-bounds position, same as finger motion.
                         break;
                     case SDL_EVENT_MOUSE_BUTTON_UP:
-                        if (event.button.which == SDL_TOUCH_MOUSEID || event.button.button != SDL_BUTTON_LEFT) {
+                        if (event.button.which == SDL_TOUCH_MOUSEID) {
+                            break;
+                        }
+                        if (event.button.button == SDL_BUTTON_LEFT) {
+                            hostControlMouseButtons &= static_cast<uint8_t>(~MouseButton_Left);
+                        } else if (event.button.button == SDL_BUTTON_RIGHT) {
+                            hostControlMouseButtons &= static_cast<uint8_t>(~MouseButton_Right);
+                        }
+                        if (event.button.button != SDL_BUTTON_LEFT) {
                             break;
                         }
                         if (mouseTouchDown) {
@@ -2336,6 +2389,23 @@ int main(int argc, char** argv) {
                 state.touchActive = touchActive ? 1 : 0;
                 state.touchX = touchX;
                 state.touchY = touchY;
+                // Host-control mouse (see hostControlMouseDeltaX/Y's
+                // declaration above): clamped rather than silently
+                // truncated by the int16_t cast, so an unusually large
+                // single-tick delta (e.g. a fast trackpad flick during a
+                // frame hitch) saturates instead of wrapping around to a
+                // motion in the wrong direction. Deltas reset to 0 after
+                // every send regardless of whether this packet actually
+                // reaches the host -- see ControllerState::mouseDeltaX's
+                // own comment on why a dropped packet's motion is simply
+                // lost, not retried.
+                state.mouseDeltaX = static_cast<int16_t>(
+                    std::clamp(hostControlMouseDeltaX, -32768, 32767));
+                state.mouseDeltaY = static_cast<int16_t>(
+                    std::clamp(hostControlMouseDeltaY, -32768, 32767));
+                state.mouseButtons = hostControlMouseButtons;
+                hostControlMouseDeltaX = 0;
+                hostControlMouseDeltaY = 0;
                 net.sendControllerState(state);
                 lastInputSendUs = nowUs;
             }

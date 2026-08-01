@@ -31,6 +31,15 @@ HostControlGamepadState translateControllerState(const ControllerState& state) {
     return out;
 }
 
+HostControlMouseState translateMouseState(const ControllerState& state) {
+    HostControlMouseState out;
+    out.dx = state.mouseDeltaX;
+    out.dy = state.mouseDeltaY;
+    out.leftDown = (state.mouseButtons & MouseButton_Left) != 0;
+    out.rightDown = (state.mouseButtons & MouseButton_Right) != 0;
+    return out;
+}
+
 namespace {
 
 constexpr int kAbsRangeMin = -32768;
@@ -130,12 +139,54 @@ HostControlAdapter::HostControlAdapter() {
     }
 
     std::fprintf(stderr, "HostControlAdapter: virtual gamepad ready\n");
+
+    mouseUinputFd_ = ::open("/dev/uinput", O_WRONLY | O_NONBLOCK);
+    if (mouseUinputFd_ < 0) {
+        std::fprintf(stderr,
+                      "HostControlAdapter: could not open /dev/uinput for the virtual mouse (%s) -- "
+                      "touchpad-as-mouse control is disabled; the virtual gamepad above still works.\n",
+                      std::strerror(errno));
+        return;
+    }
+
+    ::ioctl(mouseUinputFd_, UI_SET_EVBIT, EV_REL);
+    ::ioctl(mouseUinputFd_, UI_SET_RELBIT, REL_X);
+    ::ioctl(mouseUinputFd_, UI_SET_RELBIT, REL_Y);
+    ::ioctl(mouseUinputFd_, UI_SET_EVBIT, EV_KEY);
+    ::ioctl(mouseUinputFd_, UI_SET_KEYBIT, BTN_LEFT);
+    ::ioctl(mouseUinputFd_, UI_SET_KEYBIT, BTN_RIGHT);
+
+    uinput_setup mouseSetup{};
+    mouseSetup.id.bustype = BUS_VIRTUAL;
+    // No real device's vendor/product ID to match here (unlike the
+    // gamepad's Xbox 360 reuse above) -- EV_REL + REL_X/REL_Y + BTN_LEFT/
+    // BTN_RIGHT alone is what makes evdev/libinput classify this as a
+    // mouse; the exact IDs are only ever shown in a device list, never
+    // used for capability detection.
+    mouseSetup.id.vendor = 0x0001;
+    mouseSetup.id.product = 0x0001;
+    std::strncpy(mouseSetup.name, "DualDeck Host Control Mouse", sizeof(mouseSetup.name) - 1);
+
+    if (::ioctl(mouseUinputFd_, UI_DEV_SETUP, &mouseSetup) < 0 ||
+        ::ioctl(mouseUinputFd_, UI_DEV_CREATE) < 0) {
+        std::fprintf(stderr, "HostControlAdapter: failed to create the virtual mouse device (%s)\n",
+                      std::strerror(errno));
+        ::close(mouseUinputFd_);
+        mouseUinputFd_ = -1;
+        return;
+    }
+
+    std::fprintf(stderr, "HostControlAdapter: virtual mouse ready\n");
 }
 
 HostControlAdapter::~HostControlAdapter() {
     if (uinputFd_ >= 0) {
         ::ioctl(uinputFd_, UI_DEV_DESTROY);
         ::close(uinputFd_);
+    }
+    if (mouseUinputFd_ >= 0) {
+        ::ioctl(mouseUinputFd_, UI_DEV_DESTROY);
+        ::close(mouseUinputFd_);
     }
 }
 
@@ -173,12 +224,44 @@ void HostControlAdapter::emitState(const HostControlGamepadState& state) {
     lastEmitted_ = state;
 }
 
+void HostControlAdapter::emitMouseState(const HostControlMouseState& state) {
+    if (mouseUinputFd_ < 0) return;
+
+    bool sentAnything = false;
+    // Relative motion, not diffed against lastEmittedMouse_ -- every
+    // nonzero delta is a fresh motion to apply this tick, unlike the
+    // button/hat/stick fields above which are absolute/level state.
+    if (state.dx != 0) {
+        writeEvent(mouseUinputFd_, EV_REL, REL_X, state.dx);
+        sentAnything = true;
+    }
+    if (state.dy != 0) {
+        writeEvent(mouseUinputFd_, EV_REL, REL_Y, state.dy);
+        sentAnything = true;
+    }
+    if (state.leftDown != lastEmittedMouse_.leftDown) {
+        writeEvent(mouseUinputFd_, EV_KEY, BTN_LEFT, state.leftDown ? 1 : 0);
+        sentAnything = true;
+    }
+    if (state.rightDown != lastEmittedMouse_.rightDown) {
+        writeEvent(mouseUinputFd_, EV_KEY, BTN_RIGHT, state.rightDown ? 1 : 0);
+        sentAnything = true;
+    }
+
+    if (sentAnything) {
+        writeEvent(mouseUinputFd_, EV_SYN, SYN_REPORT, 0);
+    }
+    lastEmittedMouse_ = state;
+}
+
 void HostControlAdapter::applyControllerState(const ControllerState& state) {
     emitState(translateControllerState(state));
+    emitMouseState(translateMouseState(state));
 }
 
 void HostControlAdapter::releaseAll() {
     emitState(HostControlGamepadState{});
+    emitMouseState(HostControlMouseState{});
 }
 
 bool HostControlAdapter::getLatestFrame(std::vector<uint8_t>& /*outFrame*/, uint64_t& /*outFrameIndex*/,

@@ -7321,6 +7321,78 @@ failure.
 this is the one to watch most closely on the next re-test, since the
 Wayland half of the fix has no sandbox verification behind it at all.
 
+## 2026-08-01: Host Control gained touchpad-as-mouse support (protocol v11)
+
+Real user question, after Azahar's Steam-shortcut launch was finally
+confirmed working: "host control should be able to basically let me use
+my steam deck as a steam controller, the touchpads should work as a
+mouse, etc. but it currently does none of that." Investigating
+`host::HostControlAdapter` confirmed it: only ever translated gamepad
+buttons into a virtual Xbox-360-style `uinput` device -- there was no
+touchpad/mouse support anywhere in the wire protocol or either side's
+code, and video capture for Host Control mode remains a hard-coded stub
+(`getLatestFrame()` always returns `false` -- see this project's own
+planning notes: a from-scratch host-screen-capture subsystem is
+explicitly scoped as later, larger work, not part of this).
+
+Scoped with the user to exactly: touchpad-as-mouse + the existing
+gamepad navigation, no video. Big-Picture auto-launch and full remote-
+desktop video streaming remain unbuilt, tracked separately.
+
+**What shipped:**
+- `protocol.h`/`protocol.cpp`: `ControllerState` gained `mouseDeltaX`,
+  `mouseDeltaY` (relative motion, `int16_t`) and `mouseButtons` (a new
+  `MouseButton` bitmask: left/right). A genuine wire-shape change --
+  `kProtocolVersion` bumped 10 -> 11, `kControllerStateWireSize` 29 -> 34
+  bytes. See `docs/protocol.md`'s "ControllerState payload" section for
+  the full field table.
+- `client/src/main.cpp`: captures `SDL_EVENT_MOUSE_MOTION`'s relative
+  `xrel`/`yrel` (not the absolute `x`/`y` the existing touch-screen-via-
+  trackpad feature already uses -- these are two independent input
+  interpretations of the same underlying SDL mouse events, coexisting in
+  the same event-handling switch without conflict) and
+  `SDL_EVENT_MOUSE_BUTTON_DOWN`/`UP` for left/right clicks. Accumulates
+  deltas between the ~120Hz send ticks, clamps to `int16_t` range on
+  send (saturates rather than wraps on an unusually large single-tick
+  delta), and resets to 0 after every send -- a dropped UDP packet's
+  motion is genuinely lost, not retried, the same accepted trade-off
+  every other best-effort field on this channel already has. Filters out
+  `SDL_TOUCH_MOUSEID`-sourced synthetic events (a real touchscreen tap
+  shouldn't also move the host's cursor), matching the existing filter
+  the touch-screen-via-trackpad code already uses for the same reason.
+- `host::HostControlAdapter`: gained a second, independent `uinput`
+  device (`EV_REL` + `REL_X`/`REL_Y`, `EV_KEY` + `BTN_LEFT`/`BTN_RIGHT`)
+  rather than folding mouse capability into the existing virtual gamepad
+  device -- mixing relative-motion semantics into a device that
+  advertises itself via the Xbox 360 vendor/product ID would confuse
+  desktop environments' own device-type heuristics. `isMouseDeviceReady()`
+  is independent of the existing `isDeviceReady()` (gamepad) -- degrades
+  gracefully and independently if only one of the two `uinput` device
+  creations fails.
+
+**Verified:** `dualdeck_protocol_tests` (104 cases, including new
+round-trip/negative-delta/default-zero tests for the new fields) and
+`melonds_remote_host_tests` (79 cases, including new
+`translateMouseState()` pure-logic tests mirroring the existing
+`translateControllerState()` ones, plus updated degrade-gracefully
+coverage for `isMouseDeviceReady()`) both pass. Built SDL3 (release-3.2.16,
+this project's own pinned tag) from source in-sandbox specifically to
+compile-verify `client/src/main.cpp`'s new event-handling code (normally
+untestable here -- `DUALDECK_BUILD_CLIENT` needs a real SDL3 install this
+sandbox doesn't have by default) -- built clean with zero warnings even
+under this project's strict `-Wall -Wextra -Wpedantic -Wconversion
+-Wshadow` flags.
+
+**Not yet verified:** against real hardware -- no `/dev/uinput` access in
+this sandbox (documented limitation carried since Host Control's original
+gamepad-only milestone), and SDL's synthesis of `xrel`/`yrel` from a
+Steam Deck touchpad specifically configured as a mouse (via Steam
+Input's "Trackpad" binding or Gaming Mode's own default) hasn't been
+exercised against a real Steam Input session at all -- only reasoned
+about from SDL's documented relative-mouse-motion event shape, which
+this project's own precedent (see the two Qt-plugin entries above) has
+repeatedly shown can still hide a real-hardware surprise.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
