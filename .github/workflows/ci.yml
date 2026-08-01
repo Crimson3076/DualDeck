@@ -7,6 +7,13 @@ on:
     branches: ["**"]
 
 jobs:
+  patch-protocol-sync:
+    name: Check host patches embed the current protocol version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/check-patch-protocol-sync.sh
+
   protocol-and-host:
     name: Build + test protocol/host (no SDL3, no melonDS)
     runs-on: ubuntu-latest

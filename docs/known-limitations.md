@@ -6206,14 +6206,44 @@ in a sandboxed CI-like environment (no real melonDS GUI/GPU available
 there), not yet re-tested end-to-end against an actual Steam Deck
 client by the user.
 
-**Azahar and Cemu have the identical bug** (confirmed via the same
-`kProtocolVersion = 7` grep against their patch files) and need the
-same regeneration treatment -- not done yet as of this entry, tracked
-as a fast-follow once melonDS's fix is confirmed working end-to-end on
-real hardware. Given how this drift happened, a real fix should also
-add *some* mechanism (a CI check comparing each patch's embedded
-`kProtocolVersion` against the live header, at minimum) so this can't
-silently recur a second time.
+**Same-session followup: Azahar and Cemu fixed too, plus a real
+regression guard.** Both had the identical bug (same
+`kProtocolVersion = 7` embedded copy), but a much smaller footprint
+than melonDS's -- neither vendors `net_server.cpp`/
+`device_approval_manager.*`/`adapter_bridge.*`/`frame_source.h`/etc. at
+all, since Azahar/Cemu run in **out-of-process host-control mode**
+(their `AzaharAdapter.cpp`/`CemuAdapter.cpp` talk over `adapter_sdk`'s
+Unix-socket IPC to the separate `dualdeck-host-service` binary, which
+already always builds fresh from live source -- see the
+`ensure_host_service_binary()` fix below). Only `protocol.h`,
+`protocol.cpp`, `adapter_contract.h`, and `ipc_protocol.h` differed at
+all between their frozen copies and live; verified file-by-file (`diff`
+against live) that every change was either byte-identical, comment-only
+(both `adapter_contract.h`'s `SurfaceFrame` doc and
+`ipc_protocol.h`'s `kMaxIpcFramePixelBytes` rationale, no actual
+constants/signatures touched), or purely additive to `protocol.h` (new
+`ClientLog` packet type, new `Wire*` capability/display-descriptor
+types, no removed or changed declarations) -- confirmed neither
+`AzaharAdapter.cpp` nor `CemuAdapter.cpp` reference `frame_source.h`/
+`IFrameSource`/`getLatestFrame()` at all (the one interface break that
+*did* require a real code fix for melonDS), so this specific class of
+break doesn't apply to either. Regenerated the same way (clone at
+pinned commit, apply old patch, swap in live files, regenerate,
+`git apply --check` against a fresh clone) but **without** a full
+from-scratch compile given Azahar/Cemu's build cost (36 submodules /
+~108 vcpkg packages respectively, tens of minutes to hours) weighed
+against how low-risk the actual diff was -- the release pipeline's own
+CI build of both from source is the real final check this specific
+change still needs.
+
+Added `scripts/check-patch-protocol-sync.sh` (new CI job,
+`patch-protocol-sync` in `.github/workflows/ci.yml`) as the "some
+mechanism" this entry called for: greps `kProtocolVersion` out of the
+live header and each of the three patches, fails loudly on any
+mismatch. Deliberately a narrow tripwire, not a full sync guarantee --
+it only catches a bumped `kProtocolVersion` that never got propagated
+(exactly what happened here), not a content change to `protocol.h` or
+any of the other vendored files that doesn't come with a version bump.
 
 ## Things intentionally out of scope for v0.1
 

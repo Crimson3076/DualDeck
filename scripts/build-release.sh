@@ -2437,6 +2437,29 @@ cp "${repo_root}/host/azahar-patches/0001-remote-server-integration.patch" \
 cp "${repo_root}/host/cemu-patches/0001-remote-server-integration.patch" \
    "${emudeck_bundle_dir}/host/cemu-patches/"
 
+# Real user report, 2026-08-01: ensure_host_service_binary() (in
+# emudeck-replace-in-place.sh, needed for Azahar/Cemu's out-of-process
+# dualdeck-host-service that gets bundled into their AppImage) runs
+# `cmake -S "${repo_root}" -B ...` where repo_root resolves to wherever
+# this script itself lives -- when run from a real source checkout
+# that's this whole repo, but when run from THIS packaged copy
+# (repo_root = emudeck_bundle_dir), there was no top-level
+# CMakeLists.txt or protocol/adapter-sdk/host-remote-server source here
+# at all, so that cmake configure failed outright ("does not appear to
+# contain CMakeLists.txt") the first time anyone actually exercised the
+# Azahar/Cemu path end to end -- melonDS doesn't hit this step, so
+# earlier testing never caught it. Bundled wholesale (not cherry-picked
+# like the scripts/lib/ files above) since pruning per-file risks
+# missing a transitive add_subdirectory() dependency the way this bug
+# itself was missed; the unused tests/ subdirectories inside are inert
+# (never added -- see the -DDUALDECK_BUILD_TESTS=OFF passed below) and
+# cost only a little archive size.
+mkdir -p "${emudeck_bundle_dir}/host"
+cp "${repo_root}/CMakeLists.txt" "${emudeck_bundle_dir}/"
+cp -a "${repo_root}/protocol" "${emudeck_bundle_dir}/"
+cp -a "${repo_root}/adapter-sdk" "${emudeck_bundle_dir}/"
+cp -a "${repo_root}/host/remote-server" "${emudeck_bundle_dir}/host/"
+
 # Read by emudeck-replace-in-place.sh's own version-detection fallback
 # (no .git directory exists inside a packaged release) -- same
 # version_tag every other part of this release reports.
