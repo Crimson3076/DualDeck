@@ -205,7 +205,28 @@ void renderCenteredBitmapText(SDL_Renderer* renderer, const std::string& text, f
     renderBitmapText(renderer, text, x, y, pixelSize, color);
 }
 
-void renderDiscoverySearching(SDL_Renderer* renderer) {
+// Bottom-left corner stamp, this client binary's own DUALDECK_VERSION
+// (see main()'s netConfig.appVersion comment for where this comes from).
+// Real user ask: the client auto-updates itself on every launch (see
+// run-client.sh's auto-update block), but a failed auto-update (offline,
+// GitHub unreachable, a partial download) silently falls back to
+// whatever version was already installed, with no on-screen way to tell
+// which one that actually is short of uninstalling and reinstalling from
+// scratch. Drawn only on the picker screens (this function and
+// renderDiscoveryList() below) rather than every screen -- these are the
+// two screens guaranteed to be reached on every single launch regardless
+// of whether a host is ever found, unlike e.g. renderHostControlScreen()
+// or the in-session menu, which only show up after a connection already
+// succeeded. Skipped entirely when empty (a from-source dev build run
+// directly, not via run-client.sh -- see the same DUALDECK_VERSION
+// comment) rather than drawing a misleading blank stamp.
+void renderClientVersionStamp(SDL_Renderer* renderer, const std::string& clientVersion) {
+    if (clientVersion.empty()) return;
+    renderBitmapText(renderer, clientVersion, 20.0f, static_cast<float>(kWindowHeight) - 34.0f, 2,
+                      SDL_Color{90, 90, 96, 255});
+}
+
+void renderDiscoverySearching(SDL_Renderer* renderer, const std::string& clientVersion) {
     SDL_SetRenderDrawColor(renderer, 20, 20, 24, 255);
     SDL_RenderClear(renderer);
     renderCenteredBitmapText(renderer, "SEARCHING FOR HOST...",
@@ -216,6 +237,7 @@ void renderDiscoverySearching(SDL_Renderer* renderer) {
                               SDL_Color{140, 140, 140, 255});
     renderCenteredBitmapText(renderer, kMenuComboHint, static_cast<float>(kWindowHeight) - 80.0f, 2,
                               SDL_Color{140, 140, 140, 255});
+    renderClientVersionStamp(renderer, clientVersion);
     SDL_RenderPresent(renderer);
 }
 
@@ -260,7 +282,7 @@ void renderHostControlScreen(SDL_Renderer* renderer, const std::string& identity
 }
 
 void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHost>& hosts,
-                          int selectedIndex) {
+                          int selectedIndex, const std::string& clientVersion) {
     SDL_SetRenderDrawColor(renderer, 20, 20, 24, 255);
     SDL_RenderClear(renderer);
     renderCenteredBitmapText(renderer, "SELECT A HOST", 60.0f, 4, SDL_Color{220, 220, 220, 255});
@@ -315,6 +337,7 @@ void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHos
                               SDL_Color{140, 140, 140, 255});
     renderCenteredBitmapText(renderer, kMenuComboHint, static_cast<float>(kWindowHeight) - 60.0f, 2,
                               SDL_Color{140, 140, 140, 255});
+    renderClientVersionStamp(renderer, clientVersion);
     SDL_RenderPresent(renderer);
 }
 
@@ -422,7 +445,8 @@ void renderPauseMenu(SDL_Renderer* renderer, const std::vector<std::string>& ite
 // main() treats either as "cancel the whole run", not "connect anyway."
 std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_Gamepad*& gamepad,
                                                      uint16_t discoveryPort,
-                                                     const std::string& lastHostAddress) {
+                                                     const std::string& lastHostAddress,
+                                                     const std::string& clientVersion) {
     std::vector<DiscoveredHost> hosts;
     int selectedIndex = 0;
 
@@ -562,9 +586,9 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
         }
 
         if (hosts.empty()) {
-            renderDiscoverySearching(renderer);
+            renderDiscoverySearching(renderer, clientVersion);
         } else {
-            renderDiscoveryList(renderer, hosts, selectedIndex);
+            renderDiscoveryList(renderer, hosts, selectedIndex, clientVersion);
         }
 
         // Pull whatever the background scan thread has published so far --
@@ -902,7 +926,18 @@ WizardConnectResult wizardConnectAndApprove(SDL_Renderer* renderer, SDL_Gamepad*
                     status = "WAITING FOR APPROVAL ON THE HOST";
                     break;
                 case HelloRejectReason::ProtocolVersionMismatch:
-                    status = "PROTOCOL VERSION MISMATCH - UPDATE THE APP OR HOST";
+                    // Real user report: this message used to give no way to
+                    // tell *which* side needed updating short of comparing
+                    // installs by hand -- the host's version is always
+                    // available here (NetServer sets HelloAckPayload::
+                    // appVersion unconditionally, even on a rejected
+                    // handshake -- see net_server.cpp), same as
+                    // AppVersionMismatch's message below already shows it.
+                    // Pair with the discovery screen's version stamp
+                    // (renderClientVersionStamp()) for this client's own
+                    // version.
+                    status = "PROTOCOL VERSION MISMATCH - HOST IS " + net.hostAppVersion() +
+                              " - UPDATE THE APP OR HOST";
                     break;
                 case HelloRejectReason::AuthenticationFailed:
                     status = "AUTHENTICATION FAILED";
@@ -1274,7 +1309,7 @@ bool runSetupWizard(SDL_Window* window, SDL_Renderer* renderer, SDL_Texture* tex
                 break;
             }
             case Step::FindHost: {
-                auto selected = discoverAndSelectHost(renderer, gamepad, discoveryPort, "");
+                auto selected = discoverAndSelectHost(renderer, gamepad, discoveryPort, "", baseNetConfig.appVersion);
                 if (!selected) return false;
                 netConfig.hostAddress = selected->address;
                 netConfig.controlPort = selected->controlPort;
@@ -1572,7 +1607,7 @@ int main(int argc, char** argv) {
         // different HTPC is always one screen away.
         if (!hostExplicit) {
             std::string lastHost = loadLastHost(discoveryStorePath).value_or("");
-            auto selected = discoverAndSelectHost(renderer, gamepad, discoveryPort, lastHost);
+            auto selected = discoverAndSelectHost(renderer, gamepad, discoveryPort, lastHost, netConfig.appVersion);
             if (!selected) {
                 logLine("[discovery] cancelled before a host was chosen -- exiting\n");
                 quitApp = true;
@@ -2469,8 +2504,11 @@ int main(int argc, char** argv) {
                                   net.hostAppVersion() + ") - UPDATE TO MATCH";
                         break;
                     case HelloRejectReason::ProtocolVersionMismatch:
+                        // See wizardConnectAndApprove()'s identical case for
+                        // why net.hostAppVersion() is safe to show here even
+                        // though the handshake was rejected.
                         status = "PROTOCOL VERSION MISMATCH WITH " + netConfig.hostAddress +
-                                  " - UPDATE THE APP OR HOST";
+                                  " (HOST IS " + net.hostAppVersion() + ") - UPDATE THE APP OR HOST";
                         break;
                     // The host requires a shared secret for this mode (3DS/
                     // host-control) and this client's --auth-token doesn't

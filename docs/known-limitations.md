@@ -7393,6 +7393,47 @@ about from SDL's documented relative-mouse-motion event shape, which
 this project's own precedent (see the two Qt-plugin entries above) has
 repeatedly shown can still hide a real-hardware surprise.
 
+## 2026-08-01: Client now shows its own version, and a protocol mismatch now names the host's version
+
+Real user report, testing the Host Control mouse fix above: hit "protocol
+version mismatch" and had no way to tell which side (client or host) was
+actually out of date -- "the client should show which version it is on,
+in the event it fails to auto update, I have no way of telling other
+than uninstalling and reinstalling." A real gap: `run-client.sh` already
+auto-updates the client on every launch (falling back silently to the
+current version if that fails -- offline, GitHub unreachable, a partial
+download), so a stale install was already possible with zero on-screen
+indication.
+
+**What shipped:**
+- `client/src/main.cpp`: the two picker screens every launch reaches
+  regardless of whether a host is ever found (`renderDiscoverySearching()`,
+  `renderDiscoveryList()`) now stamp this client's own `DUALDECK_VERSION`
+  in small, dim text in the bottom-left corner (`renderClientVersionStamp()`).
+  Skipped entirely when empty (a from-source dev build run without
+  `run-client.sh` setting the env var), rather than showing a misleading
+  blank.
+- Both on-screen `ProtocolVersionMismatch` messages (the setup wizard's
+  connect step, and the main picker's post-selection connect screen) now
+  include the host's actual version -- `NetServer` already sends its real
+  `appVersion` in every `HelloAck` unconditionally, even a rejected one
+  (confirmed by reading `net_server.cpp`), and the client already stores
+  it (`hostAppVersion_`) before checking whether the handshake was
+  accepted -- so this was already safely available and just wasn't being
+  shown, exactly like the pre-existing `AppVersionMismatch` message
+  already does for the app-version (not protocol-version) case.
+
+**Verified:** rebuilt SDL3 from source again to compile-check
+`client/src/main.cpp` (clean, zero warnings), all three test suites still
+pass unchanged (this is a display-only change, no logic/protocol
+behavior touched). Ran the actual `dualdeck-client` binary under Xvfb
+with `DUALDECK_VERSION=v0.1.104` and confirmed via a screenshot that
+"V0.1.104" renders correctly in the discovery screen's corner.
+
+**Not yet verified:** against real hardware -- specifically whether this
+now gives the user enough information to resolve their actual protocol-
+mismatch report from real testing.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
