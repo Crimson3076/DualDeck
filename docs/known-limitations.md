@@ -6741,6 +6741,41 @@ without error, and the final `exec` still correctly finds its bundled
 **Not yet verified:** against the real Cemu binary on real hardware --
 same caveat as the entry above, this hasn't shipped in a release yet.
 
+## 2026-08-01: Cemu's window title now says "DualDeck"
+
+User request, right after the previous two Cemu fixes finally got it
+launching via `emudeck-replace-in-place.sh`: since the replaced
+`Cemu.AppImage` sits at the exact same path EmuDeck's own Steam shortcut
+already points to, there was no visible way to tell whether the
+currently-installed copy was DualDeck's patched build or the original
+stock one it replaced -- both look and launch identically from Steam.
+
+Added two small hunks to `host/cemu-patches/0001-remote-server-
+integration.patch` (found by reading Cemu's real `v2.6` source directly,
+not guessed): `guiWrapper.cpp`'s `gui_updateWindowTitles()` (the
+continuously-updated title covering idle/loading/in-game states, all of
+which build on the same starting string) and `MainWindow.cpp`'s
+`GetInitialWindowTitle()` (the title before that function's first run).
+Both now append `" - DualDeck"` to the existing version string instead
+of replacing it, so e.g. `Cemu 2.6` becomes `Cemu 2.6 - DualDeck` --
+purely cosmetic, no functional change, and deliberately scoped to just
+the two window-title call sites rather than the shared version-string
+macro itself (which is also used for HTTP User-Agent headers, a startup
+log line, a Windows crash-dump header, and Discord Rich Presence -- none
+of those needed touching, and touching the macro instead of the two call
+sites would have changed all of them by accident). See
+`host/cemu-patches/README.md`'s matching entry for the full source-level
+detail.
+
+**Verified:** both hunks apply cleanly via `git apply --check` against a
+fresh, throwaway shallow clone of the real `cemu-project/Cemu` `v2.6`
+tag (not just re-applying on top of the existing committed patch) --
+this caught and fixed a genuine hunk-header line-count bug (`+58,10`
+should have been `+58,11`) before it could break CI. **Not yet
+verified** inside an actual running Cemu window -- needs a real build
+and a real launch to confirm the title reads as expected once this
+ships.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

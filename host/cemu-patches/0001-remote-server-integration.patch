@@ -4606,3 +4606,35 @@ index 0000000..4221450
 +}
 +
 +} // namespace melonds_remote::adapter::ipc
+diff --git a/src/gui/guiWrapper.cpp b/src/gui/guiWrapper.cpp
+index 0000000..0000000 100644
+--- a/src/gui/guiWrapper.cpp
++++ b/src/gui/guiWrapper.cpp
+@@ -58,7 +58,11 @@ WindowInfo& gui_getWindowInfo()
+ void gui_updateWindowTitles(bool isIdle, bool isLoading, double fps)
+ {
+     std::string windowText;
+-    windowText = BUILD_VERSION_WITH_NAME_STRING;
++    // DualDeck (github.com/crimson3076/DualDeck): visibly marks this as
++    // the DualDeck-patched build in the one place a user actually looks
++    // to tell it apart from a stock Cemu install -- see docs/known-
++    // limitations.md's "window title" entry for why this string, here.
++    windowText = std::string(BUILD_VERSION_WITH_NAME_STRING) + " - DualDeck";
+ 
+ 	if (isIdle)
+ 	{
+diff --git a/src/gui/MainWindow.cpp b/src/gui/MainWindow.cpp
+index 0000000..0000000 100644
+--- a/src/gui/MainWindow.cpp
++++ b/src/gui/MainWindow.cpp
+@@ -412,7 +412,9 @@ void MainWindow::DestroyGameListAndStatusBar()
+ 
+ wxString MainWindow::GetInitialWindowTitle()
+ {
+-	return BUILD_VERSION_WITH_NAME_STRING;
++	// DualDeck (github.com/crimson3076/DualDeck): same marker as
++	// gui_updateWindowTitles() in guiWrapper.cpp -- see that comment.
++	return wxString(BUILD_VERSION_WITH_NAME_STRING) + " - DualDeck";
+ }
+ 
+ void MainWindow::OnClose(wxCloseEvent& event)

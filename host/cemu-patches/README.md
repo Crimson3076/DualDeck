@@ -731,3 +731,47 @@ here** -- diff-verified only (confirmed an isolated change against the
 previously-committed patch), not compiled. Needs a CI build and,
 ideally this time, a confirmed-successful retest against Twilight
 Princess HD and Pokemon Rumble U before calling this resolved.
+
+## Window title now says "DualDeck" (2026-08-01)
+
+Real user request, after finally getting Cemu launching via
+`emudeck-replace-in-place.sh` (see the mkdir/glibc-bundling fixes in
+`docs/known-limitations.md`): with EmuDeck's own Steam shortcut pointing
+at the same file path either way, there was no visible way to tell
+whether the currently-installed `Cemu.AppImage` was DualDeck's patched
+build or the original stock one it replaced.
+
+Two call sites build Cemu's actual on-screen window title, found by
+reading the real `v2.6` source rather than guessing (`grep -rn
+"AsyncSetTitle\|SetTitle("` across the whole tree, cross-referenced
+against `BUILD_VERSION_WITH_NAME_STRING`'s other use sites to make sure
+nothing besides window titles was being touched):
+
+- **`src/gui/guiWrapper.cpp`**'s `gui_updateWindowTitles()` -- the real,
+  continuously-updated title (FPS, renderer, GPU vendor, title ID,
+  online status, region) that overwrites everything else the instant a
+  game loads or the emulator goes idle. `windowText`'s starting value
+  (`BUILD_VERSION_WITH_NAME_STRING`) is the one thing every branch of
+  this function builds on top of, so this is the single patch point
+  that covers idle, loading, *and* full in-game titles at once.
+- **`src/gui/MainWindow.cpp`**'s `GetInitialWindowTitle()` -- the title
+  the main window is constructed with, before `gui_updateWindowTitles()`
+  ever runs for the first time. Redundant in practice (that first run
+  happens within milliseconds) but patched too for correctness, so the
+  marker is present from the very first frame regardless of timing.
+
+Both now append `" - DualDeck"` to the existing version string (e.g.
+`Cemu 2.6 - DualDeck`) rather than replacing it, so the real Cemu
+version stays visible alongside the marker. Deliberately did **not**
+touch `BUILD_VERSION_WITH_NAME_STRING`'s own definition or any of its
+other several use sites (`curl`'s `CURLOPT_USERAGENT` in three
+downloader windows, a startup log line, the Windows crash-dump header,
+Discord Rich Presence's `largeImageText`) -- those are unrelated to
+"what does the window say," and changing the shared macro itself would
+have touched all of them by accident.
+
+**Verified**: both hunks apply cleanly (`git apply --check`) against a
+fresh, real `v2.6` checkout (not just the previously-committed patch
+context) -- confirmed via a throwaway shallow clone, not assumed. Not
+yet confirmed inside an actual running Cemu window on real hardware;
+that's the next real-hardware replace-in-place run's job.
