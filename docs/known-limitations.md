@@ -6264,6 +6264,35 @@ its own, separate `ensure_packages "build"` call but never invokes
 `appimagetool` itself (its output is a plain tarball, not AppImages),
 so it isn't affected by this gap.
 
+**Third real bug found on real Bazzite hardware, same day**: with the
+`file` dependency fixed, Azahar's AppImage repack itself fully
+succeeded end to end (`appimagetool` ran clean, `azahar: installed
+DualDeck's patched build at ...azahar.AppImage` printed) -- but the
+script then crashed immediately after with `appdir: unbound variable`
+at `replace_in_place_one`'s own definition line, right as that function
+returned. Root cause: `scripts/lib/appimage_pack.sh`'s `pack_appimage()`
+sets `trap 'rm -rf "${appdir}"' RETURN` to clean up its temp AppDir --
+but a `trap ... RETURN` set inside a function in bash is **not**
+scoped to that function's own return; it's global shell state that
+fires on the return of the *next* function call anywhere in the script,
+by which point `appdir` (a `local` inside `pack_appimage`) is out of
+scope entirely, crashing under `set -u` on whatever unrelated function
+happens to return next -- in this case, `pack_appimage`'s own caller,
+immediately after a fully successful repack. Reproduced in isolation
+with a minimal two-function script before touching the real file, to
+confirm the theory rather than guess: `inner()` sets the trap and
+returns cleanly, but `outer()`'s very next return crashes with the
+identical `appdir: unbound variable` message. Fixed by making the trap
+self-clearing (`trap 'rm -rf "${appdir}"; trap - RETURN' RETURN`) so it
+only ever fires once, for `pack_appimage`'s own return -- re-verified
+against the same repro (now completes cleanly across two simulated
+emulator iterations) since this bug is generic to `pack_appimage()`
+itself, not azahar-specific, and would eventually have hit melonDS/cemu
+through this same code path too (melonDS's earlier successful test in
+this file's own history went through `install-host-distrobox.sh`
+instead, a different code path that never calls `pack_appimage()` at
+all, so it never happened to exercise this bug).
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

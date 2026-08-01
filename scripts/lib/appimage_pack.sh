@@ -68,7 +68,16 @@ pack_appimage() {
 
     local appdir
     appdir="$(mktemp -d)"
-    trap 'rm -rf "${appdir}"' RETURN
+    # Real bug: a `trap ... RETURN` set inside a function is NOT scoped to
+    # that function's own return -- it's global shell state that fires on
+    # the return of the very next function call anywhere in the script,
+    # by which point `appdir` (a `local` here) is out of scope, crashing
+    # under `set -u` ("appdir: unbound variable") on whatever unrelated
+    # function happens to return next -- in practice, this function's own
+    # caller, immediately after a fully successful AppImage repack.
+    # Self-clearing (`trap - RETURN` inside the trap body itself) so it
+    # only ever fires once, for this function's own return.
+    trap 'rm -rf "${appdir}"; trap - RETURN' RETURN
 
     mkdir -p "${appdir}/usr/bin"
     cp "${binary_path}" "${appdir}/usr/bin/$(basename "${binary_path}")"
