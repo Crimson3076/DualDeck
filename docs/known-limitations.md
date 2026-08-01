@@ -6876,6 +6876,81 @@ investigation plus hermetic tests, not yet confirmed against a real
 firewalled Bazzite host and a real client connecting to a real
 AppRun-spawned ephemeral host-service end to end.
 
+## 2026-08-01: "Is Host Control always running in the background now?" -- yes, a real bug: the private host-service spawned per-launch was never actually cleaned up
+
+Real user question/report, right after the connect/exit-hang and
+firewall fixes above: "even when emulator is not open, it allows me to
+attempt to connect with Host Control, but it gets stuck on connecting."
+Both halves turned out to be the same root cause.
+
+**Root cause:** `generate_apprun_out_of_process()`'s AppRun template
+(`scripts/lib/apprun_templates.sh`) spawns a private, ephemeral
+`dualdeck-host-service` in the background when no persistent daemon is
+already running, and sets `trap 'kill "${host_service_pid}" ...' EXIT`
+so that private instance dies when the AppRun script itself exits --
+but the script's very next command was `exec ... "${HERE}/usr/bin/
+__REALBIN__" "$@"`. `exec` *replaces* the current process image with
+the target binary's -- there is no shell process left afterward to ever
+run an `EXIT` trap, regardless of how or when the emulator eventually
+exits. Confirmed directly with a two-line repro (`trap 'echo fired' EXIT;
+exec /bin/echo hi` -- the trap output never appears). Every single
+game launch through this path left its own private `dualdeck-host-
+service` running forever afterward, still fully alive and listening,
+discoverable by any client's LAN broadcast and happy to accept a
+connection into `HostControl` mode (the fallback state for "no adapter
+currently registered," which an orphaned, emulator-less host-service is
+exactly) -- exactly "Host Control always running in the background."
+
+The "gets stuck on connecting" half follows from the same bug rather
+than being separate: `main.cpp` already has a dedicated
+`renderHostControlScreen()` for a *successfully* connected HostControl
+session (checked once `nowConnected && nowHostMode ==
+HostMode::HostControl`) -- a client that actually completes the
+handshake into HostControl mode does *not* get stuck showing
+"CONNECTING..."; it shows that dedicated screen instead (which, per
+`HostControlAdapter::getLatestFrame()`'s hard-coded `false` -- see the
+Phase C2 entries below -- never gets real video, but is a distinct UI
+state, not a hang). A client stuck on the literal "CONNECTING..." text
+means the connection itself never completed -- consistent with the
+orphaned host-service being in a broken/half-torn-down state by the
+time a client happened to find it, or simply compounding with whichever
+of the connect-timeout/firewall fixes above the build under test did or
+didn't yet include.
+
+**Fix:** matches a pattern this codebase already established elsewhere
+for the exact same reason -- `build-release.sh`'s own generated
+`run-host-azahar.sh`/`run-host-cemu.sh` already avoid `exec`ing their
+final binary, each with a "Not exec'd: ... this trap needs to still be
+able to run" comment -- `generate_apprun_out_of_process()`'s AppRun
+template just never got the same treatment when it was written this
+session. Changed the final line from `exec env LD_LIBRARY_PATH=... ...
+"__REALBIN__" "$@"` to a plain (non-`exec`'d) `env LD_LIBRARY_PATH=...
+... "__REALBIN__" "$@"`, so this shell (and its `EXIT` trap) is still
+alive once the emulator actually exits, however it exits -- a clean
+shutdown or a signal both still trigger a bash `EXIT` trap; only an
+uncatchable `SIGKILL` to the whole process group would bypass it, the
+same inherent, unavoidable limit every other wrapper script here already
+accepts. melonDS's own AppRun template needs no equivalent change -- it
+runs its remote server in-process and never spawns a separate
+host-service to begin with.
+
+**Verified:** end-to-end with fake binaries -- a fake `dualdeck-host-
+service` that just sleeps forever (so it can only ever stop if actually
+killed) plus a fake emulator binary that exits quickly, packaged into a
+real AppImage and actually run via `--appimage-extract-and-run`.
+Confirmed no `dualdeck-host-service` process remains running after the
+fake emulator exits and the AppRun script itself completes -- before
+this fix, using the exact same test harness, the process would have
+stayed running indefinitely (matches the isolated two-line `exec`/trap
+repro above).
+
+**Not yet verified:** against real hardware -- specifically, that a
+freshly-launched real Cemu/Azahar no longer leaves a lingering
+`dualdeck-host-service` process after being closed via Steam, and that a
+deliberate Host Control connection attempt (once nothing stale is left
+to accidentally connect to) either reaches `renderHostControlScreen()`
+cleanly or fails fast, rather than hanging.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

@@ -136,7 +136,31 @@ fi
 export __PREFIX___REMOTE_ENABLE=1
 export __PREFIX___REMOTE_ADAPTER_SOCKET="${adapter_socket}"
 export QT_QPA_PLATFORMTHEME=""
-exec env LD_LIBRARY_PATH="${bundled_lib_path}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+# Real user report, 2026-08-01: "is Host Control always running in the
+# background now?" -- yes, and this is why. `exec` REPLACES this whole
+# bash process's image with __REALBIN__'s -- there is no more shell left
+# afterward to ever run the `trap ... EXIT` above, so a private
+# dualdeck-host-service spawned by the branch above was silently
+# orphaned forever the instant __REALBIN__ actually launched, regardless
+# of whether __REALBIN__ later exited cleanly, crashed, or was killed --
+# confirmed directly (a two-line bash repro: a trap set before `exec
+# /bin/echo ...` never fires). Every closed game left its own host-
+# service running and discoverable, presenting HostControl mode (no
+# adapter registered) to any client that came looking, which is exactly
+# what looked like "Host Control always running" and (per
+# host_control_adapter.h's getLatestFrame(), hard-coded to return false
+# -- there is no host-desktop screen-capture code yet, see
+# docs/known-limitations.md's Phase C2 entries) also explains why
+# connecting to it got stuck: a real, accepted connection into a mode
+# that structurally never sends a video frame.
+#
+# Fixed the same way build-release.sh's own run-host-azahar.sh/
+# run-host-cemu.sh already do this (their own "Not exec'd" comments) --
+# not execing here at all, running __REALBIN__ as a normal foreground
+# command instead, so this shell (and its EXIT trap) is still alive to
+# clean up the private host-service once __REALBIN__ actually exits,
+# however it exits.
+env LD_LIBRARY_PATH="${bundled_lib_path}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
     "${HERE}/usr/bin/__REALBIN__" "$@"
 EOF
     sed -i \
