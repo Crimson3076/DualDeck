@@ -5934,6 +5934,108 @@ risk shared with `ensure_packages()`'s own `sudo apt/dnf/pacman
 install` calls, not something newly introduced here, but not yet fixed
 either.
 
+## 2026-08-01: melonDS's patched EmuDeck AppImage never actually enabled its remote server
+
+Real user report: Azahar and Cemu, patched via `emudeck-replace-in-place.sh`
+on a Fedora laptop, worked correctly end to end, but melonDS on the same
+machine never streamed at all. Root cause: `generate_apprun_melonds()`
+(`scripts/emudeck-replace-in-place.sh`) generated a trivial passthrough
+`AppRun` that never set `MELONDS_REMOTE_ENABLE` -- melonDS only starts
+its in-process remote server if that env var is set *or* its own
+persisted Settings checkbox ("Enable melonDS Remote") is already
+checked, and nobody checks that on a fresh EmuDeck install. Every
+*other* melonDS launch path in this codebase (`run-host.sh`,
+`launch-custom-emulator.sh`, `install-host-distrobox.sh`'s Distrobox
+exec) already exports `MELONDS_REMOTE_ENABLE=1` -- this was the one
+launch path that didn't. Fixed by exporting it (and
+`MELONDS_REMOTE_VERSION`, matching those other paths) in the generated
+`AppRun`, verified by generating one in isolation and inspecting its
+contents.
+
+## 2026-08-01: emudeck-replace-in-place.sh now builds inside Distrobox on Bazzite/immutable systems
+
+Real user report: running the EmuDeck integration tool on a Bazzite
+HTPC failed immediately at the dependency-check step with
+`ensure_packages()`'s existing immutable-system refusal ("Auto-
+installing build packages onto an immutable base isn't done unattended
+here"). This tool had no Distrobox fallback at all, unlike
+`install-host-distrobox.sh` (the *separate*, pre-existing Bazzite
+fallback for DualDeck's own non-EmuDeck host install) -- but that one
+only installs *runtime* libraries to launch an already-compiled binary,
+a fundamentally lighter problem than what this tool needs: a full build
+toolchain (cmake, ninja, gcc-c++, the entire Qt6/X11/Wayland `-devel`
+set, ~30-40 packages) to actually compile melonDS/Azahar/Cemu from
+source.
+
+Design (planned in detail before implementing, given the real risk of
+getting a system-level environment change wrong):
+- `scripts/lib/ensure-packages.sh` gained `is_immutable_system()`,
+  factored out of `ensure_packages()`'s own existing rpm-ostree/
+  `/run/ostree-booted` detection (byte-identical behavior for every
+  existing caller -- pure refactor, verified by confirming the refusal
+  message is still exactly what it was before).
+- `scripts/emudeck-replace-in-place.sh` gained
+  `run_in_distrobox_build_container()`: on an immutable system (and
+  only if `DUALDECK_INSIDE_EMUDECK_BUILD_CONTAINER` isn't already `1`,
+  preventing recursion), creates/reuses a **dedicated** Distrobox
+  container (`dualdeck-emudeck-build`) and `exec`s the entire script
+  again inside it with the original arguments. Deliberately a full
+  self-re-exec rather than wrapping individual build steps: `$HOME` is
+  bind-mounted into a Distrobox container at the same absolute path by
+  default, so the persistent build cache
+  (`~/.cache/dualdeck/emudeck-builds/`), the cached `appimagetool`,
+  EmuDeck's own `~/Applications/`, and this tool's own log file all
+  resolve identically inside and outside the container -- meaning the
+  exact same detection/confirm/build/package/install code that already
+  works on a regular Linux host now also works correctly, unmodified,
+  once re-run inside the container. Once inside, `is_immutable_system()`
+  is naturally false (a plain `fedora:latest` image is never immutable),
+  so `ensure_packages()` takes its normal `dnf` branch with a real
+  toolchain available.
+- Deliberately a **new, dedicated** container rather than reusing
+  `dualdeck-host` (`install-host-distrobox.sh`'s own container): the
+  build toolchain's footprint (~several hundred MB of `-devel`
+  packages) has nothing to do with `dualdeck-host`'s runtime-only,
+  long-lived launch container, and someone who only ever uses the
+  EmuDeck integration tool shouldn't need `dualdeck-host` created at
+  all, or vice versa. Treated as disposable/cache-like (no paired
+  uninstaller, unlike `dualdeck-host`/`uninstall-host-distrobox.sh`) --
+  `distrobox rm dualdeck-emudeck-build --force` reclaims its disk space
+  manually if ever needed, matching how the persistent build-binary
+  cache also has no dedicated cleanup script today.
+- `--dry-run` is completely unaffected -- the whole check lives inside
+  the existing `if [[ "${dry_run}" -ne 1 ]]` block, so dry-run never
+  even calls `command -v distrobox`, preserving the "--dry-run has zero
+  side effects" guarantee exactly as before.
+
+Verified in isolation (mocking `rpm-ostree`/`distrobox`/`dnf`/`sudo`,
+not a real container): the container dispatch fires only on a simulated
+immutable system and constructs the exact expected `distrobox create`/
+`distrobox enter` command line (container name, image, env var guard,
+absolute self-path, original arguments forwarded unchanged); the
+recursion guard actually prevents a second dispatch when already
+"inside" the container; a full re-exec walkthrough with the guard set
+and no `rpm-ostree` on `PATH` (simulating genuinely running inside the
+container) proceeds normally through the dependency-install step and
+completes; `--dry-run` never touches `distrobox` at all even on a
+simulated immutable host; and the "distrobox not found" error path
+matches `install-host-distrobox.sh`'s existing wording.
+
+**Not yet verified**: against a real Distrobox/podman container on real
+Bazzite hardware -- in particular, whether `sudo` is genuinely
+passwordless inside a freshly-created Distrobox container (assumed by
+analogy to `install-host-distrobox.sh`'s own already-unverified-on-
+real-hardware Distrobox launch line, not independently confirmed here),
+whether `distrobox enter`'s tty/interactive-prompt passthrough correctly
+reaches this tool's own `read -r -p` per-emulator y/N confirmation
+prompts, and whether the full melonDS/Azahar/Cemu source builds
+(a much bigger compile than the small host/remote-server prototype
+`docs/bazzite-host-setup.md`'s Distrobox section was originally written
+against) actually succeed inside a freshly-created `fedora:latest`
+container at all. `scripts/patch-existing-emulator.sh` has the identical
+immutable-system gap and could reuse this same pattern later -- not
+done here, out of scope for this fix.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

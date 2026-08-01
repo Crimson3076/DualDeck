@@ -29,6 +29,12 @@
 # touching something the user didn't directly point at" posture.
 set -euo pipefail
 
+# Saved before anything (the arg-parsing loop below) consumes "$@" --
+# needed verbatim if this re-execs itself inside a Distrobox build
+# container on an immutable system (see run_in_distrobox_build_container
+# further down).
+original_args=("$@")
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="${EMUDECK_REPLACE_WORKDIR:-$(mktemp -d)}"
 trap 'rm -rf "${work_dir}"' EXIT
@@ -47,6 +53,65 @@ source "${repo_root}/scripts/lib/emudeck_paths.sh"
 source "${repo_root}/scripts/lib/appimage_pack.sh"
 
 manifest_py="${repo_root}/scripts/lib/appimage_manifest.py"
+
+# Distinct from install-host-distrobox.sh's "dualdeck-host" container:
+# that one is runtime-libraries-only, meant to launch an already-
+# compiled binary, and is a long-lived thing a user launches from
+# repeatedly. This tool needs a full build toolchain (cmake, ninja,
+# gcc-c++, the whole Qt6/X11/Wayland -devel set -- see the
+# ensure_packages "build" call below) instead, a completely different,
+# much heavier footprint that a "just launch melonDS" user has no
+# reason to carry, and vice versa. Treated as disposable/cache-like
+# (see run_in_distrobox_build_container's own comment) rather than
+# something with a paired uninstaller -- reclaim its disk space any
+# time with `distrobox rm dualdeck-emudeck-build --force`.
+emudeck_build_container_name="dualdeck-emudeck-build"
+
+# run_in_distrobox_build_container
+#
+# Called once, only when is_immutable_system() is true and dry_run=0
+# (see the dependency-check block below). Creates/reuses a dedicated
+# Fedora Distrobox build container and re-execs this entire script
+# inside it with the original arguments, guarded by
+# DUALDECK_INSIDE_EMUDECK_BUILD_CONTAINER=1 so the re-exec'd copy takes
+# the normal (non-immutable) path instead of looping -- belt-and-
+# suspenders on top of is_immutable_system() itself already being false
+# inside a plain `fedora:latest` container.
+#
+# A full re-exec of the whole script, not just the build steps: $HOME
+# is bind-mounted into the container at the same absolute path by
+# Distrobox by default, so ~/.cache/dualdeck/emudeck-builds (the
+# persistent build cache), ~/.cache/dualdeck/appimagetool-*.AppImage,
+# ~/Applications (EmuDeck's own install dir this tool detects against),
+# and ~/.config/dualdeck/emudeck-replace.log all resolve identically
+# inside and outside the container with no path translation needed --
+# so the exact same detection/confirm/build/package/install code that
+# already works on a regular Linux host also works correctly,
+# unmodified, once re-run in here. work_dir (this script's own scratch
+# clone/build directory, under /tmp by default) is deliberately NOT
+# expected to be shared -- nothing outside the container process ever
+# needs to read it, so it's removed here rather than left as an
+# orphaned empty directory on the host (exec replaces this process
+# image, so the EXIT trap that would normally clean it up never runs).
+run_in_distrobox_build_container() {
+    if ! command -v distrobox >/dev/null 2>&1; then
+        echo "error: 'distrobox' not found. Bazzite ships it by default; on other" >&2
+        echo "rpm-ostree systems, install it first -- see" >&2
+        echo "https://github.com/89luca89/distrobox" >&2
+        exit 1
+    fi
+
+    echo "== This looks like an rpm-ostree (immutable) system, e.g. Bazzite =="
+    echo "== Building inside Distrobox container \"${emudeck_build_container_name}\" instead =="
+    echo "Creating/reusing Distrobox container \"${emudeck_build_container_name}\" (Fedora-based) ..."
+    distrobox create --name "${emudeck_build_container_name}" --image fedora:latest --yes
+
+    local self_path="${repo_root}/scripts/$(basename "${BASH_SOURCE[0]}")"
+    rm -rf "${work_dir}"
+    exec distrobox enter "${emudeck_build_container_name}" -- \
+        env DUALDECK_INSIDE_EMUDECK_BUILD_CONTAINER=1 \
+        "${self_path}" "${original_args[@]}"
+}
 
 # Prefers a VERSION file (present when this is run from a packaged
 # release's host/emudeck-integration/ bundle, which has no .git
@@ -108,10 +173,14 @@ done
 # of these packages, only the actual build step does.
 cmake_launcher_args=()
 if [[ "${dry_run}" -ne 1 ]]; then
+    if is_immutable_system && [[ "${DUALDECK_INSIDE_EMUDECK_BUILD_CONTAINER:-0}" != "1" ]]; then
+        run_in_distrobox_build_container   # execs; never returns on success
+    fi
+
     echo "== Checking build dependencies =="
     ensure_packages "build" \
         "cmake extra-cmake-modules ninja-build build-essential git python3 libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev libarchive-dev libenet-dev libzstd-dev libfaad-dev qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-svg-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libdecor-0-dev libturbojpeg0-dev" \
-        "cmake extra-cmake-modules ninja-build gcc-c++ git python3 libcurl-devel libpcap-devel SDL2-devel libarchive-devel enet-devel libzstd-devel faad2-devel qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtmultimedia-devel qt6-qtsvg-devel libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel turbojpeg-devel" \
+        "cmake extra-cmake-modules ninja-build gcc-c++ git python3 curl libcurl-devel libpcap-devel SDL2-devel libarchive-devel enet-devel libzstd-devel faad2-devel qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtmultimedia-devel qt6-qtsvg-devel libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel turbojpeg-devel" \
         "cmake extra-cmake-modules ninja base-devel git python curl libpcap sdl2 libarchive enet zstd faad2 qt6-base qt6-multimedia qt6-svg libx11 libxext libxrandr libxcursor libxfixes libxi libxss wayland libxkbcommon libdrm mesa libdecor libjpeg-turbo"
     if [[ " ${emulators[*]} " == *" azahar "* ]]; then
         ensure_packages "azahar build" \
@@ -136,17 +205,31 @@ fi
 # checkbox (MelonDSRemote.Enable / the "Enable melonDS Remote" setting) or
 # MELONDS_REMOTE_ENABLE, and runs its server IN-PROCESS by default -- no
 # out-of-process Host Service is needed for it to work at all (see
-# docs/known-limitations.md's "Config/UI toggle" entry), so its AppRun is
-# a trivial passthrough. Making melonDS default to out-of-process instead
-# is Phase B work (a bigger change to melonDS's own patch), not this
-# phase's scope -- see docs/known-limitations.md's Phase A entry.
+# docs/known-limitations.md's "Config/UI toggle" entry). Every OTHER
+# melonDS launch path in this codebase (run-host.sh, launch-custom-
+# emulator.sh, the Distrobox exec in install-host-distrobox.sh) exports
+# MELONDS_REMOTE_ENABLE=1 explicitly -- this one didn't, a real bug
+# (real user report: melonDS launched via a patched EmuDeck AppImage
+# never streamed at all, while Azahar/Cemu on the same machine worked
+# fine) that meant the server only ever started here if the user had
+# separately gone into melonDS's own Settings and manually checked
+# "Enable melonDS Remote," which nobody does on a fresh EmuDeck install.
+# Fixed by exporting the same env var every other path already does,
+# so this works out of the box regardless of which frontend/launcher
+# (EmuDeck's own shortcuts, SteamRomManager, ES-DE) invokes the patched
+# AppImage -- the entire point of "replace in place." Making melonDS
+# default to out-of-process instead is separate, larger Phase B work
+# (a bigger change to melonDS's own patch), not this fix's scope -- see
+# docs/known-limitations.md's Phase A entry.
 generate_apprun_melonds() {
-    local output_path="$1"
-    cat > "${output_path}" <<'EOF'
+    local output_path="$1" dualdeck_version_arg="$2"
+    cat > "${output_path}" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-HERE="$(cd "$(dirname "$(readlink -f "${0}")")" && pwd)"
-exec "${HERE}/usr/bin/melonDS" "$@"
+HERE="\$(cd "\$(dirname "\$(readlink -f "\${0}")")" && pwd)"
+export MELONDS_REMOTE_ENABLE=1
+export MELONDS_REMOTE_VERSION="${dualdeck_version_arg}"
+exec "\${HERE}/usr/bin/melonDS" "\$@"
 EOF
     chmod +x "${output_path}"
 }
@@ -321,7 +404,7 @@ print(json.load(open('${appimage_path}.dualdeck.json'))['original_sha256'])
             app_name="melonDS"
             real_bin_name="melonDS"
             apprun_path="${work_dir}/AppRun-melonds"
-            generate_apprun_melonds "${apprun_path}"
+            generate_apprun_melonds "${apprun_path}" "${dualdeck_version}"
             ;;
         azahar)
             local azahar_patch_file="${repo_root}/host/azahar-patches/0001-remote-server-integration.patch"

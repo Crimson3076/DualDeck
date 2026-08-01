@@ -12,6 +12,18 @@
 # path (docs/bazzite-host-setup.md, docs/steam-deck-setup.md) or the
 # manual command to run yourself.
 
+# is_immutable_system
+#
+# True (0) if this looks like an rpm-ostree (immutable) system -- the
+# same check ensure_packages() below uses to refuse outright. Factored
+# out so a caller that wants to react differently instead of just
+# refusing (scripts/emudeck-replace-in-place.sh building inside a
+# Distrobox container instead, rather than failing) shares this exact
+# detection rather than a second, silently-drifting copy.
+is_immutable_system() {
+    [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1
+}
+
 # ensure_packages <label> <apt-package-list> <dnf-package-list> <pacman-package-list>
 #
 # Each package-list argument is one space-separated string of package
@@ -27,7 +39,7 @@
 ensure_packages() {
     local label="$1" apt_list="$2" dnf_list="$3" pacman_list="$4"
 
-    if [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1; then
+    if is_immutable_system; then
         echo "This looks like an rpm-ostree (immutable) system, e.g. Bazzite." >&2
         echo "Auto-installing ${label} packages onto an immutable base isn't done" >&2
         echo "unattended here since it needs a reboot to take effect. Either:" >&2
