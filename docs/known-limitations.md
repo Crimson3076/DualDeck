@@ -6036,6 +6036,32 @@ container at all. `scripts/patch-existing-emulator.sh` has the identical
 immutable-system gap and could reuse this same pattern later -- not
 done here, out of scope for this fix.
 
+**Update (real Bazzite hardware test, same day)**: container creation
+itself worked ("Container Setup Complete!"), but the re-exec into it
+failed immediately with `env: error while loading shared libraries:
+libGL.so.1: cannot open shared object file: No such file or directory`
+(exit 127) -- `env`, the very first thing exec'd inside the container,
+never even started. Cause: this tool is launched from a Steam shortcut
+(its own intended entry point), and Steam exports `LD_PRELOAD` (its
+overlay-injection libs, `gameoverlayrenderer.so`/`libextest.so`) into
+the whole process tree. `distrobox enter` forwards the caller's
+environment into the container by default; on the host the 64-bit
+overlay lib loads fine and the 32-bit entry is silently skipped
+(harmless "wrong ELF class" warnings, visible throughout this run's
+output), but inside a freshly-created, not-yet-provisioned
+`fedora:latest` container the 64-bit overlay lib's own dependency,
+`libGL.so.1`, doesn't exist yet (mesa isn't installed until the
+`ensure_packages "build"` call further down this same script), so
+`ld.so`'s preload failed hard and took `env` down with it. Fixed by
+`unset LD_PRELOAD LD_LIBRARY_PATH` in
+`run_in_distrobox_build_container()` immediately before the `exec
+distrobox enter` call (`LD_LIBRARY_PATH` unset defensively for the same
+reason -- Steam also points it at its own bundled runtime). Verified in
+isolation by injecting both vars into the test harness and confirming
+via a logging fake `distrobox` that they're present for the (harmless)
+`distrobox create` call but gone by the time `distrobox enter` runs --
+the one call that actually execs something inside the container.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

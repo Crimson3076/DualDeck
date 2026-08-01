@@ -93,6 +93,23 @@ emudeck_build_container_name="dualdeck-emudeck-build"
 # needs to read it, so it's removed here rather than left as an
 # orphaned empty directory on the host (exec replaces this process
 # image, so the EXIT trap that would normally clean it up never runs).
+#
+# Real user report: launched via a Steam shortcut (this tool's own
+# intended entry point), the surrounding shell has LD_PRELOAD set to
+# Steam's overlay-injection libraries (gameoverlayrenderer.so,
+# libextest.so). distrobox enter forwards the caller's environment into
+# the container by default, and unlike on the host -- where the 64-bit
+# overlay lib loads fine and the 32-bit one is silently skipped
+# (harmless "wrong ELF class" warnings) -- inside a freshly-created,
+# not-yet-provisioned fedora:latest container the 64-bit overlay lib's
+# own dependency, libGL.so.1, doesn't exist yet (mesa isn't installed
+# until the ensure_packages "build" call further down), so ld.so's
+# preload fails hard. That took down `env` itself, the very first thing
+# exec'd inside the container, before this script's own code ever ran
+# (exit 127, "cannot open shared object file"). LD_LIBRARY_PATH is
+# unset for the same reason -- Steam also points it at its own bundled
+# runtime, which is just as capable of shadowing a library the
+# container's package manager needs.
 run_in_distrobox_build_container() {
     if ! command -v distrobox >/dev/null 2>&1; then
         echo "error: 'distrobox' not found. Bazzite ships it by default; on other" >&2
@@ -108,6 +125,7 @@ run_in_distrobox_build_container() {
 
     local self_path="${repo_root}/scripts/$(basename "${BASH_SOURCE[0]}")"
     rm -rf "${work_dir}"
+    unset LD_PRELOAD LD_LIBRARY_PATH
     exec distrobox enter "${emudeck_build_container_name}" -- \
         env DUALDECK_INSIDE_EMUDECK_BUILD_CONTAINER=1 \
         "${self_path}" "${original_args[@]}"
