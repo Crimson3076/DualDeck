@@ -5805,6 +5805,76 @@ the wrapper's exit status still propagates correctly when `keep_open=0`.
 real terminal emulator (konsole) and a real EmuDeck install -- isolation
 testing covers the logic, not the real environment.
 
+## 2026-07-31: Steam is now restarted automatically when a shortcut write needs it closed
+
+`steam_shortcut.py` refuses to write `shortcuts.vdf` while Steam is
+running and a write is actually needed (it caches the file in memory
+and can silently clobber the change on its next save) -- previously
+this just told the user to close Steam manually and try again. On a
+Steam-Controller-only setup that's a real trap: once Steam is closed,
+there's no other way to interact with the desktop to reopen it (real
+user report, 2026-07-31, Bazzite HTPC: "I cannot interface with the
+steam controller if steam is closed... they require a mouse to reopen
+it").
+
+Added `scripts/lib/steam_restart_helper.sh` (bundled into both
+`host/internal/` and `client/internal/`, alongside `steam_shortcut.py`
+itself), wired into all four of `install-steam-shortcut.sh`/
+`uninstall-steam-shortcut.sh` (host and client). On the specific "Steam
+appears to be running" refusal, it now: tells the user via a kdialog
+passive popup, asks Steam to quit (`steam -shutdown`), waits up to 30s,
+retries the write once Steam is confirmed gone, and relaunches Steam --
+all from a `setsid`-detached background process, so it survives even if
+the calling script is itself a descendant of Steam (e.g. reached via a
+Steam shortcut in Gaming Mode) and would otherwise be torn down when
+Steam quits. Any *other* steam_shortcut.py failure (corrupt vdf,
+permissions) is left completely alone -- real exit code and stderr
+propagate to the caller's existing `on_error`/kdialog handling
+unchanged.
+
+**Deliberately automatic with no confirmation prompt** -- an explicit
+user choice made aware of a real, sourced tradeoff: Bazzite has
+documented upstream GitHub issues of Steam hanging on "Shutting down
+Steam" when quit from Gaming Mode. If that happens here, the 30s wait
+times out, the shortcut write is skipped entirely (not risked against a
+Steam that might still be alive and about to clobber it), and Steam is
+relaunched anyway so a stuck shutdown doesn't also leave input broken --
+verified this exact timeout path in isolation (see below). Set
+`DUALDECK_NO_STEAM_AUTORESTART=1` in the environment to disable this
+behavior entirely and fall back to the original plain refusal message,
+if this ever proves troublesome on a particular machine.
+
+**Bug caught by testing, not shipped**: the first version of
+`run_steam_shortcut_with_restart()` captured `steam_shortcut.py`'s exit
+code via `if cmd; then ... fi; local exit_code=$?` -- an `if` statement
+whose condition is false and has no `else` branch exits 0 *itself*
+(POSIX), which silently discarded the real exit code and made *any*
+unrelated failure (a genuinely corrupt `shortcuts.vdf`, a permissions
+error) get reported back to the caller as success. Only found by
+actually testing an unrelated-failure case, not by reasoning about the
+code -- fixed with the safe `cmd || exit_code=$?` idiom instead, which
+doesn't have this pitfall.
+
+Verified in isolation (mocking `steam`, `pgrep`, and `steam_shortcut.py`
+via env-var-parameterized fakes, not a real Steam install): the happy
+path (Steam quits, write retried, Steam relaunched, correct args
+propagated through the detached subshell), the 30s-timeout path (skips
+the retry, still relaunches, logs exactly why), an unrelated failure
+passing the real exit code straight through untouched, a retry that
+itself fails for a different reason (correct exit code logged, Steam
+still relaunched), and the `DUALDECK_NO_STEAM_AUTORESTART=1` escape
+hatch. Also ran all four generated `install`/`uninstall-steam-shortcut.sh`
+scripts standalone with `--dry-run` against a synthetic `$HOME` to
+confirm the sourcing/wiring itself is correct (fails cleanly on "no
+Steam userdata directory," as expected outside a real Steam install,
+with no syntax or unbound-variable errors reaching that point).
+
+**Not yet verified**: this exact flow against a real, running Steam
+client on real Bazzite/SteamOS hardware -- isolation testing covers the
+logic against mocked `steam`/`pgrep`, not Steam's actual real-world
+shutdown behavior, which is exactly the thing documented elsewhere as
+inconsistent on Bazzite.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

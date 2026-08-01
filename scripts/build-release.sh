@@ -211,6 +211,7 @@ chmod +x "${pkg_dir}/host/internal/dualdeck-host-service"
 
 cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/host/internal/ensure-packages.sh"
 cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/host/internal/steam_shortcut.py"
+cp "${repo_root}/scripts/lib/steam_restart_helper.sh" "${pkg_dir}/host/internal/steam_restart_helper.sh"
 
 cp "${repo_build}/client/dualdeck-client" "${pkg_dir}/client/dualdeck-client"
 chmod +x "${pkg_dir}/client/dualdeck-client"
@@ -218,6 +219,7 @@ cp -a "${sdl3_install}"/lib/libSDL3.so* "${pkg_dir}/client/lib/"
 
 cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/client/internal/ensure-packages.sh"
 cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/client/internal/steam_shortcut.py"
+cp "${repo_root}/scripts/lib/steam_restart_helper.sh" "${pkg_dir}/client/internal/steam_restart_helper.sh"
 
 cat > "${pkg_dir}/client/internal/run-client.sh" <<'WRAP'
 #!/usr/bin/env bash
@@ -317,6 +319,8 @@ cat > "${pkg_dir}/client/internal/install-steam-shortcut.sh" <<'WRAP'
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 client_root="$(cd .. && pwd)"
+# shellcheck source=scripts/lib/steam_restart_helper.sh
+source ./steam_restart_helper.sh
 
 # Surfaces failures visibly instead of just closing silently when
 # double-clicked with no visible terminal attached (GitHub issue #11) --
@@ -395,7 +399,7 @@ if [[ "${dry_run}" -eq 0 ]]; then
     cp "$(dirname "${client_root}")/VERSION" "$(dirname "${central_install_dir}")/VERSION" 2>/dev/null || true
 fi
 
-python3 ./steam_shortcut.py \
+run_steam_shortcut_with_restart ./steam_shortcut.py "${error_log}" \
     --exe "${central_install_dir}/internal/run-client.sh" \
     --name "DualDeck" \
     --launch-options "${launch_options}" \
@@ -474,6 +478,26 @@ if [[ -z "${steam_shortcut_py}" ]]; then
     exit 0
 fi
 
+# Same two-candidate resolution as steam_shortcut_py above -- this
+# script runs either from an extracted archive or from the central
+# install copy, and steam_restart_helper.sh is bundled alongside
+# steam_shortcut.py in both places (scripts/build-release.sh's
+# packaging step).
+steam_restart_helper=""
+for candidate in \
+    "${central_install_dir}/internal/steam_restart_helper.sh" \
+    "${self_dir}/steam_restart_helper.sh"
+do
+    if [[ -f "${candidate}" ]]; then
+        steam_restart_helper="${candidate}"
+        break
+    fi
+done
+if [[ -n "${steam_restart_helper}" ]]; then
+    # shellcheck source=scripts/lib/steam_restart_helper.sh
+    source "${steam_restart_helper}"
+fi
+
 # One-time melonDS-Remote -> DualDeck rebrand cleanup: also try removing
 # under the old identity (old central dir, old Exe, old AppName), since
 # the Exe-OR-AppName fallback alone can't bridge a compound change of
@@ -485,11 +509,19 @@ python3 "${steam_shortcut_py}" \
     --name "melonDS Remote" \
     --remove "$@" >/dev/null 2>&1 || true
 
-python3 "${steam_shortcut_py}" \
-    --exe "${central_install_dir}/internal/run-client.sh" \
-    --name "DualDeck" \
-    --remove \
-    "$@"
+if [[ -n "${steam_restart_helper}" ]]; then
+    run_steam_shortcut_with_restart "${steam_shortcut_py}" "${error_log}" \
+        --exe "${central_install_dir}/internal/run-client.sh" \
+        --name "DualDeck" \
+        --remove \
+        "$@"
+else
+    python3 "${steam_shortcut_py}" \
+        --exe "${central_install_dir}/internal/run-client.sh" \
+        --name "DualDeck" \
+        --remove \
+        "$@"
+fi
 
 dry_run=0
 for arg in "$@"; do
@@ -1983,6 +2015,8 @@ cat > "${pkg_dir}/host/internal/install-steam-shortcut.sh" <<'WRAP'
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 host_root="$(cd .. && pwd)"
+# shellcheck source=scripts/lib/steam_restart_helper.sh
+source ./steam_restart_helper.sh
 
 # Surfaces failures visibly instead of just closing silently when
 # double-clicked with no visible terminal attached -- logs to a
@@ -2063,7 +2097,7 @@ if [[ "${dry_run}" -eq 0 ]]; then
     fi
 fi
 
-python3 ./steam_shortcut.py \
+run_steam_shortcut_with_restart ./steam_shortcut.py "${error_log}" \
     --exe "${central_install_dir}/dualdeck-host.sh" \
     --name "DualDeck Host" \
     --launch-options "${launch_options}" \
@@ -2160,6 +2194,23 @@ if [[ -z "${steam_shortcut_py}" ]]; then
     exit 0
 fi
 
+# Same two-candidate resolution as steam_shortcut_py above -- see
+# client/internal/uninstall-steam-shortcut.sh's identical comment.
+steam_restart_helper=""
+for candidate in \
+    "${central_install_dir}/internal/steam_restart_helper.sh" \
+    "${self_dir}/steam_restart_helper.sh"
+do
+    if [[ -f "${candidate}" ]]; then
+        steam_restart_helper="${candidate}"
+        break
+    fi
+done
+if [[ -n "${steam_restart_helper}" ]]; then
+    # shellcheck source=scripts/lib/steam_restart_helper.sh
+    source "${steam_restart_helper}"
+fi
+
 # One-time melonDS-Remote -> DualDeck rebrand cleanup: also try removing
 # under the old identity (old central dir, old Exe, old AppName), since
 # the Exe-OR-AppName fallback alone can't bridge a compound change of
@@ -2171,11 +2222,19 @@ python3 "${steam_shortcut_py}" \
     --name "melonDS Remote Host" \
     --remove "$@" >/dev/null 2>&1 || true
 
-python3 "${steam_shortcut_py}" \
-    --exe "${central_install_dir}/dualdeck-host.sh" \
-    --name "DualDeck Host" \
-    --remove \
-    "$@"
+if [[ -n "${steam_restart_helper}" ]]; then
+    run_steam_shortcut_with_restart "${steam_shortcut_py}" "${error_log}" \
+        --exe "${central_install_dir}/dualdeck-host.sh" \
+        --name "DualDeck Host" \
+        --remove \
+        "$@"
+else
+    python3 "${steam_shortcut_py}" \
+        --exe "${central_install_dir}/dualdeck-host.sh" \
+        --name "DualDeck Host" \
+        --remove \
+        "$@"
+fi
 
 dry_run=0
 for arg in "$@"; do
