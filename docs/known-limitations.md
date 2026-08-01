@@ -6451,6 +6451,126 @@ each previous fix addressed. **Not yet verified against a real Cemu
 vcpkg build reaching past this exact point on real hardware** -- next
 attempt is the actual end-to-end confirmation.
 
+## 2026-08-01: emudeck-replace-in-place.sh no longer builds anything locally -- it downloads prebuilt, patched AppImages from the release instead
+
+Direct follow-up to the entries immediately above (Distrobox build path,
+melonDS's missing `MELONDS_REMOTE_ENABLE`, the frozen-protocol-version
+bug, the preserved-work-dir fix, and three separate real-hardware
+`LD_PRELOAD` leaks). Every one of those was a symptom of the same root
+cause: `emudeck-replace-in-place.sh` cloned and compiled melonDS/Azahar/
+Cemu from source on whatever machine happened to run it -- a genuinely
+uncontrolled build environment (immutable-vs-not, Distrobox-or-not, 30+
+system packages, vcpkg for Cemu, whatever Steam happened to have injected
+into the environment that session). Real users kept hitting a long tail
+of build-environment failures that had nothing to do with DualDeck's own
+patch content, each one costing a multi-minute-to-multi-hour build cycle
+to even reproduce.
+
+Prompted by the user's own question mid-session: "are we compiling on top
+of the existing builds? or are we compiling new ones and swapping out the
+executables? I want to simplify this process if we can, instead of making
+this more complicated than it needs to be." The answer: CI (`release.yml`
+via `build-release.sh`) already builds all three emulators from source on
+every release, in a clean, controlled, reproducible environment. There is
+no reason a second, worse copy of that same build should also happen on
+every individual user's machine just to apply the exact same patch.
+
+**What changed:**
+
+- `build-release.sh` now packages the patched melonDS/Azahar/Cemu binaries
+  it already builds into three additional release assets --
+  `dualdeck-melonds-patched-linux-x86_64.AppImage`,
+  `dualdeck-azahar-patched-linux-x86_64.AppImage`,
+  `dualdeck-cemu-patched-linux-x86_64.AppImage` -- using the same
+  `pack_appimage()`/`bundle_library_dependencies()` machinery
+  (`scripts/lib/appimage_pack.sh`) this tool always used, just run once in
+  CI instead of once per user. Their `AppRun` generators
+  (`generate_apprun_melonds`, `generate_apprun_out_of_process`) moved out
+  of `emudeck-replace-in-place.sh` into a new `scripts/lib/
+  apprun_templates.sh`, since only `build-release.sh` calls them now.
+  `release.yml`'s asset glob picked up `release-out/*.AppImage` to publish
+  them. All three assets get `SHA256SUMS` entries alongside the existing
+  archives.
+- Caught during this packaging work, before it could reach a real build:
+  Cemu's own build output is named `Cemu_release`, not `cemu`, but
+  `pack_appimage()` names the AppDir file after the binary's basename and
+  the generated `AppRun` execs `usr/bin/cemu` literally -- staged into a
+  renamed copy first, exactly the same fix the old per-user build path
+  already carried for the same reason (its own comment called this "load-
+  bearing"). Verified end-to-end with fake binaries (real ELF files linked
+  against `libz` so `ldd`-based bundling has something real to walk)
+  before trusting the design abstractly -- all three fake AppImages built
+  and ran correctly via `--appimage-extract-and-run`.
+- `emudeck-replace-in-place.sh` was rewritten to drop entirely: sourcing
+  `pinned_commits.sh`/`ensure-packages.sh`/`build_emulator.sh`/
+  `build_cache.sh`/`appimage_pack.sh`; `is_immutable_system()`/
+  `run_in_distrobox_build_container()` and the Distrobox build container;
+  the 30+-package `ensure_packages "build"`/`"azahar build"`/
+  `"cemu build"` calls; `ensure_host_service_binary()`'s on-demand `cmake`
+  configure; and the persistent `~/.cache/dualdeck/emudeck-builds/` build
+  cache (moot once there's nothing to cache a build of). In their place:
+  `download_patched_appimage()`, which downloads
+  `dualdeck-<emulator>-patched-linux-x86_64.AppImage` from
+  `https://github.com/Crimson3076/DualDeck/releases/latest/download/...`
+  and verifies it against a downloaded `SHA256SUMS` before installing
+  anything -- the exact same download-then-verify convention
+  `DualDeck-Installer.sh` already established for the client/host
+  archives (`curl -fsSL`, `sha256sum -c --ignore-missing`), including its
+  `DUALDECK_INSTALLER_DOWNLOAD_BASE`-style test override
+  (`DUALDECK_REPLACE_DOWNLOAD_BASE` here). Everything else -- EmuDeck
+  AppImage detection (`scripts/lib/emudeck_paths.sh`), the backup-then-
+  install/manifest/drift-detection logic (`scripts/lib/
+  appimage_manifest.py`), the confirmation prompt, `--dry-run`, `--yes`,
+  logging to `~/.config/dualdeck/emudeck-replace.log` -- is unchanged.
+  `scripts/emudeck-check-drift.sh` needed zero changes: it only calls the
+  manifest checker and delegates re-patching to
+  `emudeck-replace-in-place.sh --fix`, so it re-downloads instead of
+  rebuilding automatically.
+- A real bug caught by end-to-end testing against a local fixture HTTP
+  server (fake `~/Applications/*.AppImage` files, a fake release-assets
+  directory served over `python3 -m http.server`, `DUALDECK_REPLACE_
+  DOWNLOAD_BASE` pointed at it): `download_patched_appimage()`'s own
+  progress messages (`echo "== ${emulator}: downloading ..."`) were
+  written to stdout, but the function is called as `path="$(download_
+  patched_appimage ...)"` -- command substitution captures *all* of a
+  function's stdout, so the "returned path" was actually the entire
+  multi-line progress log with the real path stuck on the end, and the
+  subsequent `cp "${downloaded_appimage}" ...` failed with "No such file
+  or directory" against that garbled multi-line string. Fixed by sending
+  every progress/status line in `download_patched_appimage()` and
+  `ensure_sha256sums_downloaded()` to stderr, leaving stdout carrying only
+  the final path -- the same stdout/stderr discipline every other
+  path-returning function in this codebase already follows, just missed
+  here on the first pass.
+- `build-release.sh`'s "Bundled EmuDeck integration tool"
+  (`host/emudeck-integration/`) packaging step shrank to match: it no
+  longer bundles the build-toolchain library files, the three emulator
+  patch files, or a full copy of `CMakeLists.txt`/`protocol`/
+  `adapter-sdk`/`host/remote-server` (previously needed so `cmake` could
+  configure `dualdeck-host-service` on demand from inside the packaged
+  copy) -- only `scripts/lib/emudeck_paths.sh` and `scripts/lib/
+  appimage_manifest.py` are still needed. Its bundled `README.md` and the
+  `dualdeck-host.sh` launcher wrapper's user-facing text were both updated
+  from "long source build" language to "downloads prebuilt AppImages."
+
+**Verified:** syntax-checked; full end-to-end run against a local fixture
+HTTP server covering first-time install (backup created, manifest
+written, correct content installed), re-install when already
+`matches_patched` (no redundant backup churn), drift re-patch when the
+installed file was replaced by something else (backup preserved from the
+*original* install, not the drifted file), checksum-mismatch refusal
+(tampered asset correctly rejected, original file left untouched), `--
+dry-run` (zero side effects), no-EmuDeck-installed skip messages for all
+three emulators, `-h`/`--help`, and a rejected `--emulator` value.
+
+**Not yet verified:** against a real GitHub Releases download (only a
+local fixture server so far) or on real EmuDeck-installed hardware end to
+end -- this is the biggest architecture change of the whole
+replace-in-place effort, so a real-hardware pass is still needed before
+calling this fully confirmed, the same posture already carried by the
+per-emulator "unverified against a live EmuDeck install" caveats
+elsewhere in this document.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

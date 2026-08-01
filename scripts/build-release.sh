@@ -24,6 +24,10 @@ mkdir -p "${work_dir}" "${out_dir}"
 source "${repo_root}/scripts/lib/ensure-packages.sh"
 # shellcheck source=scripts/lib/build_emulator.sh
 source "${repo_root}/scripts/lib/build_emulator.sh"
+# shellcheck source=scripts/lib/appimage_pack.sh
+source "${repo_root}/scripts/lib/appimage_pack.sh"
+# shellcheck source=scripts/lib/apprun_templates.sh
+source "${repo_root}/scripts/lib/apprun_templates.sh"
 
 echo "== [0/6] Checking build dependencies =="
 # qt6-qtbase-private-devel (dnf): needed for Azahar's Qt6::GuiPrivate
@@ -208,6 +212,51 @@ ldd "${cemu_bin}" | awk '{print $1}' | sort -u \
 # extra runtime library dependencies beyond libc/libstdc++/pthread.
 cp "${repo_build}/host/remote-server/dualdeck-host-service" "${pkg_dir}/host/internal/dualdeck-host-service"
 chmod +x "${pkg_dir}/host/internal/dualdeck-host-service"
+
+# Prebuilt, patched, self-contained AppImages for
+# emudeck-replace-in-place.sh to download and drop straight into an
+# existing EmuDeck install (see docs/known-limitations.md's 2026-08-01
+# "prebuilt AppImages" entry for the full story). This tool used to
+# clone/patch/compile melonDS/Azahar/Cemu on the *user's own machine*
+# on every run -- Distrobox, vcpkg, and glibc/Qt ABI mismatches between
+# that machine and wherever the resulting AppImage got launched turned
+# out to be an enormous, repeated source of real-world failures (a
+# Steam-inherited LD_PRELOAD corrupting unrelated subprocess output,
+# missing kernel headers, missing runtime libraries), none of which
+# have anything to do with this project's own patches. CI already
+# builds all three from source successfully on every release (a
+# controlled, Steam-free, consistently-provisioned environment) -- so
+# building the actual installable artifact here too, once, and letting
+# every user's machine just download it, eliminates that entire class
+# of problem outright rather than chasing it fix by fix. bundle_library_
+# dependencies() (see appimage_pack.sh) makes each AppImage genuinely
+# self-contained regardless of what glibc/Qt version the target host
+# happens to have.
+echo "== Packaging prebuilt AppImages (melonDS/Azahar/Cemu) for emudeck-replace-in-place.sh =="
+
+melonds_apprun="${work_dir}/AppRun-melonds"
+generate_apprun_melonds "${melonds_apprun}" "${version_tag}"
+pack_appimage "${melonds_bin}" "${out_dir}/dualdeck-melonds-patched-linux-x86_64.AppImage" \
+    melonDS "${melonds_apprun}"
+
+azahar_apprun="${work_dir}/AppRun-azahar"
+generate_apprun_out_of_process AZAHAR azahar azahar-apprun-adapter.sock "${azahar_apprun}"
+pack_appimage "${azahar_bin}" "${out_dir}/dualdeck-azahar-patched-linux-x86_64.AppImage" \
+    azahar "${azahar_apprun}" "${repo_build}/host/remote-server/dualdeck-host-service"
+
+cemu_apprun="${work_dir}/AppRun-cemu"
+generate_apprun_out_of_process CEMU cemu cemu-apprun-adapter.sock "${cemu_apprun}"
+# pack_appimage() names the file inside AppDir/usr/bin/ after
+# basename(binary_path), and the AppRun execs "usr/bin/cemu" literally
+# (matching Azahar's build output, which happens to already be named
+# "azahar") -- but Cemu's own build output is literally named
+# Cemu_release, not "cemu", so it has to be staged under the right name
+# first, same as emudeck-replace-in-place.sh used to do locally.
+cemu_staged="${work_dir}/staged-cemu/cemu"
+mkdir -p "$(dirname "${cemu_staged}")"
+cp "${cemu_bin}" "${cemu_staged}"
+pack_appimage "${cemu_staged}" "${out_dir}/dualdeck-cemu-patched-linux-x86_64.AppImage" \
+    cemu "${cemu_apprun}" "${repo_build}/host/remote-server/dualdeck-host-service"
 
 cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/host/internal/ensure-packages.sh"
 cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/host/internal/steam_shortcut.py"
@@ -1254,20 +1303,20 @@ cat > "${pkg_dir}/host/internal/launch-emudeck-integration.sh" <<'WRAP'
 # the DualDeck repository, and docs/known-limitations.md's Phase A
 # entry there for the full design).
 #
-# Unlike every other dualdeck-host.sh menu choice, this one is a long
-# (can be many minutes, especially Cemu), verbose source build with its
-# own per-emulator y/N confirmation prompts read from the terminal --
-# not a quick kdialog-driven action. Two things this needs that no
-# other menu choice does, both from real user feedback:
+# Unlike every other dualdeck-host.sh menu choice, this one downloads and
+# installs over files EmuDeck itself manages, with its own per-emulator
+# y/N confirmation prompts read from the terminal -- not a quick
+# kdialog-driven action. Two things this needs that no other menu choice
+# does, both from real user feedback:
 #   1. Which emulator(s) to patch -- asked up front and passed through
 #      as --emulator flags, instead of always patching every EmuDeck
 #      install found.
 #   2. The terminal window must NOT vanish the instant the tool exits
 #      (whether it succeeds or fails) -- the whole point of running in
-#      a visible terminal is so build output and prompts can be read,
-#      which a window that closes itself immediately defeats. Building
-#      a small wrapper script that pauses on a "Press Enter to close"
-#      prompt afterward is what actually fixes this, since a bare
+#      a visible terminal is so download/install progress and prompts can
+#      be read, which a window that closes itself immediately defeats.
+#      Building a small wrapper script that pauses on a "Press Enter to
+#      close" prompt afterward is what actually fixes this, since a bare
 #      `konsole -e sometool` still closes konsole the moment sometool
 #      exits regardless of what sometool itself printed.
 #
@@ -1345,7 +1394,7 @@ done
 # ---- Keep the window open afterward? ----
 keep_open=1
 if have_kdialog; then
-    kdialog --title "DualDeck Host" --yesno "Keep this window open after finishing so you can read the build output? (Recommended)" 2>/dev/null || keep_open=0
+    kdialog --title "DualDeck Host" --yesno "Keep this window open after finishing so you can read the output? (Recommended)" 2>/dev/null || keep_open=0
 else
     reply=""
     read -rp "Keep this window open after finishing so you can read the output? [Y/n] " reply < /dev/tty || true
@@ -1397,7 +1446,7 @@ manual_cmd="${tool}"
 for a in "${emulator_args[@]}"; do
     manual_cmd="${manual_cmd} $(printf '%q' "${a}")"
 done
-msg="This needs a terminal window to show build progress and ask y/N
+msg="This needs a terminal window to show download progress and ask y/N
 before replacing each emulator, but no terminal emulator (konsole,
 xterm, gnome-terminal) was found to open one automatically.
 
@@ -2401,64 +2450,34 @@ NOTES
 
 echo "== Bundling EmuDeck integration tool (host/emudeck-integration/) =="
 # Ships scripts/emudeck-replace-in-place.sh + scripts/emudeck-check-drift.sh
-# (and their scripts/lib/ dependencies + the three patch files they
-# apply) as part of the release archive itself, mirroring the exact
-# relative layout those scripts already expect from a real source
-# checkout (<root>/scripts/..., <root>/host/<emulator>-patches/...) so
-# neither script needs any changes to work unmodified from inside a
-# packaged, downloaded release. host/'s existing install/update path
-# (install-steam-shortcut.sh's/install-host-distrobox.sh's
-# `cp -a "${host_root}/."`) already recursively copies any new
-# subdirectory here into ~/.config/dualdeck/install/ on every future
-# "Check for updates" -- zero changes needed to those install/update
-# scripts either.
+# as part of the release archive itself, mirroring the exact relative
+# layout those scripts already expect from a real source checkout
+# (<root>/scripts/...) so neither script needs any changes to work
+# unmodified from inside a packaged, downloaded release. host/'s existing
+# install/update path (install-steam-shortcut.sh's/
+# install-host-distrobox.sh's `cp -a "${host_root}/."`) already
+# recursively copies any new subdirectory here into
+# ~/.config/dualdeck/install/ on every future "Check for updates" -- zero
+# changes needed to those install/update scripts either.
+#
+# Much smaller than it used to be: emudeck-replace-in-place.sh no longer
+# builds anything locally (see its own header comment) -- it downloads
+# already-built, already-patched AppImages from this same release instead
+# -- so the whole build toolchain this bundle used to carry (pinned_
+# commits.sh, ensure-packages.sh, build_emulator.sh, build_cache.sh,
+# appimage_pack.sh, the three emulator patch files, and a full copy of
+# CMakeLists.txt/protocol/adapter-sdk/host/remote-server needed to compile
+# dualdeck-host-service on demand) is gone. All that's left is EmuDeck
+# AppImage-path detection and the sidecar drift-detection manifest.
 emudeck_bundle_dir="${pkg_dir}/host/emudeck-integration"
-mkdir -p "${emudeck_bundle_dir}/scripts/lib" \
-         "${emudeck_bundle_dir}/host/melonds-patches" \
-         "${emudeck_bundle_dir}/host/azahar-patches" \
-         "${emudeck_bundle_dir}/host/cemu-patches"
+mkdir -p "${emudeck_bundle_dir}/scripts/lib"
 
 cp "${repo_root}/scripts/emudeck-replace-in-place.sh" "${emudeck_bundle_dir}/scripts/"
 cp "${repo_root}/scripts/emudeck-check-drift.sh" "${emudeck_bundle_dir}/scripts/"
-cp "${repo_root}/scripts/lib/pinned_commits.sh" "${emudeck_bundle_dir}/scripts/lib/"
-cp "${repo_root}/scripts/lib/ensure-packages.sh" "${emudeck_bundle_dir}/scripts/lib/"
-cp "${repo_root}/scripts/lib/build_emulator.sh" "${emudeck_bundle_dir}/scripts/lib/"
-cp "${repo_root}/scripts/lib/build_cache.sh" "${emudeck_bundle_dir}/scripts/lib/"
 cp "${repo_root}/scripts/lib/emudeck_paths.sh" "${emudeck_bundle_dir}/scripts/lib/"
-cp "${repo_root}/scripts/lib/appimage_pack.sh" "${emudeck_bundle_dir}/scripts/lib/"
 cp "${repo_root}/scripts/lib/appimage_manifest.py" "${emudeck_bundle_dir}/scripts/lib/"
 chmod +x "${emudeck_bundle_dir}/scripts/emudeck-replace-in-place.sh" \
          "${emudeck_bundle_dir}/scripts/emudeck-check-drift.sh"
-
-cp "${repo_root}/host/melonds-patches/0001-remote-server-integration.patch" \
-   "${emudeck_bundle_dir}/host/melonds-patches/"
-cp "${repo_root}/host/azahar-patches/0001-remote-server-integration.patch" \
-   "${emudeck_bundle_dir}/host/azahar-patches/"
-cp "${repo_root}/host/cemu-patches/0001-remote-server-integration.patch" \
-   "${emudeck_bundle_dir}/host/cemu-patches/"
-
-# Real user report, 2026-08-01: ensure_host_service_binary() (in
-# emudeck-replace-in-place.sh, needed for Azahar/Cemu's out-of-process
-# dualdeck-host-service that gets bundled into their AppImage) runs
-# `cmake -S "${repo_root}" -B ...` where repo_root resolves to wherever
-# this script itself lives -- when run from a real source checkout
-# that's this whole repo, but when run from THIS packaged copy
-# (repo_root = emudeck_bundle_dir), there was no top-level
-# CMakeLists.txt or protocol/adapter-sdk/host-remote-server source here
-# at all, so that cmake configure failed outright ("does not appear to
-# contain CMakeLists.txt") the first time anyone actually exercised the
-# Azahar/Cemu path end to end -- melonDS doesn't hit this step, so
-# earlier testing never caught it. Bundled wholesale (not cherry-picked
-# like the scripts/lib/ files above) since pruning per-file risks
-# missing a transitive add_subdirectory() dependency the way this bug
-# itself was missed; the unused tests/ subdirectories inside are inert
-# (never added -- see the -DDUALDECK_BUILD_TESTS=OFF passed below) and
-# cost only a little archive size.
-mkdir -p "${emudeck_bundle_dir}/host"
-cp "${repo_root}/CMakeLists.txt" "${emudeck_bundle_dir}/"
-cp -a "${repo_root}/protocol" "${emudeck_bundle_dir}/"
-cp -a "${repo_root}/adapter-sdk" "${emudeck_bundle_dir}/"
-cp -a "${repo_root}/host/remote-server" "${emudeck_bundle_dir}/host/"
 
 # Read by emudeck-replace-in-place.sh's own version-detection fallback
 # (no .git directory exists inside a packaged release) -- same
@@ -2474,10 +2493,10 @@ scripts already point to (\`~/Applications/*.AppImage\`), so they keep
 working unedited -- no need to change any EmuDeck shortcut, no separate
 DualDeck-managed install directory for these emulators.
 
-This is a **source-build tool**: it clones and compiles melonDS/Azahar/
-Cemu from source on your machine (it will offer to install build tools
-via apt/dnf/pacman), the same way this release itself was built. It is
-not instant, and Cemu's build in particular can take a long time.
+This downloads already-built, already-patched AppImages from this same
+GitHub release (built once in CI, not compiled on your machine) and
+verifies them against the release's \`SHA256SUMS\` before installing
+anything -- no build toolchain, no Distrobox, nothing to compile.
 
 **Not yet verified against a real EmuDeck install** -- see
 \`docs/known-limitations.md\`'s "EmuDeck replace-in-place installer"
@@ -2491,7 +2510,7 @@ entry (bundled a few directories up, at the release archive's own
 
 Start with \`--dry-run\` -- it only detects your EmuDeck installs and
 reports what it would do, with zero side effects (it won't even
-install build dependencies). Once you're happy with the plan:
+download anything). Once you're happy with the plan:
 
     ./emudeck-replace-in-place.sh
 
@@ -2505,11 +2524,9 @@ installed AppImage (losing DualDeck's patch), and re-patch it if so:
     ./emudeck-check-drift.sh
     ./emudeck-check-drift.sh --fix
 
-Re-patching after drift like this does **not** recompile from scratch:
-a compiled build is cached in \`~/.cache/dualdeck/emudeck-builds/\` and
-reused as long as DualDeck's own pinned commit and patch haven't
-changed, regardless of what stock version EmuDeck's updater grabbed.
-Applies to all three emulators.
+Re-patching after drift like this just re-downloads and re-verifies the
+same prebuilt AppImage from this release -- no rebuild, ever. Applies to
+all three emulators.
 EMUDECK_README
 
 echo "Bundled EmuDeck integration tool at host/emudeck-integration/"
@@ -2546,8 +2563,15 @@ echo "Wrote ${out_dir}/${alias_archive_name} (same bytes as ${archive_name})"
 # it, rather than trusting a plain HTTPS download unconditionally. A
 # constant filename for the same reason the archive itself has one --
 # re-publishing to the same release asset name replaces it instead of
-# accumulating stale duplicates.
-(cd "${out_dir}" && sha256sum "${archive_name}" "${alias_archive_name}" > SHA256SUMS)
+# accumulating stale duplicates. Also covers the three prebuilt AppImages
+# above -- emudeck-replace-in-place.sh verifies its download against this
+# same file before installing anything over a user's existing EmuDeck
+# AppImage.
+(cd "${out_dir}" && sha256sum "${archive_name}" "${alias_archive_name}" \
+    dualdeck-melonds-patched-linux-x86_64.AppImage \
+    dualdeck-azahar-patched-linux-x86_64.AppImage \
+    dualdeck-cemu-patched-linux-x86_64.AppImage \
+    > SHA256SUMS)
 echo "Wrote ${out_dir}/SHA256SUMS"
 
 # DualDeck-Installer.sh needs no build-time-computed values (it always

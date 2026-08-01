@@ -186,5 +186,6 @@ jobs:
             is and isn't verified.
           files: |
             release-out/*.tar.gz
+            release-out/*.AppImage
             release-out/SHA256SUMS
             release-out/DualDeck-Installer.sh
