@@ -212,6 +212,7 @@ chmod +x "${pkg_dir}/host/internal/dualdeck-host-service"
 cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/host/internal/ensure-packages.sh"
 cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/host/internal/steam_shortcut.py"
 cp "${repo_root}/scripts/lib/steam_restart_helper.sh" "${pkg_dir}/host/internal/steam_restart_helper.sh"
+cp "${repo_root}/scripts/lib/host_firewall.sh" "${pkg_dir}/host/internal/host_firewall.sh"
 
 cp "${repo_build}/client/dualdeck-client" "${pkg_dir}/client/dualdeck-client"
 chmod +x "${pkg_dir}/client/dualdeck-client"
@@ -1450,6 +1451,8 @@ cat > "${pkg_dir}/host/internal/install-host-distrobox.sh" <<'WRAP'
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 host_root="$(cd .. && pwd)"
+# shellcheck source=scripts/lib/host_firewall.sh
+source ./host_firewall.sh
 
 if [[ ! -f /run/ostree-booted ]] && ! command -v rpm-ostree >/dev/null 2>&1; then
     echo "This doesn't look like an immutable (rpm-ostree) system -- just run" >&2
@@ -1543,6 +1546,14 @@ distrobox enter "${container_name}" -- sudo dnf install -y \
     qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtmultimedia-devel qt6-qtsvg-devel \
     libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel \
     wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel
+
+# Firewalld runs at the host OS level, not per-container -- opening
+# these ports here (not just in install-steam-shortcut.sh, which
+# already calls this script as a sub-step on immutable systems) also
+# covers anyone running this script standalone. Best-effort, never
+# fatal, and idempotent if install-steam-shortcut.sh's own call already
+# did this a moment ago -- see scripts/lib/host_firewall.sh.
+ensure_host_firewall_ports || true
 
 # Only reached if everything above succeeded (set -e) -- safe to swap in
 # the new install now (nothing to swap if already_central -- the
@@ -2017,6 +2028,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 host_root="$(cd .. && pwd)"
 # shellcheck source=scripts/lib/steam_restart_helper.sh
 source ./steam_restart_helper.sh
+# shellcheck source=scripts/lib/host_firewall.sh
+source ./host_firewall.sh
 
 # Surfaces failures visibly instead of just closing silently when
 # double-clicked with no visible terminal attached -- logs to a
@@ -2095,6 +2108,15 @@ if [[ "${dry_run}" -eq 0 ]]; then
         cp "$(dirname "${host_root}")/check-for-updates.sh" "$(dirname "${central_install_dir}")/check-for-updates.sh" 2>/dev/null || true
         cp "$(dirname "${host_root}")/VERSION" "$(dirname "${central_install_dir}")/VERSION" 2>/dev/null || true
     fi
+
+    # Best-effort, never fatal to the install itself -- see
+    # scripts/lib/host_firewall.sh's own header for exactly what this
+    # opens and why it's safe to just log-and-continue on failure
+    # (real user report: the client couldn't reach the host at all,
+    # even via a direct DualDeck Host GUI launch, and firewalld -- the
+    # Bazzite/Fedora default -- blocking these ports was the likely
+    # cause; this used to be a manual docs/bazzite-host-setup.md step).
+    ensure_host_firewall_ports || true
 fi
 
 run_steam_shortcut_with_restart ./steam_shortcut.py "${error_log}" \

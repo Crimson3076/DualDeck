@@ -282,19 +282,31 @@ and device approval" section.
 ### Firewall
 
 Bazzite uses `firewalld` by default (KDE Plasma's Wayland session doesn't
-change this). Open the three ports this prototype uses (defaults: 8760
-TCP control, 8761 UDP input, 8762 TCP video -- adjust if you passed
-different `--*-port` flags):
+change this), and it blocks every one of DualDeck's ports until opened --
+this is the most common reason a client can't find or connect to the
+host at all.
+
+**If you installed via `DualDeck-Installer.sh`, `dualdeck-host.sh`'s
+"Add to Steam" menu choice, or `install-host-distrobox.sh`, this is done
+for you automatically** (`scripts/lib/host_firewall.sh`, best-effort --
+if it fails for any reason, e.g. no `firewalld`/`ufw` found or `sudo`
+declined, it logs a clear message and falls back to leaving this manual
+step for you, same as before). Nothing else to do in that case.
+
+If you're running `run-host.sh` directly from a source checkout instead
+(bypassing the installer scripts), open the five ports it uses yourself
+(defaults: 8760 TCP control, 8761 UDP input, 8762 TCP video, 8763 UDP
+discovery, 8765 UDP audio -- adjust if you passed different `--*-port`
+flags):
 
 ```sh
-sudo firewall-cmd --add-port=8760/tcp --add-port=8761/udp --add-port=8762/tcp --add-port=8763/udp
-# add --permanent and reload if you want this to survive a reboot:
-sudo firewall-cmd --permanent --add-port=8760/tcp --add-port=8761/udp --add-port=8762/tcp --add-port=8763/udp
+sudo firewall-cmd --permanent --add-port=8760/tcp --add-port=8761/udp --add-port=8762/tcp --add-port=8763/udp --add-port=8765/udp
 sudo firewall-cmd --reload
 ```
 
 (`8763/udp` is LAN discovery -- skip it if you started the host with
-`--no-discovery`.)
+`--no-discovery`. `8765/udp` is audio, always on -- no flag to disable
+it.)
 
 ### Launch script
 

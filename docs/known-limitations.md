@@ -5875,6 +5875,65 @@ logic against mocked `steam`/`pgrep`, not Steam's actual real-world
 shutdown behavior, which is exactly the thing documented elsewhere as
 inconsistent on Bazzite.
 
+## 2026-08-01: Host firewall ports are opened automatically during install
+
+Real user report (Bazzite HTPC): the client couldn't find or connect to
+the host at all, even launching an emulator directly via the DualDeck
+Host GUI (not just through the EmuDeck/SteamRomManager path) -- and the
+user explicitly didn't want to run the manual `firewall-cmd` command
+`docs/bazzite-host-setup.md`'s Firewall section documents ("the script
+should have it built in if possible"). Bazzite/Fedora ship `firewalld`
+active by default, which blocks all five of these ports
+(`host/remote-server/include/host/net_server.h`'s `NetServerConfig`
+defaults) until explicitly opened: 8760/tcp control, 8761/udp input,
+8762/tcp video, 8763/udp discovery, 8765/udp audio -- discovery being
+blocked alone is enough to fully explain "doesn't show up on the
+client at all," and audio (8765) was never even listed in the existing
+manual doc until now.
+
+Added `scripts/lib/host_firewall.sh` (`ensure_host_firewall_ports()`,
+bundled into `host/internal/` only -- this is a host-side concern, the
+client doesn't need it), wired into both
+`host/internal/install-steam-shortcut.sh` and
+`host/internal/install-host-distrobox.sh` (the latter both as a
+sub-step of the former on immutable systems, and standalone for anyone
+running it directly -- firewalld runs at the host OS level, not
+per-container, so it's the same fix either way; a harmless idempotent
+double-call when reached through both). Supports `firewalld`
+(Bazzite/Fedora's default) and `ufw` (Debian/Ubuntu-based hosts); no
+raw iptables/nftables handling, since neither of this project's
+documented host platforms needs it. Deliberately **best-effort and
+never fatal to the install**: any failure (no supported firewall
+manager, sudo declined, `firewall-cmd`/`ufw` erroring) logs a clear
+message pointing at the still-present manual fallback in
+`docs/bazzite-host-setup.md` and returns non-zero, but the calling
+install script always continues (`ensure_host_firewall_ports || true`)
+-- getting the Steam shortcut installed matters more than this one
+convenience step succeeding. Skipped entirely in `--dry-run` (same
+"zero side effects" guarantee `emudeck-replace-in-place.sh --dry-run`
+already has).
+
+Verified in isolation (mocking `firewall-cmd`/`ufw`, not a real
+firewall): all five ports/protocols opened correctly via firewalld
+(`--permanent` + `--reload`) and via ufw, the "no supported firewall
+manager" fallback message, a `firewall-cmd` failure being logged but
+not aborting the caller, `--dry-run` never invoking `firewall-cmd` at
+all, and a full end-to-end run of the real generated
+`install-steam-shortcut.sh` against a synthetic `$HOME` with a fake
+`firewall-cmd` -- confirmed the shortcut still installs successfully
+even when the fake firewall-cmd is made to fail.
+
+**Not yet verified**: against a real `firewalld`/`ufw` on real
+hardware -- isolation testing covers the logic, not whether
+`sudo firewall-cmd`/`sudo ufw` actually prompts and succeeds
+correctly when this runs without an attached terminal (e.g. re-running
+"Add to Steam" from inside Gaming Mode, where `dualdeck-host.sh` calls
+`install-steam-shortcut.sh` directly with no terminal-relaunch wrapper,
+unlike the EmuDeck integration menu choice) -- this is a pre-existing
+risk shared with `ensure_packages()`'s own `sudo apt/dnf/pacman
+install` calls, not something newly introduced here, but not yet fixed
+either.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
