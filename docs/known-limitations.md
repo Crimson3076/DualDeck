@@ -7250,6 +7250,77 @@ cleanly (`QT_INIT_OK`, exit 0), no platform-plugin error.
 **Not yet verified:** against the real hardware that reported this bug --
 needs an actual re-test of both melonDS and Azahar once this ships.
 
+## 2026-08-01: melonDS and Azahar launch cleanly with the fix above, but produce no window on the host at all
+
+Real re-test on the same Bazzite/Fedora HTPC, both from Steam and from a
+terminal directly (ruling out a Steam/gamescope launch wrapper -- none
+was configured anyway): both emulators start with no crash, `NetServer`
+listening normally, and the client connects and streams video
+successfully. But **no window, taskbar entry, or anything else appears
+on the host's own display at all** -- confirmed by the user looking
+directly at the host's monitor, not just going by log output.
+
+**Root cause:** melonDS's frame capture for the client
+(`GLBottomScreenCapture`) and Azahar/Cemu's equivalent (`AdapterBridge`)
+both read frames directly from an OpenGL render target -- this works
+whether or not the emulator's own window is actually mapped onto a
+display, so a healthy client video stream is not proof the host window
+exists. The previous fix bundled `platforms/` (the QPA plugin itself:
+`libqxcb.so`, `libqwayland-egl.so`) plus *that plugin's own* linked
+dependencies -- enough for Qt to load a platform plugin without
+aborting. But actually creating and mapping a GL-backed *window* needs
+several more Qt plugin categories that were never bundled at all:
+`xcbglintegrations` (GLX/EGL integration Qt needs for a GL-backed window
+over X11/XWayland) and, on a Wayland session, `wayland-shell-integration`
+(the xdg-shell protocol code that actually asks the compositor to map a
+toplevel window -- without it, Qt can construct a window object and keep
+rendering into it internally, but never actually tells the compositor to
+show anything), `wayland-decoration-client`, and `wayland-graphics-
+integration-client`. None of these are QPA platform plugins themselves,
+so their absence doesn't produce Qt's usual "Could not find/load
+platform plugin" abort -- window creation just silently no-ops, which is
+exactly why this surfaced as a second, completely different-looking bug
+after the first fix rather than as a variant of the same error. Modern
+Fedora/Bazzite desktop sessions default to Wayland, matching why this
+wasn't caught by the previous fix's positive verification (done under
+Xvfb, which is X11-only).
+
+**Fix:** `scripts/build-release.sh`'s AppImage-packaging step now stages
+and bundles `xcbglintegrations`, `wayland-shell-integration`,
+`wayland-decoration-client`, and `wayland-graphics-integration-client`
+alongside `platforms/` (all under the same `QT_PLUGIN_PATH` root the
+AppRun scripts already export), reusing the existing per-`.so`
+dependency-bundling logic from the previous fix for each of these too.
+`xcbglintegrations` is required (build fails without it, matching
+`platforms/`'s existing behavior); the three Wayland-only categories are
+bundled if present on the build machine and skipped gracefully
+otherwise, since XCB/XWayland support alone is enough to fix the
+originally reported bug even on a build machine with no Wayland Qt
+packages installed.
+
+**Verified:** built a real `QOpenGLWidget`-based Qt6 app (closer to
+melonDS/Azahar's actual GL-backed rendering than the previous entry's
+plain `QLabel` test), packaged it through the fixed pipeline with all
+five plugin categories bundled, and ran it under Xvfb -- `xwininfo -root
+-tree` showed a real, mapped 320x240 window, not just a clean process
+exit. **Could not verify the Wayland-specific half of this fix at all**:
+this sandbox has no Wayland compositor available to run against, and a
+same-machine X11 negative-control test (repackaging the identical app
+with only `platforms/`, no `xcbglintegrations`) *also* produced a mapped
+window under Xvfb here -- meaning this sandbox's Mesa/GL setup has a
+fallback that masks whatever's actually happening on the user's real
+Wayland desktop session, the same category of sandbox limitation flagged
+in this document's earlier Qt-plugin entries. The reasoning for the
+Wayland half rests on directly confirming (via a plain directory listing
+of a real Qt6 install) that `wayland-shell-integration` et al. exist as
+separate, never-bundled plugin categories, and on how Qt's Wayland QPA
+backend is documented to use them -- not on a reproduced-and-fixed local
+failure.
+
+**Not yet verified:** against the real hardware that reported this bug --
+this is the one to watch most closely on the next re-test, since the
+Wayland half of the fix has no sandbox verification behind it at all.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

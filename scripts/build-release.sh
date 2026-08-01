@@ -285,20 +285,54 @@ qt6_plugins_dir="$(find_qt6_plugins_dir)" || {
     echo "build machine -- install qt6-base-dev (or your distro's equivalent) first." >&2
     exit 1
 }
-qt_platforms_staged="${work_dir}/qt6-platforms/platforms"
-mkdir -p "$(dirname "${qt_platforms_staged}")"
-cp -a "${qt6_plugins_dir}/platforms" "${qt_platforms_staged}"
+# Real user report, 2026-08-01: even after platforms/ was bundled (the
+# entry above -- fixes the outright abort), melonDS/Azahar both launched
+# with no crash, a working NetServer, and a working client video stream,
+# but produced literally no window at all on the host. The QPA platform
+# plugin (libqxcb.so/libqwayland-egl.so, both in platforms/) is only
+# *one* of several plugin categories Qt needs to actually create and map
+# a GL-backed toplevel window -- xcbglintegrations/ (GLX/EGL integration
+# for xcb) and, on Wayland, wayland-shell-integration/ (the xdg-shell
+# protocol code that actually tells the compositor to map the window),
+# wayland-decoration-client/, and wayland-graphics-integration-client/
+# (the EGL/Wayland buffer backend). None of those were ever bundled --
+# unlike a missing platforms/ plugin, a missing plugin in *these*
+# categories doesn't make Qt abort at all: it just silently never maps a
+# window, while the OpenGL context and framebuffer still exist enough for
+# GLBottomScreenCapture/AdapterBridge's own frame-grabbing (which reads
+# the render target directly, not the composited window) to keep working
+# -- exactly matching the report ("client sees video, host sees nothing,
+# no crash, no error"). xcbglintegrations is required unconditionally
+# (X11/XWayland always needs it for a GL-backed window); the three
+# wayland-* categories are staged only if this build machine's Qt install
+# has them (a build machine without qt6-wayland installed simply won't
+# have these directories -- degrades to "Wayland sessions may still not
+# show a window," not a hard build failure, since XCB/XWayland is enough
+# to fix the reported bug either way).
+qt_plugin_staging_root="${work_dir}/qt6-plugins"
+qt_plugin_extra_dirs=""
+for qt_plugin_category in platforms xcbglintegrations wayland-shell-integration \
+    wayland-decoration-client wayland-graphics-integration-client; do
+    if [[ -d "${qt6_plugins_dir}/${qt_plugin_category}" ]]; then
+        mkdir -p "${qt_plugin_staging_root}"
+        cp -a "${qt6_plugins_dir}/${qt_plugin_category}" "${qt_plugin_staging_root}/${qt_plugin_category}"
+        qt_plugin_extra_dirs="${qt_plugin_extra_dirs:+${qt_plugin_extra_dirs}:}${qt_plugin_staging_root}/${qt_plugin_category}"
+    elif [[ "${qt_plugin_category}" == "xcbglintegrations" ]]; then
+        echo "warning: this build machine's Qt6 install has no xcbglintegrations plugin --" >&2
+        echo "packaged melonDS/Azahar may fail to create a GL-backed window over X11/XWayland." >&2
+    fi
+done
 
 melonds_apprun="${work_dir}/AppRun-melonds"
 generate_apprun_melonds "${melonds_apprun}" "${version_tag}"
 pack_appimage "${melonds_bin}" "${out_dir}/dualdeck-melonds-patched-linux-x86_64.AppImage" \
-    melonDS "${melonds_apprun}" "" "${qt_platforms_staged}"
+    melonDS "${melonds_apprun}" "" "${qt_plugin_extra_dirs}"
 
 azahar_apprun="${work_dir}/AppRun-azahar"
 generate_apprun_out_of_process AZAHAR azahar azahar-apprun-adapter.sock "${azahar_apprun}"
 pack_appimage "${azahar_bin}" "${out_dir}/dualdeck-azahar-patched-linux-x86_64.AppImage" \
     azahar "${azahar_apprun}" "${repo_build}/host/remote-server/dualdeck-host-service" \
-    "${qt_platforms_staged}"
+    "${qt_plugin_extra_dirs}"
 
 cemu_apprun="${work_dir}/AppRun-cemu"
 generate_apprun_out_of_process CEMU cemu cemu-apprun-adapter.sock "${cemu_apprun}"
