@@ -2497,6 +2497,11 @@ cp "${repo_root}/scripts/emudeck-replace-in-place.sh" "${emudeck_bundle_dir}/scr
 cp "${repo_root}/scripts/emudeck-check-drift.sh" "${emudeck_bundle_dir}/scripts/"
 cp "${repo_root}/scripts/lib/emudeck_paths.sh" "${emudeck_bundle_dir}/scripts/lib/"
 cp "${repo_root}/scripts/lib/appimage_manifest.py" "${emudeck_bundle_dir}/scripts/lib/"
+# GitHub/real-hardware report, 2026-08-01: emudeck-replace-in-place.sh
+# now opens this host's firewall for DualDeck's ports at install time
+# (see that script's own comment) -- needs this bundled too, the same
+# reason emudeck_paths.sh/appimage_manifest.py are.
+cp "${repo_root}/scripts/lib/host_firewall.sh" "${emudeck_bundle_dir}/scripts/lib/"
 chmod +x "${emudeck_bundle_dir}/scripts/emudeck-replace-in-place.sh" \
          "${emudeck_bundle_dir}/scripts/emudeck-check-drift.sh"
 
@@ -2519,10 +2524,10 @@ GitHub release (built once in CI, not compiled on your machine) and
 verifies them against the release's \`SHA256SUMS\` before installing
 anything -- no build toolchain, no Distrobox, nothing to compile.
 
-**Not yet verified against a real EmuDeck install** -- see
-\`docs/known-limitations.md\`'s "EmuDeck replace-in-place installer"
-entry (bundled a few directories up, at the release archive's own
-\`docs/\`) for exactly what is and isn't confirmed.
+Confirmed working end to end on real hardware (all three emulators
+launching via their existing EmuDeck/Steam shortcuts) -- see
+\`docs/known-limitations.md\`'s 2026-08-01 entries for the full
+verification history and what's still outstanding.
 
 ## Usage
 
@@ -2538,6 +2543,13 @@ download anything). Once you're happy with the plan:
 Add \`--emulator melonds\` / \`--emulator azahar\` / \`--emulator cemu\`
 (repeatable) to target specific emulators instead of every one EmuDeck
 has installed. Add \`--yes\` to skip the confirmation prompt.
+
+This also opens this host's firewall for DualDeck's ports (via
+\`firewall-cmd\`/\`ufw\`, whichever is present -- may prompt for your
+password) the first time it actually installs something, so the client
+can reach the private host-service each patched AppImage starts on its
+own when launched -- see \`docs/known-limitations.md\`'s "client hangs
+on connecting" entry for why this matters.
 
 To check later whether EmuDeck's own updater has silently replaced an
 installed AppImage (losing DualDeck's patch), and re-patch it if so:

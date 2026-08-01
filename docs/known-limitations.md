@@ -6776,6 +6776,106 @@ verified** inside an actual running Cemu window -- needs a real build
 and a real launch to confirm the title reads as expected once this
 ships.
 
+## 2026-08-01: Client hangs on "connecting to host" and can't exit -- two compounding bugs
+
+Real user report, right after all three emulators finally launched
+successfully via Steam/EmuDeck for the first time (the resources/
+gameProfiles, glibc-bundling, and window-title fixes above): "the
+client detects the host, and hangs on connecting to host, and now the
+client hangs when trying to change host or exit, I need to manually
+exit via steam."
+
+Two independent, compounding bugs, found by reading the actual
+connect/exit code paths rather than guessing:
+
+**Bug 1 -- `NetClient::connect()` (`client/src/net_client.cpp`) could
+block forever, and `disconnect()` couldn't interrupt it.** The raw
+`::connect()` calls (control and video sockets) and the `recvExact()`
+calls reading Hello/HelloAck had no timeout at all -- a host that's
+reachable at the IP level but never responds (exactly what a firewalled
+port with a silent DROP rule looks like) could block for the OS's own
+TCP retry timeout, sometimes well over a minute, or indefinitely if the
+raw TCP connect itself succeeds but nothing ever replies. Worse:
+`connect()` holds `connectMutex_` for its *entire* body, and
+`disconnect()` needs that same mutex before it can even reach the
+`shutdown()` call that would otherwise unblock a stuck `recv()`.
+`client/src/main.cpp`'s exit/change-host path does `shuttingDown = true;
+reconnectThread.join(); net.disconnect();` -- if `reconnectThread` was
+stuck inside a blocking `connect()`/`recvExact()` call, `shuttingDown`
+was never checked there, so `reconnectThread.join()` blocked until that
+syscall returned on its own (which, per the above, might be never) --
+freezing the whole app with no way out but killing it externally,
+exactly the reported symptom.
+
+Fixed with a timeout bounded to the handshake specifically, not the
+persistent per-session receive loops (which legitimately rely on
+blocking-forever `recv()` for an otherwise-idle-but-healthy connection,
+e.g. HostControl mode with no video frames): `connectWithTimeout()` (the
+standard non-blocking-connect-then-`poll()` pattern, since
+`SO_SNDTIMEO`/`SO_RCVTIMEO` have no effect on the initial `connect()`
+syscall itself on Linux) bounds both TCP connects to
+`kHandshakeTimeoutMs` (5s); `SO_RCVTIMEO` is set on the control socket
+around the Hello/HelloAck `recvExact()` calls and explicitly cleared
+back to "block forever" the moment the handshake actually succeeds, right
+before `controlReceiveLoop()`/`videoReceiveLoop()` start relying on that
+blocking-forever behavior. Worst-case exit delay is now bounded to
+roughly `kHandshakeTimeoutMs` (a connect attempt in flight right when
+the user hits exit), not indefinite.
+
+**Verified:** all 9 pre-existing real end-to-end `NetClient` tests
+(`client/tests/test_net_client.cpp`, a real `NetClient` against a real
+`NetServer` over real loopback sockets) still pass unmodified -- the
+fix doesn't change behavior for any working connection. Added a new
+10th test, `net_client_connect_times_out_when_host_never_replies`: a
+real TCP listener that accepts the connection (so the raw connect()
+succeeds, isolating the `recvExact()`-timeout half of the fix
+specifically) but never reads or replies, asserting `connect()` now
+returns `false` within 7 seconds (a generous margin over the 5s bound)
+instead of never returning at all. Full suite (10/10) runs in ~5.7s
+wall-clock, confirming the new test's own timeout is what bounds it, not
+a hang.
+
+**Bug 2 -- the new AppRun-spawned ephemeral host-service never opened
+this host's firewall.** `install-steam-shortcut.sh`/
+`install-host-distrobox.sh` both call `scripts/lib/host_firewall.sh`'s
+`ensure_host_firewall_ports()` during install, but the newer
+`emudeck-replace-in-place.sh` path -- where a patched AppImage launched
+directly via EmuDeck's own Steam shortcut spawns its own private,
+ephemeral `dualdeck-host-service` (see `scripts/lib/
+apprun_templates.sh`) -- never did. On a host with `firewalld`/`ufw`
+active (Bazzite's default), this meant the client could discover the
+host (LAN broadcast discovery uses a different, apparently-already-open
+port) but never actually connect to its control/video ports --
+precisely the kind of silently-dropped connection Bug 1 above turned
+into a full hang instead of a clean failure.
+
+Fixed by calling `ensure_host_firewall_ports` once from
+`emudeck-replace-in-place.sh` itself, at install time, after any
+emulator was actually installed this run (skipped entirely on
+`--dry-run` or when nothing was installed) -- matching every other
+host-side install path's "open ports when something is installed, not
+on every subsequent game launch" convention, since this needs `sudo`
+and has no business prompting for a password in the middle of a Steam
+game launch. `host_firewall.sh` is now also bundled into the packaged
+`host/emudeck-integration/scripts/lib/` release archive alongside
+`emudeck_paths.sh`/`appimage_manifest.py`.
+
+**Verified:** end-to-end against local fixtures -- confirmed the
+firewall step runs after a real (non-dry-run) install and is skipped
+entirely on `--dry-run`; confirmed the firewalld code path invokes
+`firewall-cmd --permanent --add-port=...` for all five expected ports
+followed by `--reload`, using a fake `firewall-cmd`/`sudo` in `PATH` (no
+real firewall state touched by the test itself); confirmed the
+"no supported firewall manager found" fallback path doesn't fail the
+overall install (`|| true`, matching existing precedent) on a machine
+with neither `firewalld` nor `ufw`.
+
+**Not yet verified:** either fix against the user's actual real
+hardware -- both are freshly diagnosed and fixed from source-level
+investigation plus hermetic tests, not yet confirmed against a real
+firewalled Bazzite host and a real client connecting to a real
+AppRun-spawned ephemeral host-service end to end.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

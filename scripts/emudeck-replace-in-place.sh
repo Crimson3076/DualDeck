@@ -61,6 +61,8 @@ trap '
 
 # shellcheck source=scripts/lib/emudeck_paths.sh
 source "${repo_root}/scripts/lib/emudeck_paths.sh"
+# shellcheck source=scripts/lib/host_firewall.sh
+source "${repo_root}/scripts/lib/host_firewall.sh"
 
 manifest_py="${repo_root}/scripts/lib/appimage_manifest.py"
 
@@ -97,6 +99,11 @@ trap 'log "FAILED at line ${LINENO}: ${BASH_COMMAND}"' ERR
 emulators=()
 dry_run=0
 assume_yes=0
+# Counts real installs this run (incremented in replace_in_place_one),
+# so the firewall step at the end only runs when it might actually
+# matter -- not on a --dry-run, and not when every emulator was skipped
+# (not found, or the user declined the confirmation prompt).
+installed_count=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --emulator)
@@ -283,10 +290,31 @@ print(json.load(open('${appimage_path}.dualdeck.json'))['original_sha256'])
     echo "== ${emulator}: installed DualDeck's patched build at ${appimage_path} =="
     echo "   (original backed up at ${backup_path})"
     log "${emulator}: installed dualdeck_version=${dualdeck_version}"
+    installed_count=$((installed_count + 1))
 }
 
 for emulator in "${emulators[@]}"; do
     replace_in_place_one "${emulator}"
 done
+
+# Real user report, 2026-08-01: a patched AppImage launched via EmuDeck's
+# own Steam shortcut spawns its own private, ephemeral dualdeck-host-
+# service (see scripts/lib/apprun_templates.sh's generate_apprun_out_of_
+# process()) -- unlike install-steam-shortcut.sh/install-host-
+# distrobox.sh, nothing in that launch path ever opened the host's
+# firewall for it, so on a host with firewalld/ufw active (Bazzite's
+# default) the client could discover it but never actually connect --
+# with the further real bug (see client/src/net_client.cpp's
+# kHandshakeTimeoutMs) that a silently-dropped connection attempt used
+# to hang the whole client indefinitely, not just fail cleanly. Run once
+# here, at install time (matching every other host-side install path's
+# "open ports when something is installed, not on every subsequent game
+# launch" convention -- this needs sudo, which has no business prompting
+# in the middle of a Steam game launch), rather than from the AppRun
+# script itself.
+if [[ "${dry_run}" -ne 1 && "${installed_count}" -gt 0 ]]; then
+    echo "== Opening this host's firewall for DualDeck's ports (if not already open) =="
+    ensure_host_firewall_ports || true
+fi
 
 echo "== Done. Launch your existing EmuDeck/Steam shortcuts as usual -- no shortcut edits needed. =="

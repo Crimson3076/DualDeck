@@ -3,7 +3,9 @@
 #include "client_log.h"
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <turbojpeg.h>
 #include <unistd.h>
@@ -92,6 +94,67 @@ bool recvExact(int fd, uint8_t* data, size_t size) {
         received += static_cast<size_t>(n);
     }
     return true;
+}
+
+// Real user report: a host that's reachable at the IP level but has the
+// control/video ports firewalled shut with a DROP (not REJECT) rule --
+// exactly what a fresh EmuDeck-installed patched AppImage looks like,
+// since scripts/lib/apprun_templates.sh's ephemeral AppRun-spawned host-
+// service never runs the firewall-port-opening step
+// install-steam-shortcut.sh does -- made the raw blocking ::connect()
+// below hang for the OS's own TCP SYN-retry timeout (100+ seconds, often
+// longer). Worse, connect() holds connectMutex_ for its entire body, and
+// disconnect() (called from main.cpp's exit/change-host path) needs that
+// same mutex before it can even reach the shutdown() call that would
+// otherwise unblock a stuck recv() -- so the whole client appeared to
+// hang with no way out but killing it externally, exactly the reported
+// "hangs when trying to change host or exit."
+//
+// Bounds the handshake specifically (not the persistent per-session
+// receive loops below, which legitimately rely on blocking-forever recv()
+// semantics for an otherwise-idle-but-healthy connection, e.g. HostControl
+// mode) to kHandshakeTimeoutMs. SO_SNDTIMEO/SO_RCVTIMEO have no effect on
+// the initial connect() syscall itself on Linux, so connectWithTimeout()
+// below uses the standard non-blocking-connect-then-poll() pattern
+// instead; SO_RCVTIMEO (set separately, around the Hello/HelloAck
+// recvExact() calls) is sufficient to bound those.
+constexpr int kHandshakeTimeoutMs = 5000;
+
+bool connectWithTimeout(int fd, const sockaddr* addr, socklen_t addrLen, int timeoutMs) {
+    int origFlags = ::fcntl(fd, F_GETFL, 0);
+    ::fcntl(fd, F_SETFL, origFlags | O_NONBLOCK);
+
+    bool ok = false;
+    if (::connect(fd, addr, addrLen) == 0) {
+        ok = true; // completed immediately (e.g. localhost)
+    } else if (errno == EINPROGRESS) {
+        pollfd pfd{fd, POLLOUT, 0};
+        int pollResult = ::poll(&pfd, 1, timeoutMs);
+        if (pollResult > 0) {
+            int soError = 0;
+            socklen_t len = sizeof(soError);
+            if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soError, &len) == 0 && soError == 0) {
+                ok = true;
+            } else {
+                errno = soError; // so the caller's strerror(errno) reflects the real failure
+            }
+        } else if (pollResult == 0) {
+            errno = ETIMEDOUT; // vs. poll()'s own errno on a genuine poll() failure (rare)
+        }
+    }
+
+    ::fcntl(fd, F_SETFL, origFlags); // restore blocking mode either way
+    return ok;
+}
+
+// Sets (timeoutMs > 0) or clears (timeoutMs == 0, "block forever") this
+// socket's receive timeout. Cleared once the handshake below actually
+// succeeds, right before controlReceiveLoop()/videoReceiveLoop() start
+// relying on it -- see kHandshakeTimeoutMs's comment for why those two
+// must keep today's blocking-forever behavior.
+void setRecvTimeoutMs(int fd, int timeoutMs) {
+    timeval tv{timeoutMs / 1000, (timeoutMs % 1000) * 1000};
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 }
 
 } // namespace
@@ -186,11 +249,16 @@ bool NetClient::connect() {
         return false;
     }
 
-    if (::connect(controlFd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+    if (!connectWithTimeout(controlFd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr), kHandshakeTimeoutMs)) {
         logLine("connect (control): %s\n", std::strerror(errno));
         closePartialConnection();
         return false;
     }
+    // Bounds the two recvExact() calls below (Hello/HelloAck) -- cleared
+    // back to "block forever" once the handshake fully succeeds, a few
+    // lines before controlThread_/videoThread_ start. See
+    // kHandshakeTimeoutMs's comment above.
+    setRecvTimeoutMs(controlFd_, kHandshakeTimeoutMs);
 
     HelloPayload helloPayload;
     helloPayload.clientName = config_.clientName;
@@ -272,7 +340,8 @@ bool NetClient::connect() {
     sockaddr_in videoAddr = addr;
     videoAddr.sin_port = htons(config_.videoPort);
     videoFd_ = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (videoFd_ < 0 || ::connect(videoFd_, reinterpret_cast<sockaddr*>(&videoAddr), sizeof(videoAddr)) < 0) {
+    if (videoFd_ < 0 ||
+        !connectWithTimeout(videoFd_, reinterpret_cast<sockaddr*>(&videoAddr), sizeof(videoAddr), kHandshakeTimeoutMs)) {
         logLine("connect (video): %s\n", std::strerror(errno));
         closePartialConnection();
         return false;
@@ -308,6 +377,11 @@ bool NetClient::connect() {
         closePartialConnection();
         return false;
     }
+
+    // Handshake succeeded -- restore blocking-forever recv() semantics
+    // before controlReceiveLoop() starts relying on it (see
+    // kHandshakeTimeoutMs's comment above).
+    setRecvTimeoutMs(controlFd_, 0);
 
     connected_ = true;
     videoThread_ = std::thread(&NetClient::videoReceiveLoop, this);

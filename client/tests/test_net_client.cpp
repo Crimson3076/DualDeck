@@ -300,6 +300,73 @@ MDR_TEST(net_client_detects_a_dead_server_connection) {
     client.disconnect();
 }
 
+// Real user report, 2026-08-01: a host reachable at the TCP level but
+// that never actually replies to Hello -- exactly what a firewalled
+// port with a silent DROP rule looks like from the client's side once
+// the raw TCP handshake happens to complete anyway (e.g. a listening
+// backlog accepting the connection at the kernel level before an
+// application-level firewall rule blocks the subsequent data) -- used to
+// make NetClient::connect() block forever inside a blocking recvExact(),
+// and since connect() holds connectMutex_ for its entire body, even
+// disconnect() from another thread couldn't unblock it: the whole client
+// appeared to hang with no way out but killing it externally (reported
+// as "hangs on connecting to host, and now hangs when trying to change
+// host or exit"). See net_client.cpp's kHandshakeTimeoutMs/
+// connectWithTimeout()/setRecvTimeoutMs() for the fix. This test
+// simulates the "TCP connects, then silence" half of that scenario (the
+// half practical to reproduce hermetically); the raw-connect()-level
+// half (a SYN that's silently dropped rather than accepted) isn't
+// simulated the same way here since it needs an actual unresponsive
+// route, not just a cooperating local listener.
+MDR_TEST(net_client_connect_times_out_when_host_never_replies) {
+    int listenFd = ::socket(AF_INET, SOCK_STREAM, 0);
+    MDR_CHECK(listenFd >= 0);
+    int reuse = 1;
+    ::setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    MDR_CHECK(::bind(listenFd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+    socklen_t len = sizeof(addr);
+    ::getsockname(listenFd, reinterpret_cast<sockaddr*>(&addr), &len);
+    uint16_t port = ntohs(addr.sin_port);
+    MDR_CHECK(::listen(listenFd, 1) == 0);
+
+    // Accepts the connection (so the client's raw TCP connect() succeeds
+    // quickly, exercising the recvExact()-timeout half of the fix
+    // specifically) but never reads or writes anything -- Hello arrives
+    // and just sits unread in the kernel's receive buffer, and no
+    // HelloAck is ever sent back.
+    int acceptedFd = -1;
+    std::thread acceptThread([&] { acceptedFd = ::accept(listenFd, nullptr, nullptr); });
+
+    NetClientConfig clientConfig;
+    clientConfig.hostAddress = "127.0.0.1";
+    clientConfig.controlPort = port;
+    clientConfig.inputPort = freePort();
+    clientConfig.videoPort = freePort();
+    clientConfig.authToken = "test-token";
+    NetClient client(clientConfig);
+
+    auto start = std::chrono::steady_clock::now();
+    bool connected = client.connect();
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now() - start)
+                         .count();
+
+    acceptThread.join();
+
+    MDR_CHECK(!connected);
+    // Before the fix, this line would never be reached at all. 7000ms is
+    // a generous margin over kHandshakeTimeoutMs's 5000ms bound
+    // (net_client.cpp) -- proving this returns promptly, not asserting a
+    // tight timing budget.
+    MDR_CHECK(elapsedMs < 7000);
+
+    if (acceptedFd >= 0) ::close(acceptedFd);
+    ::close(listenFd);
+}
+
 // Real end-to-end proof of the client log-forwarding feature
 // (client/src/client_log.h): a real NetClient::sendClientLog() call
 // reaches a real NetServer over the real control-channel socket and gets
