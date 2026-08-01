@@ -6661,6 +6661,86 @@ confirming a real Cemu instance actually shows its main window once
 replace-in-place run against the release this fix ships in is the actual
 confirmation still needed.
 
+## 2026-08-01: Fixed resources/gameProfiles, Cemu still crashed on launch -- bundling glibc itself broke `mkdir`
+
+Direct follow-up to the entry immediately above. The user re-ran the
+patched `v0.1.93` Cemu AppImage via EmuDeck's own `cemu.sh` launcher
+(the real launch path, not a manual terminal test) and got a new, much
+earlier failure:
+
+```
+DualDeck: no persistent host service running yet -- starting a private one for this session
+mkdir: symbol lookup error: /tmp/.mount_Cemu.ADdJHpA/usr/lib/libc.so.6: undefined symbol: __nptl_change_stack_perm, version GLIBC_PRIVATE
+```
+
+Note what's crashing: `mkdir`, a completely unrelated system utility the
+AppRun script calls to create its run directory, not Cemu itself --
+before Cemu was ever even reached.
+
+**Root cause:** `bundle_library_dependencies()` (`scripts/lib/
+appimage_pack.sh`) bundles *every* `ldd`-reported dependency into the
+AppImage, glibc included -- a deliberate earlier decision (see that
+function's own header comment), made to fix a *different* problem: a
+Distrobox build container having *newer* glibc/Qt symbols than a bare
+host. That reasoning doesn't hold for glibc specifically. glibc's own
+internal ABI between `ld.so` (the dynamic linker/interpreter -- always
+the *host's* copy; `PT_INTERP` is a fixed absolute path, entirely
+unaffected by `LD_LIBRARY_PATH`) and `libc.so.6` relies on private,
+version-pinned symbols (`GLIBC_PRIVATE`, e.g.
+`__nptl_change_stack_perm`) that are only guaranteed to match *within
+one specific glibc build* -- never across two independently built ones.
+Pairing the host's own `ld.so` with a *different* bundled `libc.so.6`
+isn't "an older or newer libc," it's an ABI mismatch, and every AppRun
+template exported `LD_LIBRARY_PATH` globally for the *entire script*,
+not just the emulator/host-service invocations -- so *any* plain system
+command the script called afterward (here, `mkdir -p`) inherited the
+bundled, mismatched `libc.so.6` and crashed on a private symbol the
+host's own `ld.so` doesn't provide the same way.
+
+**Fix, two independent layers:**
+
+1. `bundle_library_dependencies()` now excludes glibc's own component
+   libraries from bundling outright (`libc.so.*`, `libm.so.*`,
+   `libpthread.so.*`, `libdl.so.*`, `librt.so.*`, `libresolv.so.*`,
+   `libnsl.so.*`, `libutil.so.*`, `libnss_*.so.*`) via a new
+   `_is_never_bundle_library()` blacklist -- standard practice for
+   portable Linux apps (linuxdeploy and similar tools maintain the same
+   list for the same reason): these must always come from the host's
+   own matched `ld.so`, never from `LD_LIBRARY_PATH`. This reintroduces
+   a narrower version of the original too-old-host-glibc risk in
+   theory, but CI's build environment (GitHub's Ubuntu runner) is
+   realistically no newer than the rolling-release Fedora-based hosts
+   (Bazzite, SteamOS) this project actually targets -- unlike the old
+   Distrobox-container scenario this bundling was first written for --
+   and a working host `mkdir` is a harder requirement than a
+   hypothetical newer-glibc symbol.
+2. `scripts/lib/apprun_templates.sh`'s both generators (melonDS's and
+   the out-of-process one Azahar/Cemu share) no longer `export
+   LD_LIBRARY_PATH` for the whole script -- it's kept as a plain,
+   unexported variable and passed only via `env LD_LIBRARY_PATH=...` on
+   the specific commands that actually need the bundled libraries
+   (`dualdeck-host-service`, and the final emulator `exec`). Every other
+   command each AppRun runs (the `python3` socket probe, `mkdir`, `rm`)
+   now always sees the host's own, completely unmodified environment.
+   Defense in depth on top of (1): even if some *other* bundled library
+   ever collides with a system tool's own dependency in the future, only
+   the two commands that need bundling are exposed to it.
+
+**Verified:** `bundle_library_dependencies()` tested directly against a
+real fake binary linked against `libz` -- confirmed `libz.so.1` still
+gets bundled (a real, legitimate dependency) while `libc.so.6` (present
+in the same `ldd` output) is correctly excluded. Both generated AppRun
+scripts confirmed to no longer `export LD_LIBRARY_PATH` at all (`grep`).
+Full pack-and-run test with fake `cemu`/`dualdeck-host-service` binaries
+(both linked against `libz`) reproduced the exact failing shape of the
+real AppRun template end to end -- the `mkdir -p` call that used to crash
+now succeeds silently, the fake host-service spawns in the background
+without error, and the final `exec` still correctly finds its bundled
+`libz` dependency.
+
+**Not yet verified:** against the real Cemu binary on real hardware --
+same caveat as the entry above, this hasn't shipped in a release yet.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

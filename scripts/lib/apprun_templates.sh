@@ -36,13 +36,22 @@ set -euo pipefail
 HERE="\$(cd "\$(dirname "\$(readlink -f "\${0}")")" && pwd)"
 # See bundle_library_dependencies()'s comment in
 # scripts/lib/appimage_pack.sh -- this binary was built in a clean CI
-# environment that may have newer glibc/Qt/etc. than whatever host
-# actually launches this AppImage, so its real dependencies are
-# bundled alongside it rather than assumed present on the host.
-export LD_LIBRARY_PATH="\${HERE}/usr/lib\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}"
+# environment that may have newer Qt/etc. than whatever host actually
+# launches this AppImage, so its real dependencies are bundled alongside
+# it rather than assumed present on the host (glibc itself is
+# deliberately excluded from that bundle -- see the same comment). Kept
+# as a plain variable, not \`export\`ed, and passed only on the final
+# \`exec\` line below rather than for the whole script -- nothing else
+# runs between here and that exec in this particular AppRun, but this
+# matches the out-of-process AppRun template's identical, load-bearing
+# reason for doing the same (see generate_apprun_out_of_process()'s own
+# comment): system utilities this script might ever call in the future
+# must never inherit a LD_LIBRARY_PATH pointing at bundled libraries.
+bundled_lib_path="\${HERE}/usr/lib"
 export MELONDS_REMOTE_ENABLE=1
 export MELONDS_REMOTE_VERSION="${dualdeck_version_arg}"
-exec "\${HERE}/usr/bin/melonDS" "\$@"
+exec env LD_LIBRARY_PATH="\${bundled_lib_path}\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}" \\
+    "\${HERE}/usr/bin/melonDS" "\$@"
 EOF
     chmod +x "${output_path}"
 }
@@ -66,10 +75,28 @@ HERE="$(cd "$(dirname "$(readlink -f "${0}")")" && pwd)"
 # See bundle_library_dependencies()'s comment in
 # scripts/lib/appimage_pack.sh -- both the real emulator binary and the
 # bundled dualdeck-host-service below were built in a clean CI
-# environment that may have newer glibc/Qt/etc. than whatever host
-# actually launches this AppImage, so their real dependencies are
-# bundled alongside them rather than assumed present on the host.
-export LD_LIBRARY_PATH="${HERE}/usr/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+# environment that may have newer Qt/etc. than whatever host actually
+# launches this AppImage, so their real dependencies are bundled
+# alongside them rather than assumed present on the host (glibc itself
+# is deliberately excluded from that bundle -- see the same comment for
+# why bundling it broke ld.so's own internal ABI).
+#
+# Real crash this caused when this WAS exported for the whole script,
+# 2026-08-01: `mkdir -p` a few lines below (a completely unrelated
+# system tool, not one of DualDeck's own bundled binaries) inherited
+# this LD_LIBRARY_PATH and tried to run against the then-bundled
+# libc.so.6 instead of the system's own, crashing with `undefined
+# symbol: __nptl_change_stack_perm, version GLIBC_PRIVATE` before Cemu
+# was ever even reached. glibc is no longer bundled at all (the deeper
+# fix, see appimage_pack.sh), but this is kept as a second, independent
+# layer: NOT exporting LD_LIBRARY_PATH globally means that even if some
+# *other* bundled library ever collides with a system tool's own
+# dependency in the future, only the two commands below that actually
+# need the bundled libraries (dualdeck-host-service, __REALBIN__) are
+# affected -- every other command this script runs (the python3 socket
+# probe, mkdir, rm) always uses the host's own, completely unmodified
+# environment.
+bundled_lib_path="${HERE}/usr/lib"
 
 default_socket="${XDG_RUNTIME_DIR:-}/dualdeck/adapter.sock"
 if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
@@ -98,7 +125,8 @@ else
     mkdir -p "${run_dir}"
     adapter_socket="${run_dir}/__PRIVATE_SOCKET_NAME__"
     rm -f "${adapter_socket}"
-    "${HERE}/usr/bin/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
+    env LD_LIBRARY_PATH="${bundled_lib_path}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+        "${HERE}/usr/bin/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
         --state-dir "${HOME}/.config/melonds-remote" &
     host_service_pid=$!
     trap 'kill "${host_service_pid}" 2>/dev/null || true' EXIT
@@ -108,7 +136,8 @@ fi
 export __PREFIX___REMOTE_ENABLE=1
 export __PREFIX___REMOTE_ADAPTER_SOCKET="${adapter_socket}"
 export QT_QPA_PLATFORMTHEME=""
-exec "${HERE}/usr/bin/__REALBIN__" "$@"
+exec env LD_LIBRARY_PATH="${bundled_lib_path}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+    "${HERE}/usr/bin/__REALBIN__" "$@"
 EOF
     sed -i \
         -e "s/__PREFIX__/${prefix}/g" \

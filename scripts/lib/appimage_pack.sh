@@ -64,16 +64,48 @@ ensure_appimagetool() {
 # (`ld-linux-x86-64.so.2`, invoked by the kernel directly via the
 # binary's PT_INTERP before any AppRun-set LD_LIBRARY_PATH could matter
 # -- bundling it would need explicitly re-invoking it with
-# --library-path, a bigger change not attempted here). The AppRun
-# script sets LD_LIBRARY_PATH to prefer this directory (see
-# scripts/emudeck-replace-in-place.sh's generate_apprun_* functions),
-# so ld.so picks these up ahead of whatever (possibly older, possibly
-# entirely absent) system copies exist on the host -- this does include
-# glibc-family libraries themselves (libc.so.6/libm.so.6/etc.), which
-# is unusual for a hand-rolled AppImage packaging script but necessary
-# here given the observed glibc version mismatch specifically, and is
-# standard practice for genuinely portable AppImages built on a newer-
-# than-target base.
+# --library-path, a bigger change not attempted here).
+#
+# Real user report, 2026-08-01, on the CI-built prebuilt AppImages this
+# function's original fix was extended to cover: bundling glibc itself
+# (libc.so.6 and its close relatives) is NOT safe the way every other
+# library here is -- it used to be included on the theory that "bundle
+# everything ldd reports, glibc included, since the observed problem was
+# a too-*old* host glibc missing symbols the build environment had."
+# That reasoning doesn't hold for CI-built AppImages: glibc's own ABI
+# between ld.so (the dynamic linker/interpreter, always the HOST's copy
+# -- PT_INTERP is a fixed absolute path, entirely unaffected by
+# LD_LIBRARY_PATH) and libc.so.6 relies on private, version-pinned
+# symbols (e.g. `GLIBC_PRIVATE`) that are only guaranteed to match
+# *within one specific glibc build*, never across two independently
+# built ones. A bundled libc.so.6 paired with the host's own (different)
+# ld.so isn't "an older/newer libc," it's an ABI mismatch -- and it
+# doesn't just break the emulator binary, it breaks *any* plain system
+# utility the AppRun script itself invokes after exporting
+# LD_LIBRARY_PATH (real crash: `mkdir -p` inside the out-of-process
+# AppRun template died with `undefined symbol: __nptl_change_stack_perm,
+# version GLIBC_PRIVATE` against the bundled libc.so.6, before Cemu was
+# even reached). Fixed by excluding glibc's own component libraries from
+# bundling outright -- standard practice for portable Linux apps
+# (linuxdeploy and friends maintain the same blacklist for the same
+# reason): these must always come from the host's own matched ld.so, not
+# from LD_LIBRARY_PATH. This reintroduces a narrower version of the
+# original too-old-host-glibc risk in theory, but CI's build environment
+# (GitHub's Ubuntu runner) is realistically no newer than the rolling-
+# release Fedora-based hosts (Bazzite, SteamOS) this project actually
+# targets, unlike the old Distrobox-container scenario this function was
+# first written for -- and a working host mkdir is a harder requirement
+# than a hypothetical newer-glibc symbol.
+_is_never_bundle_library() {
+    case "$(basename "$1")" in
+        libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|\
+        libresolv.so.*|libnsl.so.*|libutil.so.*|libnss_*.so.*)
+            return 0 ;;
+        *)
+            return 1 ;;
+    esac
+}
+
 bundle_library_dependencies() {
     local binary_path="$1" dest_lib_dir="$2"
     mkdir -p "${dest_lib_dir}"
@@ -93,9 +125,11 @@ bundle_library_dependencies() {
             continue
         fi
         [[ -n "${lib_path}" && -f "${lib_path}" ]] || continue
-        # ld-linux itself: see this function's header comment for why
-        # this is deliberately not bundled.
+        # ld-linux itself, and glibc's own tightly-ld.so-coupled
+        # components: see this function's header comment for why both
+        # are deliberately not bundled.
         [[ "$(basename "${lib_path}")" == ld-linux-* ]] && continue
+        _is_never_bundle_library "${lib_path}" && continue
         [[ -e "${dest_lib_dir}/$(basename "${lib_path}")" ]] && continue
         cp -L "${lib_path}" "${dest_lib_dir}/$(basename "${lib_path}")"
     done < <(ldd "${binary_path}" 2>/dev/null || true)
