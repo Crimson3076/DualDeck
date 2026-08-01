@@ -6312,6 +6312,68 @@ long enough that re-running it just to confirm this one specific fix
 wasn't done as part of this same investigation; next real Cemu attempt
 on real hardware is the actual verification this still needs.
 
+**Fifth issue, same day, and the most fundamental one yet**: with the
+build/repack fixes above, Azahar's patched AppImage *installed*
+successfully for the first time -- but then failed to launch at all,
+manually or via Steam. Real terminal output from `~/Applications/
+azahar.AppImage`: `dualdeck-host-service: error while loading shared
+libraries: libturbojpeg.so.0: cannot open shared object file`, then
+`azahar: /lib64/libm.so.6: version 'GLIBC_2.43' not found`, `libstdc+
++.so.6: version 'GLIBCXX_3.4.35' not found`, and `libQt6Core.so.6:
+version 'Qt_6.11' not found`. Root cause: these binaries are compiled
+inside the Distrobox build container (`fedora:latest`, deliberately
+always current), but the resulting AppImage is launched directly on
+the **host** system afterward -- that's the entire point of "replace
+in place," EmuDeck's own Steam shortcuts exec the `.AppImage` file
+unmodified, with no idea it needs to run inside any container. A real
+AppImage is supposed to be self-contained precisely so build/run
+environment differences like this can't matter; `pack_appimage()`
+(`scripts/lib/appimage_pack.sh`) was copying only the raw binary and
+relying entirely on whatever the launching host happens to already
+have -- fine as long as build and run environments matched closely
+enough, which stopped being true the moment Azahar's repack first
+fully succeeded and got tested against the actual host. This was
+always going to affect all three emulators equally (nothing Azahar-
+specific about it), it just took this long in the investigation for
+any of them to get past every earlier blocker and actually reach a
+real launch attempt.
+
+Fixed with the standard portable-AppImage technique: a new
+`bundle_library_dependencies()` in `appimage_pack.sh` runs `ldd`
+(which already resolves the *full transitive* closure, not just direct
+dependencies -- one pass is enough) against the main binary and every
+extra bundled binary (`dualdeck-host-service` for Azahar/Cemu), copying
+every resolved `.so` file into `AppDir/usr/lib/`. Skips exactly two
+non-file cases: the kernel-provided `linux-vdso.so.1` (ldd prints an
+address for it but there's no real file), and the dynamic linker/
+loader itself (`ld-linux-x86-64.so.2`, invoked by the kernel directly
+via the binary's `PT_INTERP` before any `LD_LIBRARY_PATH` the AppRun
+sets could matter -- properly fixing that too would mean explicitly
+re-invoking a bundled loader with `--library-path`, not attempted
+here). Deliberately bundles glibc-family libraries too
+(`libc.so.6`/`libm.so.6`/etc.), unusual for a hand-rolled packaging
+script but exactly what the observed `GLIBC_2.43` mismatch needs --
+standard practice for AppImages built on a newer-than-target base.
+Both `generate_apprun_melonds()` and `generate_apprun_out_of_process()`
+in `emudeck-replace-in-place.sh` now export `LD_LIBRARY_PATH` to
+prefer `${HERE}/usr/lib` before doing anything else, so ld.so picks up
+the bundled copies ahead of whatever the host does or doesn't have.
+
+Verified for real, not just by inspection: compiled a small test binary
+linked against `libz`, ran it through the actual `pack_appimage()`
+function end to end (dependency bundling, `appimagetool` packaging, the
+works), confirmed the resulting `.AppImage` actually runs and its
+extracted `AppDir/usr/lib/` contains the bundled `libc.so.6`/
+`libz.so.1` with `AppRun` correctly setting `LD_LIBRARY_PATH` to find
+them. Also separately verified `bundle_library_dependencies()` against
+`curl` (a real binary with a much larger, 30-library transitive
+dependency tree spanning glibc, OpenSSL, Kerberos, LDAP, etc.) to
+confirm the transitive-closure assumption holds and the ldd-output
+parsing handles a busy, realistic case correctly. **Not yet verified
+against the actual Azahar/melonDS/Cemu AppImages on real Bazzite
+hardware** -- next real attempt on real hardware is the true
+end-to-end confirmation this specific fix still needs.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

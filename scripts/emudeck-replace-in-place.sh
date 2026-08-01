@@ -255,6 +255,12 @@ generate_apprun_melonds() {
 #!/usr/bin/env bash
 set -euo pipefail
 HERE="\$(cd "\$(dirname "\$(readlink -f "\${0}")")" && pwd)"
+# See bundle_library_dependencies()'s comment in
+# scripts/lib/appimage_pack.sh -- this binary was built inside a
+# Distrobox container that may have newer glibc/Qt/etc. than whatever
+# host actually launches this AppImage, so its real dependencies are
+# bundled alongside it rather than assumed present on the host.
+export LD_LIBRARY_PATH="\${HERE}/usr/lib\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}"
 export MELONDS_REMOTE_ENABLE=1
 export MELONDS_REMOTE_VERSION="${dualdeck_version_arg}"
 exec "\${HERE}/usr/bin/melonDS" "\$@"
@@ -278,6 +284,13 @@ generate_apprun_out_of_process() {
 #!/usr/bin/env bash
 set -euo pipefail
 HERE="$(cd "$(dirname "$(readlink -f "${0}")")" && pwd)"
+# See bundle_library_dependencies()'s comment in
+# scripts/lib/appimage_pack.sh -- both the real emulator binary and the
+# bundled dualdeck-host-service below were built inside a Distrobox
+# container that may have newer glibc/Qt/etc. than whatever host
+# actually launches this AppImage, so their real dependencies are
+# bundled alongside them rather than assumed present on the host.
+export LD_LIBRARY_PATH="${HERE}/usr/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
 default_socket="${XDG_RUNTIME_DIR:-}/dualdeck/adapter.sock"
 if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then

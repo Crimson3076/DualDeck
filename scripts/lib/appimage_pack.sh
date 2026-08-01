@@ -36,6 +36,71 @@ ensure_appimagetool() {
     echo "${tool_path}"
 }
 
+# bundle_library_dependencies <binary_path> <dest_lib_dir>
+#
+# Real Bazzite hardware bug: this binary was compiled inside a Distrobox
+# build container (a plain `fedora:latest` image, deliberately always
+# current -- see run_in_distrobox_build_container's comment in
+# emudeck-replace-in-place.sh), but the AppImage it ends up in is
+# launched directly on the *host* system afterward (EmuDeck's own Steam
+# shortcuts exec the .AppImage file as-is -- the entire point of
+# "replace in place" is that nothing about how EmuDeck launches it
+# changes). If the container's glibc/libstdc++/Qt6 etc. are newer than
+# whatever the host actually has, the binary fails to even start
+# there: `azahar: /lib64/libm.so.6: version 'GLIBC_2.43' not found`,
+# same for libstdc++/libQt6Core, plus a flat `cannot open shared object
+# file` for libturbojpeg (a build dependency inside the container, not
+# necessarily installed on the bare host at all). A real AppImage is
+# supposed to be self-contained precisely so this can't happen --
+# pack_appimage() was copying just the raw binary and relying entirely
+# on whatever the launching system happens to already have, which is
+# not a safe assumption once the build and run environments genuinely
+# differ. Fixed by actually bundling every `ldd`-reported dependency
+# (ldd already resolves the full transitive closure, not just direct
+# dependencies, so one pass is enough) into AppDir/usr/lib/, skipping
+# only the two lines that aren't real bundleable files: the kernel-
+# provided linux-vdso.so.1 (`ldd` prints an address for it, but there
+# is no on-disk file to copy), and the dynamic linker/loader itself
+# (`ld-linux-x86-64.so.2`, invoked by the kernel directly via the
+# binary's PT_INTERP before any AppRun-set LD_LIBRARY_PATH could matter
+# -- bundling it would need explicitly re-invoking it with
+# --library-path, a bigger change not attempted here). The AppRun
+# script sets LD_LIBRARY_PATH to prefer this directory (see
+# scripts/emudeck-replace-in-place.sh's generate_apprun_* functions),
+# so ld.so picks these up ahead of whatever (possibly older, possibly
+# entirely absent) system copies exist on the host -- this does include
+# glibc-family libraries themselves (libc.so.6/libm.so.6/etc.), which
+# is unusual for a hand-rolled AppImage packaging script but necessary
+# here given the observed glibc version mismatch specifically, and is
+# standard practice for genuinely portable AppImages built on a newer-
+# than-target base.
+bundle_library_dependencies() {
+    local binary_path="$1" dest_lib_dir="$2"
+    mkdir -p "${dest_lib_dir}"
+
+    local ldd_line lib_path
+    while IFS= read -r ldd_line; do
+        # Matches "name.so => /real/path (0xaddr)" and bare
+        # "/real/path (0xaddr)" (the form ldd uses for the interpreter
+        # itself) -- extracts the path in either case; skips
+        # "name.so (0xaddr)" (no "=>", no leading "/") entirely, which
+        # is linux-vdso.so.1's form (no real file to copy).
+        if [[ "${ldd_line}" == *"=>"* ]]; then
+            lib_path="$(echo "${ldd_line}" | sed -n 's/.*=> \(\/[^ ]*\).*/\1/p')"
+        elif [[ "${ldd_line}" == /* ]]; then
+            lib_path="$(echo "${ldd_line}" | sed -n 's/^[[:space:]]*\(\/[^ ]*\).*/\1/p')"
+        else
+            continue
+        fi
+        [[ -n "${lib_path}" && -f "${lib_path}" ]] || continue
+        # ld-linux itself: see this function's header comment for why
+        # this is deliberately not bundled.
+        [[ "$(basename "${lib_path}")" == ld-linux-* ]] && continue
+        [[ -e "${dest_lib_dir}/$(basename "${lib_path}")" ]] && continue
+        cp -L "${lib_path}" "${dest_lib_dir}/$(basename "${lib_path}")"
+    done < <(ldd "${binary_path}" 2>/dev/null || true)
+}
+
 # pack_appimage <binary_path> <output_appimage_path> <app_name> <apprun_script_path>
 #
 # <apprun_script_path> must already be a complete, executable AppRun
@@ -79,9 +144,10 @@ pack_appimage() {
     # only ever fires once, for this function's own return.
     trap 'rm -rf "${appdir}"; trap - RETURN' RETURN
 
-    mkdir -p "${appdir}/usr/bin"
+    mkdir -p "${appdir}/usr/bin" "${appdir}/usr/lib"
     cp "${binary_path}" "${appdir}/usr/bin/$(basename "${binary_path}")"
     chmod +x "${appdir}/usr/bin/$(basename "${binary_path}")"
+    bundle_library_dependencies "${binary_path}" "${appdir}/usr/lib"
 
     if [[ -n "${extra_binaries}" ]]; then
         local IFS=":"
@@ -90,6 +156,7 @@ pack_appimage() {
             [[ -f "${extra}" ]] || { echo "pack_appimage: no such extra binary: ${extra}" >&2; return 1; }
             cp "${extra}" "${appdir}/usr/bin/$(basename "${extra}")"
             chmod +x "${appdir}/usr/bin/$(basename "${extra}")"
+            bundle_library_dependencies "${extra}" "${appdir}/usr/lib"
         done
     fi
 
