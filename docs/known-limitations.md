@@ -6374,6 +6374,33 @@ against the actual Azahar/melonDS/Cemu AppImages on real Bazzite
 hardware** -- next real attempt on real hardware is the true
 end-to-end confirmation this specific fix still needs.
 
+**Cemu's openssl failure (fourth issue above) recurred after the
+kernel-headers fix, still unexplained**: same exact vcpkg failure,
+same generic "openssl requires Linux kernel headers" message, even
+though `ensure_packages` now reports the whole `"cemu build"` list
+(kernel-headers included) as already satisfied -- so either that
+message is a stock warning vcpkg's openssl portfile prints
+unconditionally on Linux regardless of whether headers are actually
+present (plausible: `enable-capieng`, a Windows-only CryptoAPI engine
+flag, showing up in the `./Configure` invocation for a `linux-x86_64`
+target looks like it could be a triplet-config quirk unrelated to
+kernel headers at all, though this is speculation, not confirmed), or
+kernel-headers alone isn't sufficient. The one piece of information
+that would actually explain this --
+`.../buildtrees/openssl/config-x64-linux-dbg-err.log`, referenced by
+path in the CMake error but never dumped to the console -- was
+unreachable: `emudeck-replace-in-place.sh`'s `work_dir` was deleted
+unconditionally on exit via its `EXIT` trap, success or failure alike,
+so by the time anyone could go look, both the failure and the one file
+that would explain it were already gone. Fixed the trap to preserve
+`work_dir` (and print its path) specifically on failure, still cleaned
+up normally on success -- verified in isolation (a minimal trap-only
+repro, both the success-cleans-up and failure-preserves-and-reports
+paths). This doesn't fix the openssl build itself -- it's a
+prerequisite for being able to *see* the real error on the next
+attempt, which is what's actually needed to diagnose this properly
+instead of guessing at more package names.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

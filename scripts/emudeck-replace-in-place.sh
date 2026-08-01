@@ -37,7 +37,24 @@ original_args=("$@")
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="${EMUDECK_REPLACE_WORKDIR:-$(mktemp -d)}"
-trap 'rm -rf "${work_dir}"' EXIT
+# Real user report: a build failure deep inside a dependency (e.g.
+# Cemu's vcpkg install) points at a detailed log file under work_dir
+# (e.g. .../buildtrees/openssl/config-x64-linux-dbg-err.log) that
+# explains the *actual* underlying error -- but work_dir was always
+# deleted unconditionally on exit, including on failure, so by the time
+# anyone could go look, it (and the one piece of information that would
+# actually explain the failure) was already gone. Preserve it on
+# failure so a follow-up "what does the real log say" is answerable;
+# still cleaned up on success, matching the original behavior exactly
+# for the common case.
+trap '
+    status=$?
+    if [[ "${status}" -ne 0 ]]; then
+        echo "== Build failed -- work directory preserved for debugging: ${work_dir} ==" >&2
+    else
+        rm -rf "${work_dir}"
+    fi
+' EXIT
 
 # shellcheck source=scripts/lib/pinned_commits.sh
 source "${repo_root}/scripts/lib/pinned_commits.sh"
