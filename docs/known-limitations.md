@@ -6245,6 +6245,25 @@ it only catches a bumped `kProtocolVersion` that never got propagated
 (exactly what happened here), not a content change to `protocol.h` or
 any of the other vendored files that doesn't come with a version bump.
 
+**Second real bug found on real Bazzite hardware, same day**: with the
+above fixes actually live (confirmed via a from-scratch Azahar rebuild
+recompiling `remote_server/adapter_sdk/src/protocol.cpp` etc., and
+`dualdeck-host-service` linking successfully -- both working exactly as
+intended), the next step failed: packing the rebuilt Azahar into a new
+AppImage via `appimagetool` errored with `file command is missing but
+required, please install it`. `scripts/lib/appimage_pack.sh`'s
+`ensure_appimagetool()` downloads the `appimagetool` binary itself (not
+distro-packaged) but never accounted for its runtime dependency on the
+`file`/libmagic command, which isn't part of a minimal Fedora Distrobox
+container. Fixed by adding `file` to all three (`apt`/`dnf`/`pacman`)
+package lists in `emudeck-replace-in-place.sh`'s `ensure_packages
+"build"` call -- the generic list, not an azahar/cemu-specific one,
+since AppImage repacking applies to any emulator this tool handles, not
+just those two. `build-release.sh` (the official release pipeline) has
+its own, separate `ensure_packages "build"` call but never invokes
+`appimagetool` itself (its output is a plain tarball, not AppImages),
+so it isn't affected by this gap.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
