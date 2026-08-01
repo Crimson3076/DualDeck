@@ -6062,6 +6062,51 @@ via a logging fake `distrobox` that they're present for the (harmless)
 `distrobox create` call but gone by the time `distrobox enter` runs --
 the one call that actually execs something inside the container.
 
+**Same-day followup: the identical bug existed in the actual host
+launch path, not just this build tool, and was very likely why Bazzite
+never worked as a host at all.** Real user report: after reinstalling
+with the firewall auto-open fix (see the entry above), a client still
+saw nothing when trying to connect to the Bazzite host -- not
+"discovered but refused to connect," just nothing. Diagnostics from the
+Bazzite machine (`ss -tulnp`, `firewall-cmd --list-ports` against the
+actually-active zone, `ps aux`) showed: no process was listening on any
+of `net_server.h`'s five ports at all, firewalld's active zone already
+had a much wider port range open (`1025-65535/tcp+udp`, ruling out
+firewall as the blocker), and `ps aux` showed only the Distrobox
+container's own supervisor processes (`conmon`/`crun`) -- no melonDS
+process, running or crashed-and-restarted, anywhere. Root cause: the
+exact same unfiltered-`LD_PRELOAD` bug as
+`run_in_distrobox_build_container()` above, in a second, independent
+`distrobox enter` call site --
+`host/internal/install-host-distrobox.sh`'s final launch line (`exec
+distrobox enter "${container_name}" -- env MELONDS_REMOTE_ENABLE=1 ...
+"${central_install_dir}/melonDS" "$@"`, embedded in
+`scripts/build-release.sh`, not a standalone file in the repo). Since
+this script's normal entry point *is* a Steam shortcut,
+`env`/`sudo`/melonDS never got a chance to start: `env` crashed on the
+same missing `libGL.so.1` immediately, silently (Steam's Big Picture
+launcher doesn't surface a crashed shortcut's stderr anywhere a user
+would see it), so no host process ever existed to open a socket --
+which explains "nothing appeared on the client" far better than a
+firewall problem would (a firewall issue would still let local `ss`
+show the port bound, just unreachable remotely). Fixed the same way:
+`unset LD_PRELOAD LD_LIBRARY_PATH` added once, right after this
+script's existing `command -v distrobox` check, covering both of its
+`distrobox enter` call sites (the `sudo dnf install` runtime-library
+step, which likely already tolerated this via `sudo`'s own
+`env_reset` policy stripping `LD_PRELOAD` before `dnf` ran, and the
+final unguarded `env ... melonDS` launch, which had no such
+protection). Verified the same way as the build-tool fix: extracted
+the generated `install-host-distrobox.sh` heredoc into an isolated test
+harness mirroring its real `host/internal/` layout, injected a fake
+Steam-style `LD_PRELOAD`/`LD_LIBRARY_PATH`, and confirmed via a logging
+fake `distrobox` that all four calls it makes (`list`, `create`, `enter
+... dnf install`, and the final `enter ... env MELONDS_REMOTE_ENABLE=1
+... melonDS`) now run with both variables unset. **Not yet verified**
+against real Bazzite hardware -- the diagnostics that led here came
+from the user's real machine, but this specific fix hasn't been
+retested there yet.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

@@ -1484,6 +1484,23 @@ if ! command -v distrobox >/dev/null 2>&1; then
     exit 1
 fi
 
+# Real user report, 2026-08-01 (Bazzite HTPC, launched via Steam
+# shortcut): the client never saw this host at all -- not "discovered
+# but refused," just nothing. Root cause: this script is normally
+# launched from a Steam shortcut, so Steam's own LD_PRELOAD (overlay-
+# injection libs, e.g. gameoverlayrenderer.so) is present in this
+# process's environment and distrobox enter forwards it into the
+# container by default. That crashes `env MELONDS_REMOTE_ENABLE=1 ...`
+# below outright (exit 127, "error while loading shared libraries:
+# libGL.so.1") before melonDS ever starts -- identical root cause,
+# same fix, as scripts/emudeck-replace-in-place.sh's
+# run_in_distrobox_build_container() (see docs/known-limitations.md's
+# 2026-08-01 entry on that one). melonDS silently never launching
+# explains the symptom exactly: no host process means no listening
+# ports, which means nothing for the client to discover no matter how
+# correct the firewall setup is.
+unset LD_PRELOAD LD_LIBRARY_PATH
+
 install_only=0
 if [[ "${1:-}" == "--install-only" ]]; then
     install_only=1
