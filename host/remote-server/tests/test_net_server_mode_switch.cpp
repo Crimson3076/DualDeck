@@ -418,3 +418,45 @@ MDR_TEST(default_video_quality_never_exceeds_an_already_low_configured_default) 
     // just because a large surface connected.
     MDR_CHECK(defaultVideoQualityForFrameSize(40, 854, 480) == 40);
 }
+
+// Real user report, 2026-08-01: NetServer::start() used to have no way
+// for a caller to tell whether it actually succeeded -- a bind failure
+// (e.g. another process already listening on one of these ports, the
+// suspected cause of "melonDS does not run a server, cannot connect"
+// after an earlier session left a private dualdeck-host-service
+// orphaned and still bound to the same default ports) was only ever
+// visible as a stderr line, with every caller silently proceeding as if
+// the server were up. isRunning() (net_server.h) exists so a caller can
+// actually check. Proven with a real bind conflict, not a mock: a
+// second NetServer deliberately configured to reuse the first's already-
+// bound control port.
+MDR_TEST(is_running_reflects_a_successful_start) {
+    ServerFixture fixture{NetServerConfig{}};
+    MDR_CHECK(fixture.server.isRunning());
+}
+
+MDR_TEST(is_running_is_false_after_a_real_bind_failure) {
+    ServerFixture fixture{NetServerConfig{}};
+    MDR_CHECK(fixture.server.isRunning());
+
+    LoggingInputSink sinkB;
+    FakeFrameSource frameB{0x33};
+    LoggingMicAudioSink micSinkB;
+    NetServerConfig conflictingConfig;
+    conflictingConfig.bindAddress = "127.0.0.1";
+    conflictingConfig.controlPort = fixture.config.controlPort; // already bound above
+    conflictingConfig.inputPort = freePort();
+    conflictingConfig.videoPort = freePort();
+    conflictingConfig.discoveryEnabled = false;
+    conflictingConfig.micSupported = false;
+    conflictingConfig.authToken = "test-token";
+    NetServer conflictingServer(conflictingConfig, sinkB, frameB, micSinkB);
+
+    conflictingServer.start();
+    MDR_CHECK(!conflictingServer.isRunning());
+    // The original server must be completely unaffected by the other's
+    // failed start attempt.
+    MDR_CHECK(fixture.server.isRunning());
+
+    conflictingServer.stop();
+}

@@ -873,7 +873,7 @@ new file mode 100644
 index 0000000..33a460d
 --- /dev/null
 +++ b/src/remote_server/CemuAdapter.cpp
-@@ -0,0 +1,309 @@
+@@ -0,0 +1,320 @@
 +#include "remote_server/CemuAdapter.h"
 +
 +#include <algorithm>
@@ -972,12 +972,23 @@ index 0000000..33a460d
 +        m_vpadController->add_controller(m_remoteController);
 +        m_vpadController->set_default_mapping(m_remoteController);
 +    }
-+    // else: player 1 isn't currently configured as a VPAD-type
-+    // controller (e.g. switched to Pro/Classic/Wiimote in Controller
-+    // Settings) -- nothing to auto-map onto, so remote input is
-+    // silently inert for this session, same as it would be for a real
-+    // physical controller connected while player 1 is set to a
-+    // different type.
++    else {
++        // Real user report, 2026-08-01: "Cemu works, no touch screen or
++        // controls work" -- player 1 isn't currently configured as a
++        // VPAD-type controller (e.g. switched to Pro/Classic/Wiimote in
++        // Controller Settings), so there's nothing to auto-map onto and
++        // remote input is silently inert for this session, same as it
++        // would be for a real physical controller connected while
++        // player 1 is set to a different type. This used to have no log
++        // line at all -- completely undiagnosable from a user report,
++        // since video streams fine either way and nothing else fails.
++        // Fix Controller Settings -> Player 1 -> "Wii U GamePad" first;
++        // if remote input still doesn't work with that set correctly,
++        // this log line's absence rules this specific cause out.
++        cemuLog_log(LogType::Force,
++                     "DualDeck: remote input inactive -- player 1 is not configured as a Wii U "
++                     "GamePad controller (Controller Settings)");
++    }
 +}
 +
 +CemuAdapter::~CemuAdapter() {

@@ -775,3 +775,44 @@ fresh, real `v2.6` checkout (not just the previously-committed patch
 context) -- confirmed via a throwaway shallow clone, not assumed. Not
 yet confirmed inside an actual running Cemu window on real hardware;
 that's the next real-hardware replace-in-place run's job.
+
+## Silent VPAD-registration failure now logged (2026-08-01)
+
+Real user report: "Cemu works, no touch screen or controls work
+however." Two separate things bundled in that one sentence:
+
+- **Touch**: confirmed pre-existing, deliberately out-of-scope (see
+  "What the patch does" above and `docs/known-limitations.md`) -- Cemu
+  hard-codes GamePad touch validity to invalid regardless of controller
+  (`Cafe/OS/libs/vpad/vpad.cpp`'s `VPADRead()`), so there is no existing
+  input backend for this patch to hook touch into at all. Not a
+  regression; matches this patch's design from the very first draft.
+- **Controller buttons/sticks**: `CemuAdapter`'s constructor
+  (`src/remote_server/CemuAdapter.cpp`) only auto-wires the remote
+  controller onto VPAD player 1 if `InputManager::instance().
+  get_vpad_controller(0)` returns non-null -- if player 1's Controller
+  Settings type is anything other than "Wii U GamePad" (e.g. Pro/
+  Classic/Wiimote), that call returns null and remote input is silently
+  inert for the whole session, with *zero* log output either way. Video
+  streams completely normally regardless, so nothing else about the
+  session looks broken -- this exact failure mode was previously
+  undiagnosable from a user report alone.
+
+Fixed by logging a clear `cemuLog_log(LogType::Force, "DualDeck: remote
+input inactive -- player 1 is not configured as a Wii U GamePad
+controller (Controller Settings)")` in that branch. This doesn't fix a
+misconfigured Controller Settings by itself (there's no code-level
+"bug" here to fix if that's genuinely the cause -- the auto-wiring logic
+is doing exactly what it's designed to do), but it turns an
+undiagnosable silent failure into an actionable one: if this log line
+appears, the fix is checking Controller Settings -> Player 1 -> "Wii U
+GamePad"; if remote input still doesn't work with that already set
+correctly, this specific cause is ruled out and the real bug is
+somewhere else in the input pipeline (`RemoteController`/
+`RemoteControllerProvider`), which has had no real end-to-end
+confirmation since the v2.6 rebase and is the next thing to verify.
+
+**Verified**: the modified hunk applies cleanly (`git apply --check`)
+against a fresh, real `v2.6` checkout of upstream Cemu -- not yet
+compiled or run against a real misconfigured-controller scenario on
+real hardware.

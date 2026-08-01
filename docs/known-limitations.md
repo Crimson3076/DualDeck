@@ -6951,6 +6951,87 @@ deliberate Host Control connection attempt (once nothing stale is left
 to accidentally connect to) either reaches `renderHostControlScreen()`
 cleanly or fails fast, rather than hanging.
 
+## 2026-08-01: Four more real-hardware findings after all three emulators finally launched -- melonDS silent bind failure, Cemu touch/controls, Azahar window, and what Host Control actually does
+
+Real user report, the first round of testing after every packaging fix
+above (resources/gameProfiles, glibc-bundling, window-title, connect/
+exit-hang, firewall, orphaned-host-service): "MelonDS does not run a
+server, cannot connect. Cemu works, no touch screen or controls work
+however. Azahar games boot and show running in Steam... but the window
+does not appear at all. What does Host Control even do?"
+
+**Host Control (not a bug -- an honest scope gap):** today it only
+injects a virtual gamepad on the host; there is no video (`HostControl
+Adapter::getLatestFrame()` is hard-coded to return nothing -- no host-
+desktop screen-capture code exists anywhere in this codebase yet) and no
+mouse/touchpad-to-mouse mapping. Connecting gets a blank/placeholder
+screen with a silently-active virtual controller, not the "Deck as a
+Steam-Controller-for-the-host-desktop" experience the name implies.
+Building that out (host screen capture + mouse injection) is a
+substantial net-new feature, not a quick fix -- deliberately not
+attempted here without explicit direction to build it.
+
+**melonDS -- "does not run a server, cannot connect":** `EmuInstance::
+startRemoteServer()`'s call to `RemoteServerBridge::start()` returned
+`void` and unconditionally logged "remote server enabled" regardless of
+whether the underlying `NetServer::start()` actually succeeded --
+`NetServer::start()` already logs a bind failure, but only to stderr,
+invisible under a Steam/EmuDeck launch. Most likely trigger: a leftover
+`dualdeck-host-service` process (from before the orphaned-host-service
+fix above shipped) still bound to the same default ports (8760-8765)
+melonDS's own in-process server also tries to bind -- a real port
+conflict, not a defect in melonDS's own patch. Fixed by giving
+`NetServer` (`host/remote-server/include/host/net_server.h`, shared
+core code) a public `isRunning()` accessor, threading a real `bool`
+return value through `RemoteServerBridge::start()` (both constructors),
+and having `startRemoteServer()` log a clear error and show a status-bar
+message on failure instead of silently claiming success. See
+`host/melonds-patches/README.md`'s matching entry.
+
+**Cemu -- "no touch screen or controls work":** two different things.
+Touch is confirmed pre-existing and deliberately out of scope (Cemu
+itself hard-codes GamePad touch validity to invalid, no plumbing exists
+to hook into -- unchanged since the patch's first draft). Controller
+buttons/sticks: `CemuAdapter`'s constructor only auto-wires onto VPAD
+player 1 if `get_vpad_controller(0)` returns non-null -- if Controller
+Settings has player 1 set to anything other than "Wii U GamePad" (Pro/
+Classic/Wiimote), that returns null and remote input is silently inert
+for the whole session, with video streaming completely normally either
+way -- previously undiagnosable from a user report alone. Fixed by
+logging a clear line in that branch. This doesn't fix a misconfigured
+Controller Settings by itself (nothing is actually broken if that's the
+cause -- the logic is working as designed); it turns a silent failure
+into an actionable one. See `host/cemu-patches/README.md`'s matching
+entry, including the important caveat that regular controller input has
+had **no real end-to-end confirmation since the v2.6 rebase** -- if the
+new log line doesn't appear and input still doesn't work, the real bug
+is elsewhere in the input pipeline and still needs to be found.
+
+**Azahar -- "window does not appear at all":** investigated directly,
+the same way the Cemu resources/gameProfiles bug was originally found --
+downloaded the actual published `dualdeck-azahar-patched-linux-x86_64.
+AppImage`, extracted it, and ran the real binary under Xvfb with the
+exact bundled `LD_LIBRARY_PATH` the real `AppRun` sets. **The window
+renders completely normally** -- confirmed with a real screenshot
+showing Azahar's full main-menu UI (File/Emulation/View/Multiplayer/
+Tools/Help, room list, OpenGL/volume/room-connection status bar), no
+crash, no "Qt platform plugin" error, no missing library. This rules out
+a packaging/bundling defect in the AppImage itself as the cause. Also
+directly ruled out: the same-session AppRun `exec`-removal fix (the
+orphaned-host-service fix above) -- Azahar and Cemu share the byte-
+identical `generate_apprun_out_of_process()` template, and Cemu's window
+works fine per the same report, so a template-level regression would
+have to affect both identically. **Root cause not yet identified** --
+since the AppImage itself demonstrably works in isolation, this is most
+likely something specific to the real Steam/EmuDeck/gamescope launch
+environment (window manager/compositor interaction, focus/promotion
+behavior for a windowed Qt app vs. Cemu's differently-toolkited wx/GTK
+window) rather than a defect in this project's own code, but this is
+not confirmed. **Needs more information from the user to diagnose
+further**: does anything appear even briefly before disappearing, is
+Steam in Desktop or Gaming Mode, does a window switcher/alt-tab reveal
+an Azahar window that exists but isn't focused/visible.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

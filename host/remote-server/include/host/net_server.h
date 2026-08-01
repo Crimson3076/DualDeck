@@ -265,9 +265,22 @@ public:
     NetServer& operator=(const NetServer&) = delete;
 
     // Starts all worker threads. Non-blocking; call stop() (or destroy the
-    // object) to shut down.
+    // object) to shut down. Real user report, 2026-08-01: start() has no
+    // return value and a bind failure (e.g. another process already
+    // listening on one of these ports) was only ever visible via a
+    // stderr line callers had no way to notice -- every caller silently
+    // proceeded as if the server were actually up. isRunning() (below)
+    // exists so a caller that calls start() can immediately check
+    // whether it actually took, and react (a log message, a UI
+    // notification) instead of assuming success.
     void start();
     void stop();
+
+    // Whether start() actually succeeded -- false before start() is ever
+    // called, and after a bind failure inside it (see start()'s own
+    // comment in net_server.cpp for exactly what's checked). Also
+    // becomes false after stop(). Safe to call from any thread.
+    bool isRunning() const { return running_.load(); }
 
     // Atomically swaps which IEmulatorInputSink/IFrameSource this server
     // is driven by, and updates the identity it reports, without

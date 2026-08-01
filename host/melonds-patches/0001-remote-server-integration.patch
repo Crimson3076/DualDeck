@@ -238,7 +238,7 @@ index a8b10218..6c67862a 100755
      deleteAllWindows();
  
      emuThread->emuExit();
-@@ -175,6 +225,197 @@ EmuInstance::~EmuInstance()
+@@ -175,6 +225,233 @@ EmuInstance::~EmuInstance()
      }
  }
  
@@ -283,9 +283,18 @@ index a8b10218..6c67862a 100755
 +    {
 +        remoteServer = std::make_unique<melonds_remote_bridge::RemoteServerBridge>(
 +            envOr("MELONDS_REMOTE_ADAPTER_SOCKET", "MelonDSRemote.AdapterSocket"));
-+        remoteServer->start();
-+        Platform::Log(Platform::LogLevel::Info,
-+                       "melonds-remote: remote server enabled (out-of-process adapter mode)\n");
++        // Always true for this constructor -- see RemoteServerBridge::
++        // start()'s own comment -- but checked anyway rather than
++        // assumed, so this stays correct if that ever changes.
++        if (remoteServer->start()) {
++            Platform::Log(Platform::LogLevel::Info,
++                           "melonds-remote: remote server enabled (out-of-process adapter mode)\n");
++        } else {
++            Platform::Log(Platform::LogLevel::Error,
++                           "melonds-remote: remote server FAILED to start (out-of-process adapter "
++                           "mode)\n");
++            remoteServer.reset();
++        }
 +        return;
 +    }
 +
@@ -415,8 +424,35 @@ index a8b10218..6c67862a 100755
 +        },
 +        envOr("MELONDS_REMOTE_VERSION", "MelonDSRemote.Version"),
 +        envPortOr("MELONDS_REMOTE_AUDIO_PORT", "MelonDSRemote.AudioPort"));
-+    remoteServer->start();
-+    Platform::Log(Platform::LogLevel::Info, "melonds-remote: remote server enabled\n");
++    // Real user report, 2026-08-01: this used to unconditionally log
++    // "enabled" and return, even when the NetServer underneath failed to
++    // bind (e.g. a leftover process -- most plausibly an orphaned
++    // dualdeck-host-service, see docs/known-limitations.md's "orphaned
++    // private host-service" entry -- already listening on one of the
++    // same default ports) -- the only trace of the real failure was a
++    // NetServer stderr line nobody launching via a Steam/EmuDeck
++    // shortcut would ever see. "does not run a server, cannot connect"
++    // with zero visible error is exactly what that produces.
++    if (remoteServer->start()) {
++        Platform::Log(Platform::LogLevel::Info, "melonds-remote: remote server enabled\n");
++    } else {
++        Platform::Log(Platform::LogLevel::Error,
++                       "melonds-remote: remote server FAILED to start -- likely a port already in "
++                       "use by another process (e.g. a leftover dualdeck-host-service); see stderr "
++                       "for exactly which socket failed to bind\n");
++        remoteServer.reset();
++        // Marshaled the same way the pending-approval status message
++        // above is -- mainWindow may not exist yet the first time this
++        // runs (matching that callback's own comment), and this must
++        // never touch a widget off the Qt UI thread.
++        QMetaObject::invokeMethod(qApp, [this]() {
++            if (!mainWindow) return;
++            mainWindow->statusBar()->showMessage(
++                "DualDeck: remote server failed to start -- a port it needs is already in use "
++                "(see the log for details)",
++                10000);
++        }, Qt::QueuedConnection);
++    }
 +}
 +
 +void EmuInstance::stopRemoteServer()
@@ -1885,7 +1921,7 @@ new file mode 100644
 index 00000000..1e830a79
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
-@@ -0,0 +1,151 @@
+@@ -0,0 +1,152 @@
 +#include "RemoteServerBridge.h"
 +
 +#include <algorithm>
@@ -1958,10 +1994,10 @@ index 00000000..1e830a79
 +    stop();
 +}
 +
-+void RemoteServerBridge::start() {
++bool RemoteServerBridge::start() {
 +    if (server_) {
 +        server_->start();
-+        return;
++        return server_->isRunning();
 +    }
 +
 +    // Out-of-process mode: AdapterIpcClient::connect() is a single
@@ -1991,6 +2027,7 @@ index 00000000..1e830a79
 +            }
 +        }
 +    });
++    return true;
 +}
 +
 +void RemoteServerBridge::stop() {
@@ -2042,7 +2079,7 @@ new file mode 100644
 index 00000000..c89c42a8
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
-@@ -0,0 +1,161 @@
+@@ -0,0 +1,167 @@
 +#pragma once
 +
 +// Ties the standalone melonds-remote protocol/host networking code
@@ -2141,7 +2178,13 @@ index 00000000..c89c42a8
 +    RemoteServerBridge(const RemoteServerBridge&) = delete;
 +    RemoteServerBridge& operator=(const RemoteServerBridge&) = delete;
 +
-+    void start();
++    // Returns whether the server actually started -- false after a real
++    // bind failure (e.g. another process already listening on one of
++    // these ports; see NetServer::isRunning()'s own comment). Always
++    // true for the out-of-process constructor above, which has no
++    // synchronous failure mode of its own (a failed IPC connection just
++    // keeps retrying on its own thread).
++    bool start();
 +    void stop();
 +
 +    // Called by EmuThread once per emulated frame (software renderer path

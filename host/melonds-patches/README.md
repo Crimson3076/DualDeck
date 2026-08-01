@@ -499,3 +499,43 @@ one-client-at-a-time v0.1 scope.
 - Session IDs are generated and returned in `HelloAck` but not yet
   validated on any later packet (matches the standalone prototype's
   current scope, see `docs/known-limitations.md`).
+
+## Silent remote-server bind failures now surfaced (2026-08-01)
+
+Real user report: "MelonDS does not run a server, cannot connect," no
+error visible anywhere. `startRemoteServer()`'s `RemoteServerBridge::
+start()` call returned `void` and this function unconditionally logged
+"remote server enabled" regardless of what actually happened --
+`NetServer::start()` (`host/remote-server/src/net_server.cpp`) already
+logged a bind failure, but only to stderr, invisible when launched via
+a Steam/EmuDeck shortcut.
+
+Most likely trigger for this specific report: a leftover
+`dualdeck-host-service` process (from before the AppRun `exec`/trap fix
+elsewhere in `docs/known-limitations.md`) still bound to the same
+default ports (8760-8765) melonDS's own in-process `NetServer` also
+tries to bind -- a real port conflict, not a melonDS-specific defect.
+
+Fixed by giving `NetServer` a public `isRunning()` accessor
+(`host/remote-server/include/host/net_server.h`, a real repo file, not
+per-patch), changing `RemoteServerBridge::start()`'s return type from
+`void` to `bool` (both the in-process and out-of-process constructors),
+and having `EmuInstance::startRemoteServer()` check it -- on failure,
+logs a clear `Platform::LogLevel::Error` line instead of the previous
+unconditional "enabled," and shows a status-bar message (`mainWindow->
+statusBar()->showMessage(...)`, the same mechanism the pending-approval
+notification above already uses) so it's visible without needing to
+check logs at all.
+
+**Verified**: `isRunning()` covered by two new real end-to-end tests in
+`host/remote-server/tests/test_net_server_mode_switch.cpp` -- one
+confirming it's `true` after a normal successful start, one forcing a
+*real* bind conflict (a second `NetServer` deliberately configured to
+reuse an already-bound control port) and confirming it correctly
+reports `false`, with the original server unaffected. Both pass, along
+with the full existing test suite (6/6 suites, including this file's
+pre-existing mode-switch/HelloAck coverage). The melonDS-side patch
+changes (`RemoteServerBridge`/`EmuInstance`) were verified to apply
+cleanly (`git apply --check`) against a fresh, real checkout at the
+pinned commit -- not yet compiled or run against a real port conflict
+on real hardware, which is the next confirmation step.
