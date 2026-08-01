@@ -192,6 +192,109 @@ download_patched_appimage() {
     echo "${dest_path}"
 }
 
+# bootstrap_melonds_flatpak_launcher <flatpak_launcher_path>
+#
+# Real user report, 2026-08-01: see find_emudeck_melonds_flatpak_launcher()
+# in scripts/lib/emudeck_paths.sh for the full story -- EmuDeck launches
+# melonDS via Flatpak on this configuration, so there is no existing
+# AppImage to replace. Downloads the patched AppImage fresh to a fixed
+# path under emudeck_applications_dir(), backs up melonds.sh, and
+# rewrites its one `flatpak run` line to exec the new AppImage instead
+# -- dropping EmuDeck's own `--boot=never` flag in the process (an
+# AppImage launch takes the ROM path as a plain positional argument, the
+# same convention azahar.sh/cemu.sh already use, so this also happens to
+# fix the separately-reported "melonDS opens but doesn't load the ROM
+# automatically," which was that flag's doing).
+#
+# Self-limiting to one run: once this succeeds, the newly-installed
+# AppImage sits exactly where find_emudeck_melonds_appimage() looks, so
+# every future invocation of this script takes the normal, already-
+# established replace-in-place path automatically for melonds --
+# this function never runs again after the first time.
+bootstrap_melonds_flatpak_launcher() {
+    local flatpak_launcher="$1"
+    local apps_dir new_appimage_path
+    apps_dir="$(emudeck_applications_dir)"
+    new_appimage_path="${apps_dir}/melonDS.AppImage"
+
+    echo "== melonds: EmuDeck launches melonDS via Flatpak (${flatpak_launcher}), not an" >&2
+    echo "   AppImage -- DualDeck's patch has had no effect on this install. Redirecting" >&2
+    echo "   EmuDeck's own launcher to a freshly-downloaded, patched AppImage instead. ==" >&2
+
+    if [[ "${dry_run}" -eq 1 ]]; then
+        echo "== melonds: --dry-run, stopping here (would install ${new_appimage_path} and" >&2
+        echo "   redirect ${flatpak_launcher} to exec it) ==" >&2
+        return 0
+    fi
+
+    if [[ "${assume_yes}" -ne 1 ]]; then
+        read -r -p "Install DualDeck's patched melonDS at ${new_appimage_path} and redirect EmuDeck's launcher to use it instead of the Flatpak? [y/N] " reply
+        case "${reply}" in
+            [yY]|[yY][eE][sS]) ;;
+            *) echo "== melonds: skipped (not confirmed) =="; return 0 ;;
+        esac
+    fi
+
+    local downloaded_appimage
+    downloaded_appimage="$(download_patched_appimage "melonds")"
+
+    mkdir -p "${apps_dir}"
+    cp "${downloaded_appimage}" "${new_appimage_path}"
+    chmod +x "${new_appimage_path}"
+
+    local launcher_backup="${flatpak_launcher}.dualdeck-original"
+    if [[ ! -f "${launcher_backup}" ]]; then
+        cp "${flatpak_launcher}" "${launcher_backup}"
+    fi
+
+    # replace_in_place_one()'s normal flow (which every future run of
+    # this script for melonds takes once this function has run once --
+    # see this function's own header comment) refuses to proceed if a
+    # manifest exists but "${new_appimage_path}.dualdeck-original" is
+    # missing, as a safety net against exactly the kind of corruption
+    # that would otherwise be silent (see that check's own comment).
+    # There genuinely is no original *AppImage* to back up here -- the
+    # real original state is the Flatpak launcher, already preserved
+    # above -- so this placeholder exists purely to satisfy that later
+    # file-existence check while staying honest about what it actually
+    # is, rather than a copy of anything real.
+    if [[ ! -f "${new_appimage_path}.dualdeck-original" ]]; then
+        echo "DualDeck note: melonDS was originally installed via Flatpak (net.kuribo64.melonDS)," \
+             "not an AppImage -- there is no original AppImage to preserve here. The original" \
+             "launcher script (before DualDeck redirected it) is backed up at:" \
+             "${launcher_backup}" > "${new_appimage_path}.dualdeck-original"
+    fi
+
+    # Matches against net.kuribo64.melonDS -- the real, confirmed Flatpak
+    # app ID EmuDeck uses -- rather than a looser pattern, so this only
+    # ever rewrites the exact line it was written to handle. Refuses to
+    # touch the file if that line isn't found (e.g. EmuDeck's own format
+    # changed) rather than silently doing nothing to it.
+    if ! grep -q "flatpak run net\.kuribo64\.melonDS" "${flatpak_launcher}"; then
+        echo "error: melonds: ${flatpak_launcher} no longer contains the expected 'flatpak run" >&2
+        echo "net.kuribo64.melonDS' line -- EmuDeck's launcher format may have changed. Not" >&2
+        echo "touching it; the original is still backed up at ${launcher_backup}." >&2
+        log "melonds: launcher redirect refused, expected line not found"
+        return 1
+    fi
+    sed -i -E "s|^exec flatpak run net\.kuribo64\.melonDS.*|exec \"${new_appimage_path}\" \"\\\$@\"|" \
+        "${flatpak_launcher}"
+
+    # There is no real "original AppImage" here to preserve a hash of --
+    # the actual original was a Flatpak install, never touched by this
+    # function at all. A sentinel string (never a valid sha256, so it can
+    # never spuriously match a real file's hash) rather than leaving this
+    # field empty, so a manifest that's read back stays self-explanatory.
+    python3 "${manifest_py}" write "${new_appimage_path}" \
+        --dualdeck-version "${dualdeck_version}" \
+        --original-sha256 "none (bootstrapped from a Flatpak launcher, no original AppImage)"
+
+    echo "== melonds: installed DualDeck's patched build at ${new_appimage_path} =="
+    echo "   (EmuDeck's launcher redirected; original backed up at ${launcher_backup})"
+    log "melonds: bootstrapped from Flatpak launcher, dualdeck_version=${dualdeck_version}"
+    installed_count=$((installed_count + 1))
+}
+
 # ---- per-emulator orchestration ----
 replace_in_place_one() {
     local emulator="$1"
@@ -199,10 +302,15 @@ replace_in_place_one() {
 
     case "${emulator}" in
         melonds)
-            appimage_path="$(find_emudeck_melonds_appimage)" || {
+            if ! appimage_path="$(find_emudeck_melonds_appimage)"; then
+                local flatpak_launcher
+                if flatpak_launcher="$(find_emudeck_melonds_flatpak_launcher)"; then
+                    bootstrap_melonds_flatpak_launcher "${flatpak_launcher}"
+                    return $?
+                fi
                 echo "== melonds: no EmuDeck install found under $(emudeck_applications_dir), skipping =="
                 return 0
-            }
+            fi
             ;;
         azahar)
             appimage_path="$(find_emudeck_azahar_appimage)" || {

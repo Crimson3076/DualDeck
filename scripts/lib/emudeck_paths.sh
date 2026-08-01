@@ -107,3 +107,40 @@ find_emudeck_cemu_flatpak_id() {
     command -v flatpak >/dev/null 2>&1 || return 1
     flatpak info info.cemu.Cemu >/dev/null 2>&1 && echo "info.cemu.Cemu"
 }
+
+# emudeck_launchers_dir
+#
+# Where EmuDeck's own per-emulator Steam-shortcut launcher scripts live
+# (cemu.sh, azahar.sh, melonds.sh, ...) -- a second, different directory
+# from emudeck_applications_dir() above (~/Applications, where the
+# actual AppImage binaries or Flatpak references live). Confirmed
+# against a real EmuDeck install (2026-08-01, Fedora): exact content of
+# all three launcher scripts read directly from a live install. Not
+# configurable today (matching emudeck_applications_dir()'s own
+# comment), and unverified against an EmuDeck install using a
+# customized root directory (EmuDeck's default is $HOME/Emulation
+# across every platform this project targets, but EmuDeck does allow
+# choosing a different one at install time).
+emudeck_launchers_dir() {
+    echo "${HOME}/Emulation/tools/launchers"
+}
+
+# find_emudeck_melonds_flatpak_launcher
+#
+# Real user report, 2026-08-01: EmuDeck installs melonDS as a Flatpak
+# (net.kuribo64.melonDS) on at least some configurations, not an
+# AppImage -- melonds.sh (confirmed real content) is just
+# `exec flatpak run net.kuribo64.melonDS --boot=never "$@"`, entirely
+# bypassing find_emudeck_melonds_appimage() above (which only ever looks
+# under emudeck_applications_dir()) -- every DualDeck melonDS fix has
+# zero effect on this configuration, since the actual running binary is
+# always completely stock. Prints melonds.sh's path if it exists and
+# still execs melonDS via Flatpak; prints nothing and returns 1 if the
+# launcher doesn't exist, or exists but already points somewhere else
+# (already redirected by a previous run of this same tool, or a
+# non-Flatpak stock install the normal AppImage path already handles).
+find_emudeck_melonds_flatpak_launcher() {
+    local launcher="$(emudeck_launchers_dir)/melonds.sh"
+    [[ -f "${launcher}" ]] || return 1
+    grep -qi "flatpak run.*melonds" "${launcher}" && echo "${launcher}" || return 1
+}

@@ -7032,6 +7032,101 @@ further**: does anything appear even briefly before disappearing, is
 Steam in Desktop or Gaming Mode, does a window switcher/alt-tab reveal
 an Azahar window that exists but isn't focused/visible.
 
+## 2026-08-01: melonDS was never actually running DualDeck's patch -- EmuDeck installed it as a Flatpak, not an AppImage
+
+Real user report, with the actual real launcher scripts pasted in full
+(`~/Emulation/tools/launchers/{cemu,azahar,melonds}.sh`): "Cemu is the
+only Emulator that launches from the Steam Game Shortcuts and the
+DualDeck host shortcut... MelonDS Opens, but does not open into a Rom,
+must be manually selected... Azahar does not open at all."
+
+**Root cause for melonDS, found in the pasted script itself:**
+`melonds.sh`'s entire content is
+```bash
+#!/bin/bash
+exec flatpak run net.kuribo64.melonDS --boot=never "$@"
+```
+EmuDeck installed melonDS as a **Flatpak**
+(`net.kuribo64.melonDS`), not an AppImage under `~/Applications` --
+`emudeck-replace-in-place.sh` only ever looks for and patches AppImages
+there, so it has been silently doing nothing for melonDS on this
+configuration the entire time. Every melonDS fix earlier in this
+document (the bind-failure visibility fix in particular) is real and
+correct, but was never actually exercised on this user's machine --
+they were always running completely stock, unpatched melonDS via
+Flatpak. The separately-reported "opens but doesn't load the ROM
+automatically" is unrelated to DualDeck entirely -- that's EmuDeck's
+own `--boot=never` flag on the Flatpak invocation.
+
+**Fix, after asking the user how invasive a fix they wanted (their
+answer: automate it fully within the script, no manual steps):**
+`scripts/lib/emudeck_paths.sh` gained `emudeck_launchers_dir()`
+(`$HOME/Emulation/tools/launchers`, confirmed against the real pasted
+scripts) and `find_emudeck_melonds_flatpak_launcher()` (detects the
+exact Flatpak-exec pattern). `scripts/emudeck-replace-in-place.sh`
+gained `bootstrap_melonds_flatpak_launcher()`: when no melonDS AppImage
+is found but this Flatpak launcher is, it downloads the patched
+AppImage fresh to `~/Applications/melonDS.AppImage`, backs up
+`melonds.sh`, and rewrites its one `flatpak run net.kuribo64.melonDS`
+line to exec the new AppImage instead -- dropping `--boot=never` in the
+process (an AppImage launch takes the ROM path as a plain positional
+argument, the same convention `azahar.sh`/`cemu.sh` already use, so this
+also fixes the ROM-doesn't-load report as a side effect). Self-limiting
+to one run: once the AppImage exists at that path, every future
+invocation of this script takes the normal, already-established
+replace-in-place path automatically, since `find_emudeck_melonds_
+appimage()` now finds it -- this bootstrap function never runs again
+after the first time.
+
+A real bug caught during testing: the normal replace-in-place flow
+refuses to proceed if a manifest exists but `<appimage>.dualdeck-
+original` is missing (a safety net against exactly this kind of
+corruption) -- but the bootstrap path has no real *original AppImage*
+to back up (the true original state is the Flatpak launcher, already
+preserved separately), so the very next run after a successful
+bootstrap would have hit that same safety refusal. Fixed by writing a
+small, honest placeholder file there explaining there's no original
+AppImage and pointing at the real launcher-script backup instead of
+leaving the safety check with nothing to find.
+
+**Verified:** end-to-end against local fixtures reproducing the user's
+exact real `melonds.sh` content -- confirmed the bootstrap installs the
+AppImage, rewrites the launcher, and backs up the original; confirmed a
+second run correctly self-heals into the normal replace-in-place path
+with no error; confirmed `--dry-run` has zero side effects (no
+download, no file changes) for this path too.
+
+**Cemu confirmed genuinely working** via both the Steam/EmuDeck game
+shortcut and the DualDeck host shortcut's "open Cemu" -- validates the
+resources/gameProfiles, glibc-bundling, and orphaned-host-service fixes
+above against the real launch paths, not just this project's own test
+harness.
+
+**Azahar -- further investigation, still unresolved:** re-tested using
+the *exact* invocation `azahar.sh` actually uses (`"${exe[@]}"` -- the
+raw `.AppImage` file executed directly, no `--appimage-extract-and-run`,
+unlike the earlier extracted-binary test above) against a real download
+of the published AppImage. This surfaced a real, previously-untested
+condition -- `Error: No suitable fusermount binary found on the $PATH`
+(this sandbox has `/dev/fuse` but no `fusermount`/`fusermount3` binary)
+-- but the AppImage's own embedded runtime handled it as a warning, not
+a fatal error: execution continued normally through the entire AppRun
+sequence (private host-service spawned, `NetServer` listening on all
+five expected ports) and into Qt initialization (the same two harmless
+warnings -- `XDG_RUNTIME_DIR not set`, `QPixmap::scaled: Pixmap is a
+null pixmap` -- seen in the earlier successful extracted-binary test).
+The process was still alive when a `timeout 8` killed it; nothing
+crashed on its own within that window. This rules out the missing-
+fusermount condition as the cause and further supports that the AppImage
+itself is not defective -- whatever's happening is specific to the real
+Steam/EmuDeck/gamescope launch environment on the user's actual
+hardware, which cannot be reproduced in this sandbox. **Needs real
+diagnostic output to make further progress**: running `~/Emulation/
+tools/launchers/azahar.sh` directly from a terminal (bypassing Steam
+entirely, the same technique that diagnosed the melonDS/Cemu issues
+earlier) would capture the actual crash reason instead of Steam's
+opaque Play/Stop/Play cycling.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
