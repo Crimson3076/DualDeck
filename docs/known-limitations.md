@@ -6563,13 +6563,21 @@ installed file was replaced by something else (backup preserved from the
 dry-run` (zero side effects), no-EmuDeck-installed skip messages for all
 three emulators, `-h`/`--help`, and a rejected `--emulator` value.
 
-**Not yet verified:** against a real GitHub Releases download (only a
-local fixture server so far) or on real EmuDeck-installed hardware end to
-end -- this is the biggest architecture change of the whole
-replace-in-place effort, so a real-hardware pass is still needed before
-calling this fully confirmed, the same posture already carried by the
-per-emulator "unverified against a live EmuDeck install" caveats
-elsewhere in this document.
+**Real-hardware confirmation (2026-08-01, same day, Fedora "Crimson"
+machine):** ran against the actual `v0.1.92` GitHub release this change
+published -- Cemu detected at `~/Applications/Cemu.AppImage`, original
+backed up, `dualdeck-cemu-patched-linux-x86_64.AppImage` downloaded from
+the real release and checksum-verified against the real `SHA256SUMS`
+asset, installed, manifest written. The only console noise (`ld.so:
+... wrong ELF class`, `pid ... skipping destruction (fork without
+exec?)`) is Steam's own overlay-injection libraries reacting to process
+startup/forking, present before this script's first line ever runs and
+unrelated to it -- not a regression. This closes the "not yet verified
+against a real GitHub Releases download / real EmuDeck hardware" gap
+above for Cemu specifically; melonDS and Azahar still want their own
+confirmation runs, and Cemu's installed AppImage still needs an actual
+in-game launch to confirm the remote server itself works, not just that
+installation succeeded.
 
 ## Things intentionally out of scope for v0.1
 
