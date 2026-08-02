@@ -969,22 +969,40 @@ export MELONDS_REMOTE_ENABLE=1
 export MELONDS_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
 
 # Host-control mode (GitHub issue #4, experimental): set by
-# ../dualdeck-host.sh's "Launch with host-control mode" menu
-# choice, not on by default. Starts the standalone dualdeck-host-service
-# binary in --adapter-ipc mode *before* melonDS, then points melonDS at
-# it as an out-of-process adapter (MELONDS_REMOTE_OUT_OF_PROCESS=1) --
-# see host/melonds-patches/0001-remote-server-integration.patch's
-# EmuInstance::startRemoteServer() and docs/adr/
-# 0001-host-service-and-adapter-architecture.md section 10 for why this
-# has to be a separate process that outlives melonDS itself, rather than
-# something melonDS could do on its own: a client needs somewhere to
-# connect and navigate *before* an emulator has even started. Uses the
-# same zero-typing device-approval flow as melonDS's own in-process
-# dialog -- a kdialog Yes/No popup on the host's own desktop (see
-# kdialog_approval_prompt.h) -- unless MELONDS_REMOTE_AUTH_TOKEN is set,
-# in which case that static shared secret is used instead.
-# --state-dir points at the same directory melonDS's own device-approval
-# uses, so a device approved once is approved for every emulator.
+# ../dualdeck-host.sh's "Host control only -- no emulator" menu choice,
+# not on by default. Starts the standalone dualdeck-host-service binary
+# in --adapter-ipc mode and runs it in the foreground until Ctrl+C --
+# see docs/adr/0001-host-service-and-adapter-architecture.md section 10
+# for why this is a separate process from any emulator: a client needs
+# somewhere to connect and navigate *before* an emulator has even
+# started. Uses the same zero-typing device-approval flow as melonDS's
+# own in-process dialog -- a kdialog Yes/No popup on the host's own
+# desktop (see kdialog_approval_prompt.h) -- unless
+# MELONDS_REMOTE_AUTH_TOKEN is set, in which case that static shared
+# secret is used instead. --state-dir points at the same directory
+# melonDS's own device-approval uses, so a device approved once is
+# approved for every emulator.
+#
+# Real user report, 2026-08-01: this used to *also* launch melonDS
+# immediately afterward (as an out-of-process adapter, so it would be
+# "ready" the moment a ROM was picked). That defeated the entire point:
+# ModeCoordinator switches to Emulation mode the instant *any* adapter
+# connects, with no concept of "connected but idle, no ROM loaded yet"
+# -- so melonDS's out-of-process bridge connecting within a fraction of
+# a second of starting flipped the session out of Host Control mode
+# before the user could ever interact with it, every single time,
+# regardless of whether a ROM was ever actually loaded. The client sat
+# silently in Emulation mode waiting for video frames that would never
+# arrive (no ROM = nothing for melonDS to render), which looked
+# identical to "the touchpad/buttons just don't work." Genuinely
+# emulator-agnostic host-control-mode navigation (this session handing
+# off automatically once you separately launch *any* emulator) needs a
+# persistent daemon on a socket every emulator's own launch path already
+# checks first -- not yet built (see docs/known-limitations.md's Phase B
+# entry) -- so for now this is deliberately standalone: launch an
+# emulator the normal way (its own Steam shortcut) whenever you're ready
+# to play; it starts its own separate session rather than taking over
+# this one.
 if [[ "${DUALDECK_HOST_CONTROL:-0}" == "1" ]]; then
     if [[ ! -x "${host_root}/internal/dualdeck-host-service" ]]; then
         echo "error: host/internal/dualdeck-host-service is missing from this" >&2
@@ -1002,21 +1020,14 @@ if [[ "${DUALDECK_HOST_CONTROL:-0}" == "1" ]]; then
         auth_token_args=(--auth-token "${MELONDS_REMOTE_AUTH_TOKEN}")
     fi
 
-    echo "Starting the standalone Host Service (host-control mode, experimental) ..." >&2
-    "${host_root}/internal/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
+    echo "Starting the standalone Host Service (host-control mode, experimental) --" >&2
+    echo "no emulator will be launched. Use its own Steam shortcut/launcher" >&2
+    echo "whenever you're ready to play something -- see this script's own" >&2
+    echo "header comment for why that starts a separate session rather than" >&2
+    echo "taking over this one (yet)." >&2
+    exec "${host_root}/internal/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
         --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
-        --app-version "${MELONDS_REMOTE_VERSION}" &
-    host_service_pid=$!
-    # Not exec'd below in this branch specifically so this trap can still
-    # run once melonDS exits -- exec would replace this shell (and its
-    # traps) with melonDS itself, leaving the Host Service orphaned.
-    trap 'kill "${host_service_pid}" 2>/dev/null || true' EXIT
-    sleep 0.5 # let the listener bind before melonDS tries to connect
-
-    export MELONDS_REMOTE_OUT_OF_PROCESS=1
-    export MELONDS_REMOTE_ADAPTER_SOCKET="${adapter_socket}"
-    "${host_root}/melonDS" "$@"
-    exit $?
+        --app-version "${MELONDS_REMOTE_VERSION}"
 fi
 
 exec "${host_root}/melonDS" "$@"

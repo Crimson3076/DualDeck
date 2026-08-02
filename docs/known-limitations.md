@@ -7488,6 +7488,63 @@ the same category of limitation flagged repeatedly elsewhere in this
 document. The `kTouchpadMouseSensitivity` scale factor is an arbitrary
 starting guess with no real-hardware feel-tuning behind it either.
 
+## 2026-08-01: "Host control only" launched melonDS anyway, which immediately ended Host Control mode before the user could ever interact with it
+
+Real user report, after the touchpad-API fix above still didn't produce
+any observable effect on the host at all: the actual host log revealed
+the real cause, unrelated to input capture entirely --
+
+```
+melonds-remote: connected to Host Service
+ModeCoordinator: switching to Emulation mode (system=Nintendo DS, adapter=melonDS)
+```
+
+**Root cause:** `run-host.sh`'s `DUALDECK_HOST_CONTROL=1` branch started
+the standalone Host Service correctly, but then *also* launched melonDS
+immediately afterward (as an out-of-process adapter, so it would be
+"ready" the instant a ROM was picked). `ModeCoordinator` has no concept
+of "an adapter is connected but idle, no ROM loaded yet" -- it switches
+to Emulation mode the moment *any* adapter connects, full stop. melonDS's
+out-of-process bridge connects within a fraction of a second of
+starting, so every single "Host control only" launch flipped out of
+Host Control mode almost immediately, regardless of whether a ROM was
+ever loaded. The client then sat silently in Emulation mode waiting for
+video frames that would never arrive (no ROM = nothing for melonDS to
+render) -- indistinguishable, from the user's side, from "the touchpad
+and buttons just don't work," since Host Control's own screen/behavior
+was never actually reachable long enough to test.
+
+**Fix:** `scripts/build-release.sh`'s generated `run-host.sh` no longer
+launches melonDS at all in this branch -- "Host control only -- no
+emulator" now means exactly that. The standalone Host Service runs in
+the foreground (`exec`'d directly, no backgrounding/trap needed anymore
+since there's no child emulator process to worry about orphaning) until
+Ctrl+C. Launching an emulator to actually play something is a separate
+action (its own Steam shortcut) that starts its own separate session,
+rather than automatically taking over this one -- genuinely
+emulator-agnostic hand-off (one persistent daemon, with every emulator's
+launch path connecting to the *same* socket so Host Control mode hands
+off automatically the moment any of them is opened) needs the
+persistent-daemon work described in this document's Phase B entry, which
+doesn't exist yet. This is a real, current limitation, not silently
+glossed over -- printed directly to the user when Host Control mode
+starts.
+
+**Verified:** extracted the generated script body and ran it standalone
+against a stub `dualdeck-host-service` (a script that prints the same
+"running" banner and exits cleanly on SIGTERM) -- confirmed melonDS is
+never invoked at all, the Host Service runs in the foreground with the
+correct arguments, and `SIGTERM` (Ctrl+C's equivalent) is delivered
+directly to it and produces a clean exit, since `exec` replaces the
+shell entirely with no orphaned child process risk.
+
+**Not yet verified:** against real hardware -- this is the one that
+actually matters: does gamepad/mouse input now register once the
+session genuinely stays in Host Control mode, since the previous two
+"fixes" (touchpad capture method, protocol version visibility) were
+real and necessary but couldn't have worked while this bug made Host
+Control mode unreachable in the first place.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
