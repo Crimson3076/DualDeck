@@ -7799,6 +7799,46 @@ real hardware; real `systemd --user` activation timing from a cold
 Gaming-Mode/Bazzite-HTPC boot; the two-simultaneous-adapter-connections
 IPC race under a real persistent daemon.
 
+## 2026-08-02: Found it -- the touchpad only works while holding the STEAM button, because raw touch reporting is gated behind an active Trackpad-type Steam Input binding
+
+Real hardware report, immediately after the previous entry shipped: Host
+Control's touchpad-as-mouse genuinely works now (moves the host's virtual
+mouse cursor), but only for as long as the STEAM button is held down at
+the same time -- confirming touch capture itself is fine, but something
+gates *when* it fires.
+
+**Root cause:** this is the same class of problem as an earlier, already-
+documented finding for the older mouse-motion path (see the 2026-08-01
+"SDL_EVENT_MOUSE_MOTION never fires without a specific Steam Input
+binding" entry), just showing up for `SDL_EVENT_GAMEPAD_TOUCHPAD_*`
+instead. Steam Input only forwards a trackpad's raw touch data through
+that SDL channel while the pad has a **Trackpad-type action bound to it
+in the currently active action set/layer** -- it isn't unconditional.
+Without a dedicated Controller Layout for the DualDeck Client Steam
+shortcut, Steam falls back to whatever generic template it auto-picked
+for a freshly-added non-Steam shortcut, and the only place a Trackpad
+binding exists in that default is Valve's own built-in "hold STEAM"
+layer (normally reserved for the system cursor/on-screen keyboard) --
+so touch only ever reports while that chord is held, exactly matching
+the report.
+
+**Fix, documented in `docs/troubleshooting.md`'s new touchpad entry
+(not a code change -- Steam Input controller-layout assignments live in
+a separate, undocumented-format config store this project's own
+`scripts/lib/steam_shortcut.py` deliberately doesn't try to script, same
+reasoning that file's own module docstring already gives for punting
+Controller Layout to a manual step):** give the shortcut its own
+Controller Layout, bind both trackpads to the **Trackpad** action type
+directly on the base action set (not a hold-modifier layer), matching
+`docs/steam-deck-setup.md`'s existing "configured as a mouse in Steam
+Input (the default 'Trackpad' binding)" guidance for the unrelated
+touchscreen-substitute feature -- same underlying Steam Input mechanism,
+different DualDeck feature consuming it.
+
+**Not yet verified:** whether this documented fix actually resolves it
+on real hardware -- no physical Steam Deck in this sandbox to confirm
+against; the next real-hardware test is the thing to watch for.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

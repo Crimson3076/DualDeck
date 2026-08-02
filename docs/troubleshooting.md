@@ -218,6 +218,50 @@ before this app ever saw a sustained press -- update to a current build,
 which uses L3+R3 (hold both stick clicks in together) instead, a
 combination the DS has no button for and Steam doesn't reserve.
 
+### Host Control's touchpad-as-mouse only moves the host cursor while I'm holding the STEAM button
+
+Real hardware report, 2026-08-02: the trackpads work correctly in Host
+Control mode (moving the virtual mouse on the host, see
+`docs/known-limitations.md`'s 2026-08-02 entry), but only for as long as
+the STEAM button is held down at the same time -- not something anyone
+wants to do continuously.
+
+This is the same underlying gap as "The in-app menu pops open by itself"
+and the Controller Layout note in `docs/steam-deck-setup.md`'s Gaming
+Mode section, just showing up for touch instead of buttons: Steam Input
+only forwards a trackpad's raw touch data to
+`SDL_EVENT_GAMEPAD_TOUCHPAD_*` (what the client actually reads, see
+`client/src/main.cpp`'s gamepad-touchpad handling) while that trackpad has
+a **Trackpad-type action bound to it in the currently active action
+set/layer**. Without a dedicated Controller Layout for the DualDeck Client
+shortcut, Steam falls back to whatever generic template it auto-picked,
+and the only place a Trackpad binding exists there is Valve's own
+built-in "hold STEAM" layer (normally reserved for the system cursor/
+on-screen keyboard) -- so touch only ever reports while that chord is
+held, and the client legitimately never sees anything the rest of the
+time.
+
+**Fix**: give the DualDeck Client shortcut its own Controller Layout with
+the trackpads bound directly, not relying on the auto-picked default:
+
+1. Right-click the shortcut in your Steam library (or open the Quick
+   Access Menu while it's running) → **Controller Layout** → **Edit
+   Layout**.
+2. Click each trackpad (left and right) individually and set its action
+   type to **Trackpad** -- the same binding
+   `docs/steam-deck-setup.md`'s touchscreen-substitute feature already
+   documents ("configured as a mouse in Steam Input, the default
+   'Trackpad' binding").
+3. Make sure it's bound on the **base action set**, not inside a
+   hold-modifier layer, so it's live without holding anything.
+4. Save and relaunch.
+
+Not yet verified end-to-end against real hardware by this project (no
+physical Deck in this sandbox) -- please confirm this resolves it, or
+report back with the client log (`~/.config/dualdeck-client/client.log`)
+around the touchpad diagnostic lines added in the previous entry if it
+doesn't.
+
 ### install-steam-shortcut.sh / uninstall-steam-shortcut.sh failed, or Steam's shortcuts.vdf looks wrong
 
 These scripts are careful about editing Steam's binary `shortcuts.vdf`
