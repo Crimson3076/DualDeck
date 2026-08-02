@@ -1772,6 +1772,8 @@ int main(int argc, char** argv) {
         constexpr float kTouchpadMouseSensitivity = 900.0f;
         std::optional<std::pair<float, float>>
             lastTouchpadPos[kMaxTrackedTouchpads][kMaxTrackedFingersPerTouchpad];
+        // See the SDL_EVENT_GAMEPAD_TOUCHPAD_* case's own comment.
+        bool loggedFirstTouchpadEvent = false;
 
         std::vector<uint8_t> frame;
         // Matches texture's current dimensions (textureWidth/textureHeight),
@@ -1984,7 +1986,27 @@ int main(int argc, char** argv) {
                     case SDL_EVENT_GAMEPAD_ADDED:
                         if (!gamepad) {
                             gamepad = SDL_OpenGamepad(event.gdevice.which);
-                            logLine("[input] gamepad connected\n");
+                            // Real user report, 2026-08-01: touchpad input
+                            // in Host Control mode never registered at all,
+                            // on real hardware, despite the code reading
+                            // SDL's dedicated gamepad-touchpad API (which
+                            // should work regardless of Steam Input's
+                            // control-scheme binding). SDL only exposes
+                            // touchpad capability at all if it identifies
+                            // *this specific gamepad instance* as a
+                            // touchpad-capable device in the first place
+                            // (its internal gamecontrollerdb mapping, keyed
+                            // off the reported name/VID/PID) -- logged here
+                            // so a real report of what SDL actually sees for
+                            // this exact connection replaces guessing.
+                            const char* name = gamepad ? SDL_GetGamepadName(gamepad) : nullptr;
+                            int numTouchpads = gamepad ? SDL_GetNumGamepadTouchpads(gamepad) : 0;
+                            logLine("[input] gamepad connected: name=%s touchpads=%d\n",
+                                    name ? name : "(null)", numTouchpads);
+                            for (int tp = 0; tp < numTouchpads; ++tp) {
+                                logLine("[input]   touchpad %d: %d finger slot(s)\n", tp,
+                                        SDL_GetNumGamepadTouchpadFingers(gamepad, tp));
+                            }
                         }
                         break;
                     case SDL_EVENT_GAMEPAD_REMOVED:
@@ -1997,6 +2019,19 @@ int main(int argc, char** argv) {
                     case SDL_EVENT_GAMEPAD_TOUCHPAD_DOWN:
                     case SDL_EVENT_GAMEPAD_TOUCHPAD_MOTION:
                     case SDL_EVENT_GAMEPAD_TOUCHPAD_UP: {
+                        // One-shot diagnostic (real user report, 2026-08-01:
+                        // touchpad input never registered at all) -- logged
+                        // before any of the filtering below, so this fires
+                        // even for input this code ends up discarding,
+                        // confirming definitively whether SDL ever delivers
+                        // this event type at all on real hardware.
+                        if (!loggedFirstTouchpadEvent) {
+                            loggedFirstTouchpadEvent = true;
+                            logLine("[input] first gamepad-touchpad event received: type=%d touchpad=%d "
+                                    "finger=%d x=%.3f y=%.3f\n",
+                                    static_cast<int>(event.type), event.gtouchpad.touchpad,
+                                    event.gtouchpad.finger, event.gtouchpad.x, event.gtouchpad.y);
+                        }
                         // Host-control cursor motion via SDL's gamepad
                         // touchpad API -- see lastTouchpadPos's own
                         // declaration comment for why this is the reliable

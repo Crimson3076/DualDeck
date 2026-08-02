@@ -7594,6 +7594,64 @@ which failed locally in this session's own build+test verification
 before pushing, since none of that ran through this repo's own CI
 workflow (`ci.yml`) or exercised the vendored patch copies at all.
 
+**Also worth noting:** a release (v0.1.107) was published from the
+commit immediately before this fix -- its patched melonDS build was
+compiled against the still-frozen v10 vendored `protocol.h` copy, while
+the client/host-service were built from the live v11 code. Since
+melonDS's in-process `NetServer` (built from that vendored copy) checks
+`header.protocolVersion == kProtocolVersion` before accepting a
+handshake, a v11 client connecting to that specific build would fail
+with a real, correct `ProtocolVersionMismatch` -- not a false alarm, an
+actual mismatch this v10-vendored build has. Azahar/Cemu's out-of-process
+adapters don't run `NetServer` themselves (the standalone
+`dualdeck-host-service`, built from live v11 code, does), so they were
+unaffected by this specific build's vendored-copy staleness.
+
+## 2026-08-01: Touchpad still silent in a genuinely-staying-in-Host-Control session -- added diagnostics rather than guess again
+
+Real re-test, after the "stop launching melonDS" fix: gamepad input is
+now recognized on the host (a real Xbox-identity virtual controller
+shows as connected -- `HostControlAdapter`'s uinput device is working
+correctly), but the touchpad still produces no motion at all. The
+user's renewed suggestion was to change the *host's* virtual gamepad to
+identify as a Steam Controller instead of Xbox 360, since Steam
+Controllers have touchpads -- worth addressing directly: this wouldn't
+help, because the host's virtual gamepad is a pure output device other
+host-side apps read; it has no bearing on whether the *client*
+successfully captures touchpad motion from the Deck's own hardware in
+the first place. That capture (`SDL_EVENT_GAMEPAD_TOUCHPAD_*`) happens
+entirely client-side, before anything reaches the host.
+
+That said, the underlying intuition -- that *device identity* affects
+touchpad visibility -- is correct, just aimed at the wrong device: SDL
+only exposes gamepad-touchpad capability (`SDL_GetNumGamepadTouchpads()`
+returning nonzero) if it identifies the specific connected gamepad
+instance as touchpad-capable in its own mapping database, keyed off
+whatever vendor/product ID Steam Input presents to SDL on the Deck
+itself -- entirely outside DualDeck's control, and not something this
+sandbox (no physical Steam Deck) can verify by reasoning alone.
+
+**What shipped:** rather than guess at a third capture mechanism with no
+way to verify it, `client/src/main.cpp` now logs, the moment a gamepad
+connects, its SDL-reported name and `SDL_GetNumGamepadTouchpads()` count
+(and finger-slot count per touchpad found) -- and separately logs the
+very first raw `SDL_EVENT_GAMEPAD_TOUCHPAD_*` event ever received,
+*before* any of this code's own filtering, so a real client log
+(`~/.config/dualdeck-client/client.log`) will show definitively whether
+SDL sees zero touchpads on this exact gamepad (a mapping/identification
+problem, entirely outside this project) versus sees touchpads but never
+receives an event (a different, still-unknown problem) versus receives
+events that this code's own bounds-checking is incorrectly discarding
+(a real, fixable bug in the code added earlier).
+
+**Verified:** rebuilt SDL3 to compile-check the added logging (clean,
+zero warnings), all three test suites pass unchanged (logging-only
+change).
+
+**Not yet verified:** against real hardware -- this is the actual
+diagnostic step needed before another guess is worth making; the client
+log from a real re-test is the next thing to look at.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
