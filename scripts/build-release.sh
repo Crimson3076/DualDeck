@@ -241,10 +241,34 @@ cp -a "${cemu_bin_dir}/gameProfiles" "${pkg_dir}/host/gameProfiles"
 # EmuInstance::startRemoteServer()), but required for run-host.sh's
 # opt-in "host-control mode" -- without shipping this, that mode could
 # never actually be used from a downloaded release, only from a source
-# build. Statically linked against melonds_remote_protocol/_host, so no
-# extra runtime library dependencies beyond libc/libstdc++/pthread.
+# build.
 cp "${repo_build}/host/remote-server/dualdeck-host-service" "${pkg_dir}/host/internal/dualdeck-host-service"
 chmod +x "${pkg_dir}/host/internal/dualdeck-host-service"
+
+# Real Bazzite hardware report, 2026-08-02: starting the persistent Host
+# Control daemon failed with "Unit dualdeck-host-control.service could
+# not be found" -- traced back to this binary silently depending on a
+# host-provided libturbojpeg (host/remote-server/CMakeLists.txt links
+# TurboJPEG::TurboJPEG, a dynamic library found via find_library(), not
+# statically linked -- the comment that used to be here claiming "no
+# extra runtime library dependencies" was simply wrong), which an
+# immutable/rpm-ostree system like Bazzite has no easy way to install
+# system-wide. That in turn is why install-host-distrobox.sh and
+# install-host-control-daemon.sh both used to refuse Host Control mode
+# outright on immutable systems (see their own comments) -- routing
+# through a Distrobox container was the only way to guarantee
+# libturbojpeg was present. Bundling this one binary's shared library
+# dependencies the exact same way pack_appimage() already does for the
+# prebuilt Azahar/Cemu AppImages (bundle_library_dependencies(), sourced
+# above) removes that dependency entirely: dualdeck-host-service needs no
+# Qt/SDL (host/remote-server/CMakeLists.txt links only
+# dualdeck_protocol/dualdeck_adapter_sdk/Threads/TurboJPEG), so once its
+# one extra library is bundled alongside it, it runs identically on any
+# Linux host regardless of package-manager mutability -- see
+# run-host.sh's Host-Control branch, host-control-daemon.sh, and
+# scripts/lib/adapter_socket_probe.sh for where LD_LIBRARY_PATH now
+# points at this directory.
+bundle_library_dependencies "${pkg_dir}/host/internal/dualdeck-host-service" "${pkg_dir}/host/internal/lib"
 
 # Prebuilt, patched, self-contained AppImages for
 # emudeck-replace-in-place.sh to download and drop straight into an
@@ -1041,7 +1065,12 @@ if [[ "${DUALDECK_HOST_CONTROL:-0}" == "1" ]]; then
     echo "whenever you're ready to play something -- see this script's own" >&2
     echo "header comment for why that starts a separate session rather than" >&2
     echo "taking over this one (yet)." >&2
-    exec "${host_root}/internal/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
+    # See build-release.sh's bundle_library_dependencies() call for this
+    # binary -- host/internal/lib ships its runtime deps (libturbojpeg)
+    # so it runs on any host regardless of whether that library happens
+    # to be installed system-wide (the real Bazzite bug this fixes).
+    exec env LD_LIBRARY_PATH="${host_root}/internal/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+        "${host_root}/internal/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
         --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
         --app-version "${MELONDS_REMOTE_VERSION}"
 fi
@@ -1384,7 +1413,11 @@ case "${type}" in
         if [[ -n "${token:-}" ]]; then
             auth_token_args=(--auth-token "${token}")
         fi
-        "${host_root}/internal/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
+        # See build-release.sh's bundle_library_dependencies() call for
+        # this binary -- host/internal/lib ships its runtime deps
+        # (libturbojpeg) so it doesn't depend on the host having it.
+        env LD_LIBRARY_PATH="${host_root}/internal/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+            "${host_root}/internal/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
             --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
             --app-version "${AZAHAR_REMOTE_VERSION}" &
         host_service_pid=$!
@@ -1418,7 +1451,9 @@ case "${type}" in
         if [[ -n "${token:-}" ]]; then
             auth_token_args=(--auth-token "${token}")
         fi
-        "${host_root}/internal/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
+        # See the n3ds case's identical comment above.
+        env LD_LIBRARY_PATH="${host_root}/internal/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+            "${host_root}/internal/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
             --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
             --app-version "${CEMU_REMOTE_VERSION}" &
         host_service_pid=$!
@@ -1653,21 +1688,19 @@ if [[ ! -f /run/ostree-booted ]] && ! command -v rpm-ostree >/dev/null 2>&1; the
     exit 1
 fi
 
-# Host-control mode (GitHub issue #4, experimental -- see run-host.sh's
-# matching comment for the full explanation) isn't wired up for the
-# Distrobox path yet: it would need the standalone dualdeck-host-service
-# binary running *outside* the container (a client should be able to
-# reach it before melonDS/the container even starts) with a socket
-# shared into the container for melonDS to connect to, which hasn't been
-# built or tested. Fail loudly instead of silently falling back to
-# ordinary in-process mode, which would otherwise look like host-control
-# mode "worked" right up until a client tried to use it with no emulator
-# running.
+# Host-control mode (GitHub issue #4) doesn't need a Distrobox container
+# at all -- dualdeck-host-service links no Qt/SDL, only libturbojpeg,
+# now bundled alongside it (see build-release.sh's
+# bundle_library_dependencies() call and its own comment on the real
+# Bazzite bug this fixes). This used to fail loudly here instead, on the
+# now-outdated assumption that it needed the same GUI-library-heavy
+# container melonDS itself does; launch-host.sh no longer even routes
+# Host Control launches through this script, but delegate rather than
+# error in case something still invokes this directly (e.g. a stale
+# doc, or a manual run) -- ./run-host.sh handles it correctly on its
+# own, container or not.
 if [[ "${DUALDECK_HOST_CONTROL:-0}" == "1" ]]; then
-    echo "error: host-control mode isn't supported yet on immutable/Distrobox" >&2
-    echo "systems (see host/internal/run-host.sh's comment) -- only the regular," >&2
-    echo "non-Distrobox launch path (./run-host.sh) supports it so far." >&2
-    exit 1
+    exec ./run-host.sh "$@"
 fi
 
 if ! command -v distrobox >/dev/null 2>&1; then
@@ -1836,7 +1869,13 @@ if [[ -n "${DUALDECK_HOST_CONTROL_AUTH_TOKEN:-}" ]]; then
     auth_token_args=(--auth-token "${DUALDECK_HOST_CONTROL_AUTH_TOKEN}")
 fi
 
-exec "${host_root}/internal/dualdeck-host-service" --adapter-ipc \
+# See build-release.sh's bundle_library_dependencies() call for this
+# binary -- host/internal/lib ships its runtime deps (libturbojpeg) so
+# it runs under systemd --user the same way on any host, immutable or
+# not (the real Bazzite bug this fixes: this daemon previously couldn't
+# even be installed on rpm-ostree systems because of it).
+exec env LD_LIBRARY_PATH="${host_root}/internal/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+    "${host_root}/internal/dualdeck-host-service" --adapter-ipc \
     --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
     --app-version "${DUALDECK_HOST_CONTROL_VERSION}"
 WRAP
@@ -1861,19 +1900,20 @@ on_error() {
 }
 trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
 
-# Same rejection install-host-distrobox.sh's own DUALDECK_HOST_CONTROL
-# check already gives run-host.sh's manual Host Control mode -- a
-# persistent daemon inside a Distrobox container needs the container
-# itself to be running independently of any login session, which this
-# project's Distrobox integration doesn't attempt yet. Exits 0 (not an
-# error): this is "not supported here yet," not a failure.
-if [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1; then
-    echo "The persistent Host Control daemon isn't supported yet on immutable/" >&2
-    echo "Distrobox systems (e.g. Bazzite) -- use the manual 'Host control only'" >&2
-    echo "launch option from the menu instead." >&2
-    exit 0
-fi
-
+# Real Bazzite hardware report, 2026-08-02: this daemon used to refuse
+# to install at all on immutable/rpm-ostree systems here, on the same
+# now-outdated "needs a Distrobox container" assumption
+# install-host-distrobox.sh's own DUALDECK_HOST_CONTROL check used to
+# make (see that check's own updated comment) -- dualdeck-host-service
+# links no Qt/SDL, only libturbojpeg, now bundled alongside it (see
+# build-release.sh's bundle_library_dependencies() call), so it needs no
+# container on any system. What this unit actually writes to
+# (${unit_dir} below, under $HOME) and execs
+# (host-control-daemon.sh -> the now-self-contained dualdeck-host-service)
+# both work identically whether the base OS is immutable or not -- the
+# only real prerequisite is a working systemd --user manager, checked
+# next.
+#
 # Checks a *working* --user manager is actually reachable, not just that
 # the systemctl binary exists -- a machine can have systemd installed
 # without a lingering/active --user instance for this account (e.g. no
@@ -2000,7 +2040,21 @@ cat > "${pkg_dir}/host/internal/launch-host.sh" <<'WRAP'
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-if [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1; then
+# Real Bazzite hardware report, 2026-08-02: Host Control mode
+# (DUALDECK_HOST_CONTROL=1) never worked on immutable systems at all --
+# install-host-distrobox.sh flatly refused it (see that script's own
+# comment), even though its own actual reason (needing Qt6/SDL2 that
+# only a Distrobox container can provide) doesn't apply to it:
+# dualdeck-host-service links no Qt/SDL at all, only libturbojpeg, which
+# is now bundled alongside it (see build-release.sh's
+# bundle_library_dependencies() call) precisely so it runs the same way
+# on any host regardless of package-manager mutability. Route Host
+# Control mode straight to run-host.sh even here -- it doesn't need a
+# container -- and reserve the Distrobox path for an actual melonDS GUI
+# launch, which still does.
+if [[ "${DUALDECK_HOST_CONTROL:-0}" == "1" ]]; then
+    exec ./run-host.sh "$@"
+elif [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1; then
     exec ./install-host-distrobox.sh "$@"
 else
     exec ./run-host.sh "$@"
@@ -2263,9 +2317,24 @@ case "${action}" in
         daemon_action="$(choose_host_control_daemon_action)"
         case "${daemon_action}" in
             start)
-                if ./internal/install-host-control-daemon.sh && \
-                   systemctl --user enable --now dualdeck-host-control.service; then
+                # Real Bazzite hardware report, 2026-08-02: this used to
+                # always show the same generic "check install.log"
+                # message on any failure, even when
+                # install-host-control-daemon.sh had already printed the
+                # real, specific reason to stderr (e.g. its old
+                # immutable-system refusal) -- install.log never
+                # contained that reason either, since a clean, expected
+                # refusal isn't an ERR-trap failure. Capture both
+                # commands' combined output and show it directly instead
+                # of guessing, falling back to the old generic message
+                # only if nothing was actually captured.
+                if daemon_start_output="$(./internal/install-host-control-daemon.sh 2>&1 && \
+                    systemctl --user enable --now dualdeck-host-control.service 2>&1)"; then
                     info "Host Control daemon started -- it now runs independently of Steam and stays up across reboots (once your desktop session's systemd --user manager comes up). Connect a client any time; launching a real emulator elsewhere still works exactly as before and switches this session to Emulation mode automatically."
+                elif [[ -n "${daemon_start_output}" ]]; then
+                    info "Could not start the Host Control daemon:
+
+${daemon_start_output}"
                 else
                     info "Could not start the Host Control daemon -- see ${error_log} for details, or check whether systemd --user is available on this system."
                 fi

@@ -7839,6 +7839,101 @@ different DualDeck feature consuming it.
 on real hardware -- no physical Steam Deck in this sandbox to confirm
 against; the next real-hardware test is the thing to watch for.
 
+## 2026-08-02: Host Control never worked on Bazzite at all -- "Unit dualdeck-host-control.service could not be found"
+
+Real hardware report from a Bazzite HTPC host: starting the new
+persistent Host Control daemon from `dualdeck-host.sh`'s menu failed with
+`Could not start the Host Control daemon -- see
+~/.config/dualdeck/install.log for details, or check whether systemd
+--user is available on this system`, and the actual systemd error behind
+it was `Unit dualdeck-host-control.service could not be found.`
+
+**Root cause, confirmed by direct code reading, not assumed:**
+`host/internal/dualdeck-host-service` (the standalone binary Host
+Control mode runs) was packaged as a bare, unbundled binary -- a comment
+at its copy step in `build-release.sh` claimed it was "statically
+linked... no extra runtime library dependencies," which was simply
+wrong: `host/remote-server/CMakeLists.txt` links `TurboJPEG::TurboJPEG`,
+found via `find_library()` -- a real dynamic dependency, confirmed with
+`ldd` against a freshly built copy (`libturbojpeg.so.0`, `libstdc++.so.6`,
+`libgcc_s.so.1`, beyond glibc/the dynamic linker). Because of that
+undocumented dependency, both `install-host-distrobox.sh` (the manual
+one-off Host Control launch, on immutable systems) and this session's new
+`install-host-control-daemon.sh` (the persistent daemon) had each grown
+their own outright refusal to run Host Control mode at all on
+immutable/rpm-ostree systems like Bazzite -- reasoning that it would need
+a Distrobox container to guarantee `libturbojpeg` was present, the same
+way melonDS/Azahar/Cemu's own much heavier Qt6/SDL2 dependencies do.
+`install-host-control-daemon.sh`'s refusal exits 0 (an intentional,
+logged-as-informational "not supported here" early-out, not an ERR-trap
+failure) *before* ever writing the systemd unit file -- but
+`dualdeck-host.sh`'s calling code didn't check for that, so it silently
+fell through to `systemctl --user enable --now
+dualdeck-host-control.service` anyway, which failed with "Unit ... could
+not be found" because the unit file the daemon refusal had skipped
+writing genuinely didn't exist. The generic error message the user saw
+never mentioned any of this -- the real, already-known reason
+(`install-host-control-daemon.sh` had printed it to stderr) was simply
+discarded.
+
+**The actual fix, not just a better error message:** `dualdeck-host-service`
+links no Qt6/SDL2 at all -- its only dependency beyond glibc is
+`libturbojpeg` (plus `libstdc++`/`libgcc_s`), a dramatically lighter
+footprint than any of the three emulators. Bundling those three
+libraries alongside it via the exact same `bundle_library_dependencies()`
+helper `pack_appimage()` already uses for the prebuilt Azahar/Cemu
+AppImages (`scripts/lib/appimage_pack.sh`, already sourced by
+`build-release.sh`) makes it fully self-contained, independent of
+whether the launching system's package manager can install
+`libturbojpeg` at all. With that in place, Host Control mode needs no
+Distrobox container on any system:
+
+- `build-release.sh` now bundles `dualdeck-host-service`'s shared library
+  dependencies into `host/internal/lib/` right after building it.
+- Every place that launches it (`run-host.sh`'s manual Host-Control
+  branch, the persistent daemon's `host-control-daemon.sh` wrapper,
+  `scripts/lib/adapter_socket_probe.sh`'s private-spawn fallback shared
+  by `run-host-azahar.sh`/`run-host-cemu.sh`, and
+  `launch-custom-emulator.sh`'s n3ds/wiiu spawns) now sets
+  `LD_LIBRARY_PATH` to include that directory.
+- `launch-host.sh` (the Steam shortcut's actual entry point) now routes
+  `DUALDECK_HOST_CONTROL=1` straight to `run-host.sh` unconditionally,
+  even on an immutable system -- Distrobox is reserved for an actual
+  melonDS GUI launch, which still genuinely needs it.
+- `install-host-distrobox.sh`'s own `DUALDECK_HOST_CONTROL` check now
+  delegates to `run-host.sh` instead of erroring, in case anything still
+  invokes it directly.
+- `install-host-control-daemon.sh` no longer refuses on immutable
+  systems at all -- its systemd unit lives under `$HOME` (always
+  writable, immutable-OS or not) and now execs a self-contained binary,
+  so the only real remaining prerequisite is a working `systemd --user`
+  manager, which was already checked separately.
+- `dualdeck-host.sh`'s daemon-start menu action now captures and shows
+  the actual combined output of the install script and `systemctl`
+  instead of a generic message, so any *future* genuine failure is
+  self-explanatory instead of repeating this exact confusion.
+
+**Verified:** `ldd` against a freshly built `dualdeck-host-service`
+confirms the exact three libraries bundled; `bundle_library_dependencies()`
+run against that real binary bundles exactly those three (glibc/the
+dynamic linker correctly excluded, matching its existing AppImage-bundling
+behavior); every touched script's heredoc body extracted and syntax-checked
+clean (`bash -n`); functional sandbox tests with stub binaries confirm
+`LD_LIBRARY_PATH` is actually set at each of the four invocation sites,
+`launch-host.sh` routes Host Control to `run-host.sh` on both a simulated
+immutable and regular system while leaving a plain melonDS launch on the
+Distrobox path, and the new daemon-start error-capture logic correctly
+surfaces a real refusal's actual text instead of the old generic message
+(confirmed under `set -e`, including the classic "command substitution in
+a plain assignment defeats set -e" pitfall this fix's `if
+var="$(...)"; then` form deliberately avoids).
+
+**Not yet verified:** against real Bazzite hardware -- this is the next
+real-world test to confirm; the CI-built binary's glibc/ld.so compatibility
+with a real Bazzite host is the same already-accepted risk this project's
+prebuilt-AppImage strategy already carries (see the "no longer builds
+anything locally" 2026-08-01 entry), not a new one.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

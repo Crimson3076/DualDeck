@@ -153,6 +153,16 @@ which in turn:
 - **On a regular Linux system**: just runs `run-host.sh` directly, same
   as double-clicking it yourself.
 
+Picking **"Host control only"** from the same picker (or the persistent
+Host Control daemon from `dualdeck-host.sh`'s own menu -- see
+`docs/known-limitations.md`'s 2026-08-02 entry) always runs `run-host.sh`
+directly, on Bazzite included, never through the Distrobox container --
+unlike a real melonDS/Azahar/Cemu launch, Host Control mode needs no Qt6
+or SDL2 at all, only `dualdeck-host-service` (which ships its one real
+dependency, `libturbojpeg`, bundled alongside itself), so it has nothing
+Distrobox would need to provide. This used to fail outright on immutable
+systems (real Bazzite hardware report), fixed as of that entry.
+
 Like the client's shortcut, this copies the whole `host/` directory into
 the same fixed central location (`~/.config/dualdeck/install/`)
 install-host-distrobox.sh already uses, so re-running

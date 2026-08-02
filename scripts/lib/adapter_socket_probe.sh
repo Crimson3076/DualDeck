@@ -94,7 +94,15 @@ probe_or_spawn_adapter_socket() {
     echo "DualDeck: no persistent Host Control daemon running -- starting a private one for this session" >&2
     mkdir -p "$(dirname "${private_socket_path}")"
     rm -f "${private_socket_path}"
-    "${host_service_bin}" --adapter-ipc --adapter-socket "${private_socket_path}" \
+    # dualdeck-host-service's own packaged directory (host/internal/lib,
+    # populated by build-release.sh's bundle_library_dependencies() call)
+    # ships its runtime library deps (libturbojpeg, notably) alongside it
+    # so it needs nothing from the launching system -- see that call's
+    # own comment for the real Bazzite bug this fixes. host_service_bin
+    # is always .../internal/dualdeck-host-service, so its own directory
+    # is .../internal, and the bundled libs sit in .../internal/lib.
+    env LD_LIBRARY_PATH="$(dirname "${host_service_bin}")/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+        "${host_service_bin}" --adapter-ipc --adapter-socket "${private_socket_path}" \
         --state-dir "${state_dir}" --app-version "${app_version}" "${extra_args[@]}" &
     HOST_SERVICE_PID=$!
     sleep 0.5 # let the listener bind before the caller's emulator tries to connect
