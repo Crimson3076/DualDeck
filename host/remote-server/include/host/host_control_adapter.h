@@ -81,6 +81,44 @@ HostControlMouseState translateMouseState(const ControllerState& state);
 
 class HostControlAdapter : public IEmulatorInputSink, public IFrameSource {
 public:
+    // Real user request, 2026-08-01: "It needs to function exactly like
+    // a steam controller would" (re: the touchpad not moving anything
+    // on the host). Opt-in (env var DUALDECK_HOSTCONTROL_STEAM_TOUCHPAD,
+    // read once in the constructor), default off -- zero behavior
+    // change for anyone who doesn't set it. When enabled, the gamepad
+    // uinput device (uinputFd_) additionally advertises a single-slot
+    // multitouch touchpad surface and identifies with Valve's own wired
+    // Steam Controller USB IDs instead of the Xbox 360 ones, in the hope
+    // that Steam's own controller/Big-Picture handling treats it as a
+    // real Steam Controller's touchpad.
+    //
+    // Important, deliberately not hidden: real Steam Controller/Steam
+    // Deck touchpad recognition goes through Steam's own
+    // SDL_JOYSTICK_HIDAPI_STEAM driver, which reads /dev/hidraw* in
+    // Valve's proprietary HID report format -- a uinput-created device
+    // only ever produces a plain /dev/input/eventN (evdev) node, with no
+    // corresponding hidraw node at all. uinput cannot make itself
+    // visible to that driver regardless of vendor/product ID or
+    // capability bits -- this is a real architectural ceiling, not a
+    // tuning problem. This feature is a genuine, additive, zero-
+    // regression experiment (the proven Xbox 360 identity/button
+    // behavior is completely unaffected unless explicitly opted into),
+    // not a guaranteed fix -- the realistic likely outcome is Steam
+    // treating this as an unrecognized/generic gamepad with unused extra
+    // axes. It also does not replace the still-separately-needed
+    // client-side fix for whatever's actually preventing
+    // SDL_EVENT_GAMEPAD_TOUCHPAD_* from reaching the wire in the first
+    // place (see client/src/main.cpp's own touchpad diagnostics) -- the
+    // wire-level ControllerState::mouseDeltaX/Y data this reads has to
+    // originate from the client either way.
+    //
+    // Independent of isDeviceReady()/isMouseDeviceReady() above: a
+    // failure setting up just the new ABS_MT_*/INPUT_PROP_BUTTONPAD
+    // capability bits (or the env var simply not being set) disables
+    // only this feature, never blocking the proven gamepad/stick/mouse
+    // paths from working normally.
+    bool isTouchpadReady() const { return touchpadEnabled_ && uinputFd_ >= 0; }
+
     HostControlAdapter();
     ~HostControlAdapter() override;
 
@@ -118,9 +156,34 @@ public:
 private:
     void emitState(const HostControlGamepadState& state);
     void emitMouseState(const HostControlMouseState& state);
+    void emitTouchpadState();
 
     int uinputFd_ = -1;
     HostControlGamepadState lastEmitted_;
+    bool touchpadEnabled_ = false;
+
+    // Real Steam Controller/Steam Deck touchpad "finger position" is
+    // absolute (ABS_MT_POSITION_X/Y), but the wire data
+    // (ControllerState::mouseDeltaX/Y, the same values the EV_REL mouse
+    // device above already consumes) is relative deltas -- reconstructing
+    // an absolute position needs dead-reckoned state that persists
+    // across ticks, updated directly inside applyControllerState()
+    // rather than a pure translateXState()-style free function the way
+    // HostControlGamepadState/HostControlMouseState are: position memory
+    // across calls is inherent to this problem, not an accident of this
+    // implementation. touchpadX_/touchpadY_ start at the center of
+    // [kTouchpadPosMin, kTouchpadPosMax] (see the .cpp). touchpadContact_
+    // is a genuine heuristic, documented in the .cpp: the wire protocol
+    // has no real finger-down/up signal, only continuous deltas plus a
+    // button-held bitmask.
+    int32_t touchpadX_ = 0;
+    int32_t touchpadY_ = 0;
+    bool touchpadContact_ = false;
+    // Last-emitted touchpad contact/position, diffed the same way
+    // lastEmitted_/lastEmittedMouse_ are -- only touchpadContact_ is a
+    // real "did this change" question (position dead-reckons every tick
+    // regardless, same as the mouse device's own always-relative motion).
+    bool lastEmittedTouchpadContact_ = false;
 
     // Separate uinput device from uinputFd_'s virtual gamepad: mixing
     // EV_REL mouse-relative-motion semantics into a device already

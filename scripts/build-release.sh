@@ -356,6 +356,7 @@ cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/host/internal/ensur
 cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/host/internal/steam_shortcut.py"
 cp "${repo_root}/scripts/lib/steam_restart_helper.sh" "${pkg_dir}/host/internal/steam_restart_helper.sh"
 cp "${repo_root}/scripts/lib/host_firewall.sh" "${pkg_dir}/host/internal/host_firewall.sh"
+cp "${repo_root}/scripts/lib/adapter_socket_probe.sh" "${pkg_dir}/host/internal/adapter_socket_probe.sh"
 
 cp "${repo_build}/client/dualdeck-client" "${pkg_dir}/client/dualdeck-client"
 chmod +x "${pkg_dir}/client/dualdeck-client"
@@ -994,20 +995,35 @@ export MELONDS_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/
 # regardless of whether a ROM was ever actually loaded. The client sat
 # silently in Emulation mode waiting for video frames that would never
 # arrive (no ROM = nothing for melonDS to render), which looked
-# identical to "the touchpad/buttons just don't work." Genuinely
-# emulator-agnostic host-control-mode navigation (this session handing
-# off automatically once you separately launch *any* emulator) needs a
-# persistent daemon on a socket every emulator's own launch path already
-# checks first -- not yet built (see docs/known-limitations.md's Phase B
-# entry) -- so for now this is deliberately standalone: launch an
-# emulator the normal way (its own Steam shortcut) whenever you're ready
-# to play; it starts its own separate session rather than taking over
-# this one.
+# identical to "the touchpad/buttons just don't work."
+#
+# This manual menu choice is a *temporary, private* Host Control session
+# on its own private socket, separate from the real fix for "genuinely
+# emulator-agnostic hand-off": a persistent Host Control daemon
+# (host/internal/dualdeck-host-control.service, installed via
+# install-host-control-daemon.sh -- see ../dualdeck-host.sh's own menu)
+# that stays up independent of any single Steam shortcut/session and
+# listens on the shared default socket every emulator's own launch path
+# now probes first (scripts/lib/adapter_socket_probe.sh). If that
+# persistent daemon is already running, this manual choice is almost
+# never what you actually want -- it doesn't replace the daemon's own
+# session, it just starts a second, separate, throwaway one on a
+# different, private socket -- so this only ever prints an informational
+# note about that rather than refusing to run (deliberately non-blocking:
+# a user who genuinely wants a second, temporary session for some reason
+# should still be able to get one).
 if [[ "${DUALDECK_HOST_CONTROL:-0}" == "1" ]]; then
     if [[ ! -x "${host_root}/internal/dualdeck-host-service" ]]; then
         echo "error: host/internal/dualdeck-host-service is missing from this" >&2
         echo "install -- re-download the release archive." >&2
         exit 1
+    fi
+
+    if command -v systemctl >/dev/null 2>&1 && \
+       systemctl --user is-active --quiet dualdeck-host-control.service 2>/dev/null; then
+        echo "Note: a persistent Host Control daemon already appears to be running" >&2
+        echo "(dualdeck-host-control.service) -- you probably don't need this manual" >&2
+        echo "session too. Starting one anyway, on its own private socket ..." >&2
     fi
 
     run_dir="${HOME}/.config/dualdeck/run"
@@ -1030,6 +1046,27 @@ if [[ "${DUALDECK_HOST_CONTROL:-0}" == "1" ]]; then
         --app-version "${MELONDS_REMOTE_VERSION}"
 fi
 
+# Real user request, 2026-08-01: auto-switch mode "if it detects that a
+# compatible emulator or separate server is trying to open" -- if a
+# persistent Host Control daemon is already listening on the shared
+# default socket, connect melonDS to it out-of-process (letting
+# ModeCoordinator switch that session straight to Emulation mode)
+# instead of always defaulting to melonDS's own in-process remote
+# server. Deliberately just a probe, not a spawn-if-missing (unlike
+# probe_or_spawn_adapter_socket(), used by Azahar/Cemu, which have no
+# in-process fallback at all): melonDS's in-process default is already
+# proven and correct for the common case of no daemon running, so this
+# only ever adds a better path on top of it, never removes the existing
+# one.
+# shellcheck source=scripts/lib/adapter_socket_probe.sh
+source ./adapter_socket_probe.sh
+default_socket="$(default_adapter_socket_path)"
+if is_adapter_socket_live "${default_socket}"; then
+    echo "DualDeck: found a running Host Control daemon -- melonDS will connect to" >&2
+    echo "it out-of-process instead of running its own in-process remote server." >&2
+    export MELONDS_REMOTE_OUT_OF_PROCESS=1
+    export MELONDS_REMOTE_ADAPTER_SOCKET="${default_socket}"
+fi
 exec "${host_root}/melonDS" "$@"
 WRAP
 chmod +x "${pkg_dir}/host/internal/run-host.sh"
@@ -1085,10 +1122,8 @@ if [[ ! -x "${host_root}/azahar" ]]; then
     exit 1
 fi
 
-run_dir="${HOME}/.config/dualdeck/run"
-mkdir -p "${run_dir}"
-adapter_socket="${run_dir}/azahar-adapter.sock"
-rm -f "${adapter_socket}"
+# shellcheck source=scripts/lib/adapter_socket_probe.sh
+source ./adapter_socket_probe.sh
 
 # See run-host.sh's identical MELONDS_REMOTE_VERSION comment -- same
 # central VERSION file, read the same way.
@@ -1099,15 +1134,18 @@ if [[ -n "${AZAHAR_REMOTE_AUTH_TOKEN:-}" ]]; then
     auth_token_args=(--auth-token "${AZAHAR_REMOTE_AUTH_TOKEN}")
 fi
 
-echo "Starting the standalone Host Service ..." >&2
-"${host_root}/internal/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
-    --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
-    --app-version "${AZAHAR_REMOTE_VERSION}" &
-host_service_pid=$!
-# Not exec'd below, same reason as run-host.sh's host-control branch:
-# this trap needs to still be able to run once Azahar exits.
-trap 'kill "${host_service_pid}" 2>/dev/null || true' EXIT
-sleep 0.5 # let the listener bind before Azahar tries to connect
+probe_or_spawn_adapter_socket "${HOME}/.config/dualdeck/run/azahar-adapter.sock" \
+    "${host_root}/internal/dualdeck-host-service" "${HOME}/.config/melonds-remote" \
+    "${AZAHAR_REMOTE_VERSION}" "${auth_token_args[@]}"
+adapter_socket="${ADAPTER_SOCKET}"
+if [[ -n "${HOST_SERVICE_PID}" ]]; then
+    # Not exec'd below, same reason as run-host.sh's host-control branch:
+    # this trap needs to still be able to run once Azahar exits -- only
+    # meaningful when probe_or_spawn_adapter_socket() actually spawned a
+    # private Host Service above; nothing to clean up here if this
+    # connected to an already-running persistent daemon instead.
+    trap 'kill "${HOST_SERVICE_PID}" 2>/dev/null || true' EXIT
+fi
 
 export AZAHAR_REMOTE_ENABLE=1
 export AZAHAR_REMOTE_ADAPTER_SOCKET="${adapter_socket}"
@@ -1194,10 +1232,8 @@ if [[ ! -x "${host_root}/cemu" ]]; then
     exit 1
 fi
 
-run_dir="${HOME}/.config/dualdeck/run"
-mkdir -p "${run_dir}"
-adapter_socket="${run_dir}/cemu-adapter.sock"
-rm -f "${adapter_socket}"
+# shellcheck source=scripts/lib/adapter_socket_probe.sh
+source ./adapter_socket_probe.sh
 
 # See run-host.sh's identical MELONDS_REMOTE_VERSION comment -- same
 # central VERSION file, read the same way.
@@ -1208,15 +1244,18 @@ if [[ -n "${CEMU_REMOTE_AUTH_TOKEN:-}" ]]; then
     auth_token_args=(--auth-token "${CEMU_REMOTE_AUTH_TOKEN}")
 fi
 
-echo "Starting the standalone Host Service ..." >&2
-"${host_root}/internal/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
-    --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
-    --app-version "${CEMU_REMOTE_VERSION}" &
-host_service_pid=$!
-# Not exec'd below, same reason as run-host.sh's host-control branch:
-# this trap needs to still be able to run once Cemu exits.
-trap 'kill "${host_service_pid}" 2>/dev/null || true' EXIT
-sleep 0.5 # let the listener bind before Cemu tries to connect
+probe_or_spawn_adapter_socket "${HOME}/.config/dualdeck/run/cemu-adapter.sock" \
+    "${host_root}/internal/dualdeck-host-service" "${HOME}/.config/melonds-remote" \
+    "${CEMU_REMOTE_VERSION}" "${auth_token_args[@]}"
+adapter_socket="${ADAPTER_SOCKET}"
+if [[ -n "${HOST_SERVICE_PID}" ]]; then
+    # Not exec'd below, same reason as run-host.sh's host-control branch:
+    # this trap needs to still be able to run once Cemu exits -- only
+    # meaningful when probe_or_spawn_adapter_socket() actually spawned a
+    # private Host Service above; nothing to clean up here if this
+    # connected to an already-running persistent daemon instead.
+    trap 'kill "${HOST_SERVICE_PID}" 2>/dev/null || true' EXIT
+fi
 
 export CEMU_REMOTE_ENABLE=1
 export CEMU_REMOTE_ADAPTER_SOCKET="${adapter_socket}"
@@ -1754,6 +1793,146 @@ exec distrobox enter "${container_name}" -- env MELONDS_REMOTE_ENABLE=1 \
 WRAP
 chmod +x "${pkg_dir}/host/internal/install-host-distrobox.sh"
 
+# Real user request, 2026-08-01: "Host control should be a constant
+# server from the host, being toggled via the eventual decky menu
+# plugin or the DualDeck Host GUI. Steam should not keep registering it
+# as a game running in the background." Today's "Host control only"
+# menu choice (run-host.sh's DUALDECK_HOST_CONTROL branch) execs
+# straight into dualdeck-host-service as the literal foreground process
+# of whatever launched it (a Steam shortcut, or this menu script) --
+# Steam's own "is this game still running" tracking watches that exact
+# process, with no separate PID/session layer to decouple from. A
+# systemd --user service is a completely independent process tree Steam
+# never launches and never tracks at all, closing that gap directly
+# rather than trying to make Steam stop noticing a process it's already
+# watching.
+cat > "${pkg_dir}/host/internal/host-control-daemon.sh" <<'WRAP'
+#!/usr/bin/env bash
+# The actual command the persistent Host Control systemd --user service
+# (dualdeck-host-control.service, installed by
+# install-host-control-daemon.sh) runs. A thin wrapper, not the unit's
+# ExecStart directly, because dualdeck-host-service takes CLI flags
+# (--auth-token, --app-version, --state-dir), not environment variables,
+# and the unit file itself stays static/trivial.
+#
+# Deliberately never passes --adapter-socket: dualdeck-host-service then
+# binds adapter-sdk/ipc/src/socket_path.cpp's defaultAdapterSocketPath()
+# (the shared, well-known path) -- the exact socket every emulator
+# launch path (run-host.sh, run-host-azahar.sh, run-host-cemu.sh, and
+# the prebuilt AppImages' own AppRun) now probes first via
+# scripts/lib/adapter_socket_probe.sh, so any of them connects to this
+# daemon automatically and ModeCoordinator switches this same session
+# from HostControl to Emulation mode with no re-launch/re-config needed
+# anywhere. This is the one detail tying the persistent daemon to
+# genuinely emulator-agnostic mode-switching.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+host_root="$(cd .. && pwd)"
+
+export DUALDECK_HOST_CONTROL_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+
+auth_token_args=()
+if [[ -n "${DUALDECK_HOST_CONTROL_AUTH_TOKEN:-}" ]]; then
+    auth_token_args=(--auth-token "${DUALDECK_HOST_CONTROL_AUTH_TOKEN}")
+fi
+
+exec "${host_root}/internal/dualdeck-host-service" --adapter-ipc \
+    --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
+    --app-version "${DUALDECK_HOST_CONTROL_VERSION}"
+WRAP
+chmod +x "${pkg_dir}/host/internal/host-control-daemon.sh"
+
+cat > "${pkg_dir}/host/internal/install-host-control-daemon.sh" <<'WRAP'
+#!/usr/bin/env bash
+# Installs and enables the persistent Host Control systemd --user
+# service (dualdeck-host-control.service) -- see host-control-
+# daemon.sh's own comment for why this exists at all. Idempotent: safe
+# to re-run on every install/update (matching install-steam-shortcut.sh's
+# own convention). Normally invoked from ../../dualdeck-host.sh's "Host
+# Control daemon" menu choice, not directly.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+error_log="${HOME}/.config/dualdeck/install.log"
+on_error() {
+    local exit_code="$1" line_no="$2" failing_cmd="$3"
+    mkdir -p "$(dirname "${error_log}")"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") install-host-control-daemon.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
+}
+trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
+
+# Same rejection install-host-distrobox.sh's own DUALDECK_HOST_CONTROL
+# check already gives run-host.sh's manual Host Control mode -- a
+# persistent daemon inside a Distrobox container needs the container
+# itself to be running independently of any login session, which this
+# project's Distrobox integration doesn't attempt yet. Exits 0 (not an
+# error): this is "not supported here yet," not a failure.
+if [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1; then
+    echo "The persistent Host Control daemon isn't supported yet on immutable/" >&2
+    echo "Distrobox systems (e.g. Bazzite) -- use the manual 'Host control only'" >&2
+    echo "launch option from the menu instead." >&2
+    exit 0
+fi
+
+# Checks a *working* --user manager is actually reachable, not just that
+# the systemctl binary exists -- a machine can have systemd installed
+# without a lingering/active --user instance for this account (e.g. no
+# graphical login has ever happened yet).
+if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user status >/dev/null 2>&1; then
+    echo "systemd --user isn't available on this system -- the persistent Host" >&2
+    echo "Control daemon can't be installed here. Use the manual 'Host control" >&2
+    echo "only' launch option from the menu instead." >&2
+    exit 0
+fi
+
+unit_dir="${HOME}/.config/systemd/user"
+mkdir -p "${unit_dir}"
+
+# %h is systemd's own home-directory expansion (not a bash variable --
+# this heredoc is deliberately quoted so nothing here is bash-expanded),
+# so this unit keeps working correctly even if $HOME ever changes.
+cat > "${unit_dir}/dualdeck-host-control.service" <<'EOF'
+[Unit]
+Description=DualDeck Host Control (persistent background service)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.config/dualdeck/install/internal/host-control-daemon.sh
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+EOF
+
+systemctl --user daemon-reload
+echo "Host Control daemon unit installed. Enable it with:"
+echo "  systemctl --user enable --now dualdeck-host-control.service"
+WRAP
+chmod +x "${pkg_dir}/host/internal/install-host-control-daemon.sh"
+
+cat > "${pkg_dir}/host/internal/uninstall-host-control-daemon.sh" <<'WRAP'
+#!/usr/bin/env bash
+# Undoes install-host-control-daemon.sh: stops, disables, and removes
+# the persistent Host Control systemd --user service. Safe to run even
+# if it was never installed (every step degrades to a harmless no-op).
+# Called both standalone (../../dualdeck-host.sh's "Stop & disable"
+# menu choice) and from the same script's full "Remove from Steam /
+# uninstall" flow, so a full uninstall doesn't leave this running
+# against a now-deleted install.
+set -euo pipefail
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user disable --now dualdeck-host-control.service >/dev/null 2>&1 || true
+fi
+rm -f "${HOME}/.config/systemd/user/dualdeck-host-control.service"
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+fi
+WRAP
+chmod +x "${pkg_dir}/host/internal/uninstall-host-control-daemon.sh"
+
 cat > "${pkg_dir}/host/internal/uninstall-host-distrobox.sh" <<'WRAP'
 #!/usr/bin/env bash
 # Undoes install-host-distrobox.sh: removes the Distrobox container it
@@ -1882,9 +2061,23 @@ confirm() {
 }
 
 choose_action() {
+    # Real user request, 2026-08-01: "Host control should be a constant
+    # server from the host, being toggled via the eventual decky menu
+    # plugin or the DualDeck Host GUI. Steam should not keep registering
+    # it as a game running in the background." -- the label reflects
+    # current systemd --user state (mirrors choose_emulator()'s own
+    # dynamic custom_label precedent below) so this menu doubles as a
+    # status check, not just an action picker.
+    local daemon_label="Host Control daemon (persistent, not running)"
+    if command -v systemctl >/dev/null 2>&1 && \
+       systemctl --user is-active --quiet dualdeck-host-control.service 2>/dev/null; then
+        daemon_label="Host Control daemon (persistent, RUNNING)"
+    fi
+
     if have_kdialog; then
         kdialog --title "DualDeck Host" --menu "What would you like to do?" \
             launch "Launch..." \
+            hostcontrol-daemon "${daemon_label}" \
             steam-add "Add to Steam (Big Picture / Gaming Mode)" \
             steam-remove "Remove from Steam / uninstall" \
             update "Check for updates / update" \
@@ -1899,19 +2092,66 @@ choose_action() {
         {
             echo "DualDeck Host"
             echo "  1) Launch..."
-            echo "  2) Add to Steam (Big Picture / Gaming Mode)"
-            echo "  3) Remove from Steam / uninstall"
-            echo "  4) Check for updates / update"
-            echo "  5) Patch my EmuDeck-installed emulators (experimental)"
-            echo "  6) Exit"
+            echo "  2) ${daemon_label}"
+            echo "  3) Add to Steam (Big Picture / Gaming Mode)"
+            echo "  4) Remove from Steam / uninstall"
+            echo "  5) Check for updates / update"
+            echo "  6) Patch my EmuDeck-installed emulators (experimental)"
+            echo "  7) Exit"
         } >&2
-        read -rp "Choice [1-6]: " choice
+        read -rp "Choice [1-7]: " choice
         case "${choice}" in
             1) echo "launch" ;;
-            2) echo "steam-add" ;;
-            3) echo "steam-remove" ;;
-            4) echo "update" ;;
-            5) echo "emudeck" ;;
+            2) echo "hostcontrol-daemon" ;;
+            3) echo "steam-add" ;;
+            4) echo "steam-remove" ;;
+            5) echo "update" ;;
+            6) echo "emudeck" ;;
+            *) echo "cancel" ;;
+        esac
+    fi
+}
+
+# Real user request, 2026-08-01 (see choose_action()'s own comment): a
+# persistent Host Control daemon, toggled via a real GUI now rather than
+# only terminal systemctl commands, built so a future Decky Loader
+# plugin has an obvious, trivial pair of commands to shell out to
+# instead (systemctl --user start/stop dualdeck-host-control.service).
+choose_host_control_daemon_action() {
+    local active=0
+    if command -v systemctl >/dev/null 2>&1 && \
+       systemctl --user is-active --quiet dualdeck-host-control.service 2>/dev/null; then
+        active=1
+    fi
+
+    if have_kdialog; then
+        if [[ "${active}" -eq 1 ]]; then
+            kdialog --title "DualDeck Host" --menu "Host Control daemon is RUNNING" \
+                stop "Stop && disable" \
+                status "Status" \
+                2>/dev/null || echo "cancel"
+        else
+            kdialog --title "DualDeck Host" --menu "Host Control daemon is not running" \
+                start "Enable && start now" \
+                status "Status" \
+                2>/dev/null || echo "cancel"
+        fi
+    else
+        {
+            if [[ "${active}" -eq 1 ]]; then
+                echo "Host Control daemon is RUNNING"
+                echo "  1) Stop & disable"
+            else
+                echo "Host Control daemon is not running"
+                echo "  1) Enable & start now"
+            fi
+            echo "  2) Status"
+            echo "  3) Back"
+        } >&2
+        read -rp "Choice [1-3]: " choice
+        case "${choice}" in
+            1) [[ "${active}" -eq 1 ]] && echo "stop" || echo "start" ;;
+            2) echo "status" ;;
             *) echo "cancel" ;;
         esac
     fi
@@ -2019,6 +2259,40 @@ case "${action}" in
                 ;;
         esac
         ;;
+    hostcontrol-daemon)
+        daemon_action="$(choose_host_control_daemon_action)"
+        case "${daemon_action}" in
+            start)
+                if ./internal/install-host-control-daemon.sh && \
+                   systemctl --user enable --now dualdeck-host-control.service; then
+                    info "Host Control daemon started -- it now runs independently of Steam and stays up across reboots (once your desktop session's systemd --user manager comes up). Connect a client any time; launching a real emulator elsewhere still works exactly as before and switches this session to Emulation mode automatically."
+                else
+                    info "Could not start the Host Control daemon -- see ${error_log} for details, or check whether systemd --user is available on this system."
+                fi
+                ;;
+            stop)
+                if systemctl --user disable --now dualdeck-host-control.service 2>/dev/null; then
+                    info "Host Control daemon stopped and disabled."
+                else
+                    info "Could not stop the Host Control daemon (it may not have been installed yet)."
+                fi
+                ;;
+            status)
+                status_output="$(systemctl --user status dualdeck-host-control.service --no-pager 2>&1 || true)"
+                if have_kdialog; then
+                    status_file="$(mktemp)"
+                    echo "${status_output}" > "${status_file}"
+                    kdialog --title "DualDeck Host Control daemon status" --textbox "${status_file}" 600 400 2>/dev/null || true
+                    rm -f "${status_file}"
+                else
+                    echo "${status_output}"
+                fi
+                ;;
+            *)
+                exit 0 # cancelled/back
+                ;;
+        esac
+        ;;
     steam-add)
         if ./internal/install-steam-shortcut.sh; then
             info "Added DualDeck Host to Steam. Restart Steam (or switch to Gaming Mode) to see it, and set its Controller Layout to a plain Gamepad template once it's there."
@@ -2029,6 +2303,11 @@ case "${action}" in
         ;;
     steam-remove)
         if confirm "This removes the Steam shortcut, the installed files, and the Distrobox container if one was created. Your ROMs, saves, and firmware are never touched. Continue?"; then
+            # Best-effort, before the files it depends on are removed
+            # below -- a full uninstall should also tear down the
+            # persistent Host Control daemon if one was ever installed,
+            # not leave it running against a now-deleted install.
+            ./internal/uninstall-host-control-daemon.sh 2>/dev/null || true
             if ./internal/uninstall-steam-shortcut.sh; then
                 info "Removed."
             fi
@@ -2150,10 +2429,35 @@ if [[ -z "${extracted_dir}" ]]; then
     exit 1
 fi
 
+# Real user request: "it should also reset on updates, so toggle off and
+# back on if it was already running" -- checked *before* the install
+# step below, since that step only replaces files on disk, it doesn't
+# touch whatever copy of dualdeck-host-service the persistent daemon
+# (if running) already has open. `systemctl --user restart` after the
+# install is a single atomic "toggle off and back on," matching the
+# request exactly. Guarded with `|| true`/an explicit warning rather
+# than left to the ERR trap above: a failed restart here is real but
+# distinct from an update itself failing (the update has already fully
+# succeeded by this point), so it shouldn't produce the same "Updating
+# failed" kdialog error as an actual download/install failure would.
+daemon_was_active=0
+if command -v systemctl >/dev/null 2>&1 && \
+   systemctl --user is-active --quiet dualdeck-host-control.service 2>/dev/null; then
+    daemon_was_active=1
+fi
+
 echo "Installing..."
 # Not exec'd: the work_dir EXIT trap above must still fire to clean up
 # the download afterward, which exec'ing over this process would skip.
 "${extracted_dir}/host/internal/install-steam-shortcut.sh" --force
+
+if [[ "${daemon_was_active}" -eq 1 ]]; then
+    echo "Restarting the Host Control daemon to pick up the update..."
+    if ! systemctl --user restart dualdeck-host-control.service 2>/dev/null; then
+        echo "warning: could not restart dualdeck-host-control.service -- restart it manually" >&2
+        echo "(systemctl --user restart dualdeck-host-control.service)" >&2
+    fi
+fi
 WRAP
 chmod +x "${pkg_dir}/host/internal/apply-update.sh"
 

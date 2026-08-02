@@ -10,6 +10,8 @@
 #include "host/host_control_adapter.h"
 #include "test_framework.h"
 
+#include <cstdlib>
+
 using namespace melonds_remote;
 using namespace melonds_remote::host;
 
@@ -224,6 +226,31 @@ MDR_TEST(translate_mouse_ignores_gamepad_and_touch_fields) {
     MDR_CHECK_EQ(out.dy, static_cast<int16_t>(0));
     MDR_CHECK(!out.leftDown);
     MDR_CHECK(!out.rightDown);
+}
+
+// Steam Controller touchpad experiment (see isTouchpadReady()'s header
+// comment for the full honest caveat) -- the dead-reckoning/contact-
+// heuristic logic lives inside emitTouchpadState(), which is private and
+// has real uinput I/O, so unlike translateControllerState()/
+// translateMouseState() there's no pure free function to unit-test
+// directly. This is a documentation-as-test guard, same style as
+// host_control_adapter_degrades_gracefully_without_uinput_access above:
+// confirms the opt-in env var is read without crashing and that
+// isTouchpadReady() correctly reports false in this sandbox (no
+// /dev/uinput -- uinputFd_ stays -1 regardless of the env var).
+MDR_TEST(host_control_adapter_touchpad_opt_in_degrades_gracefully_without_uinput_access) {
+    ::setenv("DUALDECK_HOSTCONTROL_STEAM_TOUCHPAD", "1", 1);
+    HostControlAdapter adapter;
+    ::unsetenv("DUALDECK_HOSTCONTROL_STEAM_TOUCHPAD");
+    MDR_CHECK(!adapter.isTouchpadReady());
+    if (!adapter.isDeviceReady()) {
+        ControllerState state;
+        state.mouseDeltaX = 5;
+        state.mouseDeltaY = -5;
+        state.mouseButtons = MouseButton_Left;
+        adapter.applyControllerState(state);
+        adapter.releaseAll();
+    }
 }
 
 MDR_TEST(translate_ignores_mouse_fields) {

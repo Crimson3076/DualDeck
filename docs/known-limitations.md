@@ -7652,6 +7652,153 @@ change).
 diagnostic step needed before another guess is worth making; the client
 log from a real re-test is the next thing to look at.
 
+## 2026-08-02: Persistent, Steam-decoupled Host Control daemon + auto mode-switching + update-reset, and a Steam Controller touchpad HID experiment
+
+Real re-test feedback after the previous entry's diagnostics shipped, two
+reports in one message: (1) in Steam Big Picture mode, controller/stick
+and even the touchscreen worked, but the touchpads still didn't move
+anything on the host -- "it needs to function exactly like a Steam
+Controller would"; (2) launching a Cemu/Azahar game from Big Picture
+never switched off Host Control mode and never streamed the game, because
+Host Control today only runs as the literal foreground process of the
+"DualDeck Host" Steam shortcut -- Steam has no separate PID/session layer
+to watch, so it considers "the game" running for as long as that one
+process tree lives, with no way to toggle it off short of killing the
+shortcut, and no way for a second, later-launched emulator to ever be
+noticed by the same host-control session.
+
+**Root causes, confirmed by reading the code, not assumed:**
+
+- `AdapterIpcServer`'s well-known default socket
+  (`adapter-sdk/ipc/src/socket_path.cpp`'s `defaultAdapterSocketPath()`,
+  `$XDG_RUNTIME_DIR/dualdeck/adapter.sock`) was already probed by the
+  AppImage/EmuDeck out-of-process launch path, but not by any of
+  DualDeck's own packaged launcher scripts (`run-host-azahar.sh`,
+  `run-host-cemu.sh`), which each always spawned and killed their own
+  private, per-launch Host Service instead.
+- `ModeCoordinator::pollLoop()` already does exactly the auto-switching
+  this needs -- mode is Emulation iff `hasConnectedAdapter()`, polled
+  every 100ms -- and needed zero code changes. The only real gap was that
+  nothing persistent was ever listening on the shared socket for a
+  later-launched emulator to find.
+- Nothing decoupled Host Control's process lifetime from Steam's shortcut
+  tracking. `run-host.sh`'s `DUALDECK_HOST_CONTROL=1` branch `exec`s
+  straight into `dualdeck-host-service`, so that process *is* what Steam
+  watches -- there was never a background-service layer to toggle
+  independently.
+
+**What shipped:**
+
+- **A real persistent daemon.** A new `systemd --user` unit
+  (`dualdeck-host-control.service`, `Type=simple`, `Restart=on-failure`,
+  `WantedBy=default.target` -- broader than `graphical-session.target`
+  since an HTPC session may be headless) runs `host-control-daemon.sh`,
+  which execs `dualdeck-host-service --adapter-ipc` with **no**
+  `--adapter-socket` passed, so it binds the shared default socket and
+  becomes the one persistent thing every emulator launch can find.
+  `install-host-control-daemon.sh`/`uninstall-host-control-daemon.sh`
+  install/remove the unit, refusing cleanly (not erroring) on
+  immutable/Distrobox systems or where `systemctl --user` isn't reachable
+  at all, matching `install-host-distrobox.sh`'s existing rejection style.
+- **A GUI toggle**, not just raw `systemctl` commands: `dualdeck-host.sh`'s
+  menu gained a new entry whose label reflects live daemon state ("(not
+  running)" / "(RUNNING)"), offering Start/Stop/Status, built so a future
+  Decky plugin can trivially shell out to the same two `systemctl --user`
+  calls. Uninstalling now also tears the daemon down.
+- **Auto mode-switching for every launcher, not just the AppImage path.**
+  New `scripts/lib/adapter_socket_probe.sh` factors the AppImage path's
+  proven probe/fallback logic into a shared `probe_or_spawn_adapter_socket()`
+  helper: try the persistent daemon's shared socket first, only spawn a
+  private ephemeral Host Service if nothing answers. `run-host-azahar.sh`
+  and `run-host-cemu.sh` now use it. melonDS's plain (non-Host-Control)
+  launch tail in `run-host.sh` also probes the shared socket before its
+  final exec, exporting `MELONDS_REMOTE_OUT_OF_PROCESS=1` to connect to a
+  running daemon when one exists -- probe-only, no spawn fallback, so
+  melonDS's proven in-process default is unchanged when no daemon is
+  running. The AppImage AppRun template's own embedded copy of this logic
+  is unchanged in behavior, just cross-referenced in comments against the
+  new shared library (an AppImage's `AppRun` can't `source` a file outside
+  the `.AppImage`, so it stays a hand-synced duplicate, same precedent
+  as `adapter_ipc_client.cpp`/`adapter_ipc_server.cpp`'s `recvMessage()`).
+- **Reset on update.** `apply-update.sh` now checks whether the daemon
+  was active before installing an update and, if so, runs
+  `systemctl --user restart` after -- literally "toggle off and back on,"
+  as requested, logged as a warning (not a failed update) if the restart
+  itself fails.
+- **A Steam Controller touchpad HID experiment**, opt-in via
+  `DUALDECK_HOSTCONTROL_STEAM_TOUCHPAD=1` (default off, zero behavior
+  change otherwise): `HostControlAdapter`'s existing virtual gamepad
+  device gains `ABS_MT_POSITION_X/Y`, `ABS_MT_TRACKING_ID`, `ABS_MT_SLOT`
+  (single slot -- the wire protocol carries one aggregate delta stream,
+  not per-finger identity), `BTN_TOUCH`, and `INPUT_PROP_BUTTONPAD`, and
+  identifies with Valve's own wired Steam Controller USB IDs
+  (`0x28de`/`0x1102`) instead of the Xbox 360 IDs it normally reuses.
+  Wire-level `mouseDeltaX/Y` is dead-reckoned into an absolute touchpad
+  position (clamped, not wrapped); a touchpad click (`MouseButton_Left`
+  held) is used as a "finger present" proxy for `ABS_MT_TRACKING_ID`,
+  since the wire protocol has no real finger-down/up signal. New setup
+  calls are deliberately isolated from the existing gamepad/stick/mouse
+  setup's own failure path (`isTouchpadReady()`, independent of
+  `isDeviceReady()`/`isMouseDeviceReady()`) -- a failure here only
+  disables this one opt-in feature.
+
+  **Said plainly, because this was explicitly flagged to the user before
+  implementing it anyway at their request:** real Steam Controller/Steam
+  Deck touchpad recognition goes through Steam's own
+  `SDL_JOYSTICK_HIDAPI_STEAM` driver, which reads `/dev/hidraw*` in
+  Valve's proprietary HID report format. A `uinput`-created device only
+  ever produces a plain `/dev/input/eventN` (evdev) node -- there is no
+  corresponding hidraw node, and no vendor/product ID or capability bits
+  can make one appear. This is a hard architectural ceiling `uinput`
+  cannot cross, not a tuning problem. The realistic outcome is Steam
+  treating this device as an unrecognized/generic gamepad with unused
+  extra axes, not native touchpad-cursor behavior in Big Picture. This
+  does **not** replace the still-separately-needed client-side fix for
+  whatever is preventing `SDL_EVENT_GAMEPAD_TOUCHPAD_*` from reaching the
+  wire in the first place (see the previous entry's diagnostics) -- the
+  wire-level data this reads has to originate from the client either way.
+
+**A collision deliberately avoided:** `AdapterIpcServer::start()`
+unconditionally `unlink()`s any existing socket file before binding, with
+no "is a live process already here" check. `run-host.sh`'s manual
+Host-Control-only branch therefore still uses its own private socket path,
+not the shared default -- pointing it at the shared path would silently
+steal it from a running daemon. It now prints a non-blocking informational
+note if the daemon already looks active, nothing more.
+
+**A real, still-open IPC risk, found while reading `adapter_ipc_server.cpp`
+rather than assumed:** `AdapterHelloAckReason::AlreadyRegistered` is
+defined and serialized but never actually sent -- `acceptLoop()` is
+strictly sequential with a `listen()` backlog of 1. A second adapter
+connecting while one is already active sits queued at the OS level rather
+than getting an explicit rejection; the second client only notices via its
+own 5s receive timeout. A persistent, always-reachable daemon is exactly
+the scenario that first makes two-emulators-at-once a real, not
+hypothetical, case. Not fixed in this change (flagged as optional
+hardening for `acceptLoop()` to non-blockingly reject immediately instead)
+-- needs its own dedicated test before being relied on as safe.
+
+**Verified:** every script-level change (private-socket fallback spawn,
+shared-socket direct-connect with no private spawn attempted, melonDS's
+probe-only plain-launch branch, the manual Host-Control-only informational
+note, the update-reset restart-only-if-was-active logic, and the "no
+`systemd --user` available" degrade-gracefully path) via real functional
+sandbox tests: stub `dualdeck-host-service`/emulator binaries, a fake
+`systemctl`, and real Python `AF_UNIX` listeners simulating a live daemon.
+`host_control_adapter.cpp`'s touchpad changes build clean with
+`-Wall -Wextra -Wpedantic -Wconversion -Wshadow`, and all existing host
+unit tests pass unchanged, plus a new test confirming
+`DUALDECK_HOSTCONTROL_STEAM_TOUCHPAD=1` is read without crashing and that
+`isTouchpadReady()` correctly reports false in this sandbox (no
+`/dev/uinput` here either, same limitation as every other uinput-dependent
+test in this file).
+
+**Not yet verified:** real Steam recognition (or lack thereof) of the
+Steam-Controller-identified device in an actual Big Picture session on
+real hardware; real `systemd --user` activation timing from a cold
+Gaming-Mode/Bazzite-HTPC boot; the two-simultaneous-adapter-connections
+IPC race under a real persistent daemon.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

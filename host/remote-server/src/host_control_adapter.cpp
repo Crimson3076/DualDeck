@@ -4,8 +4,10 @@
 #include <linux/uinput.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace melonds_remote::host {
@@ -45,6 +47,26 @@ namespace {
 constexpr int kAbsRangeMin = -32768;
 constexpr int kAbsRangeMax = 32767;
 
+// Steam Controller touchpad experiment (see host_control_adapter.h's
+// isTouchpadReady() comment for the full honest caveat) -- arbitrary
+// position range, needs real-hardware feel-tuning the same way the
+// client's own kTouchpadMouseSensitivity does.
+constexpr int32_t kTouchpadPosMin = 0;
+constexpr int32_t kTouchpadPosMax = 1024;
+constexpr int32_t kTouchpadPosCenter = (kTouchpadPosMin + kTouchpadPosMax) / 2;
+// Wire deltas (ControllerState::mouseDeltaX/Y) are the same "screen-
+// independent relative pixels" unit the EV_REL mouse device already
+// consumes unscaled -- this rescales that into the much smaller
+// [kTouchpadPosMin, kTouchpadPosMax] touchpad-surface range so a typical
+// swipe doesn't instantly pin to an edge.
+constexpr float kTouchpadPositionScale = 0.5f;
+// Valve's own wired Steam Controller USB IDs -- see the constructor's own
+// comment on why this identity is opt-in and what it realistically can't
+// achieve. 0x1142 (the wireless dongle's ID) is an alternative worth
+// trying on real hardware if 0x1102 doesn't get picked up any better.
+constexpr uint16_t kSteamControllerVendor = 0x28de;
+constexpr uint16_t kSteamControllerProduct = 0x1102;
+
 // (HostControlGamepadState field pointer, uinput BTN_* code) pairs --
 // iterated by both device setup and emitState() so the two can never
 // drift out of sync with each other.
@@ -71,6 +93,15 @@ bool writeEvent(int fd, uint16_t type, uint16_t code, int32_t value) {
 } // namespace
 
 HostControlAdapter::HostControlAdapter() {
+    // Real user request, 2026-08-01 -- see isTouchpadReady()'s comment in
+    // the header for the full honest caveat on what this can and can't
+    // actually achieve. Read once here, not re-checked per-tick, matching
+    // this codebase's existing "env vars are read at construction" style
+    // (e.g. MELONDS_REMOTE_ENABLE is only ever read at startup, never
+    // polled).
+    const char* touchpadEnv = std::getenv("DUALDECK_HOSTCONTROL_STEAM_TOUCHPAD");
+    touchpadEnabled_ = touchpadEnv != nullptr && touchpadEnv[0] != '\0' && std::strcmp(touchpadEnv, "0") != 0;
+
     uinputFd_ = ::open("/dev/uinput", O_WRONLY | O_NONBLOCK);
     if (uinputFd_ < 0) {
         std::fprintf(stderr,
@@ -93,15 +124,41 @@ HostControlAdapter::HostControlAdapter() {
     ::ioctl(uinputFd_, UI_SET_ABSBIT, ABS_HAT0X);
     ::ioctl(uinputFd_, UI_SET_ABSBIT, ABS_HAT0Y);
 
+    // Steam Controller touchpad experiment, opt-in only -- these
+    // capability bits are deliberately NOT part of the absOk chain below
+    // that gates the whole device's UI_DEV_CREATE: a failure here (or the
+    // env var simply being unset) must disable only touchpadEnabled_,
+    // never the proven gamepad/stick paths. See touchpadCapsOk below.
+    bool touchpadCapsOk = true;
+    if (touchpadEnabled_) {
+        ::ioctl(uinputFd_, UI_SET_ABSBIT, ABS_MT_SLOT);
+        ::ioctl(uinputFd_, UI_SET_ABSBIT, ABS_MT_POSITION_X);
+        ::ioctl(uinputFd_, UI_SET_ABSBIT, ABS_MT_POSITION_Y);
+        ::ioctl(uinputFd_, UI_SET_ABSBIT, ABS_MT_TRACKING_ID);
+        ::ioctl(uinputFd_, UI_SET_KEYBIT, BTN_TOUCH);
+        ::ioctl(uinputFd_, UI_SET_KEYBIT, BTN_LEFT);
+        touchpadCapsOk = ::ioctl(uinputFd_, UI_SET_PROPBIT, INPUT_PROP_BUTTONPAD) >= 0;
+    }
+
     uinput_setup usetup{};
     usetup.id.bustype = BUS_USB;
-    // Reuses the real Xbox 360 controller's USB vendor/product IDs --
-    // the same convention several other open-source virtual-gamepad
-    // projects use -- so desktop environments/Steam Input recognize this
-    // device's button layout correctly out of the box, rather than
-    // falling back to a generic/unrecognized-gamepad heuristic.
-    usetup.id.vendor = 0x045e;
-    usetup.id.product = 0x028e;
+    if (touchpadEnabled_) {
+        // See isTouchpadReady()'s comment in the header -- this identity
+        // swap is the whole point of the experiment (Steam's controller
+        // driver keys off vendor/product ID), but it cannot by itself make
+        // a uinput/evdev device visible to the HIDAPI-based driver that
+        // actually reads real Steam Controller touchpads.
+        usetup.id.vendor = kSteamControllerVendor;
+        usetup.id.product = kSteamControllerProduct;
+    } else {
+        // Reuses the real Xbox 360 controller's USB vendor/product IDs --
+        // the same convention several other open-source virtual-gamepad
+        // projects use -- so desktop environments/Steam Input recognize
+        // this device's button layout correctly out of the box, rather
+        // than falling back to a generic/unrecognized-gamepad heuristic.
+        usetup.id.vendor = 0x045e;
+        usetup.id.product = 0x028e;
+    }
     std::strncpy(usetup.name, "DualDeck Host Control", sizeof(usetup.name) - 1);
 
     if (::ioctl(uinputFd_, UI_DEV_SETUP, &usetup) < 0) {
@@ -130,6 +187,30 @@ HostControlAdapter::HostControlAdapter() {
     hatSetup.code = ABS_HAT0Y;
     absOk = absOk && ::ioctl(uinputFd_, UI_ABS_SETUP, &hatSetup) >= 0;
 
+    // Deliberately NOT folded into absOk above -- see touchpadCapsOk's own
+    // comment where the KEYBIT/PROPBIT calls happened. A failure here only
+    // ever disables touchpadEnabled_ after UI_DEV_CREATE succeeds below.
+    if (touchpadEnabled_ && touchpadCapsOk) {
+        uinput_abs_setup mtSetup{};
+        mtSetup.code = ABS_MT_POSITION_X;
+        mtSetup.absinfo.minimum = kTouchpadPosMin;
+        mtSetup.absinfo.maximum = kTouchpadPosMax;
+        touchpadCapsOk = ::ioctl(uinputFd_, UI_ABS_SETUP, &mtSetup) >= 0;
+        mtSetup.code = ABS_MT_POSITION_Y;
+        touchpadCapsOk = touchpadCapsOk && ::ioctl(uinputFd_, UI_ABS_SETUP, &mtSetup) >= 0;
+        mtSetup.code = ABS_MT_TRACKING_ID;
+        mtSetup.absinfo.minimum = -1;
+        mtSetup.absinfo.maximum = 65535;
+        touchpadCapsOk = touchpadCapsOk && ::ioctl(uinputFd_, UI_ABS_SETUP, &mtSetup) >= 0;
+        // Single slot (0..0) -- the wire protocol carries one aggregate
+        // delta stream, not per-finger identity; see touchpadX_/touchpadY_'s
+        // own header comment.
+        mtSetup.code = ABS_MT_SLOT;
+        mtSetup.absinfo.minimum = 0;
+        mtSetup.absinfo.maximum = 0;
+        touchpadCapsOk = touchpadCapsOk && ::ioctl(uinputFd_, UI_ABS_SETUP, &mtSetup) >= 0;
+    }
+
     if (!absOk || ::ioctl(uinputFd_, UI_DEV_CREATE) < 0) {
         std::fprintf(stderr, "HostControlAdapter: failed to create the virtual gamepad device (%s)\n",
                       std::strerror(errno));
@@ -138,7 +219,19 @@ HostControlAdapter::HostControlAdapter() {
         return;
     }
 
-    std::fprintf(stderr, "HostControlAdapter: virtual gamepad ready\n");
+    if (touchpadEnabled_ && !touchpadCapsOk) {
+        std::fprintf(stderr,
+                      "HostControlAdapter: DUALDECK_HOSTCONTROL_STEAM_TOUCHPAD was set but setting up "
+                      "the touchpad capability bits failed -- continuing with the virtual gamepad's "
+                      "existing button/stick/mouse behavior only.\n");
+        touchpadEnabled_ = false;
+    }
+
+    touchpadX_ = kTouchpadPosCenter;
+    touchpadY_ = kTouchpadPosCenter;
+
+    std::fprintf(stderr, "HostControlAdapter: virtual gamepad ready%s\n",
+                 touchpadEnabled_ ? " (Steam Controller touchpad experiment enabled)" : "");
 
     mouseUinputFd_ = ::open("/dev/uinput", O_WRONLY | O_NONBLOCK);
     if (mouseUinputFd_ < 0) {
@@ -254,14 +347,62 @@ void HostControlAdapter::emitMouseState(const HostControlMouseState& state) {
     lastEmittedMouse_ = state;
 }
 
+void HostControlAdapter::emitTouchpadState() {
+    if (!touchpadEnabled_ || uinputFd_ < 0) return;
+
+    bool sentAnything = false;
+    // Position dead-reckons every tick regardless of contact state, same
+    // as the mouse device's own always-relative motion above -- clamped,
+    // not wrapped, since a touchpad surface has hard edges.
+    int32_t clampedX = std::clamp(
+        touchpadX_ + static_cast<int32_t>(lastEmittedMouse_.dx * kTouchpadPositionScale), kTouchpadPosMin,
+        kTouchpadPosMax);
+    int32_t clampedY = std::clamp(
+        touchpadY_ + static_cast<int32_t>(lastEmittedMouse_.dy * kTouchpadPositionScale), kTouchpadPosMin,
+        kTouchpadPosMax);
+    if (clampedX != touchpadX_ || clampedY != touchpadY_) {
+        touchpadX_ = clampedX;
+        touchpadY_ = clampedY;
+        writeEvent(uinputFd_, EV_ABS, ABS_MT_SLOT, 0);
+        writeEvent(uinputFd_, EV_ABS, ABS_MT_POSITION_X, touchpadX_);
+        writeEvent(uinputFd_, EV_ABS, ABS_MT_POSITION_Y, touchpadY_);
+        sentAnything = true;
+    }
+
+    // Genuine heuristic, documented in the header: the wire protocol has
+    // no real finger-down/up signal, only continuous deltas plus a
+    // button-held bitmask -- use the touchpad click as a "finger present"
+    // proxy.
+    if (touchpadContact_ != lastEmittedTouchpadContact_) {
+        writeEvent(uinputFd_, EV_ABS, ABS_MT_SLOT, 0);
+        writeEvent(uinputFd_, EV_ABS, ABS_MT_TRACKING_ID, touchpadContact_ ? 0 : -1);
+        writeEvent(uinputFd_, EV_KEY, BTN_TOUCH, touchpadContact_ ? 1 : 0);
+        writeEvent(uinputFd_, EV_KEY, BTN_LEFT, touchpadContact_ ? 1 : 0);
+        lastEmittedTouchpadContact_ = touchpadContact_;
+        sentAnything = true;
+    }
+
+    if (sentAnything) {
+        writeEvent(uinputFd_, EV_SYN, SYN_REPORT, 0);
+    }
+}
+
 void HostControlAdapter::applyControllerState(const ControllerState& state) {
     emitState(translateControllerState(state));
     emitMouseState(translateMouseState(state));
+    if (touchpadEnabled_) {
+        touchpadContact_ = (state.mouseButtons & MouseButton_Left) != 0;
+        emitTouchpadState();
+    }
 }
 
 void HostControlAdapter::releaseAll() {
     emitState(HostControlGamepadState{});
     emitMouseState(HostControlMouseState{});
+    if (touchpadEnabled_) {
+        touchpadContact_ = false;
+        emitTouchpadState();
+    }
 }
 
 bool HostControlAdapter::getLatestFrame(std::vector<uint8_t>& /*outFrame*/, uint64_t& /*outFrameIndex*/,

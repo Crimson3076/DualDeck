@@ -72,11 +72,20 @@ EOF
 # always need a running Host Service to connect to over adapter-ipc. This
 # AppRun first tries the DEFAULT shared adapter socket
 # (scripts/lib/../../adapter-sdk/ipc/src/socket_path.cpp's
-# defaultAdapterSocketPath(), so a Phase B persistent daemon -- once it
-# exists -- is found automatically with no re-patch/re-package needed
-# here) before falling back to spawning a private, ephemeral Host Service
-# on a private socket and killing it on exit, exactly like today's
-# packaged run-host-azahar.sh/run-host-cemu.sh do.
+# defaultAdapterSocketPath()) before falling back to spawning a private,
+# ephemeral Host Service on a private socket and killing it on exit.
+#
+# The persistent Host Control daemon this now finds automatically (see
+# scripts/build-release.sh's host-control-daemon.sh/dualdeck-host-
+# control.service) exists as of 2026-08-01 -- this inline probe/spawn
+# logic mirrors scripts/lib/adapter_socket_probe.sh's
+# probe_or_spawn_adapter_socket() byte-for-byte in shape/order (kept as
+# a separate, hand-synced copy here, deliberately not sourcing that file:
+# an AppImage's AppRun can't reach outside the .AppImage's own bundled
+# contents at runtime to source anything from the host filesystem --
+# same reasoning adapter_ipc_client.cpp/adapter_ipc_server.cpp's
+# recvMessage() comment already gives for an identical kind of justified
+# duplication). Update both copies together if this logic ever changes.
 generate_apprun_out_of_process() {
     local prefix="$1" real_bin="$2" private_socket_name="$3" output_path="$4"
     cat > "${output_path}" <<'EOF'
