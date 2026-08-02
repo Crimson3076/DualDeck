@@ -7434,6 +7434,60 @@ with `DUALDECK_VERSION=v0.1.104` and confirmed via a screenshot that
 now gives the user enough information to resolve their actual protocol-
 mismatch report from real testing.
 
+## 2026-08-01: Touchpad-as-mouse still didn't move the host cursor -- SDL_EVENT_MOUSE_MOTION never fires without a specific Steam Input binding
+
+Real re-test, after the protocol mismatch above was resolved: gamepad
+navigation in Host Control mode works, but the touchpad still didn't
+move the host's cursor at all. The user's own guess was that this
+needed emulating a Steam Controller instead of an Xbox 360 one on the
+host side -- worth addressing directly since it's not actually the
+mechanism: the virtual gamepad (Xbox 360 identity) and the virtual mouse
+`host::HostControlAdapter` creates are already two separate `uinput`
+devices (see the touchpad-as-mouse entry above) -- mouse motion on the
+host never passed through the gamepad's identity at all, so changing it
+wouldn't have changed anything.
+
+**Root cause:** the previous fix captured the touchpad via
+`SDL_EVENT_MOUSE_MOTION`, which only fires if Steam Input's *currently
+bound control scheme* maps a touchpad to "as mouse" specifically. Most
+gamepad-style control schemes (including whatever this client's own
+default Steam Input template is) don't do that at all, so the client
+never received a single mouse-motion event from the touchpad --
+nothing was ever reaching the host to move, regardless of anything on
+the host side.
+
+**Fix:** `client/src/main.cpp` now additionally captures
+`SDL_EVENT_GAMEPAD_TOUCHPAD_DOWN`/`_MOTION`/`_UP` -- SDL's dedicated
+gamepad-touchpad API (the same mechanism PS4/PS5 controller touchpad
+support uses), which reads the Deck's touchpads directly as raw touch
+data *independent* of whatever control scheme is currently bound; Steam
+Input passes this through unconditionally. Reports absolute, normalized
+(0..1) per-(touchpad, finger) position, converted to a relative delta
+against each finger's own previously-seen position (no delta on the
+first position seen after a touch begins, to avoid a spurious jump).
+`SDL_EVENT_MOUSE_MOTION` is kept alongside this, not removed -- harmless
+if it never fires, still useful for a real desktop mouse in Desktop Mode
+or a control scheme that does bind "as mouse." Clicks gained a second
+source too: `SDL_GAMEPAD_BUTTON_TOUCHPAD` (the touchpad's own physical
+press-down, same button PS4/PS5 controllers report), polled alongside
+the existing gamepad button/stick reads and composed with (not
+replacing) the event-driven mouse-button click state.
+
+**Verified:** rebuilt SDL3 from source again to compile-check the new
+event handling (clean, zero warnings under this project's strict
+flags), all three test suites still pass unchanged (protocol/host sides
+weren't touched by this fix at all -- it's entirely client-side input
+capture).
+
+**Not yet verified:** against real hardware -- this sandbox has no Steam
+Deck (or any physical gamepad with a touchpad) to generate real
+`SDL_EVENT_GAMEPAD_TOUCHPAD_*` events against, so this rests on reading
+SDL's documented API contract and Valve's documented Steam Input
+touchpad-passthrough behavior, not a reproduced-and-fixed local test --
+the same category of limitation flagged repeatedly elsewhere in this
+document. The `kTouchpadMouseSensitivity` scale factor is an arbitrary
+starting guess with no real-hardware feel-tuning behind it either.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

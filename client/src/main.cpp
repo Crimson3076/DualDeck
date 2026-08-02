@@ -1736,6 +1736,43 @@ int main(int argc, char** argv) {
         int32_t hostControlMouseDeltaY = 0;
         uint8_t hostControlMouseButtons = 0;
 
+        // Real user report, 2026-08-01: SDL_EVENT_MOUSE_MOTION above never
+        // fired at all on real hardware -- it only exists if Steam Input's
+        // *currently bound control scheme* maps a touchpad to "as mouse,"
+        // which most gamepad-style templates (including whatever this
+        // client's own Steam shortcut defaults to) don't do. SDL's gamepad
+        // touchpad API (SDL_EVENT_GAMEPAD_TOUCHPAD_*) reads the Deck's
+        // touchpads directly as raw touch data instead -- the same
+        // mechanism PS4/PS5 controller touchpad support uses -- and Steam
+        // Input passes this through unconditionally, regardless of
+        // whatever the active control scheme binds face buttons/sticks to.
+        // This is the reliable path; SDL_EVENT_MOUSE_MOTION above is kept
+        // too (harmless if it never fires) for a real desktop mouse in
+        // Desktop Mode, or a control scheme that does bind "as mouse".
+        //
+        // Reports absolute, normalized (0..1) finger position per
+        // (touchpad, finger) -- converted to a delta against the
+        // previously-seen position for that same finger, since the wire
+        // protocol wants relative motion (see mouseDeltaX/Y's own
+        // comment). No delta is emitted for the first position seen after
+        // a touch begins (nothing to diff against yet -- would otherwise
+        // produce a spurious jump from whatever an uninitialized "previous
+        // position" happened to be). Bounded array rather than a map:
+        // the Deck has 2 touchpads with 1 finger each in practice: sized
+        // generously and bounds-checked below so an unexpected controller
+        // with more of either is just silently ignored past the bound,
+        // not a crash.
+        constexpr int kMaxTrackedTouchpads = 4;
+        constexpr int kMaxTrackedFingersPerTouchpad = 2;
+        // Chosen so a full swipe across the Deck's ~3.2cm touchpad (the
+        // normalized 0..1 range) covers roughly a third of the 1280px-wide
+        // client window's worth of cursor travel -- arbitrary but usable;
+        // no real-hardware feel testing has tuned this yet (see
+        // docs/known-limitations.md).
+        constexpr float kTouchpadMouseSensitivity = 900.0f;
+        std::optional<std::pair<float, float>>
+            lastTouchpadPos[kMaxTrackedTouchpads][kMaxTrackedFingersPerTouchpad];
+
         std::vector<uint8_t> frame;
         // Matches texture's current dimensions (textureWidth/textureHeight),
         // whatever they are at this point -- correct as long as every
@@ -1957,6 +1994,41 @@ int main(int argc, char** argv) {
                             logLine("[input] gamepad disconnected\n");
                         }
                         break;
+                    case SDL_EVENT_GAMEPAD_TOUCHPAD_DOWN:
+                    case SDL_EVENT_GAMEPAD_TOUCHPAD_MOTION:
+                    case SDL_EVENT_GAMEPAD_TOUCHPAD_UP: {
+                        // Host-control cursor motion via SDL's gamepad
+                        // touchpad API -- see lastTouchpadPos's own
+                        // declaration comment for why this is the reliable
+                        // path (independent of Steam Input's control
+                        // scheme), unlike SDL_EVENT_MOUSE_MOTION above.
+                        if (menuActive || settingsActive || !gamepad ||
+                            event.gtouchpad.which != SDL_GetGamepadID(gamepad) ||
+                            event.gtouchpad.touchpad < 0 ||
+                            event.gtouchpad.touchpad >= kMaxTrackedTouchpads ||
+                            event.gtouchpad.finger < 0 ||
+                            event.gtouchpad.finger >= kMaxTrackedFingersPerTouchpad) {
+                            break;
+                        }
+                        auto& lastPos = lastTouchpadPos[event.gtouchpad.touchpad][event.gtouchpad.finger];
+                        if (event.type == SDL_EVENT_GAMEPAD_TOUCHPAD_UP) {
+                            lastPos.reset();
+                            break;
+                        }
+                        if (lastPos) {
+                            hostControlMouseDeltaX += static_cast<int32_t>(
+                                (event.gtouchpad.x - lastPos->first) * kTouchpadMouseSensitivity);
+                            hostControlMouseDeltaY += static_cast<int32_t>(
+                                (event.gtouchpad.y - lastPos->second) * kTouchpadMouseSensitivity);
+                        }
+                        // else: SDL_EVENT_GAMEPAD_TOUCHPAD_DOWN, or the
+                        // first MOTION event this client happened to see
+                        // for a finger it missed the DOWN for -- either
+                        // way, nothing to diff against yet, so this
+                        // position is recorded but no delta is emitted.
+                        lastPos = std::make_pair(event.gtouchpad.x, event.gtouchpad.y);
+                        break;
+                    }
                     case SDL_EVENT_FINGER_DOWN:
                     case SDL_EVENT_FINGER_MOTION: {
                         if (menuActive || settingsActive) break;
@@ -2438,7 +2510,24 @@ int main(int argc, char** argv) {
                     std::clamp(hostControlMouseDeltaX, -32768, 32767));
                 state.mouseDeltaY = static_cast<int16_t>(
                     std::clamp(hostControlMouseDeltaY, -32768, 32767));
-                state.mouseButtons = hostControlMouseButtons;
+                {
+                    // Polled (matching buildButtonsFromGamepad()/the stick
+                    // reads above), not event-driven like the mouse-button
+                    // path that sets hostControlMouseButtons itself --
+                    // composed here rather than folded into that
+                    // accumulator so a real desktop mouse's left click
+                    // (SDL_EVENT_MOUSE_BUTTON_DOWN/UP) keeps working
+                    // independently of whatever this reads. SDL_GAMEPAD_
+                    // BUTTON_TOUCHPAD is the same "touchpad was pressed
+                    // down" button PS4/PS5 controllers report, which Steam
+                    // Input passes through the same way it does the
+                    // SDL_EVENT_GAMEPAD_TOUCHPAD_* motion events above.
+                    uint8_t polledMouseButtons = hostControlMouseButtons;
+                    if (gamepad && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_TOUCHPAD)) {
+                        polledMouseButtons |= MouseButton_Left;
+                    }
+                    state.mouseButtons = polledMouseButtons;
+                }
                 hostControlMouseDeltaX = 0;
                 hostControlMouseDeltaY = 0;
                 net.sendControllerState(state);
