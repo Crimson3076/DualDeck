@@ -8033,6 +8033,40 @@ and whether the touchpad (and host-control mouse cap) genuinely both
 resolve once Steam Input is disabled for the shortcut, is the next real
 hardware test to confirm.
 
+### Follow-up, same day: the toggle wasn't reachable from where it actually needed to be
+
+Real user report immediately after shipping the above: "I don't see the
+trackpad experiment in the client settings menu." The toggle only
+existed in `dualdeck-client.sh`'s outer shell menu -- but
+`install-steam-shortcut.sh` points the Steam shortcut's `Exe` straight
+at `run-client.sh`, never at that menu script, so Gaming Mode (the only
+way most people ever launch this) never shows it at all; the only way
+to reach it was double-clicking `dualdeck-client.sh` manually in Desktop
+Mode. The user reasonably expected it in the client's own in-app
+Settings screen (`client/src/main.cpp`, the one already shipped in the
+"Add client Settings menu" PR) instead, which the Steam shortcut always
+reaches.
+
+**Fixed** by moving the actual logic behind one new shared script,
+`client/internal/configure-trackpad-experiment.sh` (sources
+`steam_restart_helper.sh`, wraps `steam_input_config.py --status`/
+default-enable/`--remove`), and having BOTH `dualdeck-client.sh`'s menu
+and a new Settings-screen item ("TRACKPAD AS NATIVE INPUT
+(EXPERIMENTAL): ON/OFF") call that one script rather than duplicating
+the logic. The Settings-screen status is deliberately cached, not
+queried live inside `settingsMenuItems()` (that lambda runs every frame
+while Settings is open, for rendering -- shelling out to a script every
+frame would be wasteful/janky); it's refreshed only when Settings is
+opened and right after toggling.
+
+**Verified:** the client (including `main.cpp`'s new
+`runCaptureStdout()` helper and the Settings-screen wiring) builds
+clean with a from-source SDL3 (`-Wall -Wextra -Wpedantic -Wconversion
+-Wshadow`, zero warnings) and runs; the shared wrapper script re-tested
+end-to-end the same way as before, now going through
+`configure-trackpad-experiment.sh` instead of calling
+`steam_input_config.py` directly.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

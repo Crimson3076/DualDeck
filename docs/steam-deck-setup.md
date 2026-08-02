@@ -277,11 +277,15 @@ Input action sets -- that remapping-via-Steam-Input work is Phase 3
 **Host Control mode's touchpad-as-mouse** (moving the mouse cursor on
 the *host*, not the DS touchscreen above) needs the trackpad to report
 raw touch continuously, which real hardware testing found only happens
-by default while holding STEAM. `dualdeck-client.sh`'s menu has an
-opt-in "trackpad-experiment" entry that disables Steam Input entirely
-for this shortcut to fix it -- see `docs/known-limitations.md`'s
-2026-08-02 entry for why that's the actual fix rather than a custom
-Controller Layout, and `docs/troubleshooting.md` if it doesn't help.
+by default while holding STEAM. The client's own in-app **Settings**
+screen (pause menu -> Settings) has an opt-in "TRACKPAD AS NATIVE INPUT
+(EXPERIMENTAL)" toggle that disables Steam Input entirely for this
+shortcut to fix it -- reachable from Gaming Mode, unlike
+`dualdeck-client.sh`'s own outer menu, which has the same toggle but is
+only reachable by double-clicking it manually in Desktop Mode. See
+`docs/known-limitations.md`'s 2026-08-02 entries for why disabling
+Steam Input is the actual fix rather than a custom Controller Layout,
+and `docs/troubleshooting.md` if it doesn't help.
 
 ## If something doesn't work
 

@@ -1225,6 +1225,50 @@ WizardSimpleResult wizardTouchTest(SDL_Renderer* renderer, SDL_Gamepad*& gamepad
     }
 }
 
+// runCaptureStdout <command>
+//
+// Real user report, 2026-08-02: the trackpad-experiment toggle
+// (docs/known-limitations.md's entry of the same date) originally only
+// lived in dualdeck-client.sh's outer shell menu, which is unreachable
+// from Gaming Mode (the Steam shortcut execs run-client.sh directly,
+// bypassing that menu). Moved into this Settings screen instead, which
+// shells out to internal/configure-trackpad-experiment.sh -- the one
+// place (shared with dualdeck-client.sh's own menu) that actually knows
+// how to check/toggle it -- rather than reimplementing that logic
+// (Steam-restart-on-conflict safety, localconfig.vdf editing) in C++.
+// Relies on this binary always being launched with CWD ==
+// .../internal/ (true whenever launched via run-client.sh, which execs
+// the binary without ever cd'ing back out -- see run-client.sh's own
+// comment; this project has no existing executable-path-resolution
+// convention to fall back on for a different launch method).
+//
+// Blocking (popen() waits for the child to exit) -- acceptable here
+// since this only ever runs in direct response to a menu selection
+// (never per-frame; see settingsMenuItems()'s own comment on why the
+// *status* query is cached, not re-run every frame), and
+// configure-trackpad-experiment.sh's own Steam-restart handoff is
+// itself non-blocking (hands off to a detached background process and
+// returns immediately -- see steam_restart_helper.sh's own comment).
+// Returns the child's stdout with trailing newlines stripped, or an
+// empty string if the command couldn't even be started (matching this
+// codebase's "degrade gracefully, log once, never crash" convention for
+// an unavailable optional resource elsewhere, e.g.
+// HostControlAdapter::isDeviceReady()).
+std::string runCaptureStdout(const std::string& command) {
+    FILE* pipe = popen(command.c_str(), "r");
+    if (!pipe) return "";
+    std::string result;
+    char buffer[256];
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        result += buffer;
+    }
+    pclose(pipe);
+    while (!result.empty() && (result.back() == '\n' || result.back() == '\r')) {
+        result.pop_back();
+    }
+    return result;
+}
+
 // Orchestrates the whole wizard as an explicit step state machine. Returns
 // true if the user reached the end (Done), false if they exited entirely
 // (window close, or Exit/B from the very first screen) -- callers decide
@@ -1876,11 +1920,39 @@ int main(int argc, char** argv) {
             if (quality <= 85) return "HIGH";
             return "MAXIMUM (LARGEST)";
         };
+        // Trackpad-as-native-input experiment (see runCaptureStdout's own
+        // comment). Cached, not queried live inside settingsMenuItems()
+        // below -- that lambda runs every frame while the Settings screen
+        // is open (it's called from the render loop, see this function's
+        // renderPauseMenu() call), and shelling out to a script on every
+        // single frame would be wasteful/janky. Instead this is refreshed
+        // only when Settings is actually opened (both the keyboard and
+        // gamepad "SETTINGS" handlers below) and right after toggling it,
+        // matching micLevel/micPendingSamples' own "updated at specific
+        // trigger points, not recomputed on every read" pattern above.
+        bool trackpadExperimentEnabled = false;
+        auto refreshTrackpadExperimentStatus = [&]() {
+            trackpadExperimentEnabled =
+                runCaptureStdout("./internal/configure-trackpad-experiment.sh --status 2>/dev/null") == "disabled";
+        };
+        auto toggleTrackpadExperiment = [&]() {
+            runCaptureStdout(trackpadExperimentEnabled
+                                  ? "./internal/configure-trackpad-experiment.sh --remove 2>&1"
+                                  : "./internal/configure-trackpad-experiment.sh 2>&1");
+            // Re-queries rather than just flipping the cached bool --
+            // the underlying script can legitimately no-op (e.g. Steam
+            // still running and the auto-restart handoff hasn't finished
+            // yet), so the label should reflect what's actually on disk,
+            // not what was merely requested.
+            refreshTrackpadExperimentStatus();
+        };
         auto settingsMenuItems = [&]() {
             std::vector<std::string> items{
                 std::string("AUTO UPDATE ON LAUNCH: ") +
                     (clientSettings.autoUpdateOnLaunch ? "ON" : "OFF"),
                 std::string("VIDEO QUALITY: ") + videoQualityLabel(clientSettings.videoQuality),
+                std::string("TRACKPAD AS NATIVE INPUT (EXPERIMENTAL): ") +
+                    (trackpadExperimentEnabled ? "ON" : "OFF"),
             };
             if (!hostExplicit) items.push_back("RUN SETUP WIZARD");
             if (net.hostMicSupported()) {
@@ -2209,6 +2281,8 @@ int main(int argc, char** argv) {
                                 settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                             } else if (picked.rfind("VIDEO QUALITY:", 0) == 0) {
                                 cycleVideoQuality();
+                            } else if (picked.rfind("TRACKPAD AS NATIVE INPUT", 0) == 0) {
+                                toggleTrackpadExperiment();
                             } else if (picked == "RUN SETUP WIZARD") {
                                 setupWizardRequested = true;
                                 runningInner = false;
@@ -2259,6 +2333,7 @@ int main(int argc, char** argv) {
                                 menuActive = false;
                                 settingsActive = true;
                                 settingsSelectedIndex = 0;
+                                refreshTrackpadExperimentStatus();
                             } else if (picked == "EXIT EMULATION") {
                                 exitEmulationConfirm = true;
                                 exitEmulationSelectedIndex = 0;
@@ -2284,6 +2359,8 @@ int main(int argc, char** argv) {
                                     settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                                 } else if (picked.rfind("VIDEO QUALITY:", 0) == 0) {
                                     cycleVideoQuality();
+                                } else if (picked.rfind("TRACKPAD AS NATIVE INPUT", 0) == 0) {
+                                    toggleTrackpadExperiment();
                                 } else if (picked == "RUN SETUP WIZARD") {
                                     setupWizardRequested = true;
                                     runningInner = false;
@@ -2340,6 +2417,7 @@ int main(int argc, char** argv) {
                                     menuActive = false;
                                     settingsActive = true;
                                     settingsSelectedIndex = 0;
+                                    refreshTrackpadExperimentStatus();
                                 } else if (picked == "EXIT EMULATION") {
                                     exitEmulationConfirm = true;
                                     exitEmulationSelectedIndex = 0;
