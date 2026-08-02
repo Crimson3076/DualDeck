@@ -27,7 +27,16 @@ import sys
 import time
 
 MAGIC = 0x444D5231
-VERSION = 10
+# Kept in sync with protocol/include/melonds_remote/protocol.h's
+# kProtocolVersion by hand (this test has no build step that could read
+# the live header directly) -- a stale value here doesn't fail loudly on
+# its own: every Hello this script sends gets rejected as
+# REJECT_VERSION_MISMATCH instead of whatever that specific test case
+# actually meant to exercise (real 2026-08-01 CI failure: the
+# AuthenticationFailed case above got reject_reason=1 -- VERSION_MISMATCH,
+# not REJECT_AUTH_FAILED -- because this constant had drifted to 10 while
+# the live header had moved to 11).
+VERSION = 11
 
 PT_HELLO = 1
 PT_HELLO_ACK = 2
@@ -74,9 +83,13 @@ def hello_payload(name: str, platform: str, width: int, height: int, token: str,
 
 
 def controller_state_payload(seq: int, buttons: int, touch_x: int, touch_y: int) -> bytes:
+    # Trailing hhB (mouseDeltaX, mouseDeltaY, mouseButtons -- protocol
+    # v11, host-control mode's virtual mouse; see protocol.h's
+    # ControllerState) always sent as zero here -- this smoke test only
+    # exercises the DS-button/touch path, not host-control mode.
     return struct.pack(
-        "<IQHHhhhhBHH",
-        seq, 0, buttons, 0, 0, 0, 0, 0, 1, touch_x, touch_y,
+        "<IQHHhhhhBHHhhB",
+        seq, 0, buttons, 0, 0, 0, 0, 0, 1, touch_x, touch_y, 0, 0, 0,
     )
 
 

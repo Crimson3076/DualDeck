@@ -7545,6 +7545,55 @@ session genuinely stays in Host Control mode, since the previous two
 real and necessary but couldn't have worked while this bug made Host
 Control mode unreachable in the first place.
 
+## 2026-08-01: CI caught what the local build couldn't -- the vendored patch protocol copies and two smoke tests were still frozen at v10
+
+The Host Control fix above (a pure `scripts/build-release.sh` bash
+change, no protocol/host code touched) still broke CI: this repo's own
+`check-patch-protocol-sync.sh` tripwire (added specifically to catch
+this exact failure mode after it happened once before, see this
+document's "frozen protocol copy" entry) caught that the `mouseDeltaX`/
+`mouseDeltaY`/`mouseButtons` work several commits back bumped
+`kProtocolVersion` to 11 in the live header, but never touched the three
+patches' own *vendored* full copies of `protocol.h` (melonDS, Azahar,
+and Cemu each embed their own complete copy inside their integration
+patch rather than referencing the shared `protocol/` directory -- see
+that same earlier entry for why). All three were still frozen at v10.
+Separately, `tests/smoke_test.py` and `tests/device_approval_smoke_test.py`
+each hardcode their own `VERSION` constant for the raw packets they
+construct (no build step in either script that could read the live
+header instead) -- also still 10, which made every Hello either script
+sent get rejected as a protocol-version mismatch instead of exercising
+whatever that test case actually meant to check; the real CI failure
+this produced was an `AssertionError: expected AuthenticationFailed, got
+1` (`1` being `ProtocolVersionMismatch`, not the auth-failure case the
+test intended).
+
+**Fix:** regenerated all three patches' embedded `protocol.h` copies
+from the live header (same "new file" hunk shape, just the current
+752-line content and an updated `@@ -0,0 +1,N @@` line count). Bumped
+`VERSION` to 11 in both smoke test scripts, and extended
+`smoke_test.py`'s `controller_state_payload()` struct-pack format
+(`"<IQHHhhhhBHH"` -> `"<IQHHhhhhBHHhhB"`) to match `ControllerState`'s
+new 34-byte wire size -- it was still packing the old 29-byte shape,
+which would have failed the very next packet send once the version
+constant was fixed and this test actually got that far.
+
+**Verified:** `check-patch-protocol-sync.sh` now reports all three
+patches in sync; re-cloned real upstream source at each pinned commit
+(melonDS/Azahar/Cemu) and confirmed `git apply --check` still succeeds
+against all three regenerated patches. Built `dualdeck-host-service`
+locally and ran both `tests/smoke_test.py` and
+`tests/device_approval_smoke_test.py` directly against it --both now
+print PASSED end to end (not just up to the point the stale version
+constant used to derail them).
+
+**Lesson for next time:** any future `kProtocolVersion` bump needs all
+five of these updated in the same change: the three vendored patch
+copies, `smoke_test.py`, and `device_approval_smoke_test.py` -- none of
+which failed locally in this session's own build+test verification
+before pushing, since none of that ran through this repo's own CI
+workflow (`ci.yml`) or exercised the vendored patch copies at all.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

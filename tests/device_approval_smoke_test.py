@@ -43,7 +43,12 @@ import tempfile
 import time
 
 MAGIC = 0x444D5231
-VERSION = 10
+# Kept in sync with protocol/include/melonds_remote/protocol.h's
+# kProtocolVersion by hand -- see smoke_test.py's identical constant for
+# why a stale value here fails quietly (every Hello gets rejected as a
+# protocol-version mismatch instead of exercising whatever this script
+# actually means to test).
+VERSION = 11
 
 PT_HELLO = 1
 PT_HELLO_ACK = 2

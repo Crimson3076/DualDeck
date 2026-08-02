@@ -5991,7 +5991,7 @@ new file mode 100644
 index 00000000..e743ba3c
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
-@@ -0,0 +1,719 @@
+@@ -0,0 +1,752 @@
 +#pragma once
 +
 +// DualDeck wire protocol definitions.
@@ -6015,6 +6015,15 @@ index 00000000..e743ba3c
 +namespace melonds_remote {
 +
 +// Bumped whenever the wire format changes incompatibly.
++//
++// v11: ControllerState gained mouseDeltaX/mouseDeltaY/mouseButtons --
++// relative host-mouse motion and click state for host::HostControlAdapter
++// (see its own header comment), sent by the client from a Steam Deck
++// touchpad configured as a mouse. A genuine payload-shape change, not a
++// new bitmask value within an existing field (unlike EmulatorAction_
++// QuitApplication's v8-era addition, see EmulatorAction's own comment):
++// ControllerState's wire size grows by 5 bytes, so an old/new version
++// mismatch on either side would misparse every field after dsButtons.
 +//
 +// v10: VideoFrame's payload gained an 8-byte host wall-clock capture
 +// timestamp prepended before the JPEG bytes (see "video-latency
@@ -6046,7 +6055,7 @@ index 00000000..e743ba3c
 +// negotiating an optional codec keeps both sides simple, matching how
 +// every other incompatible wire-format change in this project has been
 +// handled (see the mic-support v5 bump above).
-+inline constexpr uint16_t kProtocolVersion = 10;
++inline constexpr uint16_t kProtocolVersion = 11;
 +
 +// Sentinel at the start of every packet so malformed/foreign traffic on the
 +// same port can be rejected cheaply before any further parsing.
@@ -6154,6 +6163,16 @@ index 00000000..e743ba3c
 +    // kProtocolVersion bump (unlike a new *field*, e.g.
 +    // HelloPayload::appVersion).
 +    EmulatorAction_QuitApplication = 1u << 8,
++};
++
++// Host-control mode's virtual mouse button state (ControllerState::
++// mouseButtons) -- unrelated to DSButton, which has no notion of a mouse
++// at all. Only meaningful while the host is in HostMode::HostControl (see
++// host::HostControlAdapter); every emulator adapter simply never reads
++// this field, the same way HostControlAdapter never reads touchX/touchY.
++enum MouseButton : uint8_t {
++    MouseButton_Left  = 1u << 0,
++    MouseButton_Right = 1u << 1,
 +};
 +
 +// Native DS bottom-screen touch range (spec section 7.4).
@@ -6481,12 +6500,26 @@ index 00000000..e743ba3c
 +    uint8_t touchActive = 0;       // 0 or 1
 +    uint16_t touchX = 0;           // 0..kTouchMaxX, valid only if touchActive
 +    uint16_t touchY = 0;           // 0..kTouchMaxY, valid only if touchActive
++    // Host-control mode only (protocol v11): relative host-mouse-cursor
++    // motion accumulated on the client since the *previous* packet was
++    // sent (a Steam Deck touchpad configured as a mouse, or a real mouse
++    // in Desktop Mode) -- NOT the same thing as touchX/touchY above,
++    // which are absolute coordinates for an *emulated* DS/3DS touch
++    // screen, meaningless outside Emulation mode. Sent over the same
++    // best-effort UDP channel as every other ControllerState field:
++    // unlike the level-triggered fields above (which self-heal on the
++    // next packet), a dropped packet's motion delta is genuinely lost --
++    // an accepted, standard trade-off for a relative-motion protocol,
++    // not a bug.
++    int16_t mouseDeltaX = 0;
++    int16_t mouseDeltaY = 0;
++    uint8_t mouseButtons = 0;      // MouseButton bitmask, 1 = held
 +};
 +
 +// Wire size of a serialized ControllerState payload (not including the
 +// common PacketHeader). Kept explicit so tests can catch accidental growth.
 +inline constexpr size_t kControllerStateWireSize =
-+    4 + 8 + 2 + 2 + 2 + 2 + 2 + 2 + 1 + 2 + 2;
++    4 + 8 + 2 + 2 + 2 + 2 + 2 + 2 + 1 + 2 + 2 + 2 + 2 + 1;
 +
 +// Wire size of VideoFramePayload's fixed timestamp prefix (protocol
 +// v10) -- the JPEG bytes that follow are variable-length, sized however
