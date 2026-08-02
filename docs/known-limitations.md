@@ -7934,6 +7934,105 @@ with a real Bazzite host is the same already-accepted risk this project's
 prebuilt-AppImage strategy already carries (see the "no longer builds
 anything locally" 2026-08-01 entry), not a new one.
 
+## 2026-08-02: Trackpad-as-native-input experiment -- disabling Steam Input for the DualDeck Client shortcut, not a custom Controller Layout
+
+Follow-up to the previous entry's fix (giving the DualDeck Client shortcut
+its own Controller Layout with the trackpads bound to "Trackpad"). The
+user asked for this to be automated for new users, as frictionless as
+possible, and specifically: "the controller layout should function
+exactly like a steam controller/steam deck." Before writing a custom
+Steam Input Controller Layout -- a reverse-engineered, undocumented
+binary/text VDF binding schema this project would have had to guess at,
+same caveat as any other undocumented-format experiment in this file --
+real research (SDL's own Steam Controller touchpad support PR discussion,
+and a real, shipped implementation in RPCS3, a major emulator project)
+turned up a simpler, better-precedented fix instead.
+
+**What the research actually found:** Steam Deck's own controller
+reports raw touchpad data to SDL's gamepad-touchpad API
+(`SDL_EVENT_GAMEPAD_TOUCHPAD_*`, what the client already reads)
+*unconditionally* at the HIDAPI/hardware level, independent of any Steam
+Input binding -- the earlier entry's "needs a Trackpad-type binding"
+diagnosis was aimed at the wrong mechanism. The real gate is whether
+Steam Input is intercepting the controller *at all*: while it's active
+(the default for any Steam shortcut), it owns the device and only
+routes trackpad data through in specific circumstances (matching "only
+while STEAM is held"); fully disabling Steam Input for one shortcut
+(Properties -> Controller -> "Disable Steam Input") lets SDL read the
+controller natively instead, where touch has always been available.
+RPCS3 (github.com/RPCS3/rpcs3, PR #18427, "steam: disable steam input
+for shortcuts") already automates exactly this for its own generated
+non-Steam shortcut -- real, shipped code, not a guess.
+
+**What shipped**, opt-in (a new "trackpad-experiment" entry in
+`dualdeck-client.sh`'s menu with a dynamic Enable/Disable label, not
+applied automatically during install, per the user's own explicit
+choice to ship this as an opt-in experiment rather than a silent
+default):
+
+- New `scripts/lib/steam_input_config.py` (client-only -- this is about
+  the Deck's own controller, not anything host-side), with its own
+  minimal text-VDF (KeyValues) parser/serializer -- `localconfig.vdf` is
+  Steam's plain-text format, a different grammar from `shortcuts.vdf`'s
+  binary one that `steam_shortcut.py` already parses elsewhere in this
+  project. Sets/clears exactly one key,
+  `"UserLocalConfigStore"->"Software"->"Valve"->"Steam"->"apps"->
+  "<appid>"->"UseSteamControllerConfig"` = `"0"`, computing `<appid>`
+  with the byte-for-byte same legacy CRC32 algorithm
+  `steam_shortcut.py`'s own `legacy_shortcut_appid()` already uses (so
+  it targets the exact same shortcut, confirmed by direct comparison of
+  both functions' output for the same input) -- every other key
+  anywhere in `localconfig.vdf` is parsed, kept, and re-serialized
+  completely untouched.
+- Same defensive discipline as `steam_shortcut.py`: refuses to write
+  while Steam is running unless `--force` (plugs into the existing
+  `run_steam_shortcut_with_restart` auto-restart helper via the same
+  "Steam appears to be running" refusal string), backs up the file
+  first, and parses its own freshly-written output back as a sanity
+  check before trusting it.
+- A `--status` mode (read-only, safe regardless of whether Steam is
+  running) drives the menu's dynamic label.
+- Removing the DualDeck Client from Steam now also best-effort reverts
+  this if it was ever turned on, so a stale override doesn't silently
+  carry over to whatever gets installed at the same shortcut identity
+  next.
+
+**A second, related real user report, same root cause:** the host-control
+mouse cursor was also observed capped to "wherever the mouse can move on
+the Steam Deck's own screen." Direct code reading
+(`client/src/main.cpp`) found two separate code paths both feeding the
+same `hostControlMouseDeltaX/Y` accumulator: the raw-touchpad path
+(unbounded by design -- finger position on the pad, not tied to any
+on-screen cursor) and an older `SDL_EVENT_MOUSE_MOTION` fallback that
+reads a real, window/screen-bounded OS cursor's relative motion --
+inherently capped once that cursor hits an edge, matching the report
+exactly. That fallback only fires today via the same Steam Input "hold
+STEAM" mouse-binding mechanism this whole entry is about, so disabling
+Steam Input is expected to make the unbounded touchpad path the sole
+active source with no code change needed -- flagged here rather than
+silently assumed; if it's still capped after testing this fix, the
+`SDL_EVENT_MOUSE_MOTION` path warrants a closer look on its own.
+
+**Verified:** `legacy_shortcut_appid()` output compared directly against
+`steam_shortcut.py`'s and confirmed identical; the text-VDF parser/
+serializer round-trips a realistic multi-app `localconfig.vdf` (including
+an escaped-quote value) byte-for-byte when nothing changes, and leaves
+every unrelated key untouched when something does; disable/enable/status
+tested through their full cycle including idempotency (a repeated
+disable or a redundant remove correctly report "nothing to change"); the
+Steam-running refusal fires correctly and matches the auto-restart
+helper's expected string; the actual `dualdeck-client.sh` menu entry
+tested end-to-end against stub scripts and a fake Steam userdata
+directory -- selecting it, confirming, writing the real file, the label
+updating live, toggling back off restoring the original state, and a
+full uninstall cleaning up the override.
+
+**Not yet verified:** against a real Steam Deck -- whether Steam
+actually respects this exact key/path the way RPCS3's precedent implies,
+and whether the touchpad (and host-control mouse cap) genuinely both
+resolve once Steam Input is disabled for the shortcut, is the next real
+hardware test to confirm.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

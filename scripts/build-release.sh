@@ -389,6 +389,11 @@ cp -a "${sdl3_install}"/lib/libSDL3.so* "${pkg_dir}/client/lib/"
 cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/client/internal/ensure-packages.sh"
 cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/client/internal/steam_shortcut.py"
 cp "${repo_root}/scripts/lib/steam_restart_helper.sh" "${pkg_dir}/client/internal/steam_restart_helper.sh"
+# Opt-in touchpad-as-native-input experiment (client-only -- this is
+# about the Deck's own trackpads, not anything host-side) -- see
+# steam_input_config.py's own module docstring for the real research
+# behind it.
+cp "${repo_root}/scripts/lib/steam_input_config.py" "${pkg_dir}/client/internal/steam_input_config.py"
 
 cat > "${pkg_dir}/client/internal/run-client.sh" <<'WRAP'
 #!/usr/bin/env bash
@@ -812,6 +817,8 @@ cat > "${pkg_dir}/client/dualdeck-client.sh" <<'WRAP'
 # back to a plain numbered prompt in a terminal otherwise.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+# shellcheck source=scripts/lib/steam_restart_helper.sh
+source ./internal/steam_restart_helper.sh
 
 error_log="${HOME}/.config/dualdeck-client/install.log"
 on_error() {
@@ -827,6 +834,14 @@ ${error_log}" 2>/dev/null || true
     fi
 }
 trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
+
+# Keep in sync with the same constant in internal/install-steam-shortcut.sh,
+# internal/uninstall-steam-shortcut.sh, and internal/apply-update.sh --
+# steam_input_config.py needs the exact same --exe/--name those already
+# use so it computes the identical shortcut appid (see that script's own
+# comment on why this has to match byte-for-byte).
+client_shortcut_exe="${HOME}/.config/dualdeck-client/install/internal/run-client.sh"
+client_shortcut_name="DualDeck"
 
 have_kdialog() { command -v kdialog >/dev/null 2>&1; }
 
@@ -849,12 +864,33 @@ confirm() {
     fi
 }
 
+# Real user request, 2026-08-02: "the controller layout should function
+# exactly like a steam controller/steam deck" -- specifically, the
+# touchpad only forwarded raw touch while the STEAM button was held
+# (see steam_input_config.py's own module docstring for the actual
+# research and fix: disabling Steam Input for this one shortcut, not a
+# custom Controller Layout, per RPCS3's real precedent). Dynamic label
+# mirrors ../host/dualdeck-host.sh's own hostcontrol-daemon precedent --
+# doesn't write anything to check status, so this is always safe/instant
+# to show regardless of whether Steam is running.
+trackpad_experiment_label() {
+    local status
+    status="$(python3 ./internal/steam_input_config.py --exe "${client_shortcut_exe}" \
+        --name "${client_shortcut_name}" --status 2>/dev/null || echo "enabled")"
+    if [[ "${status}" == "disabled" ]]; then
+        echo "trackpad-experiment (Steam Input disabled, ON)"
+    else
+        echo "trackpad-experiment (Steam Input enabled, off)"
+    fi
+}
+
 choose_action() {
     if have_kdialog; then
         kdialog --title "DualDeck" --menu "What would you like to do?" \
             launch "Launch DualDeck now" \
             steam-add "Add to Steam (Big Picture / Gaming Mode)" \
             steam-remove "Remove from Steam / uninstall" \
+            trackpad-experiment "$(trackpad_experiment_label)" \
             update "Check for updates / update" \
             2>/dev/null || echo "cancel"
     else
@@ -868,15 +904,17 @@ choose_action() {
             echo "  1) Launch DualDeck now"
             echo "  2) Add to Steam (Big Picture / Gaming Mode)"
             echo "  3) Remove from Steam / uninstall"
-            echo "  4) Check for updates / update"
-            echo "  5) Exit"
+            echo "  4) $(trackpad_experiment_label)"
+            echo "  5) Check for updates / update"
+            echo "  6) Exit"
         } >&2
-        read -rp "Choice [1-5]: " choice
+        read -rp "Choice [1-6]: " choice
         case "${choice}" in
             1) echo "launch" ;;
             2) echo "steam-add" ;;
             3) echo "steam-remove" ;;
-            4) echo "update" ;;
+            4) echo "trackpad-experiment" ;;
+            5) echo "update" ;;
             *) echo "cancel" ;;
         esac
     fi
@@ -900,8 +938,41 @@ case "${action}" in
         # (install-steam-shortcut.sh has the same error-trap pattern as
         # this script) -- nothing more to do.
         ;;
+    trackpad-experiment)
+        current_status="$(python3 ./internal/steam_input_config.py --exe "${client_shortcut_exe}" \
+            --name "${client_shortcut_name}" --status 2>/dev/null || echo "enabled")"
+        if [[ "${current_status}" == "disabled" ]]; then
+            if confirm "Re-enable Steam Input for the DualDeck Client shortcut? This turns the trackpad-as-native-touchpad experiment back off -- the touchpad goes back to only working while STEAM is held."; then
+                if run_steam_shortcut_with_restart ./internal/steam_input_config.py "${error_log}" \
+                    --exe "${client_shortcut_exe}" --name "${client_shortcut_name}" --remove; then
+                    info "Steam Input re-enabled for DualDeck Client. Restart Steam for this to take effect."
+                fi
+            fi
+        else
+            if confirm "Disable Steam Input for the DualDeck Client shortcut? This is an experimental fix for the touchpad only working while STEAM is held -- see docs/known-limitations.md's 2026-08-02 entry. Not yet confirmed on real hardware; you can turn it back off from this same menu."; then
+                if run_steam_shortcut_with_restart ./internal/steam_input_config.py "${error_log}" \
+                    --exe "${client_shortcut_exe}" --name "${client_shortcut_name}"; then
+                    info "Steam Input disabled for DualDeck Client. Restart Steam for this to take effect, then relaunch DualDeck and test the touchpad without holding STEAM."
+                fi
+            fi
+        fi
+        ;;
     steam-remove)
         if confirm "This removes the Steam shortcut and the installed files. Continue?"; then
+            # Best-effort, before the shortcut it's keyed off of is
+            # removed below -- a full uninstall should also undo the
+            # trackpad experiment if it was ever turned on, not leave a
+            # stale Steam Input override pointing at an appid a later
+            # re-add would recompute identically from the same --exe/
+            # --name (so leaving it wouldn't even be inert -- it would
+            # silently carry over to whatever gets installed next). Not
+            # --force'd, same as uninstall-steam-shortcut.sh's own plain
+            # (non-restart-helper) call just below -- if Steam happens to
+            # be running, this silently no-ops rather than risking a
+            # clobber; a stale key surviving one uninstall cycle is a
+            # minor loose end, not worth forcing past that safety check.
+            python3 ./internal/steam_input_config.py --exe "${client_shortcut_exe}" \
+                --name "${client_shortcut_name}" --remove >/dev/null 2>&1 || true
             if ./internal/uninstall-steam-shortcut.sh; then
                 info "Removed."
             fi

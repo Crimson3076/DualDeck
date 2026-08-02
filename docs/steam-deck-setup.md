@@ -274,6 +274,15 @@ bottom screen -- left click/drag maps the same way a finger touch does
 Input action sets -- that remapping-via-Steam-Input work is Phase 3
 (`SPEC.md`) and not implemented yet.
 
+**Host Control mode's touchpad-as-mouse** (moving the mouse cursor on
+the *host*, not the DS touchscreen above) needs the trackpad to report
+raw touch continuously, which real hardware testing found only happens
+by default while holding STEAM. `dualdeck-client.sh`'s menu has an
+opt-in "trackpad-experiment" entry that disables Steam Input entirely
+for this shortcut to fix it -- see `docs/known-limitations.md`'s
+2026-08-02 entry for why that's the actual fix rather than a custom
+Controller Layout, and `docs/troubleshooting.md` if it doesn't help.
+
 ## If something doesn't work
 
 See `docs/troubleshooting.md`. If you're the first person actually
