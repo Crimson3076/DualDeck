@@ -8067,6 +8067,44 @@ end-to-end the same way as before, now going through
 `configure-trackpad-experiment.sh` instead of calling
 `steam_input_config.py` directly.
 
+### Second follow-up, same day: the Settings-screen toggle silently did nothing at all
+
+Real user report: "it doesn't actually let me toggle it on, and screen
+resolution is still limiting mouse movement on the host from the
+client" -- the second half is a direct consequence of the first, not a
+separate bug: if Steam Input was never actually disabled, the touchpad
+path never took over, so the older screen-bound `SDL_EVENT_MOUSE_MOTION`
+fallback (see this file's earlier entry on that) kept being the only
+thing moving the host cursor.
+
+**Root cause, a real off-by-one-directory path bug:** `main.cpp` shelled
+out to `"./internal/configure-trackpad-experiment.sh"`, but
+`run-client.sh` already `cd`s into `internal/` before `exec`ing the
+binary and never `cd`s back out (confirmed by re-reading `run-client.sh`
+directly) -- so the running client's CWD *is* `.../internal/` already,
+and that extra `internal/` prefix pointed at a nonexistent
+`.../internal/internal/...` path. `popen()` still succeeds (the shell
+itself starts fine), but the script it tries to run isn't there, so the
+whole toggle silently did nothing -- no error surfaced anywhere, which
+is exactly why it looked like a dead button rather than an obvious
+failure.
+
+**Fixed** by dropping the incorrect prefix (`"./configure-trackpad-
+experiment.sh"`, matching the binary's real CWD) in all three call
+sites (`refreshTrackpadExperimentStatus()`, both branches of
+`toggleTrackpadExperiment()`).
+
+**Verified**, this time by directly reproducing the bug before fixing
+it: a stub script placed at the real path, called via both the old
+(`./internal/...`) and new (`./...`) strings from a CWD matching
+`run-client.sh`'s actual `internal/` -- confirmed the old string fails
+with "No such file or directory" and the new one succeeds. Client
+rebuilt clean afterward (same from-source SDL3, zero warnings).
+
+**Not yet verified:** whether the touchpad and host-control mouse cap
+now actually resolve on real hardware once the toggle itself works --
+still the next real test now that the toggle isn't silently a no-op.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

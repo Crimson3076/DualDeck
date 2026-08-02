@@ -1232,15 +1232,22 @@ WizardSimpleResult wizardTouchTest(SDL_Renderer* renderer, SDL_Gamepad*& gamepad
 // lived in dualdeck-client.sh's outer shell menu, which is unreachable
 // from Gaming Mode (the Steam shortcut execs run-client.sh directly,
 // bypassing that menu). Moved into this Settings screen instead, which
-// shells out to internal/configure-trackpad-experiment.sh -- the one
-// place (shared with dualdeck-client.sh's own menu) that actually knows
-// how to check/toggle it -- rather than reimplementing that logic
+// shells out to configure-trackpad-experiment.sh (in the same directory
+// as this binary's CWD -- see below) -- the one place (shared with
+// dualdeck-client.sh's own menu) that actually knows how to check/
+// toggle it -- rather than reimplementing that logic
 // (Steam-restart-on-conflict safety, localconfig.vdf editing) in C++.
 // Relies on this binary always being launched with CWD ==
-// .../internal/ (true whenever launched via run-client.sh, which execs
-// the binary without ever cd'ing back out -- see run-client.sh's own
-// comment; this project has no existing executable-path-resolution
-// convention to fall back on for a different launch method).
+// .../internal/ (true whenever launched via run-client.sh, which `cd`s
+// into internal/ and execs the binary without ever cd'ing back out --
+// see run-client.sh's own comment; this project has no existing
+// executable-path-resolution convention to fall back on for a
+// different launch method), so a bare "./configure-trackpad-
+// experiment.sh" -- NOT "./internal/configure-trackpad-experiment.sh"
+// -- is the correct relative path from here; real user report,
+// 2026-08-02, the "internal/" prefix silently pointed at a
+// nonexistent ".../internal/internal/..." path, so the toggle did
+// nothing at all.
 //
 // Blocking (popen() waits for the child to exit) -- acceptable here
 // since this only ever runs in direct response to a menu selection
@@ -1932,13 +1939,17 @@ int main(int argc, char** argv) {
         // trigger points, not recomputed on every read" pattern above.
         bool trackpadExperimentEnabled = false;
         auto refreshTrackpadExperimentStatus = [&]() {
+            // NOT "./internal/configure-trackpad-experiment.sh" -- see
+            // runCaptureStdout's own comment on why this binary's CWD is
+            // already .../internal/, so that extra prefix silently
+            // pointed at a nonexistent path (real user report,
+            // 2026-08-02: the toggle appeared to do nothing at all).
             trackpadExperimentEnabled =
-                runCaptureStdout("./internal/configure-trackpad-experiment.sh --status 2>/dev/null") == "disabled";
+                runCaptureStdout("./configure-trackpad-experiment.sh --status 2>/dev/null") == "disabled";
         };
         auto toggleTrackpadExperiment = [&]() {
-            runCaptureStdout(trackpadExperimentEnabled
-                                  ? "./internal/configure-trackpad-experiment.sh --remove 2>&1"
-                                  : "./internal/configure-trackpad-experiment.sh 2>&1");
+            runCaptureStdout(trackpadExperimentEnabled ? "./configure-trackpad-experiment.sh --remove 2>&1"
+                                                         : "./configure-trackpad-experiment.sh 2>&1");
             // Re-queries rather than just flipping the cached bool --
             // the underlying script can legitimately no-op (e.g. Steam
             // still running and the auto-restart handoff hasn't finished
