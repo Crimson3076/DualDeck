@@ -8305,6 +8305,19 @@ warnings).
 `client.log` will show real vendor/product IDs for the first time,
 turning this from a reasoned guess into a checkable fact.
 
+### Resolved: real hardware confirms the touchpads now work
+
+Real user report, 2026-08-03: "the touchpads work perfectly now." The
+SDL 3.2.16 -> 3.4.12 bump above was the actual, complete fix -- once a
+real client.log was captured against a build containing both the
+version bump and the vendor/product diagnostic together (rather than the
+intermediate v0.1.116 build above, which only had the version bump), the
+touchpads worked. The vendor/product diagnostic added in the follow-up
+above was never needed to explain a persisting failure, since there
+turned out not to be one. This closes out the whole touchpad
+investigation chain starting from the original "touchpads don't function
+like a Steam Controller on the host" report.
+
 ## 2026-08-03: Host Control's mouse cursor screen-cap -- the actual, direct fix
 
 Real user demand, separate from the touchpad-vs-SDL-version investigation
@@ -8477,6 +8490,57 @@ older version, an approved Deck client connecting, and confirming the
 persistent daemon actually re-downloads, restarts, and comes back
 reachable at the new version. This is the next thing to test once
 another release is available to update *to*.
+
+## 2026-08-03: Cemu Vulkan renderer init failure on Bazzite, works fine on a Fedora laptop
+
+Real user report: "Error when initializing Vulkan Renderer on Cemu on
+bazzite, works fine on Fedora Laptop." Same Cemu binary, same wire
+protocol -- the only variable that changes between the two reports is
+*how* Cemu gets launched: on the Bazzite HTPC, DualDeck's whole design
+is Steam-shortcut-first (`install-steam-shortcut.sh --exe
+dualdeck-host.sh`), so Cemu is a grandchild of a process Steam itself
+launched; a Fedora laptop test is far more likely to have run Cemu (or
+this whole flow) directly, outside Steam.
+
+**Root cause, same bug class already found and fixed once in this file
+(2026-08-01, melonDS's Distrobox launch path):** `dualdeck-host.sh` is
+the literal `--exe` target of the host's Steam shortcut, so every
+process it goes on to `exec` -- `launch-host.sh` (melonDS/Host Control),
+`run-host-azahar.sh` (3DS), `run-host-cemu.sh` (Wii U/Cemu),
+`launch-custom-emulator.sh` -- inherits Steam's own environment
+unmodified, including `LD_PRELOAD` pointing at Steam's overlay-injection
+libraries (`gameoverlayrenderer.so`). That library hooks Vulkan's
+`vkCreateInstance`/`vkCreateDevice` to draw Steam's own in-game overlay
+-- a well-known source of Vulkan initialization failures in native Linux
+Vulkan apps launched through Steam. `install-host-distrobox.sh` already
+had its own `unset LD_PRELOAD LD_LIBRARY_PATH` for exactly this reason
+(it broke melonDS's `libGL.so.1` loading outright, same LD_PRELOAD
+contamination, different graphics API), but that fix only covered
+melonDS's immutable-system Distrobox path -- Cemu's native (no
+Distrobox) launch path never got it, and neither did any of the other
+launch paths reachable from `dualdeck-host.sh`.
+
+**Fixed** by moving the `unset LD_PRELOAD LD_LIBRARY_PATH` to the true
+root of the process tree: the top of `dualdeck-host.sh` itself, right
+after its `cd`, before anything else runs. Every launch path below it
+(`ds`/`n3ds`/`wiiu`/`hostcontrol`/`custom` in `choose_emulator()`)
+inherits the cleaned environment automatically, with no per-script
+duplication needed. `install-host-distrobox.sh` keeps its own copy of
+the same `unset` too -- redundant when reached through
+`dualdeck-host.sh` now, but still a correct, self-contained safety net
+for anyone invoking it directly.
+
+**Verified:** `bash -n` on the generated script content confirms no
+syntax breakage from the added heredoc lines (the heredoc delimiter is
+quoted, so no shell expansion of the explanatory comment's `$()` text
+happens inside it).
+
+**Not yet verified:** on real Bazzite hardware -- whether Cemu's Vulkan
+renderer actually initializes successfully now that Steam's LD_PRELOAD
+no longer reaches it. This is a strong, precedented root cause (the
+identical failure mode already confirmed and fixed once for melonDS in
+this exact codebase), not a guess, but real-hardware confirmation is the
+next step once a build with this fix is available to test.
 
 ## Things intentionally out of scope for v0.1
 

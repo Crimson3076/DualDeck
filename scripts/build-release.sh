@@ -2261,6 +2261,29 @@ cat > "${pkg_dir}/host/dualdeck-host.sh" <<'WRAP'
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
+# Real user report, 2026-08-03 (Bazzite HTPC): "Error when initializing
+# Vulkan Renderer on Cemu on bazzite, works fine on Fedora Laptop." This
+# script is install-steam-shortcut.sh's --exe target, i.e. the actual
+# process Steam launches -- every emulator this menu execs into (melonDS
+# via launch-host.sh, Azahar via run-host-azahar.sh, Cemu via
+# run-host-cemu.sh) inherits Steam's own LD_PRELOAD (overlay-injection
+# libs, e.g. gameoverlayrenderer.so) unless it's stripped here first.
+# This is the identical root cause already found and fixed for melonDS's
+# Distrobox launch path (see install-host-distrobox.sh's own
+# 2026-08-01 comment: it broke libGL.so.1 loading outright there) --
+# Cemu's native (non-Distrobox) launch path never got the same fix.
+# Steam's overlay hooks Vulkan's vkCreateInstance/vkCreateDevice via
+# that same LD_PRELOAD, a known cause of "Vulkan Renderer" init
+# failures specifically when launched as a Steam shortcut -- explaining
+# why a plain (non-Steam-launched) Cemu run on a Fedora laptop is
+# unaffected. Stripped once, here at the true entry point, so every
+# launch path below inherits the clean environment instead of needing
+# its own copy of this fix (install-host-distrobox.sh keeps its own
+# unset too -- harmless/redundant now, not worth removing since it's
+# also a correct, self-contained safety net for anyone invoking it
+# directly rather than through this menu).
+unset LD_PRELOAD LD_LIBRARY_PATH
+
 error_log="${HOME}/.config/dualdeck/install.log"
 on_error() {
     local exit_code="$1" line_no="$2" failing_cmd="$3"
