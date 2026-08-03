@@ -9869,6 +9869,56 @@ Azahar/Cemu's own vendored `adapter_sdk` copy) was ever actually visible
 to a real user as a symptom, versus being a pure build-hygiene issue with
 no runtime effect via the adapter-IPC path -- not confirmed either way.
 
+## 2026-08-03: Azahar "X and Y buttons are flipped" -- Steam Input's default template, not a DualDeck bug
+
+Real user report, narrowed down over several rounds to specifically the
+face buttons (not sticks, not D-pad, not Cemu -- which shares the exact
+same wire-level convention and was not reported as flipped). Traced the
+entire chain four independent times with no code-level fault found:
+`client/src/main.cpp`'s `kButtonMappings` (`SDL_GAMEPAD_BUTTON_WEST` ->
+`DSButton_X`, `_NORTH` -> `DSButton_Y`), `protocol.h`'s `DSButton_X`/`_Y`
+bit values, `host/remote-server/src/adapter_bridge.cpp`'s
+`dsButtonsToGenericButtons()` (uses the named `DSButton_X`/`GenericButton_
+West` constants throughout, not raw hex -- ruled out a bit-value
+mismatch), the real Azahar source's own `kNativeButtonToGenericBit` table
+and `Settings::NativeButton::Values` ordering at the pinned commit, and
+finally the bundled SDL3 3.4.12's own `SDL_hidapi_xbox360.c` HID driver
+(`data[3] & 0x40` -> `WEST`, `& 0x80` -> `NORTH`, the standard XInput
+report layout) -- every layer agreed and matched.
+
+Confirmed via a screenshot of Steam Input's own action-set legend for the
+DualDeck Client shortcut: Steam's **default** controller template for
+this (auto-picked, never explicitly configured) shortcut has A/B and X/Y
+assigned to the physically wrong positions. This happens entirely inside
+Steam Input's translation layer, upstream of anything DualDeck's own code
+ever sees -- SDL only ever reports whatever Steam Input hands it, and
+every layer downstream of that was already confirmed correct.
+
+**Fix:** none needed in code -- the client's existing "TRACKPAD AS NATIVE
+INPUT (EXPERIMENTAL)" Settings toggle (`scripts/lib/
+steam_input_config.py`/`configure-trackpad-experiment.sh`, shipped
+2026-08-02 for the unrelated touchpad-forwarding issue) already fixes
+this as a side effect: turning it on disables Steam Input entirely for
+the DualDeck Client shortcut (`UseSteamControllerConfig` "0" in
+`localconfig.vdf`), so the controller reports straight to SDL with no
+Steam Input template in the loop to have the wrong layout in the first
+place. Same underlying fix, two independent symptoms.
+
+**Verified:** the full code chain was re-confirmed correct at every layer
+(see above); the actual fix (existing toggle) has not yet been confirmed
+by the user to resolve this specific symptom on real hardware, though the
+mechanism (bypassing Steam Input entirely) applies identically to both
+the touchpad and face-button cases.
+
+**Open follow-up, not yet actioned**: worth considering shipping a
+correct default Steam Input *binding* (rather than only the "disable it
+entirely" escape hatch) for users who want Steam Input's other features
+(gyro, per-app configs) while still getting correct face-button mapping
+-- flagged once already this session as a larger, separate feature
+(Steam's controller-binding VDF schema is different and mostly
+undocumented compared to `localconfig.vdf`'s simple text format), not
+attempted here.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
