@@ -162,12 +162,28 @@ find_qt6_plugins_dir() {
 # extends the same, already-proven exclusion pattern to that whole
 # class rather than adding Vulkan alone and leaving GL/EGL/DRM/GBM as
 # the next version of this same bug waiting to happen.
+#
+# Refined further, same day: independently corroborated (a second
+# analysis of the same log, converging on the same root cause via a
+# more specific mechanism) that Mesa's own Vulkan ICD (loaded correctly
+# from the host once libvulkan.so.1 itself was excluded above) can
+# itself dlopen/link libwayland-client at the WSI layer to implement
+# VK_KHR_wayland_surface -- if *that* resolves against a bundled,
+# CI-environment copy instead of the host's own (via the same
+# LD_LIBRARY_PATH-first mechanism, since Cemu's CMakeLists.txt links
+# Wayland::Client directly, putting libwayland-client/-egl/-cursor in
+# the bundled closure too), an ABI-mismatched symbol lookup there is
+# just as capable of quietly breaking Vulkan WSI support as a bundled
+# libvulkan.so.1 itself. Added defensively for the same reason as the
+# rest of this list: these must always match the host's live Wayland
+# compositor/client library ecosystem, not a build machine's.
 _is_never_bundle_library() {
     case "$(basename "$1")" in
         libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|\
         libresolv.so.*|libnsl.so.*|libutil.so.*|libnss_*.so.*|\
         libvulkan.so.*|libGL.so.*|libGLX.so.*|libGLdispatch.so.*|\
-        libEGL.so.*|libgbm.so.*|libdrm.so.*|libdrm_*.so.*)
+        libEGL.so.*|libgbm.so.*|libdrm.so.*|libdrm_*.so.*|\
+        libwayland-client.so.*|libwayland-egl.so.*|libwayland-cursor.so.*)
             return 0 ;;
         *)
             return 1 ;;

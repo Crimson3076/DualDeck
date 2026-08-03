@@ -9084,15 +9084,38 @@ menu when not using EmuDeck replace-in-place) execs Cemu directly with
 no `LD_LIBRARY_PATH` override at all -- confirmed by reading that
 script directly -- so it was never exposed to this specific mechanism.
 
+**Refined further, same day:** a second, independent analysis of the
+same log (the user's own follow-up, from another AI) converged on the
+same root cause via a more specific mechanism worth incorporating
+defensively even without a second log confirming the exact symbol:
+Mesa's own Vulkan ICD -- now correctly loaded from the host once
+`libvulkan.so.1` itself was excluded above -- can itself dlopen/link
+`libwayland-client` at the WSI layer to implement
+`VK_KHR_wayland_surface`. Since Cemu's own `CMakeLists.txt` links
+`Wayland::Client` directly, `libwayland-client`/`libwayland-egl`/
+`libwayland-cursor` were still riding along in the bundled closure even
+after the first fix -- if the host's Mesa ICD resolved its own
+Wayland-protocol symbol needs against *that* bundled (CI-environment,
+plausibly version-mismatched) copy instead of the host's own, an
+ABI-mismatched symbol lookup there is just as capable of silently
+breaking Vulkan WSI support as a bundled `libvulkan.so.1` would have
+been. Extended `_is_never_bundle_library()` to cover these three too,
+for the identical reason as the rest of the list: they must always
+match the host's live Wayland compositor/client ecosystem, never a
+build machine's.
+
 **Verified:** the exclusion logic itself, directly -- confirmed
 `libvulkan.so.1`/`libGL.so.1`/`libEGL.so.1`/`libdrm.so.2`/
-`libdrm_amdgpu.so.1`/`libgbm.so.1` are all now correctly excluded while
-ordinary libraries (X11, dbus, turbojpeg, etc.) still bundle normally,
-both via direct unit-level calls to `_is_never_bundle_library()` and by
-running the real `bundle_library_dependencies()` function against this
-project's own real, freshly-built `dualdeck-host-service` binary and
-confirming none of the newly-excluded names appear in its output.
-`bash -n` clean.
+`libdrm_amdgpu.so.1`/`libgbm.so.1`/`libwayland-client.so.0`/
+`libwayland-egl.so.1`/`libwayland-cursor.so.0` are all now correctly
+excluded while ordinary libraries (X11, dbus, turbojpeg, etc.) still
+bundle normally, both via direct unit-level calls to
+`_is_never_bundle_library()` and by running the real
+`bundle_library_dependencies()` function against this project's own
+real, freshly-built `dualdeck-host-service` binary (whose own
+dependency closure is unaffected by any of these exclusions, confirmed
+identical before and after) and confirming none of the newly-excluded
+names appear in its output. `bash -n` clean.
 
 **Not yet verified:** on real Bazzite hardware -- whether Cemu's Vulkan
 (and OpenGL, which crashed outright per the user's earlier report)
