@@ -277,8 +277,30 @@ bootstrap_melonds_flatpak_launcher() {
         log "melonds: launcher redirect refused, expected line not found"
         return 1
     fi
-    sed -i -E "s|^exec flatpak run net\.kuribo64\.melonDS.*|exec \"${new_appimage_path}\" \"\\\$@\"|" \
+    sed -i -E "s|^.*flatpak run net\.kuribo64\.melonDS.*|exec \"${new_appimage_path}\" \"\\\$@\"|" \
         "${flatpak_launcher}"
+
+    # Real bug: sed -i exits 0 even when its pattern matches nothing --
+    # the grep check above only proves the *original* file contained the
+    # expected substring, not that the anchored sed pattern (which used
+    # to require the line to start with exactly "exec flatpak run", now
+    # loosened to "anything...flatpak run" above for the same reason)
+    # actually matched and rewrote it. Without this check, a launcher
+    # format this pattern doesn't quite match would silently do nothing
+    # while the rest of this function still reported success and counted
+    # melonds as installed -- exactly indistinguishable, from the user's
+    # side, from a real install (EmuDeck's Steam shortcut keeps launching
+    # the untouched, still-Flatpak, still-completely-stock melonDS, with
+    # no DualDeck patch, no remote-server toggle, nothing). Verify the
+    # rewrite actually landed before reporting success at all.
+    if grep -q "flatpak run net\.kuribo64\.melonDS" "${flatpak_launcher}"; then
+        echo "error: melonds: rewriting ${flatpak_launcher} to exec the patched AppImage" >&2
+        echo "didn't take effect (the flatpak run line is still present after the rewrite" >&2
+        echo "attempt) -- EmuDeck's launcher format doesn't match what this script expects." >&2
+        echo "Not reporting success; the original is still backed up at ${launcher_backup}." >&2
+        log "melonds: launcher redirect verification failed after sed"
+        return 1
+    fi
 
     # There is no real "original AppImage" here to preserve a hash of --
     # the actual original was a Flatpak install, never touched by this

@@ -10121,6 +10121,62 @@ DMA-BUF would have nothing left to negotiate at all, degrading to the
 same "no frame, falls back to X11" symptom for a different reason --
 undistinguishable from this same machine without a real test).
 
+## 2026-08-03: "Patch my emulators" reported melonDS success, but it's still stock -- a possible silent no-op in the Flatpak launcher rewrite
+
+Real user report: after using the "Patch my EmuDeck-installed emulators"
+menu option, which printed a success message for melonDS specifically,
+melonDS still shows no DualDeck integration toggle and doesn't host a
+server at all -- indistinguishable from a completely untouched install.
+
+Found a real gap via direct code reading in
+`bootstrap_melonds_flatpak_launcher()` (the path taken when EmuDeck
+installs melonDS as a Flatpak rather than an AppImage --
+`find_emudeck_melonds_flatpak_launcher()`'s own comment already
+documents this as a real, confirmed EmuDeck install shape): the
+function's own refusal check (`grep -q "flatpak run net\.kuribo64\.
+melonDS"`) is looser than the `sed -i` pattern that actually rewrote the
+line (previously anchored to require the line start with exactly `exec
+flatpak run net.kuribo64.melonDS`). `sed -i` exits 0 even when its
+pattern matches zero lines -- so any real-world `melonds.sh` variant the
+grep check accepted but the stricter sed pattern didn't quite match
+(different leading whitespace, no leading `exec`, wrapped in
+`flatpak-spawn`, etc.) would silently do nothing to the file while the
+function still printed its "installed" success message and counted
+melonds as patched. The result is exactly the report: EmuDeck's Steam
+shortcut keeps launching the real, still-Flatpak, still-completely-stock
+melonDS every time, with no DualDeck patch and no toggle, while the tool
+insists it succeeded.
+
+This has not been confirmed as the actual cause on the reporting user's
+machine specifically (EmuDeck's own background emulator auto-updater
+silently reverting an otherwise-successful patch, a risk this feature's
+own design already flagged and `emudeck-check-drift.sh` exists to catch,
+remains an equally plausible alternate explanation that a real install
+would need to rule in or out) -- but it is a real, independently
+confirmed gap in the tool's own success reporting either way.
+
+**Fix:** loosened the `sed` pattern to match the same substring the
+grep check already validates (`.*flatpak run net\.kuribo64\.melonDS.*`,
+not anchored to a specific prefix), replacing the whole line rather than
+requiring an exact `^exec ` prefix. Added a post-rewrite verification
+that re-checks for the flatpak line's absence before reporting success
+at all -- if the rewrite didn't actually take effect for any reason, this
+now refuses with a loud, specific error instead of silently claiming
+success.
+
+**Verified:** manual `sed` testing against four plausible real-world
+`melonds.sh` line variants (the previously-confirmed exact format, with
+leading whitespace, without a leading `exec`, and wrapped in
+`flatpak-spawn`) -- all four now correctly rewrite to the patched
+AppImage's exec line. `bash -n` clean on the modified script.
+
+**Not yet verified:** against this user's actual `melonds.sh` (or
+whether their melonDS install is a Flatpak at all, versus a regular
+AppImage that took the normal replace-in-place path instead) -- the
+next real diagnostic step is checking that file's contents directly, or
+re-running `emudeck-check-drift.sh` to rule the EmuDeck-auto-update-race
+explanation in or out.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
