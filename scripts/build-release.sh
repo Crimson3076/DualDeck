@@ -1319,11 +1319,24 @@ ensure_packages "azahar runtime" \
     "qt6-base vulkan-icd-loader sdl2 openal-soft boost-libs" \
     || echo "warning: could not verify/install Azahar runtime libraries automatically; see docs/troubleshooting.md" >&2
 
+# Real user report, 2026-08-03: "Azahar now does not open fully, it
+# opens as a background process, but does not render a window." Root
+# cause: this script used to run azahar directly against Bazzite's own
+# minimal base image (see this comment's own former text, now removed --
+# "Azahar's Distrobox launch path isn't built yet"), which doesn't ship
+# Qt6 -- unlike Cemu's GTK3/Vulkan/PulseAudio deps, which a gaming-
+# focused base image is far more likely to already have. Qt6 silently
+# falling back to a non-visible platform when it can't find a real
+# xcb/wayland platform plugin (the exact same failure mode already fixed
+# for the AppImage path via bundled Qt platform plugins, see
+# apprun_templates.sh) is exactly "process alive, no window." Fixed by
+# routing through the same "dualdeck-host" Distrobox container
+# install-host-distrobox.sh already creates/provisions for melonDS
+# (confirmed to already carry qt6-qtbase-devel and friends) -- see
+# on_immutable_system below.
+on_immutable_system=0
 if [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1; then
-    echo "Note: this looks like an immutable (rpm-ostree) system, e.g. Bazzite -- Azahar's" >&2
-    echo "Distrobox launch path isn't built yet (see docs/known-limitations.md's" >&2
-    echo "AzaharAdapter entry), so this may fail if a required library isn't already" >&2
-    echo "present on the base image." >&2
+    on_immutable_system=1
 fi
 
 if [[ ! -x "${host_root}/internal/dualdeck-host-service" ]]; then
@@ -1392,7 +1405,37 @@ export AZAHAR_REMOTE_ADAPTER_SOCKET="${adapter_socket}"
 # cosmetic: dialogs render in Qt's own style instead of matching the
 # desktop's native GTK theme.
 export QT_QPA_PLATFORMTHEME=""
-"${host_root}/azahar" "$@"
+
+if [[ "${on_immutable_system}" -eq 1 ]]; then
+    container_name="dualdeck-host"
+    if ! command -v distrobox >/dev/null 2>&1 || ! distrobox list 2>/dev/null | grep -qw "${container_name}"; then
+        echo "error: this looks like an immutable (rpm-ostree) system, e.g. Bazzite, but the" >&2
+        echo "\"${container_name}\" Distrobox container Azahar needs (for Qt6, which Bazzite's" >&2
+        echo "own base image doesn't ship) doesn't exist yet. Launch melonDS at least once" >&2
+        echo "first (../dualdeck-host.sh -> DS/melonDS), which creates and provisions it --" >&2
+        echo "or run internal/install-host-distrobox.sh --install-only directly." >&2
+        exit 1
+    fi
+    # Distrobox forwards DISPLAY/WAYLAND_DISPLAY/XDG_RUNTIME_DIR and
+    # mounts $HOME automatically (its whole point) -- host_root/
+    # adapter_socket are both under $HOME, so no path translation is
+    # needed. Explicit `env` (not relying on distrobox enter inheriting
+    # this script's own exported vars into the container) since that's
+    # not guaranteed for arbitrary non-XDG env vars, matching
+    # install-host-distrobox.sh's own identical `env` pattern for
+    # melonDS. Deliberately NOT exec'd -- same reason as the
+    # HOST_SERVICE_PID trap set above: this shell needs to still be
+    # alive to run that cleanup trap once Azahar (running inside the
+    # container) actually exits.
+    distrobox enter "${container_name}" -- env \
+        "AZAHAR_REMOTE_ENABLE=1" \
+        "AZAHAR_REMOTE_ADAPTER_SOCKET=${adapter_socket}" \
+        "AZAHAR_REMOTE_VERSION=${AZAHAR_REMOTE_VERSION}" \
+        "QT_QPA_PLATFORMTHEME=" \
+        "${host_root}/azahar" "$@"
+else
+    "${host_root}/azahar" "$@"
+fi
 WRAP
 chmod +x "${pkg_dir}/host/internal/run-host-azahar.sh"
 

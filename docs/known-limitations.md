@@ -9566,6 +9566,68 @@ UpdateTriggered` reject reason and that `selfUpdateCommand` actually
 fires. Full host test suite (97 cases, all passing) and a clean local
 build of `dualdeck-host-service`.
 
+## 2026-08-03: Azahar "opens as a background process, but does not render a window" on Bazzite -- the already-flagged missing Distrobox launch path
+
+**Real user report:** "Azahar now does not open fully, it opens as a
+background process, but does not render a window."
+
+**Root cause:** `run-host-azahar.sh` already carried an explicit,
+honest warning for exactly this situation -- "this looks like an
+immutable (rpm-ostree) system, e.g. Bazzite -- Azahar's Distrobox launch
+path isn't built yet... so this may fail if a required library isn't
+already present on the base image" -- and then ran the Azahar binary
+directly against Bazzite's own minimal base image regardless. Unlike
+Cemu (GTK3/Vulkan/PulseAudio -- much more likely to already be present
+on a gaming-focused base image), Azahar needs Qt6, which Bazzite doesn't
+ship. When Qt6 can't find a real xcb/wayland platform plugin, it
+silently falls back to a non-visible platform rather than crashing
+loudly -- the exact same failure mode already fixed for the AppImage
+path via bundled Qt platform plugins (see `apprun_templates.sh`), just
+never fixed for this native launch path. "Process alive, no window" is
+exactly what that produces.
+
+**Fix:** `run-host-azahar.sh` now routes through the same
+`"dualdeck-host"` Distrobox container `install-host-distrobox.sh`
+already creates and provisions for melonDS on immutable systems --
+confirmed to already carry `qt6-qtbase-devel`/`qt6-qtbase-private-devel`/
+`qt6-qtmultimedia-devel`/`qt6-qtsvg-devel` and friends, so no new
+container or package list was needed, just wiring Azahar's launch
+through it. Distrobox forwards `DISPLAY`/`WAYLAND_DISPLAY`/
+`XDG_RUNTIME_DIR` and mounts `$HOME` automatically; the DualDeck-specific
+env vars (`AZAHAR_REMOTE_ENABLE`, etc.) are passed explicitly via
+`env` inside the `distrobox enter` call, matching
+`install-host-distrobox.sh`'s own identical pattern for melonDS, rather
+than assuming Distrobox forwards arbitrary non-XDG env vars (it doesn't
+promise to). Deliberately *not* `exec`'d -- same reason this script's
+own `HOST_SERVICE_PID` cleanup trap comment already gives: the shell
+needs to stay alive to run that trap once Azahar (now running inside the
+container) actually exits. If the container doesn't exist yet (melonDS
+has never been launched on this machine), this now fails with a clear,
+actionable message instead of silently running against the bare host --
+directing the user to launch melonDS once first, or run
+`install-host-distrobox.sh --install-only` directly, rather than
+duplicating that script's own container-creation/package-install logic
+a second time here.
+
+Cemu's own identical warning/direct-launch pattern is left unchanged for
+now -- no user report suggests its window-rendering is actually broken
+(the user could open and interact with its Controller Settings), and
+wrapping it in the same container without first confirming its own
+runtime deps (GTK3/Vulkan/PulseAudio/libsecret/bluez/libgcrypt/libusb --
+none of which are in the container's current package list, only
+melonDS's Qt6/SDL2/X11/Wayland set) are actually present there risks
+introducing a *new* problem rather than fixing a confirmed one.
+
+**Verified:** `bash -n` clean on both `build-release.sh` itself and the
+extracted, generated `run-host-azahar.sh` body.
+
+**Not yet verified:** on real Bazzite hardware -- whether Azahar now
+actually renders its window once launched through the container, and
+whether the container's existing package set is sufficient (it was
+provisioned for melonDS, not audited specifically against Azahar's own
+`ensure_packages()` list of `qt6-base-dev`/`libvulkan1`/`libsdl2-2.0-0`/
+`libopenal1`/`libboost-iostreams`/`libboost-thread`).
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
