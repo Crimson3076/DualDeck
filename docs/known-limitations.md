@@ -10314,6 +10314,70 @@ already avoids ever triggering this path).
 user's own already-discovered fix); or don't run the persistent daemon
 at all if melonDS is the primary way this host gets used.
 
+## 2026-08-03: Wayland screen-mirror still failing after both structural fixes -- PipeWire's own SPA plugin search path was wrong, unrelated to either
+
+Real user report, with `PIPEWIRE_DEBUG=3` output that gave a definitive
+answer instead of another guess:
+
+```
+[E] pw.loop [loop.c:67 pw_loop_new()] can't make support.system handle: No such file or directory
+```
+
+This happens at PipeWire's own `pw_loop_new()`, called from
+`pw_thread_loop_new()` -- *before* either of the day's two earlier
+structural fixes (format negotiation, DMA-BUF exclusion) ever get a
+chance to matter at all. Root cause: `dualdeck-host-service` is built
+once in CI (an Ubuntu `ubuntu-latest` runner) and dynamically links that
+machine's `libpipewire`. PipeWire's own SPA (Simple Plugin API) modules
+-- "support.system" among them, a foundational module `pw_loop_new()`
+needs just to create an event loop at all -- are themselves separate,
+`dlopen()`'d `.so` files, found via `SPA_PLUGIN_DIR`, a path baked into
+`libpipewire`'s own compiled defaults at *PipeWire's* build time. That
+default points at wherever Ubuntu's PipeWire package puts its modules
+(`/usr/lib/x86_64-linux-gnu/spa-0.2`) -- a path that doesn't exist on
+Bazzite (Fedora-based, `/usr/lib64/spa-0.2` instead). Same root shape as
+the already-fixed Qt-platform-plugin and QtMultimedia-plugin bugs (a
+dlopen()'d component with its own non-`ldd`-visible search path), but
+this is the first instance of it for PipeWire specifically, and it
+happens too early for either of today's earlier WaylandScreenCapture
+fixes to be reachable at all -- explaining why neither one changed the
+symptom.
+
+**Fix, deliberately different in kind from the Qt-plugin fixes:** rather
+than bundling DualDeck's own copy of PipeWire's SPA modules into the
+release build (the same reasoning `bundle_library_dependencies()`
+already documents for never bundling glibc itself applies here just as
+strongly -- SPA plugins and PipeWire's own loadable modules are tightly
+version-coupled to the exact PipeWire *daemon* actually running on a
+given host, not portable the way an ordinary linked library is), new
+`scripts/lib/pipewire_env.sh` detects the host's own real installed
+paths at actual launch time (checking Fedora/Debian/Arch's differing
+`spa-0.2`/`pipewire-0.3` layout conventions, mirroring
+`find_qt6_plugins_dir()`'s own detection style) and exports
+`SPA_PLUGIN_DIR`/`PIPEWIRE_MODULE_DIR` to point at whichever one
+actually exists on *this* machine. Sourced from both real Host Control
+launch paths that can reach `WaylandScreenCapture`:
+`host-control-daemon.sh` (the persistent daemon) and `run-host.sh`'s
+manual `DUALDECK_HOST_CONTROL=1` branch. Best-effort and non-fatal: if
+neither candidate path exists, both env vars stay unset and PipeWire
+degrades exactly the way it already did before this fix (X11 fallback,
+then mirroring simply disabled) -- nothing is worse off than before for
+a host this detection doesn't recognize.
+
+**Verified:** `bash -n` clean on `build-release.sh` and the new lib file;
+extracted and syntax-checked both generated heredoc bodies
+(`host-control-daemon.sh`, `run-host.sh`) directly, confirming the
+`source`/function-call lines land correctly in each; ran
+`find_and_export_pipewire_dirs` directly in this sandbox (Debian/Ubuntu-
+based) and confirmed it correctly detects and exports both real system
+paths. Full local `ctest` run (6 suites) passes with no regressions.
+
+**Not yet verified:** on the actual affected Bazzite machine -- whether
+`/usr/lib64/spa-0.2` is genuinely where Bazzite keeps these (a
+reasonable, standard Fedora convention, but not directly confirmed
+against this specific host), and whether screen mirroring actually
+produces real video once PipeWire itself can initialize.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

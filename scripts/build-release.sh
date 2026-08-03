@@ -440,6 +440,7 @@ cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/host/internal/steam_
 cp "${repo_root}/scripts/lib/steam_restart_helper.sh" "${pkg_dir}/host/internal/steam_restart_helper.sh"
 cp "${repo_root}/scripts/lib/host_firewall.sh" "${pkg_dir}/host/internal/host_firewall.sh"
 cp "${repo_root}/scripts/lib/adapter_socket_probe.sh" "${pkg_dir}/host/internal/adapter_socket_probe.sh"
+cp "${repo_root}/scripts/lib/pipewire_env.sh" "${pkg_dir}/host/internal/pipewire_env.sh"
 
 cp "${repo_build}/client/dualdeck-client" "${pkg_dir}/client/dualdeck-client"
 chmod +x "${pkg_dir}/client/dualdeck-client"
@@ -1270,6 +1271,12 @@ if [[ "${DUALDECK_HOST_CONTROL:-0}" == "1" ]]; then
     echo "whenever you're ready to play something -- see this script's own" >&2
     echo "header comment for why that starts a separate session rather than" >&2
     echo "taking over this one (yet)." >&2
+    # See host-control-daemon.sh's identical fix (pipewire_env.sh's own
+    # comment has the full story) -- this manual Host-Control session can
+    # also try to mirror the screen via PipeWire, so it needs the same fix.
+    # shellcheck source=scripts/lib/pipewire_env.sh
+    source ./pipewire_env.sh
+    find_and_export_pipewire_dirs
     # See build-release.sh's bundle_library_dependencies() call for this
     # binary -- host/internal/lib ships its runtime deps (libturbojpeg)
     # so it runs on any host regardless of whether that library happens
@@ -2167,6 +2174,19 @@ fi
 # here is safe regardless of whether device-approval or static-token
 # mode ends up active.
 self_update_args=(--self-update "${host_root}/internal/apply-update.sh")
+
+# Real user report, 2026-08-03 (Bazzite, PIPEWIRE_DEBUG=3): "can't make
+# support.system handle: No such file or directory" -- dualdeck-host-
+# service's linked libpipewire (built on an Ubuntu CI runner) has its own
+# SPA plugin search path baked in at PipeWire's own build time, pointing
+# at Ubuntu's layout, which doesn't exist on Fedora-based hosts like
+# Bazzite -- so WaylandScreenCapture's PipeWire client never even got as
+# far as this project's own format/buffer negotiation code. See
+# pipewire_env.sh's own comment for why this points at the host's own
+# installed PipeWire instead of bundling DualDeck's own copies.
+# shellcheck source=scripts/lib/pipewire_env.sh
+source ./pipewire_env.sh
+find_and_export_pipewire_dirs
 
 # See build-release.sh's bundle_library_dependencies() call for this
 # binary -- host/internal/lib ships its runtime deps (libturbojpeg) so
