@@ -1792,8 +1792,8 @@ int main(int argc, char** argv) {
         // adapter_contract.h's SurfaceFrame comment -- so the correct size
         // may only become known partway through a connection, not at its
         // start).
-        auto resizeTextureIfNeeded = [&](int newWidth, int newHeight) {
-            if (newWidth == textureWidth && newHeight == textureHeight) return;
+        auto resizeTextureIfNeeded = [&](int newWidth, int newHeight, bool force = false) {
+            if (!force && newWidth == textureWidth && newHeight == textureHeight) return;
             SDL_DestroyTexture(texture);
             texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGRA32,
                                          SDL_TEXTUREACCESS_STREAMING, newWidth, newHeight);
@@ -2351,6 +2351,40 @@ int main(int argc, char** argv) {
                                 menuActive = false; // back/cancel, no action taken
                             }
                         }
+                        break;
+                    // Real bug report: entering or leaving Steam's Gaming
+                    // Mode (a full gamescope compositor switch, on the Deck
+                    // or a Gaming-Mode-launched host) left the video frozen
+                    // on whatever frame was last shown before the switch,
+                    // in both directions, despite controls (a separate
+                    // send-only path, unaffected) continuing to work. SDL3
+                    // fires SDL_EVENT_RENDER_DEVICE_RESET/_TARGETS_RESET
+                    // precisely when the underlying GPU device/surface a
+                    // renderer's textures were allocated against has been
+                    // invalidated and "all textures need to be recreated"
+                    // (SDL_events.h) -- exactly what a compositor mode
+                    // switch can do to a window's surface, and something
+                    // this client never listened for at all: the old
+                    // texture object kept being fed new pixels via
+                    // SDL_UpdateTexture every frame, but a texture backed by
+                    // an invalidated device can silently stop actually
+                    // presenting those updates, leaving the last
+                    // successfully-presented frame stuck on screen forever
+                    // (net.getLatestFrame() itself is unaffected -- it's fed
+                    // by the network/decode thread, not the renderer, which
+                    // is exactly why controls and the underlying connection
+                    // were never actually broken). Forcing a same-size
+                    // recreation (bypassing resizeTextureIfNeeded's normal
+                    // no-op-if-unchanged check) gets a fresh texture object
+                    // bound to the now-current device/surface; the very next
+                    // loop iteration's ordinary SDL_UpdateTexture call
+                    // repopulates it with the latest already-buffered frame,
+                    // no reconnect or frame redelivery needed.
+                    case SDL_EVENT_RENDER_TARGETS_RESET:
+                    case SDL_EVENT_RENDER_DEVICE_RESET:
+                        logLine("[video] SDL render device reset (event=%d) -- recreating video texture\n",
+                                static_cast<int>(event.type));
+                        resizeTextureIfNeeded(textureWidth, textureHeight, /*force=*/true);
                         break;
                     default:
                         break;

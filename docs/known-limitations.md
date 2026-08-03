@@ -7652,6 +7652,69 @@ change).
 diagnostic step needed before another guess is worth making; the client
 log from a real re-test is the next thing to look at.
 
+## 2026-08-03: Screen mirroring freezes when entering/leaving Steam Gaming Mode -- client never handled SDL's render-device-reset event
+
+Real user report: "Screen mirroring does not work in Steam's Gaming mode,
+when entering, the last frame from desktop mode persists on the client,
+and when switching back to desktop mode, it still does not 'refresh' or
+update the image that is being sent, despite controls working fine."
+
+**Root cause.** `client/src/main.cpp` creates a single `SDL_Texture*
+texture` once at startup and only ever recreates it via
+`resizeTextureIfNeeded()`, which is a deliberate no-op whenever the
+requested dimensions already match -- correct for its actual purpose
+(picking up a new host's differently-sized video), but it means nothing
+in this client ever recreates the texture just because the underlying
+*device* changed, only because the *size* changed. A full gamescope
+compositor switch -- entering or leaving Steam's Gaming Mode, on the
+Deck itself or on a Gaming-Mode-launched host -- is exactly the kind of
+event that can invalidate the GPU device/surface a renderer's textures
+were allocated against. SDL3 has a purpose-built event for precisely
+this (`SDL_events.h`): `SDL_EVENT_RENDER_DEVICE_RESET`, documented as
+"the device has been reset and all textures need to be recreated," plus
+`SDL_EVENT_RENDER_TARGETS_RESET`. This client never listened for either
+one -- confirmed via direct inspection, zero references anywhere in
+`client/src/main.cpp` before this fix. The existing per-frame
+`SDL_UpdateTexture` call kept writing new pixel data into the same
+texture object every loop iteration regardless, but a texture backed by
+an invalidated device can silently stop actually presenting those
+writes -- explaining both the "frozen on the last desktop-mode frame
+after entering Gaming Mode" and "still frozen after switching back"
+halves of the report as the same underlying cause, and why controls
+kept working throughout (`net.sendControllerState()`/
+`net.getLatestFrame()` are fed by the network/decode thread, entirely
+independent of the renderer's own device state).
+
+**Fix.** `resizeTextureIfNeeded()` gained a `force` parameter
+(default `false`, preserving its existing no-op-if-unchanged behavior
+everywhere else it's already called) that skips the dimension-equality
+check. The main connected-session event loop now handles
+`SDL_EVENT_RENDER_DEVICE_RESET`/`SDL_EVENT_RENDER_TARGETS_RESET` by
+calling `resizeTextureIfNeeded(textureWidth, textureHeight,
+/*force=*/true)` -- destroying and recreating the texture at its
+current dimensions the instant SDL reports the device was reset. No
+reconnect, frame redelivery, or network-level recovery is needed: the
+very next loop iteration's ordinary `SDL_UpdateTexture` call
+repopulates the fresh texture with whatever frame the network thread
+already has buffered.
+
+**Verified:** clean rebuild of `dualdeck-client` (zero warnings), full
+`ctest` suite passes unchanged (this is client-render-loop-only logic
+with no unit-test coverage of SDL's own event/rendering behavior, same
+as the rest of this file's SDL-level code). **Not verified against real
+hardware**: this sandbox cannot run a real SDL3 window through an actual
+gamescope Gaming Mode transition, so whether SDL genuinely fires
+`SDL_EVENT_RENDER_DEVICE_RESET` for this specific transition on Steam
+Deck/Bazzite (rather than some other event, or none at all) is inferred
+from SDL's own documented semantics and the exact shape of the reported
+symptom, not observed directly. If the freeze persists after this fix
+ships, the next real diagnostic step is checking the client's own log
+file (`~/.config/dualdeck-client/client.log`) for the new "`[video] SDL
+render device reset`" line during a real Gaming-Mode transition -- its
+absence would mean SDL isn't firing either event for this transition at
+all, pointing at a different mechanism (e.g. a window
+occlusion/minimize event instead, which this fix does not handle).
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
