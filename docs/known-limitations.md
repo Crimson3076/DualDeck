@@ -8105,6 +8105,46 @@ rebuilt clean afterward (same from-source SDL3, zero warnings).
 now actually resolve on real hardware once the toggle itself works --
 still the next real test now that the toggle isn't silently a no-op.
 
+### Third follow-up, same day: enabling it from in-app "seemingly crashe[d] Steam and restart[ed] it"
+
+Real user report, right after the path fix above landed: enabling the
+experiment from the Settings screen "seemingly crashes Steam and
+restarts it." Not a misread -- `configure-trackpad-experiment.sh`
+routes writes through `run_steam_shortcut_with_restart`
+(`steam_restart_helper.sh`), which runs `steam -shutdown`, waits for it
+to quit, retries the write, then relaunches Steam whenever the target
+file is in use. That's the right, deliberate behavior for
+`dualdeck-client.sh`'s own standalone menu -- run in Desktop Mode,
+before anything is launched, on a controller-only setup with no other
+way to reopen a closed Steam (see that helper's own original 2026-07-31
+entry). It is *not* the right behavior triggered from inside the
+Settings screen: the client is normally itself a Steam-launched process
+in Gaming Mode, so killing Steam out from under the game it's actively
+running is jarring at best -- and since Steam effectively *is* the
+Gaming Mode session on a real Deck, risks tearing down more than just
+Steam, which plausibly is what actually looked like a "crash."
+
+**Fixed** with a new `--no-restart` mode on
+`configure-trackpad-experiment.sh`: writes with `--force` instead (the
+same accepted "Steam's in-memory cache could overwrite this on its next
+save" tradeoff `steam_shortcut.py`'s own `--force` already carries, not
+a new risk category) and tells the user to restart Steam themselves
+whenever's convenient, rather than doing it automatically. `main.cpp`'s
+Settings-screen calls now always pass `--no-restart`;
+`dualdeck-client.sh`'s own menu doesn't, so its existing auto-restart
+convenience is unchanged there.
+
+**Verified:** a fake `steam` binary confirmed it's genuinely never
+invoked when `--no-restart` is passed (the file still gets written
+correctly even with a simulated "Steam is running" state), and that
+omitting the flag still triggers the exact same auto-restart sequence
+as before, unchanged, for `dualdeck-client.sh`'s own call. Client
+rebuilt clean again afterward.
+
+**Not yet verified:** on real hardware -- whether a manual Steam restart
+after this reliably picks up the change, and whether the touchpad and
+host-control mouse cap finally resolve once it does.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

@@ -1252,10 +1252,14 @@ WizardSimpleResult wizardTouchTest(SDL_Renderer* renderer, SDL_Gamepad*& gamepad
 // Blocking (popen() waits for the child to exit) -- acceptable here
 // since this only ever runs in direct response to a menu selection
 // (never per-frame; see settingsMenuItems()'s own comment on why the
-// *status* query is cached, not re-run every frame), and
-// configure-trackpad-experiment.sh's own Steam-restart handoff is
-// itself non-blocking (hands off to a detached background process and
-// returns immediately -- see steam_restart_helper.sh's own comment).
+// *status* query is cached, not re-run every frame). Toggle calls below
+// always pass --no-restart: real user report, 2026-08-02, triggering
+// configure-trackpad-experiment.sh's normal Steam-restart handoff from
+// in here (this client is normally itself a Steam-launched process in
+// Gaming Mode) "seemingly crashe[d] Steam and restart[ed] it" -- killing
+// Steam out from under the game it's actively running it, rather than
+// something a standalone Desktop Mode menu action does before anything
+// is even launched. See that script's own comment on --no-restart.
 // Returns the child's stdout with trailing newlines stripped, or an
 // empty string if the command couldn't even be started (matching this
 // codebase's "degrade gracefully, log once, never crash" convention for
@@ -1948,13 +1952,18 @@ int main(int argc, char** argv) {
                 runCaptureStdout("./configure-trackpad-experiment.sh --status 2>/dev/null") == "disabled";
         };
         auto toggleTrackpadExperiment = [&]() {
-            runCaptureStdout(trackpadExperimentEnabled ? "./configure-trackpad-experiment.sh --remove 2>&1"
-                                                         : "./configure-trackpad-experiment.sh 2>&1");
+            // --no-restart: see runCaptureStdout's own comment -- never
+            // let this trigger Steam restarting itself while this
+            // client is running as a live Steam-launched process.
+            runCaptureStdout(trackpadExperimentEnabled
+                                  ? "./configure-trackpad-experiment.sh --remove --no-restart 2>&1"
+                                  : "./configure-trackpad-experiment.sh --no-restart 2>&1");
             // Re-queries rather than just flipping the cached bool --
-            // the underlying script can legitimately no-op (e.g. Steam
-            // still running and the auto-restart handoff hasn't finished
-            // yet), so the label should reflect what's actually on disk,
-            // not what was merely requested.
+            // the underlying script writes with --force in --no-restart
+            // mode (see its own comment), so this should reliably
+            // reflect the just-requested state, but re-checking what's
+            // actually on disk is still cheap and more honest than
+            // assuming.
             refreshTrackpadExperimentStatus();
         };
         auto settingsMenuItems = [&]() {
