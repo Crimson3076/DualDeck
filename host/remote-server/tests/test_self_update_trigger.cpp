@@ -143,6 +143,69 @@ bool handshakeAndGetAck(uint16_t controlPort, const std::string& deviceId, const
     return true;
 }
 
+// Same as handshakeAndGetAck() above, but sends a Hello with a header
+// protocolVersion of `wireVersion` instead of the live kProtocolVersion --
+// used to exercise the real-user-report fix (2026-08-03: "Client -> Host
+// update notifier seemingly broke in this version") where a genuine wire-
+// format bump used to short-circuit straight past the self-update-trigger
+// logic instead of reaching it. Builds the packet by hand (serializeHeader()
+// + serializeHelloPayload() directly) since buildHelloPacket() always
+// stamps the live kProtocolVersion.
+bool handshakeWithProtocolVersionAndGetAck(uint16_t controlPort, uint16_t wireVersion, const std::string& deviceId,
+                                            const std::string& appVersion, HelloAckPayload& outAck) {
+    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(controlPort);
+    ::inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+        ::close(fd);
+        return false;
+    }
+
+    HelloPayload hello;
+    hello.clientName = "test-client";
+    hello.clientPlatform = "linux";
+    hello.displayWidth = 1280;
+    hello.displayHeight = 800;
+    hello.authToken = deviceId;
+    hello.appVersion = appVersion;
+    ByteBuffer payload;
+    serializeHelloPayload(payload, hello);
+
+    PacketHeader header;
+    header.protocolVersion = wireVersion;
+    header.type = PacketType::Hello;
+    header.payloadSize = static_cast<uint32_t>(payload.size());
+    ByteBuffer packet;
+    serializeHeader(packet, header);
+    packet.insert(packet.end(), payload.begin(), payload.end());
+
+    bool ok = sendAllRaw(fd, packet.data(), packet.size());
+
+    uint8_t headerBuf[kPacketHeaderWireSize];
+    ok = ok && recvExactRaw(fd, headerBuf, sizeof(headerBuf));
+    if (!ok) {
+        ::close(fd);
+        return false;
+    }
+    auto respHeader = parseHeader(headerBuf, sizeof(headerBuf));
+    if (!respHeader || respHeader->type != PacketType::HelloAck) {
+        ::close(fd);
+        return false;
+    }
+    ByteBuffer body(respHeader->payloadSize);
+    if (!body.empty() && !recvExactRaw(fd, body.data(), body.size())) {
+        ::close(fd);
+        return false;
+    }
+    auto parsed = parseHelloAckPayload(body.data(), body.size());
+    ::close(fd);
+    if (!parsed) return false;
+    outAck = *parsed;
+    return true;
+}
+
 // Unique-per-call temp path under the OS temp dir -- no two tests in this
 // file share a marker or state file, so a leftover from one can't make
 // another spuriously pass.
@@ -243,6 +306,64 @@ MDR_TEST(approved_device_with_version_mismatch_triggers_self_update) {
 
     HelloAckPayload ack;
     MDR_CHECK(handshakeAndGetAck(config.controlPort, "device-abc", "v-client-old", ack));
+    MDR_CHECK(!ack.accepted);
+    MDR_CHECK(ack.rejectReason == HelloRejectReason::AppVersionMismatchUpdateTriggered);
+
+    MDR_CHECK(waitUntil([&] {
+        FILE* f = std::fopen(markerPath.c_str(), "r");
+        if (!f) return false;
+        std::fclose(f);
+        return true;
+    }));
+
+    server.stop();
+}
+
+// Real user report, 2026-08-03: "Client -> Host update notifier seemingly
+// broke in this version." Root cause: the handshake used to require
+// header->protocolVersion == kProtocolVersion just to attempt parsing
+// Hello at all, so a genuine wire-format bump (this same release's
+// protocol v12) short-circuited straight to the default
+// ProtocolVersionMismatch rejection, never reaching this feature's
+// version-mismatch/self-update-trigger logic. An already-approved device
+// presenting a *different protocol version* (not just a different
+// appVersion string) must still get AppVersionMismatchUpdateTriggered and
+// still fire the configured selfUpdateCommand.
+MDR_TEST(approved_device_with_protocol_version_mismatch_triggers_self_update) {
+    std::string statePath = uniqueTempPath("e2e_state_protover");
+    TempFileCleanup cleanupState{statePath};
+    std::string markerPath = uniqueTempPath("e2e_marker_protover");
+    TempFileCleanup cleanupMarker{markerPath};
+
+    {
+        DeviceApprovalManager preApproval(statePath);
+        preApproval.check("device-protover", "test-client", "127.0.0.1");
+        MDR_CHECK(preApproval.approve("device-protover"));
+    }
+
+    LoggingInputSink sink;
+    FakeFrameSource frameSource;
+    LoggingMicAudioSink micSink;
+    NetServerConfig config;
+    config.bindAddress = "127.0.0.1";
+    config.controlPort = freePort();
+    config.inputPort = freePort();
+    config.videoPort = freePort();
+    config.discoveryEnabled = false;
+    config.micSupported = false;
+    config.authToken = "";
+    config.approvalStateFilePath = statePath;
+    config.appVersion = "v-host";
+    config.selfUpdateCommand = "touch " + markerPath;
+
+    NetServer server(config, sink, frameSource, micSink);
+    server.start();
+    MDR_CHECK(server.isRunning());
+
+    HelloAckPayload ack;
+    MDR_CHECK(handshakeWithProtocolVersionAndGetAck(config.controlPort,
+                                                      static_cast<uint16_t>(kProtocolVersion - 1), "device-protover",
+                                                      "v-client-old", ack));
     MDR_CHECK(!ack.accepted);
     MDR_CHECK(ack.rejectReason == HelloRejectReason::AppVersionMismatchUpdateTriggered);
 

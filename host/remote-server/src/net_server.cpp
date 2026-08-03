@@ -484,9 +484,30 @@ void NetServer::controlLoop() {
         ssize_t n = ::recv(clientFd, headerBuf, sizeof(headerBuf), MSG_WAITALL);
         if (n == static_cast<ssize_t>(sizeof(headerBuf))) {
             auto header = parseHeader(headerBuf, sizeof(headerBuf));
-            if (header && header->type == PacketType::Hello &&
-                header->protocolVersion == kProtocolVersion &&
-                header->payloadSize <= kMaxHelloPayloadSize) {
+            // Real user report, 2026-08-03: "Client -> Host update
+            // notifier seemingly broke in this version." Root cause: this
+            // used to require header->protocolVersion == kProtocolVersion
+            // just to attempt parsing Hello at all -- meaning a genuine
+            // wire-format bump (like this same release's protocol v12,
+            // which grew ControllerState) short-circuited straight to the
+            // default ProtocolVersionMismatch rejection below, never
+            // reaching the appVersion-mismatch/self-update-trigger logic
+            // beneath it. That logic's whole point is "an already-
+            // approved device is running a different release than this
+            // host -- self-update," which is if anything *more* true, not
+            // less, when the two sides don't even agree on the wire
+            // format itself. HelloPayload's own byte layout is
+            // independent of kProtocolVersion (confirmed by reading
+            // parseHelloPayload() -- it's driven entirely by length-
+            // prefixed strings read from `data`/`size`, never consults
+            // the packet header), so it's safe to attempt parsing
+            // regardless of a version mismatch here; a genuinely
+            // incompatible future HelloPayload layout still fails safely
+            // via parseHelloPayload()'s own strict size/trailing-byte
+            // checks, landing in the existing "malformed Hello payload"
+            // branch below rather than misparsing.
+            bool protocolVersionMismatch = header && header->protocolVersion != kProtocolVersion;
+            if (header && header->type == PacketType::Hello && header->payloadSize <= kMaxHelloPayloadSize) {
                 ByteBuffer payloadBuf(header->payloadSize);
                 ssize_t got = header->payloadSize == 0
                                   ? 0
@@ -495,17 +516,31 @@ void NetServer::controlLoop() {
                     auto hello = parseHelloPayload(payloadBuf.data(), payloadBuf.size());
                     if (!hello) {
                         std::fprintf(stderr, "NetServer: rejecting handshake (malformed Hello payload)\n");
-                    } else if (!config_.appVersion.empty() && !hello->appVersion.empty() &&
-                               hello->appVersion != config_.appVersion) {
+                    } else if (protocolVersionMismatch ||
+                               (!config_.appVersion.empty() && !hello->appVersion.empty() &&
+                                hello->appVersion != config_.appVersion)) {
                         // Wire-format-compatible (same kProtocolVersion) but a
                         // different release -- checked before authentication so
                         // a stale client never even learns whether its stale
-                        // credentials would have worked.
-                        std::fprintf(stderr,
-                                      "NetServer: rejecting handshake from %s (app version mismatch: "
-                                      "host is %s, client is %s)\n",
-                                      ipStr, config_.appVersion.c_str(), hello->appVersion.c_str());
-                        rejectReason = HelloRejectReason::AppVersionMismatch;
+                        // credentials would have worked. A real protocol-
+                        // version mismatch (protocolVersionMismatch above)
+                        // takes the same path -- see this block's own
+                        // real-user-report comment above.
+                        if (protocolVersionMismatch) {
+                            std::fprintf(stderr,
+                                          "NetServer: rejecting handshake from %s (protocol version "
+                                          "mismatch: host is v%u (app %s), client is v%u (app %s))\n",
+                                          ipStr, static_cast<unsigned>(kProtocolVersion),
+                                          config_.appVersion.c_str(), static_cast<unsigned>(header->protocolVersion),
+                                          hello->appVersion.c_str());
+                        } else {
+                            std::fprintf(stderr,
+                                          "NetServer: rejecting handshake from %s (app version mismatch: "
+                                          "host is %s, client is %s)\n",
+                                          ipStr, config_.appVersion.c_str(), hello->appVersion.c_str());
+                        }
+                        rejectReason = protocolVersionMismatch ? HelloRejectReason::ProtocolVersionMismatch
+                                                                : HelloRejectReason::AppVersionMismatch;
                         // Real user request, 2026-08-03 (see
                         // NetServerConfig::selfUpdateCommand's own
                         // comment for the full design): only for a

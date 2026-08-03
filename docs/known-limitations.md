@@ -9516,6 +9516,56 @@ replace-in-place installer produced (check the sidecar
 `.dualdeck.json` manifest next to it) or something else entirely (a
 stock EmuDeck download, a manually-built copy, etc.).
 
+## 2026-08-03: Client-triggers-host-update notifier broke -- a self-inflicted regression from this same session's protocol v12 bump
+
+**Real user report:** "Client -> Host update notifier seemingly broke in
+this version."
+
+**Root cause:** `net_server.cpp`'s Hello-handling code required
+`header->protocolVersion == kProtocolVersion` just to attempt parsing the
+Hello payload at all -- if it didn't match, the whole block was skipped
+and the handshake fell through to the default `ProtocolVersionMismatch`
+rejection, never reaching the appVersion-mismatch/self-update-trigger
+logic beneath it (added earlier this same session, see the
+client-triggers-host-update entries above). This was harmless as long as
+`kProtocolVersion` stayed stable across releases (an app-version-only
+difference, same wire format, was the only mismatch case that could ever
+happen) -- but this same session's Host Control gamepad fix bumped
+`kProtocolVersion` from 11 to 12 (`ControllerState` grew 3 bytes for
+`leftTrigger`/`rightTrigger`/`extraButtons`). From that point on, an
+already-approved device on the old (pre-v12) client build hitting a
+freshly-updated (v12) host -- exactly the scenario this feature exists to
+recover from -- got silently rejected with plain `ProtocolVersionMismatch`
+instead of triggering a self-update, because the version mismatch was now
+at the *wire* level, not just the app-version level, and that path never
+even looked at the Hello payload.
+
+**Fix:** the `header->protocolVersion == kProtocolVersion` check moved out
+of the top-level gate (which now only requires `PacketType::Hello` and a
+sane `payloadSize`) into a `protocolVersionMismatch` flag checked
+alongside the existing appVersion-mismatch condition. `HelloPayload`'s own
+wire layout is independent of `kProtocolVersion` (confirmed by reading
+`parseHelloPayload()` -- purely length-prefixed strings read from
+`data`/`size`, never consults the packet header), so parsing it is safe
+regardless of a version mismatch; a genuinely incompatible future
+`HelloPayload` layout still fails safely via that function's own strict
+size/trailing-byte checks, landing in the existing "malformed Hello
+payload" branch rather than misparsing. A real protocol-version mismatch
+now takes the exact same already-approved-device-triggers-self-update path
+an app-version-only mismatch always did, since it's if anything a
+*stronger* signal that the host needs to update to match, not a weaker
+one.
+
+**Verified:** new end-to-end test
+(`approved_device_with_protocol_version_mismatch_triggers_self_update` in
+`test_self_update_trigger.cpp`) using a real `NetServer` over real
+loopback sockets and a hand-crafted Hello packet with a mismatched
+`protocolVersion` field in its header (since `buildHelloPacket()` always
+stamps the live version) -- confirms both the `AppVersionMismatch
+UpdateTriggered` reject reason and that `selfUpdateCommand` actually
+fires. Full host test suite (97 cases, all passing) and a clean local
+build of `dualdeck-host-service`.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
