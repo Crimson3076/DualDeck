@@ -108,13 +108,67 @@ MDR_TEST(translate_opposite_dpad_directions_does_not_crash_or_go_out_of_range) {
     MDR_CHECK(out.hatY == -1 || out.hatY == 1);
 }
 
-MDR_TEST(translate_left_stick_passes_through_unscaled) {
+// X passes through unscaled (both sides agree positive = right), but Y is
+// re-negated -- see translateControllerState()'s own comment: the wire's
+// leftStickY already has client/src/main.cpp's 3DS-circle-pad-convention
+// flip applied (positive = up), which must be undone here since this
+// feeds a uinput ABS_Y axis, where standard evdev/joystick convention is
+// positive = down. Real user report, 2026-08-03: "L joystick reads down
+// when going up" before this fix.
+MDR_TEST(translate_left_stick_x_passes_through_y_is_renegated) {
     ControllerState state;
     state.leftStickX = 12345;
     state.leftStickY = -6789;
     HostControlGamepadState out = translateControllerState(state);
     MDR_CHECK_EQ(out.leftStickX, static_cast<int16_t>(12345));
-    MDR_CHECK_EQ(out.leftStickY, static_cast<int16_t>(-6789));
+    MDR_CHECK_EQ(out.leftStickY, static_cast<int16_t>(6789));
+}
+
+MDR_TEST(translate_left_stick_y_negation_clamps_at_int16_min) {
+    // INT16_MIN negated overflows int16_t's range -- must clamp to
+    // INT16_MAX rather than wrap, matching client/src/main.cpp's own
+    // negateStickAxis() behavior at this same edge case.
+    ControllerState state;
+    state.leftStickY = INT16_MIN;
+    HostControlGamepadState out = translateControllerState(state);
+    MDR_CHECK_EQ(out.leftStickY, INT16_MAX);
+}
+
+// Same X-passthrough/Y-renegation rule as the left stick above applies to
+// the right stick.
+MDR_TEST(translate_right_stick_x_passes_through_y_is_renegated) {
+    ControllerState state;
+    state.rightStickX = -4321;
+    state.rightStickY = 8765;
+    HostControlGamepadState out = translateControllerState(state);
+    MDR_CHECK_EQ(out.rightStickX, static_cast<int16_t>(-4321));
+    MDR_CHECK_EQ(out.rightStickY, static_cast<int16_t>(-8765));
+}
+
+// Real user report (Steam Controller Tester), 2026-08-03: "Triggers do
+// not work. same with stick clicking" -- protocol v12 added
+// leftTrigger/rightTrigger/hostControlButtons specifically so Host
+// Control mode's virtual gamepad could report these.
+MDR_TEST(translate_triggers_pass_through_unscaled) {
+    ControllerState state;
+    state.leftTrigger = 128;
+    state.rightTrigger = 255;
+    HostControlGamepadState out = translateControllerState(state);
+    MDR_CHECK_EQ(out.leftTrigger, static_cast<uint8_t>(128));
+    MDR_CHECK_EQ(out.rightTrigger, static_cast<uint8_t>(255));
+}
+
+MDR_TEST(translate_thumb_clicks_from_host_control_buttons) {
+    ControllerState state;
+    state.hostControlButtons = HostControlButton_ThumbLeft;
+    HostControlGamepadState out = translateControllerState(state);
+    MDR_CHECK(out.thumbL);
+    MDR_CHECK(!out.thumbR);
+
+    state.hostControlButtons = HostControlButton_ThumbRight;
+    out = translateControllerState(state);
+    MDR_CHECK(!out.thumbL);
+    MDR_CHECK(out.thumbR);
 }
 
 MDR_TEST(translate_ignores_touch_and_emulator_actions) {

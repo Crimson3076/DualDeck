@@ -2715,6 +2715,36 @@ int main(int argc, char** argv) {
                     state.leftStickY = negateStickAxis(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY));
                     state.rightStickX = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTX);
                     state.rightStickY = negateStickAxis(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTY));
+
+                    // Host-control-mode-only (protocol v12): analog
+                    // triggers and thumbstick clicks -- no DS/3DS/Wii U
+                    // game reads these (see protocol.h's HostControlButton/
+                    // leftTrigger/rightTrigger comments), but
+                    // host::HostControlAdapter's virtual gamepad wants
+                    // them. Real user report, 2026-08-03 (Steam Controller
+                    // Tester): "bumpers register, but Triggers do not
+                    // work. same with stick clicking." SDL's trigger axes
+                    // are 0..32767 (unsigned, unlike the sticks' signed
+                    // range) -- scaled down to the wire's 0..255 range.
+                    state.leftTrigger = static_cast<uint8_t>(
+                        std::clamp(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER), int16_t{0},
+                                   int16_t{32767}) / 128);
+                    state.rightTrigger = static_cast<uint8_t>(
+                        std::clamp(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER), int16_t{0},
+                                   int16_t{32767}) / 128);
+                    // Individual clicks only -- the L3+R3 *combo* is still
+                    // reserved client-side for the menu chord (see
+                    // kMenuChordHoldUs's comment); a lone click of either
+                    // stick is never part of that chord and is safe to
+                    // forward every tick.
+                    uint8_t hostControlButtons = 0;
+                    if (SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_LEFT_STICK)) {
+                        hostControlButtons |= HostControlButton_ThumbLeft;
+                    }
+                    if (SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_RIGHT_STICK)) {
+                        hostControlButtons |= HostControlButton_ThumbRight;
+                    }
+                    state.hostControlButtons = hostControlButtons;
                 }
                 // See pendingEmulatorAction's declaration above for why this
                 // resends for a window instead of just the one packet that

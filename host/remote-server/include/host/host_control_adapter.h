@@ -58,9 +58,25 @@ struct HostControlGamepadState {
     int8_t hatY = 0; // -1 = up, 1 = down
     // Passed through unscaled from ControllerState -- both use the same
     // int16_t, centered-at-0 range, so no rescaling is needed to feed
-    // this straight into ABS_X/ABS_Y.
+    // this straight into ABS_X/ABS_Y (Y is re-negated first, see
+    // translateControllerState()'s own comment).
     int16_t leftStickX = 0;
     int16_t leftStickY = 0;
+    // Real user report (Steam Controller Tester), 2026-08-03: Host
+    // Control mode had no right stick, analog triggers, or thumbstick-
+    // click support at all -- "bumpers register, but Triggers do not
+    // work. same with stick clicking." rightStickX/Y were already on the
+    // wire (ControllerState) but never read here; leftTrigger/rightTrigger/
+    // thumb clicks needed a protocol v12 addition (see protocol.h's
+    // HostControlButton/leftTrigger/rightTrigger comments) since the DS/
+    // 3DS/Wii U devices this wire protocol was originally built for have
+    // neither.
+    int16_t rightStickX = 0;
+    int16_t rightStickY = 0;
+    uint8_t leftTrigger = 0;  // 0..255, straight from the wire
+    uint8_t rightTrigger = 0;
+    bool thumbL = false; // left stick click
+    bool thumbR = false; // right stick click
 };
 
 // Pure translation, no I/O -- see HostControlGamepadState's own comment.

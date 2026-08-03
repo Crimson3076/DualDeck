@@ -12,6 +12,14 @@
 
 namespace melonds_remote::host {
 
+// Plain `-axis` overflows int16_t's range at the negative extreme
+// (-(-32768) doesn't fit in 16 bits) -- same clamp-to-range technique as
+// client/src/main.cpp's own negateStickAxis(), duplicated here rather than
+// shared since the two live in entirely separate binaries/build targets.
+int16_t negateStickAxis(int16_t axis) {
+    return axis == INT16_MIN ? INT16_MAX : static_cast<int16_t>(-axis);
+}
+
 HostControlGamepadState translateControllerState(const ControllerState& state) {
     HostControlGamepadState out;
     out.south = (state.dsButtons & DSButton_A) != 0;
@@ -29,7 +37,34 @@ HostControlGamepadState translateControllerState(const ControllerState& state) {
     else if (state.dsButtons & DSButton_Down) out.hatY = 1;
 
     out.leftStickX = state.leftStickX;
-    out.leftStickY = state.leftStickY;
+    // Real user report (Steam Controller Tester), 2026-08-03: "L joystick
+    // reads down when going up." client/src/main.cpp's own
+    // negateStickAxis() call on leftStickY already flips SDL's raw
+    // positive-is-down convention to positive-is-up before this ever hits
+    // the wire, specifically to match the 3DS circle pad's
+    // GetStickDirectionState() convention (see that call site's own
+    // comment, confirmed by reading Azahar's hid.cpp directly) --
+    // correct for an emulated analog stick, but this ABS_Y axis feeds a
+    // literal uinput virtual Xbox-360-style gamepad, where the universal
+    // joystick/evdev/SDL convention is the opposite: positive Y = down.
+    // Passing the wire's already-inverted value straight through (as the
+    // old code here did, under the "both use the same centered-at-0
+    // range, so no rescaling is needed" assumption that's true for X but
+    // not for Y's sign) silently double-applies the flip for Host Control
+    // mode specifically, inverting every up/down motion Steam's own
+    // controller tester displays. Negated back here, undoing the wire's
+    // 3DS-oriented flip so this virtual gamepad's Y axis matches standard
+    // convention like every other field in this function already does.
+    out.leftStickY = negateStickAxis(state.leftStickY);
+    // Same Y-sign reasoning as leftStickY above applies identically to the
+    // right stick -- client/src/main.cpp negates rightStickY the same way
+    // it negates leftStickY, for the same 3DS-circle-pad-convention reason.
+    out.rightStickX = state.rightStickX;
+    out.rightStickY = negateStickAxis(state.rightStickY);
+    out.leftTrigger = state.leftTrigger;
+    out.rightTrigger = state.rightTrigger;
+    out.thumbL = (state.hostControlButtons & HostControlButton_ThumbLeft) != 0;
+    out.thumbR = (state.hostControlButtons & HostControlButton_ThumbRight) != 0;
     return out;
 }
 
@@ -75,11 +110,33 @@ struct ButtonMapping {
     int code;
 };
 
+// Real user report (Steam Controller Tester), 2026-08-03: "X and Y are
+// reversed during host control mode." Root cause: <linux/input-event-
+// codes.h> defines BTN_X as a plain alias for BTN_NORTH (0x133) and
+// BTN_Y as a plain alias for BTN_WEST (0x134) -- confirmed by reading
+// /usr/include/linux/input-event-codes.h directly, not assumed. A
+// Linux input device's button *index* (what SDL -- and Steam's
+// controller tester, which reads through SDL -- actually keys
+// gamecontrollerdb.txt's `x:bN`/`y:bN` entries on, for a device
+// identified as an Xbox 360 pad) is assigned in ascending raw-code
+// order, not UI_SET_KEYBIT call order: BTN_NORTH (0x133) sorts before
+// BTN_WEST (0x134). The old code below sent DSButton_X's presses as
+// code BTN_WEST (0x134, the higher index) and DSButton_Y's as BTN_NORTH
+// (0x133, the lower index) -- backwards from gamecontrollerdb's
+// expectation that the lower index is "x", so Steam displayed X presses
+// as Y and vice versa. Fixed by using the `BTN_X`/`BTN_Y` aliases
+// directly (same numeric codes, 0x133/0x134) on the fields whose wire
+// meaning they actually match, so the lower raw code now belongs to the
+// X field, matching gamecontrollerdb's assumption.
 constexpr ButtonMapping kButtonMappings[] = {
     {&HostControlGamepadState::south, BTN_SOUTH}, {&HostControlGamepadState::east, BTN_EAST},
-    {&HostControlGamepadState::west, BTN_WEST},   {&HostControlGamepadState::north, BTN_NORTH},
+    {&HostControlGamepadState::west, BTN_X},       {&HostControlGamepadState::north, BTN_Y},
     {&HostControlGamepadState::tl, BTN_TL},       {&HostControlGamepadState::tr, BTN_TR},
     {&HostControlGamepadState::start, BTN_START}, {&HostControlGamepadState::select, BTN_SELECT},
+    // Real user report (Steam Controller Tester), 2026-08-03: "same with
+    // stick clicking" (not registering at all) -- there was no uinput
+    // capability/button mapping for these before this fix.
+    {&HostControlGamepadState::thumbL, BTN_THUMBL}, {&HostControlGamepadState::thumbR, BTN_THUMBR},
 };
 
 bool writeEvent(int fd, uint16_t type, uint16_t code, int32_t value) {
@@ -175,6 +232,12 @@ HostControlAdapter::HostControlAdapter() {
     ::ioctl(uinputFd_, UI_SET_ABSBIT, ABS_Y);
     ::ioctl(uinputFd_, UI_SET_ABSBIT, ABS_HAT0X);
     ::ioctl(uinputFd_, UI_SET_ABSBIT, ABS_HAT0Y);
+    // Right stick + analog triggers -- see HostControlGamepadState's own
+    // comment (real user report, 2026-08-03: neither existed before this).
+    ::ioctl(uinputFd_, UI_SET_ABSBIT, ABS_RX);
+    ::ioctl(uinputFd_, UI_SET_ABSBIT, ABS_RY);
+    ::ioctl(uinputFd_, UI_SET_ABSBIT, ABS_Z);
+    ::ioctl(uinputFd_, UI_SET_ABSBIT, ABS_RZ);
 
     // Steam Controller touchpad experiment, opt-in only -- these
     // capability bits are deliberately NOT part of the absOk chain below
@@ -231,12 +294,23 @@ HostControlAdapter::HostControlAdapter() {
     // the analog stick's full int16_t sweep -- set those two separately
     // rather than folding into the lambda above.
     uinput_abs_setup hatSetup{};
-    bool absOk = setupAbs(ABS_X) && setupAbs(ABS_Y);
+    bool absOk = setupAbs(ABS_X) && setupAbs(ABS_Y) && setupAbs(ABS_RX) && setupAbs(ABS_RY);
     hatSetup.code = ABS_HAT0X;
     hatSetup.absinfo.minimum = -1;
     hatSetup.absinfo.maximum = 1;
     absOk = absOk && ::ioctl(uinputFd_, UI_ABS_SETUP, &hatSetup) >= 0;
     hatSetup.code = ABS_HAT0Y;
+    absOk = absOk && ::ioctl(uinputFd_, UI_ABS_SETUP, &hatSetup) >= 0;
+
+    // Analog triggers use uinput's conventional 0..255 range (matching a
+    // real Xbox 360 pad's ABS_Z/ABS_RZ), not the sticks' signed
+    // centered-at-0 range -- reuses hatSetup's storage, just with
+    // different bounds, rather than a third near-identical local.
+    hatSetup.code = ABS_Z;
+    hatSetup.absinfo.minimum = 0;
+    hatSetup.absinfo.maximum = 255;
+    absOk = absOk && ::ioctl(uinputFd_, UI_ABS_SETUP, &hatSetup) >= 0;
+    hatSetup.code = ABS_RZ;
     absOk = absOk && ::ioctl(uinputFd_, UI_ABS_SETUP, &hatSetup) >= 0;
 
     // Deliberately NOT folded into absOk above -- see touchpadCapsOk's own
@@ -360,6 +434,22 @@ void HostControlAdapter::emitState(const HostControlGamepadState& state) {
     }
     if (state.leftStickY != lastEmitted_.leftStickY) {
         writeEvent(uinputFd_, EV_ABS, ABS_Y, state.leftStickY);
+        sentAnything = true;
+    }
+    if (state.rightStickX != lastEmitted_.rightStickX) {
+        writeEvent(uinputFd_, EV_ABS, ABS_RX, state.rightStickX);
+        sentAnything = true;
+    }
+    if (state.rightStickY != lastEmitted_.rightStickY) {
+        writeEvent(uinputFd_, EV_ABS, ABS_RY, state.rightStickY);
+        sentAnything = true;
+    }
+    if (state.leftTrigger != lastEmitted_.leftTrigger) {
+        writeEvent(uinputFd_, EV_ABS, ABS_Z, state.leftTrigger);
+        sentAnything = true;
+    }
+    if (state.rightTrigger != lastEmitted_.rightTrigger) {
+        writeEvent(uinputFd_, EV_ABS, ABS_RZ, state.rightTrigger);
         sentAnything = true;
     }
 

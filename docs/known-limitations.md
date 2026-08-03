@@ -9206,6 +9206,108 @@ nothing to hand off.
 Cemu is now instant instead of hanging. The next release build is what
 will actually confirm this end to end.
 
+## 2026-08-03: Host Control mode gamepad bugs found via Steam's Controller Tester -- X/Y swapped, left stick inverted, no triggers/stick-clicks
+
+**Real user report** (testing Host Control mode's virtual gamepad directly
+in Steam's own Controller Tester): "Joystick controls are reversed, L
+joystick reads down when going up, left if right, etc... X and Y are
+reversed during host control mode, that should only happen in the
+emulators, or we can map the emulator controls accordingly, as those are
+Nintendo mappings... bumpers register, but Triggers do not work. same
+with stick clicking."
+
+**Root cause 1 (X/Y swapped):** `<linux/input-event-codes.h>` defines
+`BTN_X` as a plain alias for `BTN_NORTH` (0x133) and `BTN_Y` as a plain
+alias for `BTN_WEST` (0x134) -- confirmed by reading
+`/usr/include/linux/input-event-codes.h` directly. A Linux input device's
+button *index* (what SDL -- and Steam's Controller Tester, which reads
+through SDL -- keys `gamecontrollerdb.txt`'s `x:bN`/`y:bN` entries on, for
+a device identified as an Xbox 360 pad) is assigned in ascending raw-code
+order, not `UI_SET_KEYBIT` call order: `BTN_NORTH` (0x133) sorts before
+`BTN_WEST` (0x134). `host_control_adapter.cpp`'s `kButtonMappings` sent
+`DSButton_X`'s presses as code `BTN_WEST` (the higher index) and
+`DSButton_Y`'s as `BTN_NORTH` (the lower index) -- backwards from
+gamecontrollerdb's expectation that the lower index is "x", so Steam
+displayed X presses as Y and vice versa.
+
+**Root cause 2 (left stick inverted):** `client/src/main.cpp` negates
+`leftStickY`/`rightStickY` before they ever hit the wire, specifically to
+match the 3DS circle pad's `GetStickDirectionState()` convention
+(positive = up, confirmed by reading Azahar's `hid.cpp` directly) --
+correct for an emulated analog stick, but `host_control_adapter.cpp`'s
+`translateControllerState()` passed that already-inverted wire value
+straight through into a uinput `ABS_Y` axis, where the universal
+joystick/evdev/SDL convention is the opposite (positive = down). This
+silently double-applied the flip for Host Control mode specifically,
+inverting every up/down motion Steam's tester displayed.
+
+**Root cause 3 (no triggers/stick-clicks):** Host Control mode's virtual
+gamepad never had a right stick, analog triggers, or thumbstick-click
+support at all -- `HostControlGamepadState` only ever had `leftStickX/Y`
+and eight digital buttons. `rightStickX/Y` were already on the wire
+(`ControllerState`) but never read here; there was no wire representation
+at all for analog triggers or thumbstick clicks, since the DS/3DS/Wii U
+devices this protocol was originally built for have neither.
+
+**Fix:**
+- `host/remote-server/src/host_control_adapter.cpp`: `kButtonMappings` now
+  uses the `BTN_X`/`BTN_Y` aliases directly (same numeric codes, assigned
+  to the fields whose wire meaning they actually match) instead of
+  `BTN_WEST`/`BTN_NORTH`. `translateControllerState()` re-negates
+  `leftStickY`/`rightStickY` (a local `negateStickAxis()`, mirroring
+  `client/src/main.cpp`'s own) so the double-flip cancels out.
+- **Protocol v12** (`protocol/include/melonds_remote/protocol.h`):
+  `ControllerState` gained `leftTrigger`/`rightTrigger` (0..255) and
+  `hostControlButtons` (a new `HostControlButton` bitmask:
+  `ThumbLeft`/`ThumbRight`) -- host-control-mode-only fields, same
+  contract as v11's `mouseDeltaX/Y`/`mouseButtons` (no DS/3DS/Wii U game
+  reads them). Wire size grows by 3 bytes.
+- `host_control_adapter.h/.cpp`: `HostControlGamepadState` gained
+  `rightStickX/Y`, `leftTrigger`/`rightTrigger`, `thumbL`/`thumbR`; the
+  uinput device now advertises `ABS_RX`/`ABS_RY` (right stick, same
+  range as the left), `ABS_Z`/`ABS_RZ` (triggers, 0..255, matching a real
+  Xbox 360 pad's convention), and `BTN_THUMBL`/`BTN_THUMBR`.
+- `client/src/main.cpp`: reads `SDL_GAMEPAD_AXIS_LEFT_TRIGGER`/
+  `RIGHT_TRIGGER` (SDL's 0..32767 range, scaled to the wire's 0..255) and
+  individual `SDL_GAMEPAD_BUTTON_LEFT_STICK`/`RIGHT_STICK` clicks (not the
+  L3+R3 *combo*, which stays reserved for the menu-open chord -- see
+  `kMenuChordHoldUs`'s comment; a lone click of either stick is never part
+  of that chord and is safe to forward every tick).
+- **melonDS's frozen `protocol.h`/`protocol.cpp` copy** (`host/melonds-
+  patches/`) regenerated to exactly match the live files -- melonDS runs
+  its own in-process `NetServer` implementing this wire protocol directly
+  (unlike Azahar/Cemu, which only ever see the separate, unaffected
+  `GenericInputState` over adapter IPC), so a version mismatch here would
+  have broken every melonDS connection the moment a v12 client talked to
+  a v11-frozen melonDS host. This regeneration also happened to pick up
+  `AppVersionMismatchUpdateTriggered` (added earlier this session for the
+  client-triggers-host-update feature), which had been missed when that
+  feature shipped -- purely additive/non-wire-breaking on its own, but
+  now correctly in sync going forward too.
+
+**Verified:** all three fixes via new/updated unit tests in
+`test_host_control_adapter.cpp` (button-code assignment is exercised
+indirectly through `translateControllerState()`'s existing
+`west`/`north` boolean tests, which are unaffected -- the actual raw
+uinput code change isn't unit-testable without a real `/dev/uinput`, see
+below; the Y-renegation and new trigger/thumb-click fields are directly
+tested) and `test_controller_state.cpp`'s protocol round-trip test,
+extended for the three new fields; a full local build of
+`dualdeck-host-service`, `dualdeck-client`, and every existing test suite
+(host: 94 cases, protocol: 104 cases, client net/settings: 20 cases, all
+passing); melonDS's regenerated `protocol.h`/`protocol.cpp` confirmed
+byte-identical to the live repo copies and compiling cleanly standalone;
+the melonDS patch as a whole re-confirmed to `git apply` cleanly against
+its pinned commit.
+
+**Not yet verified:** on real hardware -- whether Steam's Controller
+Tester now shows correct X/Y labels, an upright left stick, and working
+triggers/stick-clicks for Host Control mode. The uinput device-creation
+and raw ioctl/event-write paths (`UI_SET_ABSBIT`/`UI_ABS_SETUP` for the
+new axes, the actual `BTN_X`/`BTN_Y`/`BTN_THUMBL`/`BTN_THUMBR` events)
+cannot be exercised in this sandbox (no `/dev/uinput`) -- only compile-
+clean and the pure `translateControllerState()` logic are verified here.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
