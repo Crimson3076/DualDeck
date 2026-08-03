@@ -9962,6 +9962,55 @@ fixes the reported flip for this user's specific Steam Input
 configuration (expected to, based on the root-cause finding, but not yet
 confirmed against a live session).
 
+## 2026-08-03: Azahar aborts opening Configure -- "QtMultimedia is not currently supported" -- another unbundled dlopen()'d Qt plugin category
+
+Real user report via the EmuDeck replace-in-place path (`azahar.sh` ->
+the patched `/home/bazzite/Applications/azahar.AppImage`, confirming
+DualDeck's patch and host-service connection were both already working
+fine -- "DualDeck: found a running host service ... connecting to it"
+printed before the crash): `could not load multimedia backend ""` /
+`QtMultimedia is not currently supported on this platform or compiler`,
+then `Aborted (core dumped)` from inside the AppImage's own AppRun.
+
+Same root cause, same class of bug, as the two Qt-plugin-bundling fixes
+already shipped this same day for the platform (`platforms/`) and
+windowing (`xcbglintegrations/`, `wayland-*/`) plugin categories: Qt's
+multimedia backend (used by Azahar's Camera configuration tab, for
+webcam-as-3DS-camera capture) is its own separate, dlopen()'d plugin
+(typically an FFmpeg-backed `.so` under `plugins/multimedia/` on modern
+Qt6), never visible to `bundle_library_dependencies()`'s `ldd`-based scan
+of the main Azahar binary -- so it was never bundled into either the
+DualDeck-distributed AppImages or, transitively, the ones
+`emudeck-replace-in-place.sh` downloads (that script never builds
+anything itself; it downloads `build-release.sh`'s own published release
+assets), leaving Qt with no multimedia backend to load at all on any host
+without its own system Qt6 multimedia stack.
+
+**Fix:** added `multimedia` to `build-release.sh`'s existing Qt-plugin
+`extra_dirs` staging loop (the exact mechanism already proven for
+`platforms`/`xcbglintegrations`/`wayland-*`) -- `qt6-multimedia-dev` is
+already an existing build dependency (needed to compile against
+QtMultimedia's headers in the first place), so the plugin directory
+`find_qt6_plugins_dir()` locates should already have it populated on the
+CI build machine. `QT_PLUGIN_PATH` (both AppRun templates,
+`scripts/lib/apprun_templates.sh`) already points at the parent directory
+every staged plugin category lands under -- no AppRun changes needed,
+this is purely a "what gets bundled" fix. Kept optional (soft warning,
+not a hard build failure) like the `wayland-*` categories, since a
+webcam-as-3DS-camera feature isn't worth blocking the whole release build
+over on a machine that happens to lack `qt6-multimedia-dev`.
+
+**Verified:** `bash -n build-release.sh` clean; the staging/bundling
+logic itself (recursive `.so` dependency scanning per staged plugin
+directory, `QT_PLUGIN_PATH` layout) was already proven correct by the two
+earlier Qt-plugin fixes this loop shares code with -- this change only
+adds one more category name to an already-working mechanism.
+
+**Not yet verified:** an actual CI/release build with a real Qt6
+multimedia plugin present, and real-hardware confirmation that Azahar's
+Configure dialog opens without aborting once the next EmuDeck
+replace-in-place run (or drift-check) downloads the fixed AppImage.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

@@ -375,8 +375,23 @@ qt6_plugins_dir="$(find_qt6_plugins_dir)" || {
 # to fix the reported bug either way).
 qt_plugin_staging_root="${work_dir}/qt6-plugins"
 qt_plugin_extra_dirs=""
+# "multimedia" added 2026-08-03: real user report, a hard abort
+# ("could not load multimedia backend \"\"" / "QtMultimedia is not
+# currently supported on this platform or compiler") hitting Azahar's
+# Configure dialog (its Camera tab uses QtMultimedia for webcam-as-3DS-
+# camera capture; some builds also probe it for audio device
+# enumeration). Same root cause as platforms/xcbglintegrations/wayland-*
+# above -- Qt's multimedia backend is its own dlopen()'d plugin
+# (typically an FFmpeg- or GStreamer-backed .so under plugins/
+# multimedia/), invisible to bundle_library_dependencies()'s ldd-based
+# scan of the main binary, so it was never bundled and QtMultimedia had
+# nothing to load at all on a host without a system Qt6 install. Kept
+# optional (soft warning, not a hard build failure) like the wayland-*
+# categories: the 3DS camera feature this backs is a rarely-used
+# secondary feature, not core functionality worth blocking the whole
+# build over on a machine that happens to lack qt6-multimedia-dev.
 for qt_plugin_category in platforms xcbglintegrations wayland-shell-integration \
-    wayland-decoration-client wayland-graphics-integration-client; do
+    wayland-decoration-client wayland-graphics-integration-client multimedia; do
     if [[ -d "${qt6_plugins_dir}/${qt_plugin_category}" ]]; then
         mkdir -p "${qt_plugin_staging_root}"
         cp -a "${qt6_plugins_dir}/${qt_plugin_category}" "${qt_plugin_staging_root}/${qt_plugin_category}"
@@ -384,6 +399,10 @@ for qt_plugin_category in platforms xcbglintegrations wayland-shell-integration 
     elif [[ "${qt_plugin_category}" == "xcbglintegrations" ]]; then
         echo "warning: this build machine's Qt6 install has no xcbglintegrations plugin --" >&2
         echo "packaged melonDS/Azahar may fail to create a GL-backed window over X11/XWayland." >&2
+    elif [[ "${qt_plugin_category}" == "multimedia" ]]; then
+        echo "warning: this build machine's Qt6 install has no multimedia plugin -- Azahar's" >&2
+        echo "Camera configuration tab may abort instead of opening on a host with no system" >&2
+        echo "Qt6 multimedia stack (install qt6-multimedia-dev or your distro's equivalent)." >&2
     fi
 done
 
