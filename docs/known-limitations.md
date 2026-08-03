@@ -9704,6 +9704,60 @@ produces a real, non-black captured frame this time, including the
 one-time interactive screen-share permission prompt actually appearing
 and being answerable from a `systemd --user` daemon context.
 
+## 2026-08-03: Cemu "controls work, but have to be manually bound" -- `set_default_mapping()`'s own guard was silently no-oping the auto-bind
+
+Real user report, after the previous batch's Cemu trigger/L3-R3 wiring fix
+landed: "Cemu controls *Work*, but they need to be binded by the user,
+which I do not like, otherwise it works fine." Confirmed via reading real
+Cemu source at the pinned commit (`a6fb0a4`, v2.6): `CemuAdapter`'s
+constructor auto-binds the remote controller onto Player 1 by calling
+`VPADController::set_default_mapping(m_remoteController)`
+(`src/input/emulated/VPADController.cpp`) -- but that function's own final
+step only fills a Wii U button slot when
+`m_mappings.find(m.first) == m_mappings.cend()`, i.e. it silently does
+nothing for any slot Player 1 already has *any* mapping for. This guard
+exists to protect a user's own hand-configured controller from being
+clobbered by, say, plugging in a second physical pad -- reasonable in
+general, but it means `set_default_mapping()` only actually does anything
+the *literal first time ever* Player 1 gets configured. The moment a user
+has set up any real controller for Player 1 (true for nearly every
+real-world Cemu profile), every slot is already "mapped," and
+`set_default_mapping()` silently no-ops for DualDeck's remote controller
+too -- explaining exactly the report: video/basic session works (that
+path doesn't go through this mapping at all), but no input arrives until
+the user manually rebinds Player 1 to the DualDeck-labeled controller
+themselves.
+
+**Fix:** `CemuAdapter.cpp` no longer calls `set_default_mapping()`. It
+calls the new `forceRemoteControllerMapping()` instead, which replicates
+`VPADController.cpp`'s own `InputAPI::XInput`/`InputAPI::DualDeckRemote`
+button/axis table (the same table gated behind that guard) and calls the
+lower-level `EmulatedController::set_mapping()` directly, once per entry
+-- a public, unconditional `m_mappings[mapping] = { controller, button }`
+with no "already mapped" check at all (confirmed by reading
+`EmulatedController.cpp` directly). This makes DualDeck's remote
+controller always take over Player 1's full button/axis mapping the
+instant a client session starts, regardless of whatever was configured
+before -- matching the precedence every other DualDeck emulator
+integration already gives network input over local input for the
+duration of a session.
+
+**Verified:** `git apply --check` (and a real apply) of the patch against
+a fresh clone of Cemu at the exact pinned commit (`a6fb0a48eb4...`)
+succeeds cleanly; the replicated table, `VPADController::kButtonId_*`
+enum values, and `EmulatedController::set_mapping()`'s signature were all
+read directly from that same real checkout, not guessed. `CemuAdapter.cpp`
+already includes `input/api/Controller.h`, `input/emulated/
+EmulatedController.h`, and `input/emulated/VPADController.h` (needed for
+the unscoped `Buttons2` enum and `VPADController::ButtonId` enum used by
+the table) -- no new includes were required.
+
+**Not yet verified:** a full Cemu build (infeasible in this sandbox --
+Vulkan/OpenGL/Latte-renderer dependency chain) and real-hardware
+confirmation that Player 1's controls now register immediately on
+connect with zero manual rebinding, on a Cemu profile that already had a
+real controller configured for Player 1 beforehand.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

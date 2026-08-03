@@ -873,7 +873,7 @@ new file mode 100644
 index 0000000..33a460d
 --- /dev/null
 +++ b/src/remote_server/CemuAdapter.cpp
-@@ -0,0 +1,320 @@
+@@ -0,0 +1,388 @@
 +#include "remote_server/CemuAdapter.h"
 +
 +#include <algorithm>
@@ -943,6 +943,71 @@ index 0000000..33a460d
 +    return std::dynamic_pointer_cast<RemoteControllerProvider>(provider);
 +}
 +
++// Real user report, 2026-08-03: "Cemu controls *Work*, but they need to
++// be binded by the user, which I do not like." Root cause: VPADController::
++// set_default_mapping() (input/emulated/VPADController.cpp) only fills a
++// Wii U button slot when `m_mappings.find(m.first) == m_mappings.cend()`
++// -- i.e. it silently no-ops for any slot Player 1 already has a mapping
++// for, which is true for essentially any real-world Cemu profile (Cemu
++// ships with no controller configured at all only on a literally fresh
++// install; the very first time a user sets up *any* controller for
++// Player 1, every slot below becomes "already mapped" and
++// set_default_mapping() stops doing anything for a controller added
++// afterward, including this remote one). EmulatedController::set_mapping()
++// (public, EmulatedController.h) has no such guard -- confirmed by
++// reading it directly, it's an unconditional `m_mappings[mapping] = {
++// controller, button }`. This table is VPADController.cpp's own
++// `InputAPI::XInput`/`InputAPI::DualDeckRemote` case (the two share this
++// exact table -- see this patch's VPADController.cpp hunk), replicated
++// here so the remote controller can be force-applied via set_mapping()
++// directly, unconditionally taking over Player 1 regardless of whatever
++// was mapped before -- matching "a client just connected, it should be
++// in control now" semantics, the same precedence this project's other
++// emulator integrations already give network input over local/physical
++// input while a client session is active.
++// Takes EmulatedController&, not VPADController&, matching m_vpadController's
++// own declared type in CemuAdapter.h (std::shared_ptr<EmulatedController> --
++// set_mapping() lives on that base class, no VPADController-specific API is
++// needed here). The VPADController::kButtonId_* values below are just
++// compile-time constants pulled from that subclass's enum.
++void forceRemoteControllerMapping(EmulatedController& vpad, const std::shared_ptr<ControllerBase>& controller) {
++    static constexpr std::pair<uint64, uint64> kMapping[] = {
++        {VPADController::kButtonId_A, kButton13},
++        {VPADController::kButtonId_B, kButton12},
++        {VPADController::kButtonId_X, kButton15},
++        {VPADController::kButtonId_Y, kButton14},
++
++        {VPADController::kButtonId_L, kButton8},
++        {VPADController::kButtonId_R, kButton9},
++        {VPADController::kButtonId_ZL, kTriggerXP},
++        {VPADController::kButtonId_ZR, kTriggerYP},
++
++        {VPADController::kButtonId_Plus, kButton4},
++        {VPADController::kButtonId_Minus, kButton5},
++
++        {VPADController::kButtonId_Up, kButton0},
++        {VPADController::kButtonId_Down, kButton1},
++        {VPADController::kButtonId_Left, kButton2},
++        {VPADController::kButtonId_Right, kButton3},
++
++        {VPADController::kButtonId_StickL, kButton6},
++        {VPADController::kButtonId_StickR, kButton7},
++
++        {VPADController::kButtonId_StickL_Up, kAxisYP},
++        {VPADController::kButtonId_StickL_Down, kAxisYN},
++        {VPADController::kButtonId_StickL_Left, kAxisXN},
++        {VPADController::kButtonId_StickL_Right, kAxisXP},
++
++        {VPADController::kButtonId_StickR_Up, kRotationYP},
++        {VPADController::kButtonId_StickR_Down, kRotationYN},
++        {VPADController::kButtonId_StickR_Left, kRotationXN},
++        {VPADController::kButtonId_StickR_Right, kRotationXP},
++    };
++    for (const auto& m : kMapping) {
++        vpad.set_mapping(m.first, controller, m.second);
++    }
++}
++
 +} // namespace
 +
 +CemuAdapter::CemuAdapter(std::string cemuVersion, std::function<void()> onQuitSession,
@@ -970,7 +1035,10 @@ index 0000000..33a460d
 +        // (eventual) remove pairing for a real controller.
 +        m_remoteController = provider->get_controllers().front();
 +        m_vpadController->add_controller(m_remoteController);
-+        m_vpadController->set_default_mapping(m_remoteController);
++        // Not set_default_mapping() -- see forceRemoteControllerMapping()'s
++        // comment above for why that silently no-ops on any Cemu profile
++        // that already has Player 1 configured.
++        forceRemoteControllerMapping(*m_vpadController, m_remoteController);
 +    }
 +    else {
 +        // Real user report, 2026-08-01: "Cemu works, no touch screen or
