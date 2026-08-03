@@ -27,6 +27,7 @@
 
 #include "host/emulator_input_sink.h"
 #include "host/frame_source.h"
+#include "host/wayland_screen_capture.h"
 #include "host/x11_screen_capture.h"
 
 namespace melonds_remote::host {
@@ -154,12 +155,15 @@ public:
     // the TV I am testing on currently." Opt-in (env var
     // DUALDECK_HOSTCONTROL_MIRROR_SCREEN, read once in the constructor,
     // same style as DUALDECK_HOSTCONTROL_STEAM_TOUCHPAD above), default
-    // off -- zero behavior change, including zero X11 connection
-    // attempt, for anyone who doesn't set it. When enabled and an X11
-    // display is actually reachable (see X11ScreenCapture's own header
-    // comment for the honest Wayland gap and why this is X11-only for
-    // now), periodically captures the host's root window and returns it
-    // here instead of always returning false. Rate-limited internally
+    // off -- zero behavior change, including zero X11/D-Bus connection
+    // attempt, for anyone who doesn't set it. When enabled, tries
+    // X11ScreenCapture first (cheap, synchronous, works on a real X11
+    // desktop session), then falls back to WaylandScreenCapture (portal
+    // + PipeWire, needed on the actual Wayland sessions this was tested
+    // against -- see that header's own comment for the one-time
+    // interactive permission prompt this involves) if X11 didn't work.
+    // Either way, once ready, periodically captures the host's screen
+    // and returns it here instead of always returning false. Rate-limited internally
     // (mirrorCaptureInterval_, default 5fps -- "a few frames per
     // second, good enough to see settings menus," the user's own
     // explicit choice over investing in a smoother capture path right
@@ -182,14 +186,24 @@ public:
     // every other frame source's behavior in that case.
     void frameDimensions(uint16_t& outWidth, uint16_t& outHeight) const override;
 
-    // True once a real mirrored frame has actually been sent at least
-    // once -- distinct from mirrorEnabled_ (the env var was set) and
-    // mirrorCapture_->isReady() (X11/XShm setup succeeded): this is the
+    // True once a real mirror-capture backend is actually working --
+    // distinct from mirrorEnabled_ (the env var was set): this is the
     // one a caller wanting to know "is this actually working" should
     // check, matching isDeviceReady()/isTouchpadReady()'s naming
     // convention above even though the underlying readiness state lives
-    // one layer down in X11ScreenCapture.
-    bool isMirrorReady() const { return mirrorCapture_ && mirrorCapture_->isReady(); }
+    // one layer down in X11ScreenCapture/WaylandScreenCapture. Real
+    // user report, 2026-08-03: both of the user's actual test machines
+    // turned out to be Wayland sessions, where X11ScreenCapture
+    // "succeeds" against XWayland's own empty compositing root (a
+    // uniform grey, not a crash -- see docs/known-limitations.md) --
+    // tried first anyway since it's cheaper/simpler when it does apply
+    // (a real X11 desktop session), with WaylandScreenCapture's
+    // portal+PipeWire path as the fallback that actually matters on
+    // Wayland.
+    bool isMirrorReady() const {
+        return (mirrorX11Capture_ && mirrorX11Capture_->isReady()) ||
+               (mirrorWaylandCapture_ && mirrorWaylandCapture_->isReady());
+    }
 
 private:
     void emitState(const HostControlGamepadState& state);
@@ -236,14 +250,23 @@ private:
     HostControlMouseState lastEmittedMouse_;
 
     // Screen-mirror experiment state -- see getLatestFrame()'s own
-    // comment above for the full design. mirrorCapture_ is only ever
-    // constructed at all when mirrorEnabled_ is true (never attempts an
-    // X11 connection otherwise); mirrorLastFrame_/mirrorLastFrameIndex_
-    // cache the most recent successful capture so getLatestFrame() can
-    // keep returning it between actual captures (rate-limited by
+    // comment above for the full design. Neither capture backend is
+    // ever constructed at all when mirrorEnabled_ is false (never
+    // attempts an X11 connection or a portal/PipeWire session
+    // otherwise); mirrorLastFrame_/mirrorLastFrameIndex_ cache the most
+    // recent successful capture so getLatestFrame() can keep returning
+    // it between actual captures (rate-limited by
     // mirrorCaptureInterval_) without re-capturing every single poll.
+    // mirrorX11Capture_ is tried first (see isMirrorReady()'s comment);
+    // mirrorWaylandCapture_ is only ever constructed as a fallback when
+    // the X11 attempt didn't work, since constructing it unconditionally
+    // would mean every mirror-enabled host always pays for a portal
+    // session negotiation (including its one-time interactive
+    // permission prompt) even on a real X11 desktop where it's not
+    // needed at all.
     bool mirrorEnabled_ = false;
-    std::unique_ptr<X11ScreenCapture> mirrorCapture_;
+    std::unique_ptr<X11ScreenCapture> mirrorX11Capture_;
+    std::unique_ptr<WaylandScreenCapture> mirrorWaylandCapture_;
     std::vector<uint8_t> mirrorLastFrame_;
     uint16_t mirrorLastWidth_ = 0;
     uint16_t mirrorLastHeight_ = 0;

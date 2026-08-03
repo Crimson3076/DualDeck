@@ -8802,16 +8802,117 @@ touchpad-investigation entries spent several rounds correcting
 (declaring something fixed on reasoning alone, without real-environment
 confirmation).
 
-**Not yet fixed.** Real Wayland capture (portal + PipeWire) is
-substantial, unbudgeted engineering -- this project's own earlier
-planning notes already flagged Wayland screen capture as likely the
-single largest piece of work in the whole Host-Control-video effort,
-before this feature request even existed. Decision on how to proceed
-deferred to the user (asked directly, not assumed) given the real
-verification-risk tradeoff of building it blind versus deprioritizing
-it in favor of a more direct, mirror-independent path to the actual
-blocking issue (getting Cemu's own terminal/stderr output, which needs
-no video at all).
+**Not yet fixed as of this entry.** Real Wayland capture (portal +
+PipeWire) is substantial, unbudgeted engineering -- this project's own
+earlier planning notes already flagged Wayland screen capture as likely
+the single largest piece of work in the whole Host-Control-video
+effort, before this feature request even existed. Decision on how to
+proceed deferred to the user (asked directly, not assumed) given the
+real verification-risk tradeoff of building it blind versus
+deprioritizing it in favor of a more direct, mirror-independent path to
+the actual blocking issue (getting Cemu's own terminal/stderr output,
+which needs no video at all). User chose to build it now and iterate on
+real hardware -- see the follow-up entry immediately below.
+
+### Follow-up: Wayland portal + PipeWire capture implemented, verified as far as this sandbox allows
+
+New `WaylandScreenCapture` (host/remote-server/{include/host,src}/wayland_screen_capture.h/.cpp),
+same PIMPL/degrade-gracefully shape as `X11ScreenCapture`. `HostControlAdapter`
+now tries X11 first (cheap, and genuinely correct on a real X11 desktop
+session), falling back to this only if X11 didn't work -- avoiding an
+unconditional portal session (and its one-time interactive permission
+prompt, see below) on hosts where X11 already works fine.
+
+**Design**, following the xdg-desktop-portal spec directly: `CreateSession`
+-> `SelectSources` (monitor sources only) -> `Start` (the call that
+shows the interactive one-time permission dialog *on the host's own
+screen* -- a real GNOME/KDE system dialog, not anything this project
+draws; this is the portal's actual security boundary working as
+designed) -> `OpenPipeWireRemote` (returns a session-scoped, pre-
+authorized file descriptor -- connecting to the ambient/default local
+PipeWire socket instead would not be authorized to see this stream at
+all) -> `pw_context_connect_fd()` with that fd -> a `pw_stream`
+negotiating a raw video format, running on its own persistent
+background thread (PipeWire delivers frames via callback, unlike
+X11ScreenCapture's synchronous per-call `XShmGetImage`) that keeps a
+mutex-protected "latest frame" slot `capture()` just reads out.
+Persisted consent (`persist_mode`/`restore_token`) was deliberately
+**not** implemented in this first cut -- every process launch re-prompts
+for permission; a real, worthwhile future improvement, scoped out
+rather than half-built.
+
+**Real verification undertaken, more than the usual "compiles clean"
+given this class's real-world stakes** -- this sandbox has no
+compositor/portal/PipeWire service by default, so packages were
+installed and a real environment assembled specifically to test against
+(`pipewire`, `wireplumber`, `xdg-desktop-portal`, `xdg-desktop-portal-wlr`,
+`sway`, `gstreamer1.0-pipewire`, all genuinely available via apt, not
+assumed):
+- **PipeWire consumption -- fully verified end to end, not just
+  compiled.** A real PipeWire daemon + real session bus were started,
+  and a real video-producing PipeWire node created via `gst-launch-1.0
+  videotestsrc pattern=red ! pipewiresink mode=provide` (confirmed via
+  `pw-dump` as a genuine `Stream/Output/Video` node). A minimal test
+  program built directly against `WaylandScreenCapture`'s exact
+  `pw_stream`/SPA-format-negotiation code connected to that real node,
+  negotiated a real format (`64x48`, `SPA_VIDEO_FORMAT_BGRx`), received
+  three real frames, and read back the pixel data: `B=0x00 G=0x00
+  R=0xff` -- exactly matching the drawn red test pattern, in the
+  correct byte order this project's BGRA8888 convention expects. This
+  is the same category of proof the X11 path got (a known color drawn,
+  then confirmed byte-for-byte in the captured output), just via a
+  PipeWire producer instead of an X11 root-window fill.
+- **Portal D-Bus session flow -- implemented per the documented spec,
+  compiles clean under this project's full `-Wall -Wextra -Wpedantic
+  -Wconversion -Wshadow` warning set (verified directly, including
+  against the real `dbus-1`/`libpipewire-0.3` headers with
+  `SYSTEM`-include treatment so their own GNU-extension macros don't
+  drown out real warnings from this project's own code), but **not**
+  driven through a complete live `CreateSession` -> `Start` round trip
+  against a running `xdg-desktop-portal` + backend in this sandbox --
+  attempts to run compositor/portal daemons as genuinely persistent
+  background processes hit this sandbox's own job-control/backgrounding
+  behavior (commands meant to run indefinitely were treated as timed-out
+  failures), not a problem with the portal software itself or this
+  project's D-Bus code. Real, honest gap, not glossed over: the
+  `CreateSession`/`SelectSources`/`Start`/`OpenPipeWireRemote` message
+  construction and Response-signal handling is implemented correctly
+  per the spec's documented method signatures and object-path/signal
+  conventions, but has not been observed actually completing against a
+  live portal backend.
+- Full host (`dualdeck_host`, `dualdeck-host-service`,
+  `melonds_remote_host_tests` -- 90 cases, 0 failures) rebuilds clean
+  with both `DUALDECK_HAVE_X11_SCREEN_CAPTURE` and
+  `DUALDECK_HAVE_WAYLAND_SCREEN_CAPTURE` active (both `find_package`/
+  `pkg_check_modules` calls succeeded in this sandbox once the new dev
+  packages -- `libdbus-1-dev`/`libpipewire-0.3-dev` (apt), `dbus-devel`/
+  `pipewire-devel` (dnf), `dbus`/`libpipewire` (pacman), added to
+  `scripts/build-release.sh`'s `"build"` `ensure_packages()` list -- were
+  installed); `ldd` on the built `dualdeck-host-service` confirms it now
+  links `libdbus-1.so.3`/`libpipewire-0.3.so.0` alongside the X11 libs,
+  which the existing generic `bundle_library_dependencies()` call
+  (already fixing the Bazzite Host Control libturbojpeg bug, see its own
+  2026-08-02 entry) picks up and bundles automatically -- no separate
+  packaging-script changes needed for runtime availability.
+- The new degrade-gracefully test
+  (`host_control_adapter_mirror_opt_in_degrades_gracefully_without_any_backend`)
+  is deliberately more defensive than the original X11-only version:
+  it clears `DISPLAY`, `DBUS_SESSION_BUS_ADDRESS`, *and* redirects
+  `XDG_RUNTIME_DIR` to a fresh empty directory, since libdbus's
+  systemd-style `$XDG_RUNTIME_DIR/bus` autodetection runs independently
+  of `DBUS_SESSION_BUS_ADDRESS` -- a real fallback path on any
+  systemd-based desktop, i.e. plausibly whatever machine actually runs
+  this test suite. Without that, this unit test could pop a genuine
+  interactive system permission dialog on a developer's real desktop
+  just from running `ctest` -- caught and fixed before it could ever do
+  that to anyone, not discovered the hard way.
+
+**Not yet verified:** on real Bazzite/Fedora hardware -- whether the
+full portal permission flow actually completes and produces a real
+mirrored image end to end. Given both machines are confirmed Wayland,
+this is the actual, sole remaining gap before the original motivating
+use case (seeing Cemu's own graphics-settings screen without physical
+access to the connected TV) can work.
 
 ## Things intentionally out of scope for v0.1
 

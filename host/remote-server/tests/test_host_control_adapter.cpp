@@ -10,6 +10,9 @@
 #include "host/host_control_adapter.h"
 #include "test_framework.h"
 
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <cstdlib>
 #include <string>
 
@@ -277,20 +280,64 @@ MDR_TEST(host_control_adapter_mirror_disabled_by_default_returns_no_frame) {
     MDR_CHECK_EQ(dimHeight, static_cast<uint16_t>(kFrameHeight));
 }
 
-MDR_TEST(host_control_adapter_mirror_opt_in_degrades_gracefully_without_x11_display) {
-    // Deterministic regardless of what this test happens to run under:
-    // force the "no reachable X11 display" path explicitly rather than
-    // relying on this sandbox/CI coincidentally having no DISPLAY set.
-    const char* previousDisplay = std::getenv("DISPLAY");
-    std::string savedDisplay = previousDisplay ? previousDisplay : "";
-    bool hadDisplay = previousDisplay != nullptr;
-    ::unsetenv("DISPLAY");
+// Small RAII helper: saves an env var, clears it, restores it on scope
+// exit (even if a CHECK fails partway through) -- used below to force
+// both the X11 and the Wayland-fallback capture paths into their
+// "nothing reachable" branch deterministically, regardless of what
+// desktop session (if any) actually runs this test suite. This matters
+// more here than it did for the X11-only test it's replacing:
+// WaylandScreenCapture's constructor, on a real desktop machine with a
+// real session bus AND a real xdg-desktop-portal ScreenCast backend,
+// would otherwise pop a genuine, real, interactive system permission
+// dialog (see that class's own header comment) just from running this
+// unit test -- clearing DBUS_SESSION_BUS_ADDRESS (and DISPLAY, so
+// dbus_bus_get can't fall back to X11-based auto-launch either) makes
+// dbus_bus_get_private() fail fast and silently instead, exactly the
+// "no session bus reachable" degrade-gracefully path this test means to
+// exercise.
+struct ScopedUnsetEnv {
+    std::string name;
+    std::string savedValue;
+    bool hadValue = false;
+
+    explicit ScopedUnsetEnv(std::string envName) : name(std::move(envName)) {
+        const char* previous = std::getenv(name.c_str());
+        hadValue = previous != nullptr;
+        if (hadValue) savedValue = previous;
+        ::unsetenv(name.c_str());
+    }
+    ~ScopedUnsetEnv() {
+        if (hadValue) ::setenv(name.c_str(), savedValue.c_str(), 1);
+    }
+};
+
+// Same idea, opposite direction -- redirects XDG_RUNTIME_DIR to a
+// directory this process just created and knows to be empty, so
+// libdbus's systemd-style "$XDG_RUNTIME_DIR/bus" autodetection (which
+// runs independently of DBUS_SESSION_BUS_ADDRESS -- a real fallback
+// path on any systemd-based desktop, i.e. plausibly the very machine
+// running this test suite) can't stumble onto a genuine session bus
+// either.
+struct ScopedEmptyXdgRuntimeDir {
+    ScopedUnsetEnv inner{"XDG_RUNTIME_DIR"};
+    std::string path;
+
+    ScopedEmptyXdgRuntimeDir() {
+        path = "/tmp/dualdeck_test_empty_xdg_runtime_dir_" + std::to_string(::getpid());
+        ::mkdir(path.c_str(), 0700);
+        ::setenv("XDG_RUNTIME_DIR", path.c_str(), 1);
+    }
+    ~ScopedEmptyXdgRuntimeDir() { ::rmdir(path.c_str()); }
+};
+
+MDR_TEST(host_control_adapter_mirror_opt_in_degrades_gracefully_without_any_backend) {
+    ScopedUnsetEnv noDisplay("DISPLAY");
+    ScopedUnsetEnv noDbus("DBUS_SESSION_BUS_ADDRESS");
+    ScopedEmptyXdgRuntimeDir noXdgRuntimeBus;
 
     ::setenv("DUALDECK_HOSTCONTROL_MIRROR_SCREEN", "1", 1);
     HostControlAdapter adapter;
     ::unsetenv("DUALDECK_HOSTCONTROL_MIRROR_SCREEN");
-
-    if (hadDisplay) ::setenv("DISPLAY", savedDisplay.c_str(), 1);
 
     MDR_CHECK(!adapter.isMirrorReady());
     std::vector<uint8_t> frame;

@@ -104,21 +104,35 @@ HostControlAdapter::HostControlAdapter() {
 
     // Screen-mirror experiment, same opt-in-env-var-read-once style as
     // touchpadEnabled_ above -- see getLatestFrame()'s header comment
-    // for the full design. mirrorCapture_ is only constructed (and only
-    // then attempts an X11 connection) when this is actually set, so a
-    // host that never opts in never even tries to reach an X server.
+    // for the full design. Neither capture backend is constructed (and
+    // neither attempts an X11/D-Bus connection) unless this is actually
+    // set, so a host that never opts in never even tries to reach
+    // either. X11 tried first (cheap, synchronous); WaylandScreenCapture
+    // (portal + PipeWire) only constructed as a fallback if X11 didn't
+    // work -- real user report, 2026-08-03: X11 "succeeding" against
+    // XWayland's own empty compositing root on a Wayland session
+    // produced a uniform grey, not a crash, so isReady() alone can't be
+    // trusted to mean "this will actually show something" on every
+    // system -- but it's still cheaper to try first on a real X11
+    // desktop session where it genuinely does work, rather than always
+    // paying for a portal session negotiation (including its one-time
+    // interactive permission prompt) unconditionally.
     const char* mirrorEnv = std::getenv("DUALDECK_HOSTCONTROL_MIRROR_SCREEN");
     mirrorEnabled_ = mirrorEnv != nullptr && mirrorEnv[0] != '\0' && std::strcmp(mirrorEnv, "0") != 0;
     if (mirrorEnabled_) {
-        mirrorCapture_ = std::make_unique<X11ScreenCapture>();
-        if (mirrorCapture_->isReady()) {
+        mirrorX11Capture_ = std::make_unique<X11ScreenCapture>();
+        if (mirrorX11Capture_->isReady()) {
             std::fprintf(stderr, "HostControlAdapter: screen-mirror capture ready (X11)\n");
         } else {
             std::fprintf(stderr,
                           "HostControlAdapter: DUALDECK_HOSTCONTROL_MIRROR_SCREEN was set but no usable X11 "
-                          "display/XShm was found -- screen mirroring stays disabled (Wayland-only sessions "
-                          "aren't supported yet, see docs/known-limitations.md); everything else continues "
-                          "to work normally.\n");
+                          "display/XShm was found -- trying the Wayland portal + PipeWire path instead.\n");
+            mirrorWaylandCapture_ = std::make_unique<WaylandScreenCapture>();
+            if (!mirrorWaylandCapture_->isReady()) {
+                std::fprintf(stderr,
+                              "HostControlAdapter: Wayland portal screen-mirror capture also unavailable -- "
+                              "screen mirroring stays disabled; everything else continues to work normally.\n");
+            }
         }
 
         // Optional override of the default ~5fps capture rate (a full
@@ -452,7 +466,10 @@ bool HostControlAdapter::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t
         std::vector<uint8_t> frame;
         uint16_t width = 0;
         uint16_t height = 0;
-        if (mirrorCapture_->capture(frame, width, height)) {
+        bool captured = mirrorX11Capture_ && mirrorX11Capture_->isReady()
+                             ? mirrorX11Capture_->capture(frame, width, height)
+                             : mirrorWaylandCapture_->capture(frame, width, height);
+        if (captured) {
             mirrorLastFrame_ = std::move(frame);
             mirrorLastWidth_ = width;
             mirrorLastHeight_ = height;
@@ -474,8 +491,12 @@ bool HostControlAdapter::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t
 }
 
 void HostControlAdapter::frameDimensions(uint16_t& outWidth, uint16_t& outHeight) const {
-    if (mirrorCapture_ && mirrorCapture_->isReady()) {
-        mirrorCapture_->nativeSize(outWidth, outHeight);
+    if (mirrorX11Capture_ && mirrorX11Capture_->isReady()) {
+        mirrorX11Capture_->nativeSize(outWidth, outHeight);
+        return;
+    }
+    if (mirrorWaylandCapture_ && mirrorWaylandCapture_->isReady()) {
+        mirrorWaylandCapture_->nativeSize(outWidth, outHeight);
         return;
     }
     outWidth = static_cast<uint16_t>(kFrameWidth);
