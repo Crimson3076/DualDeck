@@ -47,8 +47,12 @@ MAGIC = 0x444D5231
 # kProtocolVersion by hand -- see smoke_test.py's identical constant for
 # why a stale value here fails quietly (every Hello gets rejected as a
 # protocol-version mismatch instead of exercising whatever this script
-# actually means to test).
-VERSION = 11
+# actually means to test). Real 2026-08-03 CI failure: this drifted to 11
+# while the live header had moved to 12, same class of bug as
+# smoke_test.py's own VERSION constant (fixed the same day) -- this file
+# just wasn't caught by that same pass since check-patch-protocol-sync.sh
+# only checks the three patch files, not tests/*.py.
+VERSION = 12
 
 PT_HELLO = 1
 PT_HELLO_ACK = 2

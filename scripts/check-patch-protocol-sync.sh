@@ -59,4 +59,34 @@ for patch in host/melonds-patches/0001-remote-server-integration.patch \
     fi
 done
 
+# Real 2026-08-03 CI failures (twice, in the same commit's follow-up):
+# tests/smoke_test.py and tests/device_approval_smoke_test.py each hand-
+# maintain their own VERSION constant (no build step reads the live
+# header) since they hand-construct raw Hello packets against a real
+# dualdeck-host-service binary -- a stale value silently changes what
+# every test case actually exercises (every Hello gets rejected as a
+# protocol-version mismatch before reaching the specific condition under
+# test) rather than failing loudly on its own. Catches this the same way
+# the patch loop above catches patch drift, so it can't happen a third
+# time unnoticed.
+for test_script in tests/smoke_test.py tests/device_approval_smoke_test.py; do
+    test_script_path="${repo_root}/${test_script}"
+    if [[ ! -f "${test_script_path}" ]]; then
+        echo "error: ${test_script} not found" >&2
+        failed=1
+        continue
+    fi
+    test_version="$(grep -oP '^VERSION = \K[0-9]+' "${test_script_path}" | head -1 || true)"
+    if [[ -z "${test_version}" ]]; then
+        echo "warning: ${test_script} doesn't have a top-level VERSION constant -- skipping (not necessarily an error, but check by hand)" >&2
+        continue
+    fi
+    if [[ "${test_version}" != "${live_version}" ]]; then
+        echo "error: ${test_script} embeds VERSION=${test_version}, live header is ${live_version} -- update its VERSION constant to match" >&2
+        failed=1
+    else
+        echo "${test_script}: VERSION=${test_version} -- in sync"
+    fi
+done
+
 exit "${failed}"
