@@ -913,7 +913,7 @@ new file mode 100644
 index 000000000..646019a5b
 --- /dev/null
 +++ b/src/citra_qt/remote_server/RemoteServerBridge.cpp
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,120 @@
 +#include "citra_qt/remote_server/RemoteServerBridge.h"
 +
 +#include <algorithm>
@@ -996,12 +996,41 @@ index 000000000..646019a5b
 +
 +void RemoteServerBridge::stop() {
 +    stopRequested_ = true;
-+    if (reconnectThread_.joinable()) {
-+        reconnectThread_.join();
++    if (!reconnectThread_.joinable() && !ipcClient_ && !adapter_) {
++        return;
 +    }
-+    if (ipcClient_) {
-+        ipcClient_->disconnect();
-+    }
++    // Real user report against Cemu's identical RemoteServerBridge, 2026-08-03:
++    // "cemu seems to hang when trying to exit. and I usually have to
++    // terminate it." This function is the same reconnect-thread-join
++    // pattern Cemu's own RemoteServerBridge::stop() has (this file's own
++    // header comment even calls out that the two mirror each other's
++    // teardown ordering), so it carries the identical bug: called
++    // SYNCHRONOUSLY from Qt's UI thread (via GMainWindow::ShutdownGame()'s
++    // remote_server_bridge.reset(), see citra_qt.cpp), it can block for
++    // however long the reconnect loop below takes to notice
++    // stopRequested_ and wake up, INCLUDING the up-to-~5s it can be stuck
++    // inside a blocking AdapterIpcClient::connect() attempt at the exact
++    // moment stop() is called (bounded by adapter_ipc_client.cpp's own
++    // kRecvTimeoutSeconds, but still long enough to freeze the UI).
++    // Fixed the same way: hand the actual join + disconnect off to a
++    // detached background thread, which also takes ownership of
++    // ipcClient_/adapter_ (moved in below) rather than leaving them to be
++    // destroyed synchronously right after this function returns --
++    // ipcClient_'s read/write threads hold a reference to *adapter_ (see
++    // the constructor above) and must finish shutting down (inside
++    // ipcClient->disconnect(), which joins them) before adapter_'s
++    // destructor can safely run, so both must move into the same closure
++    // and be destroyed there, in that order.
++    std::thread cleanup([reconnectThread = std::move(reconnectThread_), ipcClient = std::move(ipcClient_),
++                          adapter = std::move(adapter_)]() mutable {
++        if (reconnectThread.joinable()) {
++            reconnectThread.join();
++        }
++        if (ipcClient) {
++            ipcClient->disconnect();
++        }
++    });
++    cleanup.detach();
 +}
 +
 +} // namespace CitraQt::RemoteServer

@@ -9125,6 +9125,87 @@ mechanistically-complete root cause (not a guess -- traced through
 real source on both the Cemu and DualDeck sides), but the next release
 build is what will actually confirm it end to end.
 
+## 2026-08-03: Cemu hangs on exit, has to be force-killed -- GUI thread blocked on a background-thread join
+
+**Real user report:** "Ok, it seems to be working now, but odd thing, cemu
+seems to hang when trying to exit. and I usually have to terminate it" --
+reported immediately after the AppImage GPU-detection fix above got Cemu's
+Vulkan renderer working again, so this is a distinct, newly-visible bug,
+not a re-report of the graphics issue.
+
+**Root cause:** traced directly through `host/cemu-patches/`'s own diff
+content (`src/remote_server/RemoteServerBridge.cpp`, `src/gui/
+MainWindow.cpp`, `src/Cafe/CafeSystem.cpp`), not guessed. Ending a title
+(File > End Emulation, or closing Cemu with one running) calls
+`MainWindow::EndEmulation()` on Cemu's own wx **GUI thread**, which calls
+`CafeSystem::ShutdownTitle()` **synchronously**, which does
+`s_remoteServerBridge.reset()` at the very top of teardown -- destroying
+the `RemoteServerBridge` and running its destructor, `stop()`, all still
+on that same GUI thread. `RemoteServerBridge::stop()` set
+`stopRequested_ = true` and then immediately called
+`reconnectThread_.join()` -- blocking the GUI thread until the background
+reconnect thread (a loop that sleeps in 100ms increments, checking
+`stopRequested_` each time, but also calls a *blocking*
+`AdapterIpcClient::connect()` when not yet connected) actually wakes up
+and exits. `adapter_sdk/ipc/src/adapter_ipc_client.cpp`'s own
+`kRecvTimeoutSeconds = 5` bounds that blocking `connect()` attempt's
+Hello/HelloAck handshake, so in the worst case (`stop()` called at the
+exact moment the reconnect thread just started a `connect()` attempt --
+e.g. no Host Service running, or a slow/stalled one) the GUI thread could
+freeze for close to 5+ seconds, easily read by an impatient user as "it
+hangs, so I kill it" well before it would have actually resolved on its
+own.
+
+Azahar's own `RemoteServerBridge::stop()` (`host/azahar-patches/`) turned
+out to have the exact same pattern, copy-derived from the same design
+(its own header comment literally says "same ordering melonDS's own
+RemoteServerBridge teardown already uses, for the same reason") and
+called just as synchronously from Qt's UI thread via
+`GMainWindow::ShutdownGame()`'s `remote_server_bridge.reset()` -- a latent
+version of the identical bug, fixed at the same time even though it
+hadn't been separately reported, since it's the same root cause under a
+different GUI toolkit.
+
+**Fix:** both `stop()` implementations now hand the actual
+`reconnectThread_.join()` + `ipcClient_->disconnect()` work off to a
+**detached background thread**, so the GUI-thread caller (`ShutdownTitle()`
+/ `ShutdownGame()`) returns immediately instead of blocking on it.
+`adapter_`/`ipcClient_` are `std::move()`'d into that detached thread's
+closure rather than left to be destroyed synchronously back on the GUI
+thread the instant `stop()` returns: `ipcClient_`'s read/write threads
+hold a reference to `*adapter_` and must finish shutting down (inside
+`ipcClient->disconnect()`, which joins them) before `adapter_`'s own
+destructor can safely run, so both must be destroyed together, in that
+order, inside the same closure. The one piece of state still cleared
+synchronously is Cemu's `s_currentAdapter` pointer (read every frame by
+`LatteRenderTarget.cpp`'s render hook) -- set to `nullptr` at the very top
+of `stop()`, before anything is hung off to the background thread, so any
+code reading `currentAdapter()` after `stop()` begins immediately sees "no
+active bridge," matching the function's previous synchronous behavior for
+that one piece of state.
+
+Also noticed in passing, not yet fixed (separate, minor, doesn't affect
+this bug): `RemoteServerBridge`'s constructor `Bind()`s a wx event handler
+to `g_mainFrame` on every construction (every title launch) with no
+corresponding `Unbind()` in the destructor, so launching multiple titles
+within one Cemu session accumulates duplicate event-handler bindings.
+Left alone for now -- doesn't contribute to the hang (each stale binding
+just calls the idempotent `EndEmulation()` an extra time) and fixing it
+properly needs switching from a lambda to a bindable member-function
+pointer, a slightly larger change than this fix's scope.
+
+**Verified:** both patched `stop()` bodies apply cleanly via `git apply
+--check`/`git apply` in an isolated scratch repo (confirming the diff
+hunks are well-formed and self-consistent after hand-editing the patch
+files' line counts); the core move-capture-and-detach pattern compiles
+and runs correctly as a standalone `g++ -std=c++20 -Wall -Wextra -pthread`
+reproduction, including the early-return guard for a `stop()` call with
+nothing to hand off.
+
+**Not yet verified:** on real hardware -- whether ending a title/closing
+Cemu is now instant instead of hanging. The next release build is what
+will actually confirm this end to end.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

@@ -1713,7 +1713,7 @@ new file mode 100644
 index 0000000..daa6a5c
 --- /dev/null
 +++ b/src/remote_server/RemoteServerBridge.cpp
-@@ -0,0 +1,125 @@
+@@ -0,0 +1,158 @@
 +#include "remote_server/RemoteServerBridge.h"
 +
 +#include <algorithm>
@@ -1825,13 +1825,46 @@ index 0000000..daa6a5c
 +
 +void RemoteServerBridge::stop() {
 +    stopRequested_ = true;
-+    if (reconnectThread_.joinable()) {
-+        reconnectThread_.join();
-+    }
-+    if (ipcClient_) {
-+        ipcClient_->disconnect();
-+    }
++    // Cleared synchronously (not deferred to the background thread below)
++    // so any other code reading currentAdapter() sees "no active bridge"
++    // immediately, matching this function's previous synchronous behavior
++    // for that one piece of state.
 +    s_currentAdapter.store(nullptr);
++    if (!reconnectThread_.joinable() && !ipcClient_ && !adapter_) {
++        return;
++    }
++    // Real user report, 2026-08-03: "cemu seems to hang when trying to
++    // exit. and I usually have to terminate it." Traced to this function
++    // running SYNCHRONOUSLY on Cemu's GUI thread (via
++    // MainWindow::EndEmulation() -> CafeSystem::ShutdownTitle() ->
++    // s_remoteServerBridge.reset(), see CafeSystem.cpp/MainWindow.cpp)
++    // while reconnectThread_.join() below can block for however long the
++    // reconnect loop takes to notice stopRequested_ and wake from its
++    // current 100ms sleep, INCLUDING the up-to-~5s it can be stuck inside
++    // a blocking AdapterIpcClient::connect() attempt at the exact moment
++    // stop() is called (bounded by adapter_ipc_client.cpp's own
++    // kRecvTimeoutSeconds, but still long enough for a GUI to look and
++    // feel completely frozen to an impatient user). Fixed by handing the
++    // actual join + disconnect off to a detached background thread, which
++    // also takes ownership of ipcClient_/adapter_ (moved in below) rather
++    // than leaving them to be destroyed synchronously right after this
++    // function returns -- ipcClient_'s read/write threads hold a
++    // reference to *adapter_ (see the constructor above) and must finish
++    // shutting down (inside ipcClient->disconnect(), which joins them)
++    // before adapter_'s destructor can safely run, so both must move into
++    // the same closure and be destroyed there, in that order, rather than
++    // adapter_ being destroyed back here on the GUI thread the instant
++    // this function returns.
++    std::thread cleanup([reconnectThread = std::move(reconnectThread_), ipcClient = std::move(ipcClient_),
++                          adapter = std::move(adapter_)]() mutable {
++        if (reconnectThread.joinable()) {
++            reconnectThread.join();
++        }
++        if (ipcClient) {
++            ipcClient->disconnect();
++        }
++    });
++    cleanup.detach();
 +}
 +
 +CemuAdapter* RemoteServerBridge::currentAdapter() {
