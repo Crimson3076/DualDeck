@@ -133,10 +133,41 @@ find_qt6_plugins_dir() {
 # targets, unlike the old Distrobox-container scenario this function was
 # first written for -- and a working host mkdir is a harder requirement
 # than a hypothetical newer-glibc symbol.
+#
+# Real user report, 2026-08-03: Cemu, launched via a DualDeck-patched
+# AppImage on real Bazzite hardware (a machine with a real, working
+# discrete AMD GPU -- confirmed via its own log.txt, not a system
+# without one), failed with "The following required Vulkan instance
+# extensions are not supported: VK_KHR_surface, VK_KHR_wayland_surface"
+# -- traced directly to Cemu's own unmodified upstream code (this
+# project's patch never touches vkEnumerateInstanceExtensionProperties()
+# or anything near it, confirmed by reading the actual diff), calling
+# dlopen("libvulkan.so"/"libvulkan.so.1") with no path -- a bare-soname
+# dlopen resolves through the *same* LD_LIBRARY_PATH-first search order
+# as any NEEDED library. Cemu's own CMakeLists.txt links Wayland::Client
+# directly (target_link_libraries(CemuCafe PUBLIC Wayland::Client)), so
+# ldd's recursive closure -- and therefore bundle_library_dependencies()
+# above -- can pull in Vulkan-loader-adjacent libraries from the CI
+# runner (a headless build machine with no real GPU/ICD ever
+# discoverable there) into the very same AppImage LD_LIBRARY_PATH
+# apprun_templates.sh's generated AppRun script points Cemu at before
+# it launches -- structurally identical to this function's own
+# documented glibc bug above (a build-environment copy of something
+# that must always be the host's own, shadowing the correct one via
+# LD_LIBRARY_PATH), just manifesting as "no GPU/graphics device
+# detected" instead of a glibc symbol crash. Mesa/Vulkan/GL driver
+# libraries are universally excluded from AppImage/Flatpak/Snap bundles
+# for exactly this reason (they're the userspace half of the kernel's
+# own GPU driver, not a portable application dependency) -- this
+# extends the same, already-proven exclusion pattern to that whole
+# class rather than adding Vulkan alone and leaving GL/EGL/DRM/GBM as
+# the next version of this same bug waiting to happen.
 _is_never_bundle_library() {
     case "$(basename "$1")" in
         libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|\
-        libresolv.so.*|libnsl.so.*|libutil.so.*|libnss_*.so.*)
+        libresolv.so.*|libnsl.so.*|libutil.so.*|libnss_*.so.*|\
+        libvulkan.so.*|libGL.so.*|libGLX.so.*|libGLdispatch.so.*|\
+        libEGL.so.*|libgbm.so.*|libdrm.so.*|libdrm_*.so.*)
             return 0 ;;
         *)
             return 1 ;;

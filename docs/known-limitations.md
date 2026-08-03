@@ -8993,6 +8993,115 @@ that correct fix never reached a real release. The next release build
 triggered after this entry is the one that should finally confirm the
 whole chain end to end.
 
+## 2026-08-03: Cemu detects no GPU at all, even after the version fix -- real root cause found in the AppImage's own LD_LIBRARY_PATH
+
+Real user report, with the actual `log.txt` this time (not just a
+symptom description): "it seems despite Cemu being on 2.6 instead of
+the nightly build, it still does not detect my GPU, not iGPU. this
+seems to be an issue with just the DualDeck integrated patches." The
+log's own error is exact and specific:
+
+```
+------- Init Vulkan graphics backend -------
+The following required Vulkan instance extensions are not supported:
+VK_KHR_surface
+VK_KHR_wayland_surface
+```
+
+**Checked the "is it the patch" hypothesis directly against the real
+diff, not assumed:** `host/cemu-patches/0001-remote-server-integration.patch`
+touches `VulkanRenderer.cpp` in exactly one place -- adding a new
+`CaptureSurfaceBGRA()` function (used for this project's own video-
+streaming capture, added well after Cemu's own `HandleScreenshotRequest()`)
+plus its destructor cleanup. It never touches `vkCreateInstance`,
+`vkEnumerateInstanceExtensionProperties`, device/instance-extension
+enumeration, or anything within reach of the actual failing code path
+-- confirmed by reading Cemu's real, unmodified upstream source at the
+exact pinned commit (`GetInstanceExtensions()`-equivalent logic around
+`VulkanRenderer.cpp:1255-1310`) and finding the failing check is
+genuine, unmodified stock Cemu code. The patch's own C++ changes are
+not the cause.
+
+**The real mechanism, traced end to end through real source, not
+guessed:**
+1. Cemu's own `src/CMakeLists.txt` directly links
+   `target_link_libraries(CemuCafe PUBLIC Wayland::Client)` when Wayland
+   support is enabled -- confirmed in the real Cemu checkout, not this
+   project's patch.
+2. The user's actual setup is `emudeck-replace-in-place.sh`'s
+   downloaded, patched AppImage (`/home/bazzite/Applications/Cemu.AppImage`,
+   confirmed directly in their own terminal output) -- built by
+   `pack_appimage()`/`bundle_library_dependencies()` (scripts/lib/
+   appimage_pack.sh), which bundles the *full recursive `ldd` closure*
+   of the Cemu binary built on GitHub's own CI runner (a headless
+   machine with no real GPU or Vulkan ICD ever discoverable there).
+3. `scripts/lib/apprun_templates.sh`'s generated AppRun script for the
+   out-of-process AppImages (`generate_apprun_out_of_process()`)
+   explicitly sets `LD_LIBRARY_PATH="${bundled_lib_path}:..."` on the
+   exact line that launches the real emulator binary.
+4. Cemu's own (again, unmodified) startup code calls
+   `dlopen("libvulkan.so")` / `dlopen("libvulkan.so.1")` with a bare
+   soname, not an absolute path -- which resolves through that same
+   `LD_LIBRARY_PATH`-first search order as any other library. Whatever
+   Vulkan-loader-adjacent library rode along in step 2's bundled
+   closure gets found *before* the host's own real, correctly-
+   functioning Vulkan loader -- explaining both symptoms together
+   (`VK_KHR_surface`, the single most universal, always-present Vulkan
+   extension on any real desktop, missing *and* `VK_KHR_wayland_surface`
+   missing) on a machine confirmed to have a real, working GPU (an
+   AMD Ryzen 7 9800X3D system, per the log's own hardware line -- note
+   this CPU model itself has no integrated graphics at all, so a
+   discrete GPU is a certainty here, not a maybe).
+
+This is the exact same bug *class* this file already documents twice
+over for this same AppImage-bundling mechanism -- a build-environment
+copy of something that must always be the host's own shadowing the
+correct one via `LD_LIBRARY_PATH` (glibc's `GLIBC_PRIVATE` symbol
+mismatch crashing `mkdir -p`, and Qt's platform plugin discovery
+failing outright) -- just a new instance of it, this time hitting
+graphics-driver libraries instead.
+
+**Fixed** by extending `bundle_library_dependencies()`'s existing
+`_is_never_bundle_library()` exclusion list (already covering glibc's
+own tightly-coupled components, with its own header comment explaining
+exactly why) to also exclude the whole Mesa/Vulkan/GL driver-library
+family: `libvulkan.so.*`, `libGL.so.*`, `libGLX.so.*`,
+`libGLdispatch.so.*`, `libEGL.so.*`, `libgbm.so.*`, `libdrm.so.*`,
+`libdrm_*.so.*`. This is standard, well-established practice for
+portable Linux app packaging generally (AppImage/Flatpak/Snap
+tooling -- including linuxdeploy, which this project's own bundling
+logic is conceptually modeled after -- universally exclude Mesa/Vulkan/
+GL libraries from bundles for exactly this reason: they are the
+userspace half of the kernel's own GPU driver, not a portable
+application dependency, and must always match whatever kernel driver
+is actually running on the host).
+
+**Scope, checked directly:** only the AppImage packaging path
+(`emudeck-replace-in-place.sh`'s downloaded, patched AppImages) is
+affected. The plain, non-AppImage `host/cemu` binary
+(`run-host-cemu.sh`'s own launch path, used by DualDeck's own "Launch..."
+menu when not using EmuDeck replace-in-place) execs Cemu directly with
+no `LD_LIBRARY_PATH` override at all -- confirmed by reading that
+script directly -- so it was never exposed to this specific mechanism.
+
+**Verified:** the exclusion logic itself, directly -- confirmed
+`libvulkan.so.1`/`libGL.so.1`/`libEGL.so.1`/`libdrm.so.2`/
+`libdrm_amdgpu.so.1`/`libgbm.so.1` are all now correctly excluded while
+ordinary libraries (X11, dbus, turbojpeg, etc.) still bundle normally,
+both via direct unit-level calls to `_is_never_bundle_library()` and by
+running the real `bundle_library_dependencies()` function against this
+project's own real, freshly-built `dualdeck-host-service` binary and
+confirming none of the newly-excluded names appear in its output.
+`bash -n` clean.
+
+**Not yet verified:** on real Bazzite hardware -- whether Cemu's Vulkan
+(and OpenGL, which crashed outright per the user's earlier report)
+backends actually initialize successfully once the AppImage no longer
+bundles a shadowing graphics-driver library. This is a strong,
+mechanistically-complete root cause (not a guess -- traced through
+real source on both the Cemu and DualDeck sides), but the next release
+build is what will actually confirm it end to end.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
