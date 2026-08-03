@@ -320,7 +320,7 @@ std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t 
     ack.accepted = accepted;
 
     uint8_t reason = data[offset]; offset += 1;
-    if (reason > static_cast<uint8_t>(HelloRejectReason::AppVersionMismatch)) {
+    if (reason > static_cast<uint8_t>(HelloRejectReason::AppVersionMismatchUpdateTriggered)) {
         return std::nullopt;
     }
     ack.rejectReason = static_cast<HelloRejectReason>(reason);

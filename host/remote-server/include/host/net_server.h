@@ -194,6 +194,33 @@ struct NetServerConfig {
     // this from the packaged archive's VERSION file.
     std::string appVersion;
 
+    // Real user request, 2026-08-03: "if the client connects to the host
+    // and the host is on an older version, it should try to trigger an
+    // update if possible" -- specifically scoped, per the user's own
+    // choice, to a client whose device identity is already in
+    // deviceApprovalManager's approved set (see handleHelloLocked() in
+    // net_server.cpp): the version check happens before authentication
+    // is even looked at, so an *unapproved* client learning it can make
+    // a host update and restart itself just by presenting a
+    // (correctly-formatted but unapproved) device identity would be a
+    // real, unauthenticated trigger -- not acceptable.
+    //
+    // Empty (the default) disables this entirely -- this only makes
+    // sense for a standalone dualdeck-host-service process that can
+    // cleanly restart itself afterward (the persistent Host Control
+    // daemon under systemd --user, Restart=on-failure -- see
+    // scripts/build-release.sh's host-control-daemon.sh), never for
+    // melonDS's in-process integration, which has no way to "restart
+    // itself" mid-emulation without losing the user's game entirely.
+    // When set, this is the full shell command run (detached, fire-and-
+    // forget -- see runSelfUpdateCommand() in net_server.cpp) the moment
+    // an already-approved device's Hello is rejected for a version
+    // mismatch; main.cpp wires this to
+    // "<host_root>/internal/apply-update.sh" (already idempotent, and
+    // already restarts the persistent daemon if it was active -- see
+    // that script's own comment) only when --self-update is passed.
+    std::string selfUpdateCommand;
+
     // Emulator-independent identity (GitHub issue #28's architecture
     // foundation milestone: decouple DualDeck from melonDS), sent back
     // in every HelloAck and DiscoveryResponse -- see
@@ -353,6 +380,17 @@ private:
     // Only ever touched from inside the onPendingRequestsChanged callback
     // above (see the comment there for why that's safe without its own lock).
     std::unordered_set<std::string> notifiedPendingIds_;
+    // Guards against re-running config_.selfUpdateCommand more than once
+    // per process lifetime -- an approved-but-mismatched client's own
+    // reconnect loop retries every few seconds, and the update itself
+    // (a download + install) can take well over a minute, so without
+    // this a single slow retry cadence would launch several overlapping
+    // update attempts. Deliberately never reset: once one is launched,
+    // this process is expected to eventually be replaced (the persistent
+    // daemon restarts once the update completes) -- there's no scenario
+    // where this same still-running, still-mismatched process should
+    // ever want to launch a second one.
+    std::atomic<bool> selfUpdateTriggered_{false};
 
     std::atomic<bool> running_{false};
     std::thread controlThread_;

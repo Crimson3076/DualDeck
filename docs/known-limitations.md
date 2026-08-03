@@ -8355,6 +8355,129 @@ fix does not depend on or wait for the separate touchpad-vs-synthetic-
 gamepad question above, so it's expected to work regardless of how that
 one resolves.
 
+## 2026-08-03: client-triggers-host-update on a version mismatch
+
+Real user request, planned ahead of any specific failure: "if the client
+connects to the host and the host is on an older version, it should try
+to trigger an update if possible." Before this, `HelloRejectReason::
+AppVersionMismatch` just told the user to update one side manually --
+verified via direct codebase grep that no auto-update trigger existed
+anywhere before implementing this (the user later reported "the client
+telling the host to update is not working," which was correct: it had
+never been built, not a bug).
+
+**Trust model, the user's own explicit choice** (via `AskUserQuestion`,
+not assumed): auto-trigger only for a device identity already in the
+host's approved-devices set (`DeviceApprovalManager`), never for any
+connecting client. The version-mismatch check happens *before*
+authentication/approval in `net_server.cpp`'s Hello handling (on
+purpose -- a stale client should never learn whether its stale
+credentials would have worked), so this needed its own read-only lookup
+rather than reusing the existing `check()`: `DeviceApprovalManager::
+isApproved()` (device_approval_manager.h/.cpp) looks up the approved set
+without the side effect `check()` has of registering/refreshing a
+pending-approval entry for an unrecognized id -- a client whose version
+doesn't even match yet has no business cluttering the pending-approval
+queue with an entry a human can't act on until versions match anyway.
+
+**Design:**
+- New `HelloRejectReason::AppVersionMismatchUpdateTriggered = 6` (purely
+  additive to the wire format -- `HelloRejectReason` is a plain
+  `uint8_t`, see `protocol.cpp`'s serialize/parse -- no
+  `kProtocolVersion` bump needed). Client shows a distinct "HOST IS
+  UPDATING ITSELF - RETRYING..." message instead of the plain
+  AppVersionMismatch "update one side to match the other" message.
+- New `NetServerConfig::selfUpdateCommand` (net_server.h): empty by
+  default (disables the feature entirely). Only makes sense for a
+  standalone `dualdeck-host-service` process that can cleanly restart
+  itself afterward (the persistent Host Control daemon under
+  `systemd --user`, `Restart=on-failure`) -- **never** for melonDS's
+  in-process integration, which has no way to restart itself mid-
+  emulation without losing the user's game. `main.cpp` only wires this
+  (to `<host_root>/internal/apply-update.sh`, which already restarts the
+  persistent daemon if it was active) when a new `--self-update` CLI
+  flag is passed; `scripts/build-release.sh`'s generated
+  `host-control-daemon.sh` passes it, nothing else does.
+- Gated additionally on `config_.authToken.empty()` -- static-token
+  deployments never populate `DeviceApprovalManager`'s approved set at
+  all (there, `hello->authToken` means "shared secret", not "persistent
+  device identity"), so the feature is a structural no-op in that mode
+  even if `selfUpdateCommand` were set by mistake.
+- Fire-and-forget via `runSelfUpdateCommand()` (`std::system("nohup " +
+  command + " >/dev/null 2>&1 &")`) so a potentially ~180-second update
+  download never blocks the Hello/HelloAck response.
+- `selfUpdateTriggered_` (atomic, deliberately never reset) ensures the
+  update command runs at most once per host process lifetime -- a
+  client retrying every few seconds while the update is already
+  downloading must not spawn a second concurrent update. A side effect
+  worth knowing: once triggered, *subsequent* Hello attempts from the
+  same approved device during the update window see plain
+  `AppVersionMismatch`, not another `AppVersionMismatchUpdateTriggered`
+  -- slightly less precise messaging on retries 2+, not a bug (the
+  client's auto-reconnect loop keeps retrying regardless of which of the
+  two reasons it sees, and the daemon comes back on its own once the
+  update finishes).
+
+**A real bug the new tests caught before shipping:** the live
+`protocol.cpp`'s `parseHelloAckPayload()` had its own separate
+validation cap -- `if (reason > static_cast<uint8_t>(HelloRejectReason::
+AppVersionMismatch)) return std::nullopt;` -- left over from before this
+change and never updated when the new enum value was added. Any client
+parsing a real `AppVersionMismatchUpdateTriggered` HelloAck would have
+seen it as a malformed packet and dropped the entire connection instead
+of showing the new message. Caught by
+`test_self_update_trigger.cpp`'s real end-to-end test (a real `NetServer`
+on real loopback sockets, a real raw-socket Hello, asserting on the
+parsed `HelloAck`) failing with the client-side handshake helper itself
+returning false, not a wrong-value assertion -- exactly the class of bug
+a "does the field decode to the right enum value" unit test alone would
+have missed, since the packet never parsed as anything at all. Fixed by
+raising the cap to `AppVersionMismatchUpdateTriggered`.
+
+**Frozen/vendored patch copies checked, no regeneration needed:**
+`host/melonds-patches/0001-remote-server-integration.patch` vendors a
+full standalone copy of `net_server.cpp`/`net_server.h` (melonDS's
+in-process integration builds its own disconnected snapshot, confirmed
+via direct grep) -- but `selfUpdateCommand` is designed to always stay
+empty for melonDS's in-process path (see above), so the vendored copy
+never needing the new trigger logic is by design, not an oversight.
+`host/azahar-patches/` and `host/cemu-patches/` only vendor `protocol.h`/
+`protocol.cpp` (for adapter-IPC contract types) plus `ipc_protocol.h` --
+confirmed via grep that their vendored `parseHelloAckPayload` is dead
+code in both (only `serializeHelloAckPayload` is ever called, by the
+adapter-contract layer; the actual client-host Hello/HelloAck exchange
+for Azahar/Cemu happens in the separately-built, always-current
+`dualdeck-host-service` binary they connect to over adapter IPC, not in
+anything vendored into the patch). `scripts/check-patch-protocol-sync.sh`
+only compares `kProtocolVersion` numbers between the live header and
+each patch's embedded copy, which this purely-additive enum change
+doesn't affect either way -- it would not have caught (and did not need
+to catch) any of the above.
+
+**Verified:** new `test_self_update_trigger.cpp` (host_tests) -- real
+`NetServer`/`DeviceApprovalManager` end-to-end, no mocks: an
+already-approved device with a mismatched `appVersion` gets
+`AppVersionMismatchUpdateTriggered` and the configured
+`selfUpdateCommand` actually runs (observed via a marker file, since the
+trigger is intentionally fire-and-forget with no other completion
+signal); an *unapproved* device with the same mismatch gets plain
+`AppVersionMismatch` and never triggers the command (the security
+boundary the user explicitly chose); the update fires at most once per
+process lifetime; static-auth-token mode never triggers it at all. Full
+host (`dualdeck_host`, `dualdeck-host-service`,
+`melonds_remote_host_tests` -- 88 cases, 0 failures) and protocol
+(`dualdeck_protocol_tests` -- 104 cases, 0 failures) test suites rebuilt
+and passing; client (`dualdeck-client`, including both new
+`HelloRejectReason::AppVersionMismatchUpdateTriggered` switch cases)
+rebuilds clean against SDL 3.4.12 with `-Wall -Wextra -Wpedantic
+-Wconversion -Wshadow`, zero warnings.
+
+**Not yet verified:** on real hardware -- an actual host running an
+older version, an approved Deck client connecting, and confirming the
+persistent daemon actually re-downloads, restarts, and comes back
+reachable at the new version. This is the next thing to test once
+another release is available to update *to*.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

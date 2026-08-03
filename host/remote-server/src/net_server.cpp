@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <utility>
@@ -406,6 +407,30 @@ namespace {
 // payloadSize value can't be used to make the host allocate/read
 // arbitrarily large amounts of data (spec section 13).
 constexpr uint32_t kMaxHelloPayloadSize = 512;
+
+// runSelfUpdateCommand <command>
+//
+// See NetServerConfig::selfUpdateCommand's own comment for the real user
+// request behind this and why it's gated to already-approved devices
+// only. `command` is never attacker- or network-controlled -- it only
+// ever comes from main.cpp's own hardcoded "<host_root>/internal/
+// apply-update.sh" path when --self-update is passed, never from
+// anything a connecting client sends -- so shelling out to it directly
+// is safe.
+//
+// Fire-and-forget: `apply-update.sh` itself can take well over a minute
+// (a real download), and this is called from inside the same
+// controlLoop() accept-handling that must send a HelloAck back promptly
+// -- blocking the handshake response on that would make an already-slow
+// update look like a hung/broken host on top of being out of date.
+// `nohup ... &` backgrounds the actual work; std::system() itself only
+// waits for the shell to fork it off, not for it to finish.
+void runSelfUpdateCommand(const std::string& command) {
+    std::string shellCommand = "nohup " + command + " >/dev/null 2>&1 &";
+    if (std::system(shellCommand.c_str()) != 0) {
+        std::fprintf(stderr, "NetServer: failed to launch self-update command (%s)\n", command.c_str());
+    }
+}
 } // namespace
 
 void NetServer::controlLoop() {
@@ -481,6 +506,24 @@ void NetServer::controlLoop() {
                                       "host is %s, client is %s)\n",
                                       ipStr, config_.appVersion.c_str(), hello->appVersion.c_str());
                         rejectReason = HelloRejectReason::AppVersionMismatch;
+                        // Real user request, 2026-08-03 (see
+                        // NetServerConfig::selfUpdateCommand's own
+                        // comment for the full design): only for a
+                        // device identity already in the approved set --
+                        // config_.authToken.empty() also excludes
+                        // static-token deployments, where deviceApproval_
+                        // is never populated at all and hello->authToken
+                        // means something else entirely (a shared
+                        // secret, not a persistent device id).
+                        if (config_.authToken.empty() && !config_.selfUpdateCommand.empty() &&
+                            deviceApproval_.isApproved(hello->authToken) && !selfUpdateTriggered_.exchange(true)) {
+                            std::fprintf(stderr,
+                                          "NetServer: %s is an already-approved device -- triggering "
+                                          "self-update (%s)\n",
+                                          ipStr, config_.selfUpdateCommand.c_str());
+                            runSelfUpdateCommand(config_.selfUpdateCommand);
+                            rejectReason = HelloRejectReason::AppVersionMismatchUpdateTriggered;
+                        }
                     } else if (!config_.authToken.empty()) {
                         // Legacy/CI-friendly static-token mode: exact match or reject,
                         // device-approval flow is bypassed entirely.

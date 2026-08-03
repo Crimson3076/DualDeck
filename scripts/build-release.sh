@@ -2038,6 +2038,20 @@ if [[ -n "${DUALDECK_HOST_CONTROL_AUTH_TOKEN:-}" ]]; then
     auth_token_args=(--auth-token "${DUALDECK_HOST_CONTROL_AUTH_TOKEN}")
 fi
 
+# Real user request, 2026-08-03: "if the client connects to the host and
+# the host is on an older version, it should try to trigger an update if
+# possible." This process is exactly the case that feature was scoped
+# to -- a standalone daemon that can cleanly restart itself once
+# apply-update.sh finishes (see that script's own "restart the daemon if
+# it was active" logic, added for this exact purpose) -- unlike melonDS's
+# in-process integration, which has no way to "restart itself" without
+# losing the current game. NetServer only ever acts on this for a device
+# identity already in the approved set (see net_server.cpp's own
+# comment), never an unapproved one, so passing this unconditionally
+# here is safe regardless of whether device-approval or static-token
+# mode ends up active.
+self_update_args=(--self-update "${host_root}/internal/apply-update.sh")
+
 # See build-release.sh's bundle_library_dependencies() call for this
 # binary -- host/internal/lib ships its runtime deps (libturbojpeg) so
 # it runs under systemd --user the same way on any host, immutable or
@@ -2046,7 +2060,7 @@ fi
 exec env LD_LIBRARY_PATH="${host_root}/internal/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
     "${host_root}/internal/dualdeck-host-service" --adapter-ipc \
     --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
-    --app-version "${DUALDECK_HOST_CONTROL_VERSION}"
+    --app-version "${DUALDECK_HOST_CONTROL_VERSION}" "${self_update_args[@]}"
 WRAP
 chmod +x "${pkg_dir}/host/internal/host-control-daemon.sh"
 

@@ -948,6 +948,16 @@ WizardConnectResult wizardConnectAndApprove(SDL_Renderer* renderer, SDL_Gamepad*
                 case HelloRejectReason::AppVersionMismatch:
                     status = "VERSION MISMATCH - HOST IS " + net.hostAppVersion() + ", UPDATE TO MATCH";
                     break;
+                case HelloRejectReason::AppVersionMismatchUpdateTriggered:
+                    // Real user request, 2026-08-03: the host already
+                    // recognized this device as approved and kicked off
+                    // its own update in the background (see
+                    // NetServerConfig::selfUpdateCommand's comment) --
+                    // the client's own reconnect loop just needs to keep
+                    // retrying, same as any other transient rejection,
+                    // until the host comes back on a matching version.
+                    status = "HOST " + net.hostAppVersion() + " IS UPDATING ITSELF - RETRYING...";
+                    break;
                 case HelloRejectReason::None:
                 default:
                     status = "HOST UNREACHABLE AT " + hostAddress;
@@ -2806,6 +2816,12 @@ int main(int argc, char** argv) {
                     case HelloRejectReason::AppVersionMismatch:
                         status = "VERSION MISMATCH WITH " + netConfig.hostAddress + " (HOST IS " +
                                   net.hostAppVersion() + ") - UPDATE TO MATCH";
+                        break;
+                    case HelloRejectReason::AppVersionMismatchUpdateTriggered:
+                        // See wizardConnectAndApprove()'s identical case's
+                        // own comment.
+                        status = "HOST " + netConfig.hostAddress + " (" + net.hostAppVersion() +
+                                  ") IS UPDATING ITSELF - RETRYING...";
                         break;
                     case HelloRejectReason::ProtocolVersionMismatch:
                         // See wizardConnectAndApprove()'s identical case for

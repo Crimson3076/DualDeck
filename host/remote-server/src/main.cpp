@@ -246,6 +246,8 @@ int main(int argc, char** argv) {
             config.micSupported = false;
         } else if (arg == "--app-version") {
             config.appVersion = nextArg();
+        } else if (arg == "--self-update") {
+            config.selfUpdateCommand = nextArg();
         } else if (arg == "--system-id") {
             config.systemIdentity.systemId = nextArg();
             systemIdentityExplicit = true;
@@ -272,7 +274,7 @@ int main(int argc, char** argv) {
                 "[--input-port N] [--video-port N] [--timeout-ms N] [--auth-token TOKEN] "
                 "[--state-dir PATH] [--pending-request-ttl-s N] [--stats-interval-ms N] "
                 "[--discovery-port N] [--host-name NAME] [--no-discovery] "
-                "[--audio-port N] [--no-mic] [--app-version STRING] "
+                "[--audio-port N] [--no-mic] [--app-version STRING] [--self-update COMMAND] "
                 "[--system-id ID] [--system-name NAME] [--adapter-id ID] "
                 "[--adapter-name NAME] [--adapter-version STRING] "
                 "[--adapter-ipc] [--adapter-socket PATH]\n"
@@ -329,6 +331,18 @@ int main(int argc, char** argv) {
                 "with AppVersionMismatch before authentication is even checked.\n"
                 "Omitted by default (no version-mismatch check at all) -- the\n"
                 "packaged release wires this from the archive's VERSION file.\n"
+                "\n"
+                "--self-update COMMAND runs COMMAND (detached, fire-and-forget) the\n"
+                "moment a client whose device identity is ALREADY approved (never an\n"
+                "unapproved one) hits an AppVersionMismatch rejection -- the client is\n"
+                "told AppVersionMismatchUpdateTriggered instead, so it can show 'host is\n"
+                "updating' rather than 'update one side to match the other'. Omitted by\n"
+                "default (no self-update trigger at all). Only meaningful for a\n"
+                "standalone process that can cleanly restart itself afterward -- the\n"
+                "packaged persistent Host Control daemon wires this to its own\n"
+                "internal/apply-update.sh, which already restarts the daemon if it was\n"
+                "active; never set this for melonDS's in-process integration, which has\n"
+                "no way to \"restart itself\" without losing the current game.\n"
                 "\n"
                 "Microphone support (spec/GitHub issue #2) is on by default: the\n"
                 "client can capture its own microphone and stream it here over UDP\n"

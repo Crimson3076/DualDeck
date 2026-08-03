@@ -73,6 +73,19 @@ public:
     CheckResult check(const std::string& deviceId, const std::string& clientName,
                        const std::string& address);
 
+    // Real user request, 2026-08-03: "auto-trigger [a host update] for
+    // already-approved devices" on an AppVersionMismatch rejection --
+    // that check happens *before* check() above is ever reached (see
+    // net_server.cpp's Hello handling, version compatibility is checked
+    // before authentication/approval on purpose), so it needs its own,
+    // read-only lookup rather than reusing check(): unlike check(), this
+    // never records or refreshes a pending-approval entry for an unknown
+    // deviceId -- a client whose version doesn't even match yet has no
+    // business cluttering the pending-approval queue with an entry a
+    // human at the host can't meaningfully act on until versions match
+    // anyway.
+    bool isApproved(const std::string& deviceId) const;
+
     // Approves a pending request by exact deviceId or unambiguous prefix
     // (operator convenience -- typing the first several characters of the
     // id shown in the log is enough). Persists the full deviceId to disk

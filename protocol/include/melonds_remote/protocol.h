@@ -404,6 +404,22 @@ enum class HelloRejectReason : uint8_t {
     // Never raised when either side's appVersion is empty (unknown/dev
     // build) -- see net_server.cpp.
     AppVersionMismatch = 5,
+    // Same underlying condition as AppVersionMismatch, but the presented
+    // device identity was already in the host's approved-devices list
+    // (see host::DeviceApprovalManager::isApproved()) -- real user
+    // request, 2026-08-03: "auto-trigger [a host update] for already-
+    // approved devices" specifically, not any connecting client, since
+    // this tells the host to download and install an update and restart
+    // itself. The host has already kicked that off in the background by
+    // the time this is sent; the client should show a distinct "updating,
+    // hang on" message rather than the plain "update one side to match
+    // the other" AppVersionMismatch tells an unapproved client. Purely
+    // additive to the wire format (HelloRejectReason is a plain uint8_t,
+    // see protocol.cpp's serialization) -- no kProtocolVersion bump
+    // needed; an older client that doesn't recognize this value still
+    // sees `accepted == 0` and falls back to its own default rejection
+    // handling.
+    AppVersionMismatchUpdateTriggered = 6,
 };
 
 // HelloAck (host -> client) handshake payload.

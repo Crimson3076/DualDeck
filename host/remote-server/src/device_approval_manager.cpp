@@ -110,6 +110,11 @@ DeviceApprovalManager::CheckResult DeviceApprovalManager::check(const std::strin
     return CheckResult::Pending;
 }
 
+bool DeviceApprovalManager::isApproved(const std::string& deviceId) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return !deviceId.empty() && approvedDevices_.count(deviceId) > 0;
+}
+
 bool DeviceApprovalManager::approve(const std::string& deviceIdOrPrefix) {
     std::lock_guard<std::mutex> lock(mutex_);
     std::string deviceId = resolvePendingLocked(deviceIdOrPrefix);

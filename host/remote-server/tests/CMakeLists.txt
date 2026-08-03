@@ -2,6 +2,7 @@ add_executable(melonds_remote_host_tests
     main.cpp
     test_adapter_bridge.cpp
     test_net_server_mode_switch.cpp
+    test_self_update_trigger.cpp
     test_host_control_adapter.cpp
     test_mode_coordinator.cpp
     test_host_session_state.cpp
