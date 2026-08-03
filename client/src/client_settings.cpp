@@ -46,6 +46,7 @@ ClientSettings loadClientSettings(const std::string& settingsPath) {
         constexpr const char* kMicMutedPrefix = "mic_muted=";
         constexpr const char* kVideoQualityPrefix = "video_quality=";
         constexpr const char* kMirrorHostScreenPrefix = "mirror_host_screen=";
+        constexpr const char* kSwapXYButtonsPrefix = "swap_xy_buttons=";
 
         if (line.rfind(kAutoUpdatePrefix, 0) == 0) {
             std::string value = line.substr(std::char_traits<char>::length(kAutoUpdatePrefix));
@@ -83,6 +84,13 @@ ClientSettings loadClientSettings(const std::string& settingsPath) {
             } else if (value == "0" || value == "false" || value == "off") {
                 settings.mirrorHostScreen = false;
             }
+        } else if (line.rfind(kSwapXYButtonsPrefix, 0) == 0) {
+            std::string value = line.substr(std::char_traits<char>::length(kSwapXYButtonsPrefix));
+            if (value == "1" || value == "true" || value == "on") {
+                settings.swapXYButtons = true;
+            } else if (value == "0" || value == "false" || value == "off") {
+                settings.swapXYButtons = false;
+            }
         }
     }
     return settings;
@@ -108,6 +116,7 @@ bool saveClientSettings(const std::string& settingsPath, const ClientSettings& s
         out << "mic_muted=" << (settings.micMuted ? "1" : "0") << '\n';
         out << "video_quality=" << settings.videoQuality << '\n';
         out << "mirror_host_screen=" << (settings.mirrorHostScreen ? "1" : "0") << '\n';
+        out << "swap_xy_buttons=" << (settings.swapXYButtons ? "1" : "0") << '\n';
         if (!out.good()) {
             out.close();
             std::error_code cleanupError;

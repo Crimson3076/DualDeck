@@ -50,6 +50,26 @@ struct ClientSettings {
     // test pattern texture instead of real video, which is harmless but
     // not the point, so it's not force-enabled by default.
     bool mirrorHostScreen = false;
+
+    // Real user report, 2026-08-03: Azahar's X/Y face buttons read
+    // swapped. Root-caused to Steam Input's default controller template
+    // for the DualDeck Client's Steam shortcut assigning A/B and X/Y to
+    // the physically wrong positions -- confirmed via the user's own
+    // Steam Input action-set screenshot, after the whole DualDeck-owned
+    // chain (client SDL mapping, wire protocol, host translation,
+    // Azahar's own source, and the bundled SDL3's own Xbox 360 HID
+    // driver) was independently re-verified correct at every layer. This
+    // happens entirely upstream of DualDeck's own code, in Steam Input's
+    // translation layer, so there is nothing to "fix" in Azahar's
+    // mapping table specifically without breaking it for every user
+    // whose Steam Input config (or lack of one) doesn't have this quirk.
+    // A client-side remap the affected user can opt into is the
+    // correctly-scoped fix instead: applies uniformly to whatever system
+    // is running (this is a controller-reading issue, not an
+    // Azahar-specific one), defaults off, and doesn't assume every
+    // user's Steam Input template is broken the same way. See
+    // buildButtonsFromGamepad()'s swapXY parameter.
+    bool swapXYButtons = false;
 };
 
 // $HOME/.config/dualdeck-client/settings.conf, or empty if HOME is

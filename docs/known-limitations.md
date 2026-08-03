@@ -9919,6 +9919,49 @@ entirely" escape hatch) for users who want Steam Input's other features
 undocumented compared to `localconfig.vdf`'s simple text format), not
 attempted here.
 
+## 2026-08-03: Client-side "swap X/Y buttons" option added for the Steam Input default-template issue above
+
+Follow-up to the entry above: the user asked for this to be "remapped in
+Azahar" specifically. That's the wrong place to fix it -- the actual
+mis-read happens on the client, upstream of the wire, in Steam Input's
+translation layer; hard-coding a swap into Azahar's own button table
+would fix it only for users hitting this exact Steam Input quirk while
+silently breaking it for everyone else (and be inconsistent with Cemu,
+melonDS, and any future adapter, all of which share the same wire-level
+convention). It's also not system-specific -- since the actual fault is
+in how the client reads its own controller, not anything about which
+emulator is running, a fix belongs at the client's input-read layer, not
+inside one host adapter.
+
+**Fix:** added `ClientSettings::swapXYButtons` (default off, persisted in
+`settings.conf` as `swap_xy_buttons=`), a new "SWAP X/Y BUTTONS" entry in
+the client's Settings screen, and a `swapXY` parameter to
+`buildButtonsFromGamepad()` that swaps the `DSButton_X`/`DSButton_Y` bits
+after the normal mapping loop runs -- applied uniformly to whatever
+system is connected (the real per-frame gameplay call site), not the
+setup wizard's raw controller-test screen (deliberately left unswapped,
+since that screen exists to show the user exactly what their controller
+is really reporting, which is useful for noticing this exact issue in
+the first place). Because `ControllerState.dsButtons` is the one shared
+field both Emulation and Host Control modes read from, enabling this
+correctly follows through to Host Control's own virtual gamepad too --
+unrelated to and not a re-fix of the earlier 2026-08-03 Host Control
+X/Y-swap entry (that one was a raw evdev/BTN_X-alias bug in the host's
+own uinput device construction, a completely different bug already
+fixed).
+
+**Verified:** full client build against SDL3 3.4.12 headers (via the
+project's own CMake client target) compiles clean; new
+`client_settings_missing_file_uses_swap_xy_buttons_off_default`/
+`client_settings_round_trip_swap_xy_buttons` tests pass, along with the
+full existing `client_settings_tests` suite and the rest of `ctest` (6
+suites, 0 failures) -- no regressions.
+
+**Not yet verified:** on real hardware, that toggling this actually
+fixes the reported flip for this user's specific Steam Input
+configuration (expected to, based on the root-cause finding, but not yet
+confirmed against a live session).
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
