@@ -10147,35 +10147,64 @@ shortcut keeps launching the real, still-Flatpak, still-completely-stock
 melonDS every time, with no DualDeck patch and no toggle, while the tool
 insists it succeeded.
 
-This has not been confirmed as the actual cause on the reporting user's
-machine specifically (EmuDeck's own background emulator auto-updater
-silently reverting an otherwise-successful patch, a risk this feature's
-own design already flagged and `emudeck-check-drift.sh` exists to catch,
-remains an equally plausible alternate explanation that a real install
-would need to rule in or out) -- but it is a real, independently
-confirmed gap in the tool's own success reporting either way.
+**Confirmed via the user's own `cat ~/Emulation/tools/launchers/melonds.sh`
+output.** The real content is:
+
+```bash
+#!/bin/bash
+. "$HOME/.config/EmuDeck/backend/functions/all.sh"
+emulatorInit "melonds"
+/usr/bin/flatpak run net.kuribo64.melonDS "${@}"
+cloud_sync_uploadForced
+rm -rf "$savesPath/.gaming"
+```
+
+This is exactly the gap above, hit in practice: no leading `exec`, the
+full `/usr/bin/flatpak` path rather than a bare `flatpak`, and `"${@}"`
+rather than `"$@"` -- the old anchored sed pattern
+(`^exec flatpak run net\.kuribo64\.melonDS.*`) would not have matched
+this line at all, while the looser grep refusal check
+(`flatpak run net\.kuribo64\.melonDS`, no anchor) did, so the rewrite
+silently did nothing and the function still reported success. This is
+also an update to `scripts/lib/emudeck_paths.sh`'s own prior comment,
+which had assumed (and stated with unwarranted confidence) a single
+`exec flatpak run net.kuribo64.melonDS --boot=never "$@"` line as
+"confirmed real content" -- that was evidently either stale (a
+since-changed EmuDeck launcher format) or simply wrong; this entry's
+content is the one actually verified against a real user's real file.
+
+**Second bug found from the same real file, before it could bite:** the
+real script has genuine cleanup steps (`cloud_sync_uploadForced`, `rm -rf
+"$savesPath/.gaming"`) on the lines *after* the flatpak invocation, which
+only run because that invocation is a plain foreground command, not
+`exec`'d. The fix already drafted for the pattern-matching gap above used
+`exec` in its replacement -- which would have made this rewrite
+technically "succeed" (the flatpak line really would be replaced) while
+silently discarding EmuDeck's own save/cloud-sync cleanup forever, a new
+regression the pattern-matching fix alone would never have surfaced
+without this real file to test against.
 
 **Fix:** loosened the `sed` pattern to match the same substring the
-grep check already validates (`.*flatpak run net\.kuribo64\.melonDS.*`,
-not anchored to a specific prefix), replacing the whole line rather than
-requiring an exact `^exec ` prefix. Added a post-rewrite verification
-that re-checks for the flatpak line's absence before reporting success
-at all -- if the rewrite didn't actually take effect for any reason, this
-now refuses with a loud, specific error instead of silently claiming
-success.
+existing grep check already validates (`.*flatpak run net\.kuribo64\.
+melonDS.*`, not anchored to a specific prefix) instead of the real line's
+exact wording, and the replacement itself no longer uses `exec` --
+`"${new_appimage_path}" "${@}"` as a plain foreground command, matching
+the original line's own convention exactly, so the cleanup steps after
+it keep running. Added a post-rewrite verification that re-checks for
+the flatpak line's absence before reporting success at all -- if the
+rewrite didn't actually take effect for any reason, this now refuses
+with a loud, specific error instead of silently claiming success.
 
-**Verified:** manual `sed` testing against four plausible real-world
-`melonds.sh` line variants (the previously-confirmed exact format, with
-leading whitespace, without a leading `exec`, and wrapped in
-`flatpak-spawn`) -- all four now correctly rewrite to the patched
-AppImage's exec line. `bash -n` clean on the modified script.
+**Verified:** manual `sed` testing against the exact real `melonds.sh`
+content quoted above -- confirms both the flatpak line gets correctly
+replaced and the `cloud_sync_uploadForced`/`rm -rf` lines survive
+unchanged afterward. `bash -n` clean on both modified scripts
+(`emudeck-replace-in-place.sh`, `scripts/lib/emudeck_paths.sh`).
 
-**Not yet verified:** against this user's actual `melonds.sh` (or
-whether their melonDS install is a Flatpak at all, versus a regular
-AppImage that took the normal replace-in-place path instead) -- the
-next real diagnostic step is checking that file's contents directly, or
-re-running `emudeck-check-drift.sh` to rule the EmuDeck-auto-update-race
-explanation in or out.
+**Not yet verified:** a full real end-to-end run of "Patch my emulators"
+against this user's actual EmuDeck install, confirming melonDS's
+DualDeck integration toggle now actually appears and a server actually
+starts once they're on a build with this fix.
 
 ## Things intentionally out of scope for v0.1
 

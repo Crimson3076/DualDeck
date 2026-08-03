@@ -199,12 +199,19 @@ download_patched_appimage() {
 # melonDS via Flatpak on this configuration, so there is no existing
 # AppImage to replace. Downloads the patched AppImage fresh to a fixed
 # path under emudeck_applications_dir(), backs up melonds.sh, and
-# rewrites its one `flatpak run` line to exec the new AppImage instead
-# -- dropping EmuDeck's own `--boot=never` flag in the process (an
-# AppImage launch takes the ROM path as a plain positional argument, the
-# same convention azahar.sh/cemu.sh already use, so this also happens to
-# fix the separately-reported "melonDS opens but doesn't load the ROM
-# automatically," which was that flag's doing).
+# rewrites its one `flatpak run` line to invoke the new AppImage instead.
+# Real melonds.sh content confirmed 2026-08-03 (superseding this
+# function's own earlier, apparently-stale assumption of a single `exec
+# flatpak run ...` line): `/usr/bin/flatpak run net.kuribo64.melonDS
+# "${@}"`, with real cleanup steps (cloud_sync_uploadForced, `rm -rf
+# "$savesPath/.gaming"`) on the lines *after* it -- this rewrite
+# deliberately does not introduce `exec` for exactly that reason (see the
+# sed call below's own comment). Also drops EmuDeck's own `--boot=never`
+# flag in the process where present (an AppImage launch takes the ROM
+# path as a plain positional argument, the same convention azahar.sh/
+# cemu.sh already use, so this also happens to fix the separately-
+# reported "melonDS opens but doesn't load the ROM automatically," which
+# was that flag's doing).
 #
 # Self-limiting to one run: once this succeeds, the newly-installed
 # AppImage sits exactly where find_emudeck_melonds_appimage() looks, so
@@ -277,7 +284,22 @@ bootstrap_melonds_flatpak_launcher() {
         log "melonds: launcher redirect refused, expected line not found"
         return 1
     fi
-    sed -i -E "s|^.*flatpak run net\.kuribo64\.melonDS.*|exec \"${new_appimage_path}\" \"\\\$@\"|" \
+    # Real user report, 2026-08-03: the actual current melonds.sh format
+    # is `/usr/bin/flatpak run net.kuribo64.melonDS "${@}"` -- no leading
+    # `exec`, and followed by real cleanup lines (cloud_sync_uploadForced,
+    # `rm -rf "$savesPath/.gaming"`) that only run because the flatpak
+    # invocation above them is a plain foreground command, not `exec`'d.
+    # This replacement deliberately matches that same convention (no
+    # `exec` here either) -- an earlier version of this line used `exec`,
+    # which would have discarded those cleanup steps entirely the moment
+    # this redirect took effect, a real behavioral regression to
+    # EmuDeck's own save/cloud-sync flow that was never actually
+    # triggered before this bug was found and fixed (see the
+    # verification check right below, added at the same time: without
+    # it, a sed pattern this loosened to match the real line above would
+    # otherwise have needed a live test to catch introducing this new
+    # problem while silently fixing the original one).
+    sed -i -E "s|^.*flatpak run net\.kuribo64\.melonDS.*|\"${new_appimage_path}\" \"\\\$@\"|" \
         "${flatpak_launcher}"
 
     # Real bug: sed -i exits 0 even when its pattern matches nothing --

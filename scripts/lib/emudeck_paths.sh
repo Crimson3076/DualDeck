@@ -129,16 +129,24 @@ emudeck_launchers_dir() {
 #
 # Real user report, 2026-08-01: EmuDeck installs melonDS as a Flatpak
 # (net.kuribo64.melonDS) on at least some configurations, not an
-# AppImage -- melonds.sh (confirmed real content) is just
-# `exec flatpak run net.kuribo64.melonDS --boot=never "$@"`, entirely
-# bypassing find_emudeck_melonds_appimage() above (which only ever looks
-# under emudeck_applications_dir()) -- every DualDeck melonDS fix has
-# zero effect on this configuration, since the actual running binary is
-# always completely stock. Prints melonds.sh's path if it exists and
-# still execs melonDS via Flatpak; prints nothing and returns 1 if the
-# launcher doesn't exist, or exists but already points somewhere else
-# (already redirected by a previous run of this same tool, or a
-# non-Flatpak stock install the normal AppImage path already handles).
+# AppImage -- entirely bypassing find_emudeck_melonds_appimage() above
+# (which only ever looks under emudeck_applications_dir()) -- every
+# DualDeck melonDS fix has zero effect on this configuration, since the
+# actual running binary is always completely stock. The exact
+# melonds.sh content has now been confirmed to vary between real EmuDeck
+# installs -- an earlier version of this comment assumed a single `exec
+# flatpak run net.kuribo64.melonDS --boot=never "$@"` line, but a real
+# 2026-08-03 report showed `/usr/bin/flatpak run net.kuribo64.melonDS
+# "${@}"` (no `exec`, full binary path, different arg-expansion syntax)
+# with real cleanup steps on the lines after it -- so
+# bootstrap_melonds_flatpak_launcher() (emudeck-replace-in-place.sh)
+# only matches on the `flatpak run net.kuribo64.melonDS` substring
+# common to both forms, not the whole line. Prints melonds.sh's path if
+# it exists and still contains that substring; prints nothing and
+# returns 1 if the launcher doesn't exist, or exists but already points
+# somewhere else (already redirected by a previous run of this same
+# tool, or a non-Flatpak stock install the normal AppImage path already
+# handles).
 find_emudeck_melonds_flatpak_launcher() {
     local launcher="$(emudeck_launchers_dir)/melonds.sh"
     [[ -f "${launcher}" ]] || return 1
