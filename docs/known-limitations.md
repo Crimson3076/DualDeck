@@ -8305,6 +8305,56 @@ warnings).
 `client.log` will show real vendor/product IDs for the first time,
 turning this from a reasoned guess into a checkable fact.
 
+## 2026-08-03: Host Control's mouse cursor screen-cap -- the actual, direct fix
+
+Real user demand, separate from the touchpad-vs-SDL-version investigation
+above: "it is still limited by resolution, we need a real answer and
+real solution." Right to push back on more diagnosis -- this one has a
+direct, well-understood fix that doesn't depend on resolving the
+touchpad mystery at all.
+
+**The real cause, stated plainly:** `SDL_EVENT_MOUSE_MOTION`'s
+`xrel`/`yrel` (what `hostControlMouseDeltaX/Y` accumulates) come from a
+*real* OS cursor's position delta. That cursor is confined to this
+client's own window/the Deck's screen like any normal cursor -- once it
+physically reaches an edge, it cannot move further, so no amount of
+continued physical input past that point produces any more motion. This
+is true regardless of what device is driving the cursor (the Deck's own
+trackpad already does this today, independent of the whole
+`SDL_EVENT_GAMEPAD_TOUCHPAD_*`/Steam Input investigation above -- a
+touchpad configured as a mouse always drives a real, boundable OS
+cursor) and independent of SDL version.
+
+**The fix:** `SDL_SetWindowRelativeMouseMode()`, an SDL feature built
+for exactly this case -- its own header comment: "an FPS wouldn't want
+the player's motion to stop as the mouse hits the edge of the window."
+Enabling it hides the OS cursor, grabs mouse input to the window, and
+keeps reporting relative motion deltas indefinitely regardless of screen
+edges. `main.cpp` now toggles this on whenever `net.hostMode() ==
+HostMode::HostControl` and connected, off otherwise -- Emulation mode's
+DS-touchscreen-via-mouse-drag feature (`mapPointToDSCoords`) still needs
+the real absolute cursor position, so relative mode would break that if
+left on outside Host Control.
+
+**A real correctness detail caught before shipping:** `SDL_mouse.h`
+documents that `SDL_SetWindowRelativeMouseMode()` "will flush any
+pending mouse motion for this window" *every time it's called* -- an
+early version of this fix called it unconditionally every frame based
+on current state, which would have flushed real in-flight motion
+constantly and made input feel jittery. Fixed by tracking the
+previously-applied state (`wasRelativeMouseMode`) and only calling the
+SDL function on an actual transition, matching this loop's existing
+`lastHostMode` transition-tracking pattern.
+
+**Verified:** client rebuilds clean (`-Wall -Wextra -Wpedantic
+-Wconversion -Wshadow`, zero warnings) against SDL 3.4.12.
+
+**Not yet verified:** on real hardware -- whether host-control mouse
+movement is now genuinely unbounded is the next thing to confirm; this
+fix does not depend on or wait for the separate touchpad-vs-synthetic-
+gamepad question above, so it's expected to work regardless of how that
+one resolves.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

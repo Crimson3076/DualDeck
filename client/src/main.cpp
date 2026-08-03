@@ -1829,6 +1829,14 @@ int main(int argc, char** argv) {
         // a fresh identity via ModeChanged that the block below should
         // pick up the same way it already does for the initial connect.
         HostMode lastHostMode = HostMode::Emulation;
+        // See the SDL_SetWindowRelativeMouseMode() call further down for
+        // why this exists -- tracked separately from lastHostMode/
+        // wasConnected so the toggle only ever fires on a real transition,
+        // never redundantly every frame (SDL_mouse.h: this call "will
+        // flush any pending mouse motion for this window" every time it's
+        // called, so calling it unconditionally on every frame would
+        // discard real, in-flight motion constantly).
+        bool wasRelativeMouseMode = false;
         bool touchActive = false;
         uint16_t touchX = 0;
         uint16_t touchY = 0;
@@ -2545,6 +2553,32 @@ int main(int argc, char** argv) {
             // (see their declaration above for why they survive a drop).
             bool nowConnected = net.isConnected();
             HostMode nowHostMode = net.hostMode();
+            // Real user report, 2026-08-03: "still limited by resolution" --
+            // the SDL_EVENT_MOUSE_MOTION handler above accumulates
+            // event.motion.xrel/yrel into hostControlMouseDeltaX/Y, but
+            // without this, xrel/yrel come from a REAL OS cursor confined to
+            // this window/the Deck's own screen -- once that cursor
+            // physically hits an edge, it can't move further, so no more
+            // motion ever fires no matter how far the actual input device
+            // keeps moving. This is an SDL feature built for exactly this
+            // ("an FPS wouldn't want the player's look-motion to stop as the
+            // mouse hits the edge of the window" -- SDL_mouse.h's own
+            // wording), not something specific to the touchpad-vs-Steam-
+            // Input investigation those other entries are chasing: relative
+            // mouse mode hides the OS cursor and keeps reporting motion
+            // deltas indefinitely regardless of screen edges, independent of
+            // whatever underlying device is generating them (the Deck's own
+            // trackpad already drives an OS cursor exactly like this even
+            // without any of the SDL_EVENT_GAMEPAD_TOUCHPAD_* work). Only
+            // meaningful in Host Control mode -- Emulation mode's DS-
+            // touchscreen-via-mouse-drag feature (mapPointToDSCoords below)
+            // needs the real absolute cursor position, which relative mode
+            // would break.
+            bool wantRelativeMouseMode = nowConnected && nowHostMode == HostMode::HostControl;
+            if (wantRelativeMouseMode != wasRelativeMouseMode) {
+                SDL_SetWindowRelativeMouseMode(window, wantRelativeMouseMode);
+                wasRelativeMouseMode = wantRelativeMouseMode;
+            }
             if (nowConnected && (!wasConnected || nowHostMode != lastHostMode)) {
                 SystemIdentity hostSystem = net.hostSystemIdentity();
                 AdapterIdentity hostAdapter = net.hostAdapterIdentity();
