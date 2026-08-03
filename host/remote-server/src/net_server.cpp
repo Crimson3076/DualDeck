@@ -10,6 +10,7 @@
 #include <turbojpeg.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -65,6 +66,32 @@ int makeTcpListener(const std::string& bindAddress, uint16_t port) {
 
     if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
         std::perror("bind (tcp)");
+        // Real user report, 2026-08-03: melonDS's own in-process
+        // NetServer (this file, vendored into the melonDS patch) and the
+        // separate persistent Host Control daemon (dualdeck-host-
+        // control.service) are two independent processes that both bind
+        // these exact same default client-facing ports -- melonDS isn't
+        // wired into the shared-daemon/adapter-IPC model Azahar/Cemu use
+        // (a known, deliberately-deferred larger rework, see
+        // docs/known-limitations.md), so nothing today stops both from
+        // trying to claim the same port at once. When that happens here,
+        // this melonDS instance silently never starts a server at all
+        // while the client, upon connecting, reaches whichever one *did*
+        // win the bind -- typically the daemon, since it's usually
+        // already running by the time melonDS launches -- landing the
+        // client in Host Control mode instead of the melonDS session the
+        // user actually wanted, with no obvious explanation from the
+        // client side alone. EADDRINUSE specifically (not just any bind
+        // failure) is exactly this scenario; call it out by name so
+        // whoever reads this line (interactively, or via journalctl if
+        // launched under systemd) doesn't have to guess.
+        if (errno == EADDRINUSE) {
+            std::fprintf(stderr,
+                          "NetServer: port %u is already in use -- if the persistent Host Control "
+                          "daemon (dualdeck-host-control.service) is running, stop it first "
+                          "(systemctl --user stop dualdeck-host-control.service), then relaunch.\n",
+                          port);
+        }
         ::close(fd);
         return -1;
     }
@@ -96,6 +123,16 @@ int makeUdpSocket(const std::string& bindAddress, uint16_t port) {
 
     if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
         std::perror("bind (udp)");
+        // See makeTcpListener()'s identical EADDRINUSE handling above --
+        // same melonDS-vs-persistent-daemon port conflict, just on the
+        // UDP input port instead of the TCP control/video ones.
+        if (errno == EADDRINUSE) {
+            std::fprintf(stderr,
+                          "NetServer: port %u is already in use -- if the persistent Host Control "
+                          "daemon (dualdeck-host-control.service) is running, stop it first "
+                          "(systemctl --user stop dualdeck-host-control.service), then relaunch.\n",
+                          port);
+        }
         ::close(fd);
         return -1;
     }

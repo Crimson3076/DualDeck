@@ -10206,6 +10206,114 @@ against this user's actual EmuDeck install, confirming melonDS's
 DualDeck integration toggle now actually appears and a server actually
 starts once they're on a build with this fix.
 
+## 2026-08-03: melonDS's own frozen net_server.cpp/protocol.h copy was months of fixes behind the live source -- regenerated everything, not just the two lines this pass touched
+
+Found while regenerating melonDS's `net_server.cpp` for this same day's
+small EADDRINUSE-diagnostic addition (see the entry below): the embedded
+copy was 1142 lines against the live file's 1257 -- not just missing
+those new lines, missing the *entire* client-triggers-host-update
+self-update-trigger feature from earlier this same day
+(`protocolVersionMismatch` decoupling, `runSelfUpdateCommand()`,
+`selfUpdateCommand`/`selfUpdateTriggered_` -- confirmed missing from
+`net_server.h` too, not just `.cpp`). `scripts/check-patch-protocol-
+sync.sh` only ever checked `kProtocolVersion`'s numeric value, which
+matched (`protocol.h`'s version line is normally bumped in lockstep with
+content changes) -- but a change to `net_server.cpp` itself, or to
+`protocol.h` content that doesn't touch the version number (a struct
+field rename, in this case), has no tripwire at all today. Audited every
+other embedded "new file" hunk melonDS's patch carries by direct byte
+diff against a fresh pinned checkout: `adapter_bridge.cpp/.h`,
+`device_approval_manager.cpp/.h`, `emulator_input_sink.h`,
+`frame_source.h`, and `mic_audio_sink.h` had all drifted too (to varying
+degrees); `protocol.h`/`protocol.cpp` had a real, non-cosmetic
+divergence despite matching `kProtocolVersion` -- the live code renamed
+`HostControlButton`/`hostControlButtons` to `ExtraButton`/`extraButtons`
+(once Cemu started reading the same field, making the old
+host-control-specific name actively misleading), and melonDS's frozen
+copy still had the old names -- which would have been a real compile
+error the moment melonDS's `net_server.cpp` got regenerated to reference
+the new names without `protocol.h` following along. The `adapter_sdk/`
+embedded files were, by contrast, already fully in sync -- this
+staleness was specific to `host/remote-server` and `protocol/`'s own
+files.
+
+**Fix:** regenerated all eight drifted files (`net_server.cpp/.h`,
+`adapter_bridge.cpp/.h`, `device_approval_manager.cpp/.h`,
+`emulator_input_sink.h`, `frame_source.h`, `mic_audio_sink.h`,
+`protocol.h`, `protocol.cpp`) from their live sources, using the same
+whole-file-replacement technique already proven for the Azahar/Cemu
+`protocol.h`/`protocol.cpp` regeneration earlier this same day.
+
+**Verified:** the regenerated patch applies cleanly (`git apply --check`,
+then a real apply) to a fresh clone of melonDS at the pinned commit
+(`10a173b55`), and every one of the eight regenerated files is
+byte-identical to its live counterpart after applying (`diff`, zero
+output, checked individually) -- as are the eleven `adapter_sdk/` files
+that turned out already in sync. `check-patch-protocol-sync.sh` still
+passes. Full local `ctest` run (6 suites) passes with no regressions to
+the shared host code these files are copies of.
+
+**Not yet verified:** whether this staleness (independent of today's own
+small addition) was ever the actual root cause of any specific past
+melonDS bug report -- plausible given the missing self-update-trigger
+feature alone, but not confirmed against real hardware. Also not yet
+done: extending `check-patch-protocol-sync.sh` (or a new, broader script)
+to catch this whole class of drift automatically across all three
+patches' embedded files, not just `kProtocolVersion`'s number -- flagged
+as a real gap, not attempted in this pass.
+
+## 2026-08-03: melonDS server fails to bind when the persistent Host Control daemon is already running -- known architecture gap, now at least diagnosable
+
+Real user report: after finally getting melonDS correctly patched (see
+the EmuDeck Flatpak-launcher entries above), the client would only ever
+connect to Host Control mode, never to melonDS itself -- "I have to stop
+the background service and then launch via the dualdeck GUI, then it
+allows me to connect to that instead of host control."
+
+Root cause, confirmed by reading `NetServer::start()`: melonDS's own
+in-process `NetServer` and the separate persistent Host Control daemon
+(`dualdeck-host-control.service`, Phase B+) are two independent processes
+that each bind the exact same default client-facing control/input/video
+ports -- melonDS was never wired into the shared-daemon/adapter-IPC
+model Azahar/Cemu already use (out-of-process, connecting to one shared
+daemon over a local socket); it still always runs its own competing
+server. This is a real, already-known, deliberately-deferred
+architectural gap (see this file's own Phase A/B planning notes: "Making
+melonDS default to out-of-process instead is separate, larger Phase B
+work"), not a new bug -- but the *symptom* was previously undiagnosable:
+`makeTcpListener()`/`makeUdpSocket()` already called `perror()` on a bind
+failure, but gave no indication of *why* the port was taken or what to
+do about it, and `NetServer::start()`'s overall failure message never
+reaches the user at all when launched from Steam/Gaming Mode (no visible
+terminal, and nothing routes this to `journalctl` either since melonDS
+isn't a systemd-launched process the way the persistent daemon is).
+Whichever process bound the ports *first* (typically the daemon, since
+it's usually already running by the time melonDS launches) is the one
+the client actually reaches -- landing the user in Host Control mode
+with zero indication that anything is wrong, exactly matching the
+report.
+
+**Fix (diagnosability only, not the underlying architecture gap):**
+`makeTcpListener()`/`makeUdpSocket()` in `net_server.cpp` now check
+`errno == EADDRINUSE` specifically on a bind failure and print a clear,
+actionable message naming the persistent Host Control daemon and the
+exact `systemctl --user stop dualdeck-host-control.service` command to
+free the ports. Real fix for the underlying conflict (melonDS defaulting
+to out-of-process, or the daemon detecting and stepping aside for a
+higher-priority in-process session) remains explicitly out of scope for
+this pass, matching the same phase-boundary decision already made and
+documented for this exact gap.
+
+**Verified:** full local build + `ctest` (6 suites) passes. The message
+itself has not been observed against a real port conflict on real
+hardware (the user's own workaround -- stopping the daemon first --
+already avoids ever triggering this path).
+
+**Practical workaround, until the larger rework happens:** stop
+`dualdeck-host-control.service` before launching melonDS directly (the
+user's own already-discovered fix); or don't run the persistent daemon
+at all if melonDS is the primary way this host gets used.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

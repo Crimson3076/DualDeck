@@ -3669,10 +3669,10 @@ index 00000000..42214503
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/frontend/qt_sdl/remote_server/host/adapter_bridge.cpp b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.cpp
 new file mode 100644
-index 00000000..34fd8b11
+index 0000000..d1a2b3c40
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.cpp
-@@ -0,0 +1,125 @@
+@@ -0,0 +1,145 @@
 +#include "host/adapter_bridge.h"
 +
 +namespace melonds_remote::host {
@@ -3730,6 +3730,21 @@ index 00000000..34fd8b11
 +    return generic;
 +}
 +
++// Real Wii U GamePad hardware has clickable analog sticks (L3/R3) --
++// unlike DSButton, which has no bits for these at all (the DS/3DS have
++// no such concept), protocol v12's ExtraButton bitmask carries them
++// (see protocol.h's own comment). host/cemu-patches/'s RemoteController.cpp
++// already maps GenericButton_L3/R3 to the Wii U's real kButton6/kButton7
++// stick-click bits -- this table is what actually populates them from
++// the wire, closing a real gap where they were always 0 regardless of
++// whether the wire carried real data (it didn't, before v12).
++uint32_t extraButtonsToGenericButtons(uint8_t extraButtons) {
++    uint32_t generic = 0;
++    if (extraButtons & melonds_remote::ExtraButton_ThumbLeft) generic |= melonds_remote::adapter::GenericButton_L3;
++    if (extraButtons & melonds_remote::ExtraButton_ThumbRight) generic |= melonds_remote::adapter::GenericButton_R3;
++    return generic;
++}
++
 +} // namespace
 +
 +std::string AdapterBridge::targetSurfaceId() const {
@@ -3740,11 +3755,16 @@ index 00000000..34fd8b11
 +    melonds_remote::adapter::GenericInputState generic;
 +    generic.sequence = state.sequence;
 +    generic.clientTimestampUs = state.clientTimestampUs;
-+    generic.buttons = dsButtonsToGenericButtons(state.dsButtons);
++    generic.buttons = dsButtonsToGenericButtons(state.dsButtons) | extraButtonsToGenericButtons(state.extraButtons);
 +    generic.leftStickX = state.leftStickX;
 +    generic.leftStickY = state.leftStickY;
 +    generic.rightStickX = state.rightStickX;
 +    generic.rightStickY = state.rightStickY;
++    // Real Wii U GamePad hardware has analog ZL/ZR -- see protocol.h's
++    // leftTrigger/rightTrigger comment for why these aren't DS/3DS-only
++    // despite living next to the other host-control-era additions.
++    generic.leftTrigger = state.leftTrigger;
++    generic.rightTrigger = state.rightTrigger;
 +    if (state.touchActive) {
 +        generic.touches.push_back(
 +            melonds_remote::adapter::TouchContact{targetSurfaceId(), state.touchX, state.touchY});
@@ -3800,7 +3820,7 @@ index 00000000..34fd8b11
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/adapter_bridge.h b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.h
 new file mode 100644
-index 00000000..44733239
+index 0000000..e2b3c4d51
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.h
 @@ -0,0 +1,92 @@
@@ -3898,10 +3918,10 @@ index 00000000..44733239
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/device_approval_manager.cpp b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.cpp
 new file mode 100644
-index 00000000..24299127
+index 0000000..f3c4d5e62
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.cpp
-@@ -0,0 +1,163 @@
+@@ -0,0 +1,168 @@
 +#include "host/device_approval_manager.h"
 +
 +#include <algorithm>
@@ -4014,6 +4034,11 @@ index 00000000..24299127
 +    return CheckResult::Pending;
 +}
 +
++bool DeviceApprovalManager::isApproved(const std::string& deviceId) const {
++    std::lock_guard<std::mutex> lock(mutex_);
++    return !deviceId.empty() && approvedDevices_.count(deviceId) > 0;
++}
++
 +bool DeviceApprovalManager::approve(const std::string& deviceIdOrPrefix) {
 +    std::lock_guard<std::mutex> lock(mutex_);
 +    std::string deviceId = resolvePendingLocked(deviceIdOrPrefix);
@@ -4067,10 +4092,10 @@ index 00000000..24299127
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/device_approval_manager.h b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.h
 new file mode 100644
-index 00000000..a472cbad
+index 0000000..a4d5e6f73
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.h
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,150 @@
 +#pragma once
 +
 +// Implements device-approval authentication (replaces the earlier
@@ -4146,6 +4171,19 @@ index 00000000..a472cbad
 +    CheckResult check(const std::string& deviceId, const std::string& clientName,
 +                       const std::string& address);
 +
++    // Real user request, 2026-08-03: "auto-trigger [a host update] for
++    // already-approved devices" on an AppVersionMismatch rejection --
++    // that check happens *before* check() above is ever reached (see
++    // net_server.cpp's Hello handling, version compatibility is checked
++    // before authentication/approval on purpose), so it needs its own,
++    // read-only lookup rather than reusing check(): unlike check(), this
++    // never records or refreshes a pending-approval entry for an unknown
++    // deviceId -- a client whose version doesn't even match yet has no
++    // business cluttering the pending-approval queue with an entry a
++    // human at the host can't meaningfully act on until versions match
++    // anyway.
++    bool isApproved(const std::string& deviceId) const;
++
 +    // Approves a pending request by exact deviceId or unambiguous prefix
 +    // (operator convenience -- typing the first several characters of the
 +    // id shown in the log is enough). Persists the full deviceId to disk
@@ -4210,7 +4248,7 @@ index 00000000..a472cbad
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/emulator_input_sink.h b/src/frontend/qt_sdl/remote_server/host/emulator_input_sink.h
 new file mode 100644
-index 00000000..b6f99b86
+index 0000000..b5e6f7084
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/emulator_input_sink.h
 @@ -0,0 +1,34 @@
@@ -4250,7 +4288,7 @@ index 00000000..b6f99b86
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/frame_source.h b/src/frontend/qt_sdl/remote_server/host/frame_source.h
 new file mode 100644
-index 00000000..3c0abbda
+index 0000000..c6f70895a
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/frame_source.h
 @@ -0,0 +1,63 @@
@@ -4319,7 +4357,7 @@ index 00000000..3c0abbda
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/mic_audio_sink.h b/src/frontend/qt_sdl/remote_server/host/mic_audio_sink.h
 new file mode 100644
-index 00000000..34cb8a58
+index 0000000..d7081960b
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/mic_audio_sink.h
 @@ -0,0 +1,35 @@
@@ -4360,10 +4398,10 @@ index 00000000..34cb8a58
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.cpp b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
 new file mode 100644
-index 00000000..41b4be03
+index 0000000..b1e9f2c7a
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
-@@ -0,0 +1,1142 @@
+@@ -0,0 +1,1257 @@
 +#include "host/net_server.h"
 +
 +#include <arpa/inet.h>
@@ -4376,8 +4414,10 @@ index 00000000..41b4be03
 +#include <turbojpeg.h>
 +
 +#include <algorithm>
++#include <cerrno>
 +#include <chrono>
 +#include <cstdio>
++#include <cstdlib>
 +#include <cstring>
 +#include <optional>
 +#include <utility>
@@ -4430,6 +4470,32 @@ index 00000000..41b4be03
 +
 +    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
 +        std::perror("bind (tcp)");
++        // Real user report, 2026-08-03: melonDS's own in-process
++        // NetServer (this file, vendored into the melonDS patch) and the
++        // separate persistent Host Control daemon (dualdeck-host-
++        // control.service) are two independent processes that both bind
++        // these exact same default client-facing ports -- melonDS isn't
++        // wired into the shared-daemon/adapter-IPC model Azahar/Cemu use
++        // (a known, deliberately-deferred larger rework, see
++        // docs/known-limitations.md), so nothing today stops both from
++        // trying to claim the same port at once. When that happens here,
++        // this melonDS instance silently never starts a server at all
++        // while the client, upon connecting, reaches whichever one *did*
++        // win the bind -- typically the daemon, since it's usually
++        // already running by the time melonDS launches -- landing the
++        // client in Host Control mode instead of the melonDS session the
++        // user actually wanted, with no obvious explanation from the
++        // client side alone. EADDRINUSE specifically (not just any bind
++        // failure) is exactly this scenario; call it out by name so
++        // whoever reads this line (interactively, or via journalctl if
++        // launched under systemd) doesn't have to guess.
++        if (errno == EADDRINUSE) {
++            std::fprintf(stderr,
++                          "NetServer: port %u is already in use -- if the persistent Host Control "
++                          "daemon (dualdeck-host-control.service) is running, stop it first "
++                          "(systemctl --user stop dualdeck-host-control.service), then relaunch.\n",
++                          port);
++        }
 +        ::close(fd);
 +        return -1;
 +    }
@@ -4461,6 +4527,16 @@ index 00000000..41b4be03
 +
 +    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
 +        std::perror("bind (udp)");
++        // See makeTcpListener()'s identical EADDRINUSE handling above --
++        // same melonDS-vs-persistent-daemon port conflict, just on the
++        // UDP input port instead of the TCP control/video ones.
++        if (errno == EADDRINUSE) {
++            std::fprintf(stderr,
++                          "NetServer: port %u is already in use -- if the persistent Host Control "
++                          "daemon (dualdeck-host-control.service) is running, stop it first "
++                          "(systemctl --user stop dualdeck-host-control.service), then relaunch.\n",
++                          port);
++        }
 +        ::close(fd);
 +        return -1;
 +    }
@@ -4772,6 +4848,30 @@ index 00000000..41b4be03
 +// payloadSize value can't be used to make the host allocate/read
 +// arbitrarily large amounts of data (spec section 13).
 +constexpr uint32_t kMaxHelloPayloadSize = 512;
++
++// runSelfUpdateCommand <command>
++//
++// See NetServerConfig::selfUpdateCommand's own comment for the real user
++// request behind this and why it's gated to already-approved devices
++// only. `command` is never attacker- or network-controlled -- it only
++// ever comes from main.cpp's own hardcoded "<host_root>/internal/
++// apply-update.sh" path when --self-update is passed, never from
++// anything a connecting client sends -- so shelling out to it directly
++// is safe.
++//
++// Fire-and-forget: `apply-update.sh` itself can take well over a minute
++// (a real download), and this is called from inside the same
++// controlLoop() accept-handling that must send a HelloAck back promptly
++// -- blocking the handshake response on that would make an already-slow
++// update look like a hung/broken host on top of being out of date.
++// `nohup ... &` backgrounds the actual work; std::system() itself only
++// waits for the shell to fork it off, not for it to finish.
++void runSelfUpdateCommand(const std::string& command) {
++    std::string shellCommand = "nohup " + command + " >/dev/null 2>&1 &";
++    if (std::system(shellCommand.c_str()) != 0) {
++        std::fprintf(stderr, "NetServer: failed to launch self-update command (%s)\n", command.c_str());
++    }
++}
 +} // namespace
 +
 +void NetServer::controlLoop() {
@@ -4825,9 +4925,30 @@ index 00000000..41b4be03
 +        ssize_t n = ::recv(clientFd, headerBuf, sizeof(headerBuf), MSG_WAITALL);
 +        if (n == static_cast<ssize_t>(sizeof(headerBuf))) {
 +            auto header = parseHeader(headerBuf, sizeof(headerBuf));
-+            if (header && header->type == PacketType::Hello &&
-+                header->protocolVersion == kProtocolVersion &&
-+                header->payloadSize <= kMaxHelloPayloadSize) {
++            // Real user report, 2026-08-03: "Client -> Host update
++            // notifier seemingly broke in this version." Root cause: this
++            // used to require header->protocolVersion == kProtocolVersion
++            // just to attempt parsing Hello at all -- meaning a genuine
++            // wire-format bump (like this same release's protocol v12,
++            // which grew ControllerState) short-circuited straight to the
++            // default ProtocolVersionMismatch rejection below, never
++            // reaching the appVersion-mismatch/self-update-trigger logic
++            // beneath it. That logic's whole point is "an already-
++            // approved device is running a different release than this
++            // host -- self-update," which is if anything *more* true, not
++            // less, when the two sides don't even agree on the wire
++            // format itself. HelloPayload's own byte layout is
++            // independent of kProtocolVersion (confirmed by reading
++            // parseHelloPayload() -- it's driven entirely by length-
++            // prefixed strings read from `data`/`size`, never consults
++            // the packet header), so it's safe to attempt parsing
++            // regardless of a version mismatch here; a genuinely
++            // incompatible future HelloPayload layout still fails safely
++            // via parseHelloPayload()'s own strict size/trailing-byte
++            // checks, landing in the existing "malformed Hello payload"
++            // branch below rather than misparsing.
++            bool protocolVersionMismatch = header && header->protocolVersion != kProtocolVersion;
++            if (header && header->type == PacketType::Hello && header->payloadSize <= kMaxHelloPayloadSize) {
 +                ByteBuffer payloadBuf(header->payloadSize);
 +                ssize_t got = header->payloadSize == 0
 +                                  ? 0
@@ -4836,17 +4957,49 @@ index 00000000..41b4be03
 +                    auto hello = parseHelloPayload(payloadBuf.data(), payloadBuf.size());
 +                    if (!hello) {
 +                        std::fprintf(stderr, "NetServer: rejecting handshake (malformed Hello payload)\n");
-+                    } else if (!config_.appVersion.empty() && !hello->appVersion.empty() &&
-+                               hello->appVersion != config_.appVersion) {
++                    } else if (protocolVersionMismatch ||
++                               (!config_.appVersion.empty() && !hello->appVersion.empty() &&
++                                hello->appVersion != config_.appVersion)) {
 +                        // Wire-format-compatible (same kProtocolVersion) but a
 +                        // different release -- checked before authentication so
 +                        // a stale client never even learns whether its stale
-+                        // credentials would have worked.
-+                        std::fprintf(stderr,
-+                                      "NetServer: rejecting handshake from %s (app version mismatch: "
-+                                      "host is %s, client is %s)\n",
-+                                      ipStr, config_.appVersion.c_str(), hello->appVersion.c_str());
-+                        rejectReason = HelloRejectReason::AppVersionMismatch;
++                        // credentials would have worked. A real protocol-
++                        // version mismatch (protocolVersionMismatch above)
++                        // takes the same path -- see this block's own
++                        // real-user-report comment above.
++                        if (protocolVersionMismatch) {
++                            std::fprintf(stderr,
++                                          "NetServer: rejecting handshake from %s (protocol version "
++                                          "mismatch: host is v%u (app %s), client is v%u (app %s))\n",
++                                          ipStr, static_cast<unsigned>(kProtocolVersion),
++                                          config_.appVersion.c_str(), static_cast<unsigned>(header->protocolVersion),
++                                          hello->appVersion.c_str());
++                        } else {
++                            std::fprintf(stderr,
++                                          "NetServer: rejecting handshake from %s (app version mismatch: "
++                                          "host is %s, client is %s)\n",
++                                          ipStr, config_.appVersion.c_str(), hello->appVersion.c_str());
++                        }
++                        rejectReason = protocolVersionMismatch ? HelloRejectReason::ProtocolVersionMismatch
++                                                                : HelloRejectReason::AppVersionMismatch;
++                        // Real user request, 2026-08-03 (see
++                        // NetServerConfig::selfUpdateCommand's own
++                        // comment for the full design): only for a
++                        // device identity already in the approved set --
++                        // config_.authToken.empty() also excludes
++                        // static-token deployments, where deviceApproval_
++                        // is never populated at all and hello->authToken
++                        // means something else entirely (a shared
++                        // secret, not a persistent device id).
++                        if (config_.authToken.empty() && !config_.selfUpdateCommand.empty() &&
++                            deviceApproval_.isApproved(hello->authToken) && !selfUpdateTriggered_.exchange(true)) {
++                            std::fprintf(stderr,
++                                          "NetServer: %s is an already-approved device -- triggering "
++                                          "self-update (%s)\n",
++                                          ipStr, config_.selfUpdateCommand.c_str());
++                            runSelfUpdateCommand(config_.selfUpdateCommand);
++                            rejectReason = HelloRejectReason::AppVersionMismatchUpdateTriggered;
++                        }
 +                    } else if (!config_.authToken.empty()) {
 +                        // Legacy/CI-friendly static-token mode: exact match or reject,
 +                        // device-approval flow is bypassed entirely.
@@ -5508,10 +5661,10 @@ index 00000000..41b4be03
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.h b/src/frontend/qt_sdl/remote_server/host/net_server.h
 new file mode 100644
-index 00000000..25acd39d
+index 0000000..c4f8a1e63
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.h
-@@ -0,0 +1,404 @@
+@@ -0,0 +1,442 @@
 +#pragma once
 +
 +// Minimal standalone host server: one TCP control connection (handshake +
@@ -5708,6 +5861,33 @@ index 00000000..25acd39d
 +    // this from the packaged archive's VERSION file.
 +    std::string appVersion;
 +
++    // Real user request, 2026-08-03: "if the client connects to the host
++    // and the host is on an older version, it should try to trigger an
++    // update if possible" -- specifically scoped, per the user's own
++    // choice, to a client whose device identity is already in
++    // deviceApprovalManager's approved set (see handleHelloLocked() in
++    // net_server.cpp): the version check happens before authentication
++    // is even looked at, so an *unapproved* client learning it can make
++    // a host update and restart itself just by presenting a
++    // (correctly-formatted but unapproved) device identity would be a
++    // real, unauthenticated trigger -- not acceptable.
++    //
++    // Empty (the default) disables this entirely -- this only makes
++    // sense for a standalone dualdeck-host-service process that can
++    // cleanly restart itself afterward (the persistent Host Control
++    // daemon under systemd --user, Restart=on-failure -- see
++    // scripts/build-release.sh's host-control-daemon.sh), never for
++    // melonDS's in-process integration, which has no way to "restart
++    // itself" mid-emulation without losing the user's game entirely.
++    // When set, this is the full shell command run (detached, fire-and-
++    // forget -- see runSelfUpdateCommand() in net_server.cpp) the moment
++    // an already-approved device's Hello is rejected for a version
++    // mismatch; main.cpp wires this to
++    // "<host_root>/internal/apply-update.sh" (already idempotent, and
++    // already restarts the persistent daemon if it was active -- see
++    // that script's own comment) only when --self-update is passed.
++    std::string selfUpdateCommand;
++
 +    // Emulator-independent identity (GitHub issue #28's architecture
 +    // foundation milestone: decouple DualDeck from melonDS), sent back
 +    // in every HelloAck and DiscoveryResponse -- see
@@ -5867,6 +6047,17 @@ index 00000000..25acd39d
 +    // Only ever touched from inside the onPendingRequestsChanged callback
 +    // above (see the comment there for why that's safe without its own lock).
 +    std::unordered_set<std::string> notifiedPendingIds_;
++    // Guards against re-running config_.selfUpdateCommand more than once
++    // per process lifetime -- an approved-but-mismatched client's own
++    // reconnect loop retries every few seconds, and the update itself
++    // (a download + install) can take well over a minute, so without
++    // this a single slow retry cadence would launch several overlapping
++    // update attempts. Deliberately never reset: once one is launched,
++    // this process is expected to eventually be replaced (the persistent
++    // daemon restarts once the update completes) -- there's no scenario
++    // where this same still-running, still-mismatched process should
++    // ever want to launch a second one.
++    std::atomic<bool> selfUpdateTriggered_{false};
 +
 +    std::atomic<bool> running_{false};
 +    std::thread controlThread_;
@@ -5988,10 +6179,10 @@ index 00000000..48014b9b
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
 new file mode 100644
-index 00000000..e743ba3c
+index 0000000..e8f90a1bc
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
-@@ -0,0 +1,804 @@
+@@ -0,0 +1,817 @@
 +#pragma once
 +
 +// DualDeck wire protocol definitions.
@@ -6016,15 +6207,16 @@ index 00000000..e743ba3c
 +
 +// Bumped whenever the wire format changes incompatibly.
 +//
-+// v12: ControllerState gained leftTrigger/rightTrigger/hostControlButtons
-+// -- analog trigger values and a HostControlButton (thumbstick click)
-+// bitmask for host::HostControlAdapter, same host-control-only rationale
-+// as v11's mouseDeltaX/Y/mouseButtons (see HostControlButton's own
-+// comment). Real user report, 2026-08-03 (Steam Controller Tester):
-+// "bumpers register, but Triggers do not work. same with stick
-+// clicking." ControllerState's wire size grows by 3 bytes, so an old/new
-+// version mismatch on either side would misparse every field after
-+// mouseButtons.
++// v12: ControllerState gained leftTrigger/rightTrigger/extraButtons --
++// analog trigger values and an ExtraButton (thumbstick click) bitmask,
++// consumed by host::HostControlAdapter's virtual gamepad AND forwarded
++// to every out-of-process emulator adapter via GenericInputState (real
++// Wii U GamePad hardware has both analog ZL/ZR and clickable sticks --
++// see ExtraButton's/leftTrigger's own comments). Real user report,
++// 2026-08-03 (Steam Controller Tester): "bumpers register, but Triggers
++// do not work. same with stick clicking." ControllerState's wire size
++// grows by 3 bytes, so an old/new version mismatch on either side would
++// misparse every field after mouseButtons.
 +//
 +// v11: ControllerState gained mouseDeltaX/mouseDeltaY/mouseButtons --
 +// relative host-mouse motion and click state for host::HostControlAdapter
@@ -6185,17 +6377,24 @@ index 00000000..e743ba3c
 +    MouseButton_Right = 1u << 1,
 +};
 +
-+// Host-control-mode-only, same "every emulator adapter simply never reads
-+// this" contract as MouseButton above: no DS/3DS/Wii U game has a
-+// clickable analog stick, but host::HostControlAdapter's virtual gamepad
-+// is a full Xbox-360-style device (BTN_THUMBL/BTN_THUMBR), and Steam Big
-+// Picture / most desktop UIs treat stick clicks as ordinary navigation
-+// input. Real user report, 2026-08-03 (tested via Steam's Controller
-+// Tester): "bumpers register, but... stick clicking" doesn't -- there was
-+// no wire field for it at all before this.
-+enum HostControlButton : uint8_t {
-+    HostControlButton_ThumbLeft  = 1u << 0,
-+    HostControlButton_ThumbRight = 1u << 1,
++// Thumbstick-click state DS/3DS have no notion of (no clickable stick on
++// either), but both host::HostControlAdapter's virtual gamepad (a full
++// Xbox-360-style device, BTN_THUMBL/BTN_THUMBR -- Steam Big Picture /
++// most desktop UIs treat stick clicks as ordinary navigation input) and
++// Cemu's real Wii U GamePad emulation (its control sticks are genuinely
++// clickable hardware buttons -- see host/cemu-patches/'s
++// RemoteController.cpp raw_state(), which already maps
++// GenericButton_L3/R3 to the Wii U's real kButton6/kButton7 stick-click
++// bits) want it. NOT host-control-only despite the field's original
++// name while this was being designed -- kept as ExtraButton/extraButtons
++// once that became clear, rather than HostControlButton/
++// hostControlButtons, which would have been actively misleading once
++// Cemu started reading it too. Real user report, 2026-08-03 (tested via
++// Steam's Controller Tester): "bumpers register, but... stick clicking"
++// doesn't -- there was no wire field for it at all before this.
++enum ExtraButton : uint8_t {
++    ExtraButton_ThumbLeft  = 1u << 0,
++    ExtraButton_ThumbRight = 1u << 1,
 +};
 +
 +// Native DS bottom-screen touch range (spec section 7.4).
@@ -6553,19 +6752,24 @@ index 00000000..e743ba3c
 +    int16_t mouseDeltaX = 0;
 +    int16_t mouseDeltaY = 0;
 +    uint8_t mouseButtons = 0;      // MouseButton bitmask, 1 = held
-+    // Host-control-mode-only (protocol v12), same "no DS/3DS/Wii U game
-+    // reads these" contract as mouseDeltaX/Y/mouseButtons above. Real user
-+    // report, 2026-08-03 (Steam Controller Tester): "bumpers register,
-+    // but Triggers do not work. same with stick clicking." rightStickX/Y
-+    // above were already wired through, but there was no wire
-+    // representation at all for analog triggers or thumbstick clicks
-+    // before this -- host::HostControlAdapter's virtual gamepad is a full
-+    // Xbox-360-style device, but the wire protocol only ever carried what
-+    // an actual DS/3DS/Wii U game needs (neither has analog triggers or
-+    // clickable sticks).
-+    uint8_t leftTrigger = 0;       // 0..255, host-control mode only
-+    uint8_t rightTrigger = 0;      // 0..255, host-control mode only
-+    uint8_t hostControlButtons = 0; // HostControlButton bitmask, 1 = held
++    // Protocol v12. Real user report, 2026-08-03 (Steam Controller
++    // Tester): "bumpers register, but Triggers do not work. same with
++    // stick clicking." rightStickX/Y above were already wired through,
++    // but there was no wire representation at all for analog triggers or
++    // thumbstick clicks before this. NOT DS/3DS-only fields like
++    // mouseDeltaX/Y/mouseButtons above (neither system has either
++    // concept) -- but Wii U's real GamePad hardware has both (analog
++    // ZL/ZR, clickable sticks), so host::AdapterBridge forwards these to
++    // GenericInputState::leftTrigger/rightTrigger and
++    // GenericButton_L2/R2/L3/R3 for every emulator adapter, not just
++    // host::HostControlAdapter -- see adapter_bridge.cpp's
++    // dsButtonsToGenericButtons()/applyControllerState(). A DS/3DS
++    // adapter simply never reads the resulting GenericButton_L2/R2/L3/R3
++    // bits or leftTrigger/rightTrigger values, the same way it already
++    // never reads mouseDeltaX/Y.
++    uint8_t leftTrigger = 0;       // 0..255
++    uint8_t rightTrigger = 0;      // 0..255
++    uint8_t extraButtons = 0;      // ExtraButton bitmask, 1 = held
 +};
 +
 +// Wire size of a serialized ControllerState payload (not including the
@@ -6951,7 +7155,7 @@ index 00000000..a1aff532
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
 new file mode 100644
-index 00000000..38c4cedd
+index 0000000..f9a0b1c2d
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
 @@ -0,0 +1,573 @@
@@ -7046,7 +7250,7 @@ index 00000000..38c4cedd
 +    out.push_back(state.mouseButtons);
 +    out.push_back(state.leftTrigger);
 +    out.push_back(state.rightTrigger);
-+    out.push_back(state.hostControlButtons);
++    out.push_back(state.extraButtons);
 +}
 +
 +std::optional<ControllerState> parseControllerState(const uint8_t* data, size_t size) {
@@ -7085,7 +7289,7 @@ index 00000000..38c4cedd
 +    state.mouseButtons = data[offset]; offset += 1;
 +    state.leftTrigger = data[offset]; offset += 1;
 +    state.rightTrigger = data[offset]; offset += 1;
-+    state.hostControlButtons = data[offset]; offset += 1;
++    state.extraButtons = data[offset]; offset += 1;
 +
 +    return state;
 +}
