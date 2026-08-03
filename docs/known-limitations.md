@@ -10840,44 +10840,83 @@ deliberately out of scope for this pass, which targets the specific,
 evidenced regression (full-native-resolution encoding) rather than a
 broader encoder rewrite.
 
-## 2026-08-03: Host Control screen mirror never shows the mouse cursor -- known, root-caused, deliberately deferred
+## 2026-08-03: Host Control screen mirror never showed the mouse cursor -- root-caused, then fixed for both capture backends
 
-Real user report, flagged as a "save for later" item rather than an
-urgent fix, once mirroring itself was fast enough to actually use.
-Confirmed via direct code read (`grep -i cursor` across both capture
-backends returns nothing at all): neither `x11_screen_capture.cpp` nor
-`wayland_screen_capture.cpp` does anything cursor-related, so this isn't
-a regression from any of today's other fixes -- the cursor was never
-captured at all, from this feature's very first commit.
+Real user report, initially flagged as a "save for later" item, then
+picked back up in the same session once mirroring itself was fast
+enough to actually use. Root cause confirmed via direct code read
+before any fix was attempted: neither `x11_screen_capture.cpp` nor
+`wayland_screen_capture.cpp` did anything cursor-related at all, so this
+was never a regression from any of today's other fixes -- the cursor
+was simply never captured, from this feature's very first commit.
 
-**Root cause, different for each backend (both would need a fix,
-independently, before this feature is complete on either code path):**
-- **X11**: `XGetImage()` reads the root window's own pixel buffer, which
-  never includes the hardware cursor -- the X server composites the
-  cursor as a separate XFixes overlay at display time, not something a
-  plain screenshot call captures. Getting the cursor here needs a
-  separate `XFixesGetCursorImage()` call (returns the cursor's own ARGB
-  pixel data + hotspot + position) composited into the captured frame by
-  hand, plus an `XFixesSelectCursorInput()` subscription if the cursor
-  image should update live (shape changes, e.g. a text-edit I-beam)
-  rather than being fetched fresh every capture tick.
-- **Wayland/PipeWire portal**: `createSession()`'s `SelectSources` D-Bus
-  call (`wayland_screen_capture.cpp`) never sets the portal's
-  `cursor_mode` option (bit 1 = Hidden, the implicit default when
-  unset; bit 2 = Embedded, cursor rendered directly into the video
-  frames PipeWire delivers; bit 4 = Metadata, cursor position/image
-  delivered as separate PipeWire stream metadata instead of baked into
-  the pixels). Embedded is the simpler of the two real options for this
-  project's existing "just get a flat BGRA frame out" pipeline --
-  Metadata would need `onStreamProcess()` to also parse and manually
-  composite `spa_meta_cursor`, more code for very little benefit over
-  just asking the portal to embed it directly.
+**X11 fix:** `XShmGetImage()` reads the root window's own pixel buffer,
+which never includes the hardware cursor -- the X server composites it
+as a separate XFixes overlay at display time. Added
+`XFixesGetCursorImage()` (gated on a new, independently-optional
+`DUALDECK_HAVE_X11_XFIXES_CURSOR` CMake define -- Xfixes is essentially
+universal but this still degrades gracefully to "capture works, cursor
+just isn't drawn" on some unusual X server without it, matching this
+class's existing XShm-availability handling) after each capture, hand-
+composited onto the captured BGRA8888 buffer with a premultiplied-alpha
+"over" blend (`compositeXfixesCursor()`), clipped against the frame's
+own bounds since the cursor can legitimately hang partway off any edge
+of the screen. `XFixesCursorImage::pixels` stores each pixel as a
+32-bit premultiplied ARGB value in the low bits of an `unsigned long`
+array entry (RENDER extension convention); `x`/`y` is the hotspot's
+current screen position, `xhot`/`yhot` its offset within the cursor
+image, so the image's own top-left screen position is
+`(x - xhot, y - yhot)`.
 
-**Deliberately not fixed in this pass**, per the user's own explicit
-"save for later" -- documented here so the two concrete, independently-
-scoped starting points above (`XFixesGetCursorImage()` for X11;
-`cursor_mode` Embedded in the portal's `SelectSources` call for Wayland)
-don't need to be rediscovered next time this comes up.
+**Wayland fix, with a real near-miss caught before implementing:** the
+portal's `SelectSources` call never set `cursor_mode` (bit 1 = Hidden,
+the implicit default; bit 2 = Embedded, cursor rendered directly into
+PipeWire's video frames; bit 4 = Metadata, cursor position/image sent as
+separate stream metadata). Embedded is the simpler option for this
+project's existing "just get a flat BGRA frame out" pipeline. The
+initial draft requested `cursor_mode: 2` unconditionally, reasoning an
+unsupported bit would just be ignored -- checked that assumption against
+the actual xdg-desktop-portal ScreenCast interface documentation before
+writing the real fix, and it's wrong: the spec is explicit that
+"setting a cursor mode not advertised will cause the screen cast session
+to be closed" -- a hard failure of the *entire* capture session on any
+compositor/portal that doesn't advertise Embedded support, which would
+have traded "no cursor" for "no mirroring at all" on an untested portal.
+Fixed properly: added `queryAvailableCursorModes()` (a plain synchronous
+`org.freedesktop.DBus.Properties.Get` call for the ScreenCast
+interface's `AvailableCursorModes` property, distinct from this class's
+existing Request/Response portal-call pattern since a property read has
+a direct reply, not a deferred Request object), and `cursor_mode` is
+only included in `SelectSources`' options when bit 2 is actually
+present in that bitmask -- silently omitted (falling back to the
+already-existing Hidden default, capture still works) on any portal
+that doesn't advertise it, or on any failure reading the property at
+all (an older portal without it, a malformed reply, etc.).
+
+**Verified:** clean rebuild under the project's full warning flags
+(zero warnings) with `DUALDECK_HAVE_X11_XFIXES_CURSOR` confirmed active
+via `compile_commands.json` (this sandbox has real Xfixes dev headers).
+Manually verified the premultiplied-"over" compositing formula's
+correctness by hand for the three cases that matter (fully opaque
+replaces the destination exactly; fully transparent leaves the
+destination untouched, explicitly short-circuited; 50%-alpha black over
+white produces the expected mid-gray) -- not backed by a new automated
+test, matching this project's existing precedent of `X11ScreenCapture`
+having zero unit test coverage at all (no real X server in this
+sandbox to exercise its constructor/capture path against, the same
+constraint `HostControlAdapter`'s own `/dev/uinput` code already
+documents). Full local `ctest` run (6 suites) passes with no
+regressions. `check-patch-protocol-sync.sh` still reports every patch
+in sync (no wire-format change); confirmed melonDS's patch doesn't
+vendor any of the three files touched here (`x11_screen_capture.cpp`,
+`wayland_screen_capture.cpp`, `host_control_adapter.h`) at all --
+melonDS's own in-process integration never uses `HostControlAdapter` in
+the first place, so no patch regeneration was needed.
+
+**Not yet verified:** on the actual affected Bazzite machine, for
+either backend -- whether the cursor is now genuinely visible and
+correctly positioned in the mirrored stream, on both the X11 and
+Wayland capture paths.
 
 ## Things intentionally out of scope for v0.1
 

@@ -9,6 +9,7 @@
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/extensions/XShm.h>
+#include <X11/extensions/Xfixes.h>
 
 #include <cstring>
 #endif
@@ -25,6 +26,14 @@ struct X11ScreenCapture::Impl {
     uint16_t width = 0;
     uint16_t height = 0;
     bool ready = false;
+#if defined(DUALDECK_HAVE_X11_XFIXES_CURSOR)
+    // See capture()'s own comment -- checked once at construction
+    // (Xfixes is essentially universal, but this still degrades
+    // gracefully to "capture works, cursor just isn't drawn" rather
+    // than failing the whole feature if some unusual X server lacks
+    // it, matching this class's existing XShm-availability handling).
+    bool haveXfixes = false;
+#endif
 
     // Tears down whatever setup got as far as succeeding, in reverse
     // order -- every intermediate failure branch in the constructor
@@ -162,6 +171,17 @@ X11ScreenCapture::X11ScreenCapture() : impl_(std::make_unique<Impl>()) {
     impl_->width = static_cast<uint16_t>(width);
     impl_->height = static_cast<uint16_t>(height);
     impl_->ready = true;
+
+#if defined(DUALDECK_HAVE_X11_XFIXES_CURSOR)
+    int xfixesEventBase = 0;
+    int xfixesErrorBase = 0;
+    impl_->haveXfixes = ::XFixesQueryExtension(impl_->display, &xfixesEventBase, &xfixesErrorBase);
+    if (!impl_->haveXfixes) {
+        std::fprintf(stderr,
+                      "X11ScreenCapture: Xfixes extension not available -- screen mirroring will work but "
+                      "the mouse cursor won't be visible in it\n");
+    }
+#endif
 }
 
 X11ScreenCapture::~X11ScreenCapture() = default;
@@ -172,6 +192,48 @@ void X11ScreenCapture::nativeSize(uint16_t& outWidth, uint16_t& outHeight) const
     outWidth = impl_->ready ? impl_->width : 0;
     outHeight = impl_->ready ? impl_->height : 0;
 }
+
+#if defined(DUALDECK_HAVE_X11_XFIXES_CURSOR)
+// Composites the current XFixes cursor image onto a captured BGRA8888
+// frame buffer, in place -- see this class's own comment on why
+// XShmGetImage() alone never includes the cursor at all.
+// XFixesCursorImage::pixels stores each pixel as a 32-bit premultiplied-
+// alpha ARGB value (0xAARRGGBB) in the low 32 bits of each `unsigned
+// long` array entry (matching the RENDER extension's own pixel format
+// convention, per Xfixes's protocol spec) -- any upper bits present on
+// a 64-bit `unsigned long` are unused/zero. `cursor->x`/`cursor->y` is
+// where the cursor's hotspot currently is on screen;
+// `cursor->xhot`/`yhot` is the hotspot's own offset within the cursor
+// image, so the image's top-left screen position is
+// (x - xhot, y - yhot). Clips against the frame's own bounds since the
+// cursor can legitimately hang partway off any edge of the screen.
+// Premultiplied-alpha "over" compositing needs no clamping: for a
+// correctly formed cursor image, src's own channels are already <= its
+// alpha, so src + dst*(1-a) can't exceed 255.
+void compositeXfixesCursor(uint8_t* frame, int frameWidth, int frameHeight, const XFixesCursorImage* cursor) {
+    const int originX = cursor->x - cursor->xhot;
+    const int originY = cursor->y - cursor->yhot;
+    for (int cy = 0; cy < cursor->height; ++cy) {
+        const int screenY = originY + cy;
+        if (screenY < 0 || screenY >= frameHeight) continue;
+        for (int cx = 0; cx < cursor->width; ++cx) {
+            const int screenX = originX + cx;
+            if (screenX < 0 || screenX >= frameWidth) continue;
+            unsigned long packed = cursor->pixels[static_cast<size_t>(cy) * cursor->width + cx];
+            uint8_t a = static_cast<uint8_t>((packed >> 24) & 0xFF);
+            if (a == 0) continue; // fully transparent, nothing to blend
+            uint8_t r = static_cast<uint8_t>((packed >> 16) & 0xFF);
+            uint8_t g = static_cast<uint8_t>((packed >> 8) & 0xFF);
+            uint8_t b = static_cast<uint8_t>(packed & 0xFF);
+            uint8_t* dst = frame + (static_cast<size_t>(screenY) * frameWidth + screenX) * 4;
+            const int inv = 255 - a;
+            dst[0] = static_cast<uint8_t>(b + (dst[0] * inv) / 255);
+            dst[1] = static_cast<uint8_t>(g + (dst[1] * inv) / 255);
+            dst[2] = static_cast<uint8_t>(r + (dst[2] * inv) / 255);
+        }
+    }
+}
+#endif
 
 bool X11ScreenCapture::capture(std::vector<uint8_t>& outFrame, uint16_t& outWidth, uint16_t& outHeight) {
     if (!impl_->ready) return false;
@@ -194,6 +256,17 @@ bool X11ScreenCapture::capture(std::vector<uint8_t>& outFrame, uint16_t& outWidt
         std::memcpy(outFrame.data() + static_cast<size_t>(y) * rowBytes,
                     impl_->image->data + static_cast<size_t>(y) * stride, rowBytes);
     }
+
+#if defined(DUALDECK_HAVE_X11_XFIXES_CURSOR)
+    if (impl_->haveXfixes) {
+        XFixesCursorImage* cursor = ::XFixesGetCursorImage(impl_->display);
+        if (cursor) {
+            compositeXfixesCursor(outFrame.data(), impl_->width, impl_->height, cursor);
+            ::XFree(cursor);
+        }
+    }
+#endif
+
     outWidth = impl_->width;
     outHeight = impl_->height;
     return true;

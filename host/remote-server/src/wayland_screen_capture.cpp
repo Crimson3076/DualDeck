@@ -263,6 +263,48 @@ struct WaylandScreenCapture::Impl {
         return found;
     }
 
+    // Reads the ScreenCast interface's AvailableCursorModes property (a
+    // bitmask: Hidden=1, Embedded=2, Metadata=4) via a plain synchronous
+    // org.freedesktop.DBus.Properties.Get call -- NOT the Request/
+    // Response pattern callAndAwaitResponse() handles, since a property
+    // read is an ordinary D-Bus method call with a direct reply, not
+    // something the portal defers via a Request object. Returns 0 (no
+    // modes) on any failure -- an older portal without this property,
+    // a malformed reply, anything -- which selectSources() below
+    // treats as "can't confirm Embedded is safe, don't ask for it",
+    // never as a reason to fail the whole capture setup.
+    uint32_t queryAvailableCursorModes() {
+        DBusMessage* msg = dbus_message_new_method_call("org.freedesktop.portal.Desktop",
+                                                          "/org/freedesktop/portal/desktop",
+                                                          "org.freedesktop.DBus.Properties", "Get");
+        DBusMessageIter iter;
+        dbus_message_iter_init_append(msg, &iter);
+        const char* interfaceName = "org.freedesktop.portal.ScreenCast";
+        dbus_message_iter_append_basic(&iter, DBUS_TYPE_STRING, &interfaceName);
+        const char* propertyName = "AvailableCursorModes";
+        dbus_message_iter_append_basic(&iter, DBUS_TYPE_STRING, &propertyName);
+
+        DBusError error;
+        dbus_error_init(&error);
+        DBusMessage* reply = dbus_connection_send_with_reply_and_block(bus, msg, kPortalRequestTimeoutMs, &error);
+        dbus_message_unref(msg);
+        if (!reply) {
+            dbus_error_free(&error);
+            return 0;
+        }
+        DBusMessageIter replyIter, variantIter;
+        dbus_message_iter_init(reply, &replyIter);
+        uint32_t modes = 0;
+        if (dbus_message_iter_get_arg_type(&replyIter) == DBUS_TYPE_VARIANT) {
+            dbus_message_iter_recurse(&replyIter, &variantIter);
+            if (dbus_message_iter_get_arg_type(&variantIter) == DBUS_TYPE_UINT32) {
+                dbus_message_iter_get_basic(&variantIter, &modes);
+            }
+        }
+        dbus_message_unref(reply);
+        return modes;
+    }
+
     bool selectSources() {
         DBusMessage* msg = dbus_message_new_method_call("org.freedesktop.portal.Desktop",
                                                           "/org/freedesktop/portal/desktop",
@@ -275,6 +317,40 @@ struct WaylandScreenCapture::Impl {
         appendStringOption(arrayIter, "handle_token", randomToken());
         appendUint32Option(arrayIter, "types", 1); // MONITOR only, not individual windows
         appendBoolOption(arrayIter, "multiple", false);
+        // Real user report, 2026-08-03: the mouse cursor was never
+        // visible in the mirrored stream at all. Root cause: this
+        // option was never set, so the portal defaulted to
+        // cursor_mode Hidden (bit 1) -- the ScreenCast interface's
+        // three modes are Hidden=1, Embedded=2 (cursor rendered
+        // directly into the video frames PipeWire delivers), and
+        // Metadata=4 (cursor position/image delivered as separate
+        // spa_meta_cursor stream metadata instead of baked into the
+        // pixels). Embedded is the simpler of the two real options for
+        // this project's existing "just get a flat BGRA frame out"
+        // pipeline -- Metadata would need onStreamProcess() to also
+        // parse and manually composite spa_meta_cursor, more code for
+        // no benefit over just asking the portal to embed it directly.
+        //
+        // MUST be gated on AvailableCursorModes, not just requested
+        // unconditionally: the portal spec is explicit that "setting a
+        // cursor mode not advertised will cause the screen cast session
+        // to be closed" -- a hard failure of the whole capture session,
+        // not a harmless no-op, on any compositor/portal that doesn't
+        // advertise Embedded support. Confirmed directly against the
+        // spec (xdg-desktop-portal's own ScreenCast interface
+        // documentation) before writing this, specifically to avoid
+        // trading "no cursor" for "no capture at all" on a portal this
+        // wasn't tested against.
+        uint32_t availableCursorModes = queryAvailableCursorModes();
+        constexpr uint32_t kCursorModeEmbedded = 2;
+        if (availableCursorModes & kCursorModeEmbedded) {
+            appendUint32Option(arrayIter, "cursor_mode", kCursorModeEmbedded);
+        } else {
+            std::fprintf(stderr,
+                          "WaylandScreenCapture: portal doesn't advertise Embedded cursor mode (available=0x%x) "
+                          "-- mirroring will work but the mouse cursor won't be visible in it\n",
+                          availableCursorModes);
+        }
         dbus_message_iter_close_container(&iter, &arrayIter);
 
         DBusMessage* response = nullptr;

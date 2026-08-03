@@ -37,6 +37,25 @@ else()
                     "(DUALDECK_HOSTCONTROL_MIRROR_SCREEN) will be compiled out as a no-op in this build")
 endif()
 
+# Real user report, 2026-08-03: the X11 screen-mirror path never showed
+# the mouse cursor at all -- XShmGetImage() (above) only ever reads the
+# root window's own pixel buffer, which never includes the hardware
+# cursor (the X server composites it as a separate XFixes overlay at
+# display time, not something a plain screenshot captures). Xfixes is
+# essentially universal on any modern X server (used by countless
+# ordinary desktop apps, unlike XShm which is already a hard
+# requirement above), but this is still gated independently and
+# gracefully degrades to "no cursor, capture still works" rather than
+# disabling the whole feature, matching this file's own existing
+# X11/Xext-optional philosophy for a from-source host-only build.
+if(X11_FOUND AND X11_Xext_FOUND AND X11_Xfixes_FOUND)
+    target_compile_definitions(dualdeck_host PRIVATE DUALDECK_HAVE_X11_XFIXES_CURSOR)
+    target_link_libraries(dualdeck_host PRIVATE ${X11_Xfixes_LIB})
+elseif(X11_FOUND AND X11_Xext_FOUND)
+    message(STATUS "dualdeck_host: Xfixes not found -- Host Control's X11 screen-mirror will work "
+                    "but never show the mouse cursor in this build")
+endif()
+
 # Host Control screen-mirror experiment's Wayland fallback
 # (wayland_screen_capture.cpp -- see host_control_adapter.cpp's own
 # comment on why both an X11 and a Wayland backend exist: real user
