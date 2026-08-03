@@ -281,6 +281,39 @@ MDR_TEST(net_client_receives_a_non_ds_sized_video_frame) {
     client.disconnect();
 }
 
+// Real user report, 2026-08-03: "when exiting an emulator...the last
+// frame that was sent to the client persists on screen until I change
+// client and reinitialize the connection." Root cause: NetClient's
+// hasFrame_ was set true the first time a frame was ever decoded and
+// never reset, so getLatestFrame() kept handing back the same stale
+// buffer forever, even long after the mode that produced it had changed.
+// See net_client.cpp's ModeChanged handling for the fix.
+MDR_TEST(net_client_clears_stale_frame_on_mode_change) {
+    ServerFixture fixture;
+    SizedFrameSource dsFrame(256, 192);
+    std::vector<uint8_t> realFrame(static_cast<size_t>(256) * 192 * 4, 0x5A);
+    dsFrame.setFrame(realFrame);
+    fixture.server.setTarget(fixture.sinkA, dsFrame, HostMode::Emulation, SystemIdentity{"nds", "Nintendo DS"},
+                              AdapterIdentity{"melonds", "melonDS", "1.0"});
+
+    NetClient client(fixture.clientConfig());
+    MDR_CHECK(client.connect());
+
+    std::vector<uint8_t> received;
+    MDR_CHECK(waitUntil([&] { return client.getLatestFrame(received); }));
+
+    // The adapter disconnects (e.g. the emulator exits) -- the host falls
+    // back to HostControl with nothing to stream. Before the fix,
+    // getLatestFrame() would keep returning the frame captured above
+    // forever, regardless of this mode change.
+    fixture.server.setTarget(fixture.sinkB, fixture.frameB, HostMode::HostControl, SystemIdentity{"host", "Host Menu"},
+                              AdapterIdentity{"host-control", "Host Control", ""});
+    MDR_CHECK(waitUntil([&] { return client.hostMode() == HostMode::HostControl; }));
+    MDR_CHECK(waitUntil([&] { return !client.getLatestFrame(received); }));
+
+    client.disconnect();
+}
+
 MDR_TEST(net_client_detects_a_dead_server_connection) {
     ServerFixture fixture;
     NetClient client(fixture.clientConfig());

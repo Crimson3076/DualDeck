@@ -715,6 +715,31 @@ void NetClient::controlReceiveLoop() {
                 logLine("control: dropping malformed ModeChanged packet\n");
                 continue;
             }
+            // Real user report, 2026-08-03: "when exiting an emulator...
+            // the last frame that was sent to the client persists on
+            // screen until I change client and reinitialize the
+            // connection." Root cause: hasFrame_ (set true the first time
+            // videoReceiveLoop() ever decodes a frame) was never reset
+            // anywhere -- getLatestFrame() keeps handing back the same
+            // stale latestFrame_ buffer forever, to any caller, regardless
+            // of mode changes or the adapter that produced it having long
+            // since disconnected. main.cpp's render loop only stops
+            // calling getLatestFrame() once hostMode_ reads HostControl
+            // *and* mirrorHostScreen is off; otherwise (mirroring on, or a
+            // brief window before this ModeChanged packet is even
+            // processed) it kept redrawing the last real frame
+            // indefinitely, exactly matching the report. A mode change is
+            // exactly the signal that whatever video state existed before
+            // is no longer valid -- reset it here so the render loop falls
+            // through to the test pattern / host-control placeholder
+            // immediately instead of only on a fresh reconnect (a new
+            // NetClient instance, which starts with hasFrame_ already
+            // false -- the reason "exit and reopen the client" already
+            // masked this).
+            if (modeChanged->mode != hostMode_) {
+                std::lock_guard<std::mutex> lock(frameMutex_);
+                hasFrame_ = false;
+            }
             hostMode_ = modeChanged->mode;
             {
                 std::lock_guard<std::mutex> lock(handshakeResultMutex_);

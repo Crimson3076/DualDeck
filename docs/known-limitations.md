@@ -9758,6 +9758,56 @@ confirmation that Player 1's controls now register immediately on
 connect with zero manual rebinding, on a Cemu profile that already had a
 real controller configured for Player 1 beforehand.
 
+## 2026-08-03: Last frame persists on screen after exiting an emulator, until reconnect
+
+Real user report: "when exiting an emulator, for example azahar, when
+exiting the application, the last frame that was sent to the client
+persists on screen until I change client and reinitialize the connection
+or exit and reopen the client app." Root-caused via direct code reading
+in `client/src/net_client.cpp`: `hasFrame_` is set `true` the first time
+`videoReceiveLoop()` ever decodes a frame, but was never reset anywhere
+in the file. `getLatestFrame()`'s only gate is `if (!hasFrame_) return
+false;`, so once any frame has ever been decoded in a session, it keeps
+handing back that same stale `latestFrame_` buffer to every caller
+forever -- regardless of the host's mode changing, the adapter that
+produced it disconnecting, or the control connection itself staying
+otherwise healthy. `main.cpp`'s render loop only stops calling
+`getLatestFrame()` once `hostMode()` reads `HostControl` *and*
+`clientSettings.mirrorHostScreen` is off; with mirroring on (an
+experiment this same session added and has been actively testing), or in
+the brief window before a `ModeChanged` packet is processed, it kept
+redrawing the last real frame indefinitely -- exactly matching the
+report. Reconnecting via "exit and reopen the client app" already masked
+this by accident: a fresh process means a fresh `NetClient` object, whose
+`hasFrame_` starts `false` again -- not because reconnecting itself did
+anything to clear stale state.
+
+**Fix:** `controlReceiveLoop()`'s `ModeChanged` handling now resets
+`hasFrame_` to `false` (under `frameMutex_`) whenever the reported mode
+actually changes, before updating `hostMode_`. A mode change is exactly
+the signal that whatever video state existed before is no longer valid,
+so the render loop falls through to the test pattern / host-control
+placeholder the moment the notification arrives, instead of only on a
+full reconnect.
+
+**Verified:** new end-to-end test
+`net_client_clears_stale_frame_on_mode_change`
+(`client/tests/test_net_client.cpp`) -- a real `NetClient` against a real
+`NetServer` over loopback, confirms `getLatestFrame()` returns a real
+frame while in `Emulation` mode, then confirms it starts returning
+`false` once the host mode changes to `HostControl`, reproducing the
+exact before/after this fix changes. Full local build + `ctest` run (6
+suites: protocol, adapter-sdk, client-settings, net-client, config
+migration, host -- all passing, 0 failures) confirms no regressions.
+`net_client.cpp` also recompiles clean under the same strict
+`-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror` flags CI uses.
+
+**Not yet verified:** on real hardware, whether the placeholder/test
+pattern now actually appears immediately after an emulator exits with
+`mirrorHostScreen` on (the previously-untested combination this fix
+specifically addresses) versus the already-working case with mirroring
+off.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
