@@ -8,6 +8,7 @@
 
 #include <dbus/dbus.h>
 #include <pipewire/pipewire.h>
+#include <spa/param/buffers.h>
 #include <spa/param/video/format-utils.h>
 
 #include <atomic>
@@ -497,7 +498,7 @@ WaylandScreenCapture::WaylandScreenCapture() : impl_(std::make_unique<Impl>()) {
     spa_fraction defFramerate = SPA_FRACTION(0, 1);
     spa_fraction minFramerate = SPA_FRACTION(0, 1);
     spa_fraction maxFramerate = SPA_FRACTION(1000, 1);
-    const spa_pod* params[1];
+    const spa_pod* params[2];
     params[0] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
         &podBuilder, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat, SPA_FORMAT_mediaType,
         SPA_POD_Id(SPA_MEDIA_TYPE_video), SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
@@ -515,11 +516,32 @@ WaylandScreenCapture::WaylandScreenCapture() : impl_(std::make_unique<Impl>()) {
         SPA_FORMAT_VIDEO_size,
         SPA_POD_CHOICE_RANGE_Rectangle(&defSize, &minSize, &maxSize), SPA_FORMAT_VIDEO_framerate,
         SPA_POD_CHOICE_RANGE_Fraction(&defFramerate, &minFramerate, &maxFramerate)));
+    // Second real bug behind the same "black after granting permission"
+    // symptom, found after the format-choice fix above still wasn't
+    // enough on its own: without this, PipeWire is free to negotiate
+    // SPA_DATA_DmaBuf buffers (GPU memory, zero-copy, the type many
+    // Wayland compositors' screencast sources prefer/default to,
+    // especially with hardware-accelerated capture) -- onStreamProcess()
+    // only ever reads buf->datas[0].data directly, which is NULL for a
+    // DMA-BUF (that's GPU memory; CPU-mapping it needs GBM/EGL, not a
+    // plain pointer), so a DMA-BUF buffer type makes onStreamProcess()
+    // silently skip every single frame forever, exactly like the missing
+    // format alternatives did: no frame ever completes, the constructor's
+    // wait times out, isReady() stays false, and the same fallback chain
+    // drops to X11ScreenCapture's black XWayland capture. This second
+    // param object restricts SPA_PARAM_Buffers' negotiable dataType to
+    // just MemPtr/MemFd (real CPU-mapped memory this code can actually
+    // read), so PipeWire has nothing to offer here but the kind of buffer
+    // onStreamProcess() already knows how to consume -- PW_STREAM_FLAG_
+    // MAP_BUFFERS then does the actual mmap()'ing for MemFd.
+    params[1] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
+        &podBuilder, SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers, SPA_PARAM_BUFFERS_dataType,
+        SPA_POD_CHOICE_FLAGS_Int((1u << SPA_DATA_MemPtr) | (1u << SPA_DATA_MemFd))));
 
     int connectResult =
         pw_stream_connect(impl_->stream, PW_DIRECTION_INPUT, nodeId,
                            static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS),
-                           params, 1);
+                           params, 2);
     pw_thread_loop_unlock(impl_->loop);
     if (connectResult < 0) {
         std::fprintf(stderr, "WaylandScreenCapture: pw_stream_connect failed (%d)\n", connectResult);

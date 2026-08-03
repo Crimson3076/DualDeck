@@ -10078,6 +10078,49 @@ RGBx/RGBA swap path is byte-order-correct against real captured content
 (not just plausible from reading the SPA headers), remains unconfirmed
 until tested on the actual affected machine.
 
+## 2026-08-03: Wayland screen-mirror still black after the format fix above -- PipeWire was still free to hand back DMA-BUF
+
+Real user report: the format-negotiation fix above did not resolve it --
+still black after selecting a screen to share. Found a second, separate
+bug behind the identical symptom via direct code reading: the
+`pw_stream_connect()` call only ever constrained the video *format*
+(BGRx/BGRA/RGBx/RGBA), never the buffer *memory type*. PipeWire's
+`SPA_PARAM_Buffers` negotiation is a completely separate axis from pixel
+format, and without an explicit constraint, PipeWire is free to hand
+back `SPA_DATA_DmaBuf` buffers -- GPU memory, zero-copy, and the type
+many Wayland compositors' hardware-accelerated screencast sources
+prefer/default to. `onStreamProcess()` only ever reads
+`buf->datas[0].data` directly, which is `nullptr` for a DMA-BUF (that's
+GPU memory; getting CPU-visible pixels out of it needs GBM/EGL, not a
+plain pointer) -- so with a DMA-BUF negotiated, every single frame gets
+silently skipped by `onStreamProcess()`'s existing `if (buf->datas[0].data
+&& ...)` guard, forever. Exactly the same downstream effect as the
+missing-format-alternatives bug: no frame ever completes, the
+constructor's 5-second wait times out, `isReady()` stays false, and the
+fallback chain drops to `X11ScreenCapture`'s black XWayland capture --
+which is why fixing the format alone wasn't enough to change the
+symptom at all.
+
+**Fix:** added a second `SPA_PARAM_Buffers`/`SPA_TYPE_OBJECT_ParamBuffers`
+param object to the same `pw_stream_connect()` call, constraining
+`SPA_PARAM_BUFFERS_dataType` to `SPA_DATA_MemPtr | SPA_DATA_MemFd` only
+(explicitly excluding `SPA_DATA_DmaBuf`) -- PipeWire now has nothing left
+to negotiate but buffer types this code can actually read directly, and
+`PW_STREAM_FLAG_MAP_BUFFERS` (already set) handles the actual `mmap()`
+for `MemFd`.
+
+**Verified:** compiles clean (real `dbus-1`/`libpipewire-0.3` headers,
+this sandbox has them) under the project's full warnings set, zero
+warnings/errors; full `ctest` run (6 suites) passes with no regressions.
+
+**Not yet verified:** real hardware -- whether the affected user's
+compositor accepts this constraint and now actually produces a non-black
+frame, or refuses to offer *any* buffer type once DMA-BUF is excluded
+(a real, if less likely, possibility: a source that truly only supports
+DMA-BUF would have nothing left to negotiate at all, degrading to the
+same "no frame, falls back to X11" symptom for a different reason --
+undistinguishable from this same machine without a real test).
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
