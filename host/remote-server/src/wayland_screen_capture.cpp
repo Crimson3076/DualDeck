@@ -112,7 +112,46 @@ struct WaylandScreenCapture::Impl {
             pw_thread_loop_destroy(loop);
         }
         if (pipewireFd >= 0) ::close(pipewireFd);
-        if (bus) dbus_connection_unref(bus);
+        if (bus) {
+            // Best-effort: tell the portal we're done with this
+            // ScreenCast session so the compositor can drop its
+            // permission-grant/UI state immediately, rather than only
+            // noticing once the D-Bus peer disconnects. Fire-and-forget
+            // (dbus_connection_send, not send_with_reply_and_block) --
+            // we're tearing down and don't need to wait for a reply,
+            // just flush() to make sure it actually reaches the bus
+            // before the connection below gets closed.
+            if (!sessionHandle.empty()) {
+                DBusMessage* closeMsg = dbus_message_new_method_call(
+                    "org.freedesktop.portal.Desktop", sessionHandle.c_str(),
+                    "org.freedesktop.portal.Session", "Close");
+                if (closeMsg) {
+                    dbus_connection_send(bus, closeMsg, nullptr);
+                    dbus_connection_flush(bus);
+                    dbus_message_unref(closeMsg);
+                }
+            }
+            // Real bug, 2026-08-03: dbus_bus_get_private() (used above
+            // instead of the ordinary shared dbus_bus_get()) hands back
+            // a *private* connection that libdbus's own documented
+            // contract requires the owner to dbus_connection_close()
+            // before the final unref -- dropping the last reference on
+            // an unclosed private connection is treated as a fatal
+            // application programming error and made libdbus abort the
+            // whole process with an assertion. This was the actual
+            // cause of the reported "D-Bus assertion" crash during Host
+            // Control startup/cleanup; it reproduced on essentially any
+            // real desktop with a reachable session bus (including
+            // early-return/partial-failure constructor paths, since
+            // `bus` is set as soon as dbus_bus_get_private() succeeds,
+            // before any of the portal/PipeWire setup that can fail),
+            // which is why it didn't show up in the unit tests (they
+            // force dbus_bus_get_private() itself to fail via
+            // ScopedUnsetEnv specifically to avoid popping a real
+            // permission dialog).
+            dbus_connection_close(bus);
+            dbus_connection_unref(bus);
+        }
     }
 
     // Calls a portal method that follows the Request/Response pattern

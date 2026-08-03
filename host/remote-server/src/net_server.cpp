@@ -462,8 +462,33 @@ constexpr uint32_t kMaxHelloPayloadSize = 512;
 // update look like a hung/broken host on top of being out of date.
 // `nohup ... &` backgrounds the actual work; std::system() itself only
 // waits for the shell to fork it off, not for it to finish.
+//
+// Real user report, 2026-08-03 (Bazzite): this backgrounded, detached
+// invocation has no controlling terminal at all, so when apply-update.sh
+// hands off to install-steam-shortcut.sh --force on an immutable
+// (rpm-ostree) system, its ostree-booted branch used to unconditionally
+// delegate to install-host-distrobox.sh --install-only -- which needs an
+// unattended `sudo dnf install` to succeed before it will activate the
+// staged files (by design, so a failed package install never activates
+// unverified files). With no TTY to authenticate sudo, that step
+// silently fails, the activation swap never runs, and install/
+// (including internal/lib/libturbojpeg.so.0) is left stuck on whatever
+// was staged before this update -- explaining a self-update that appears
+// to succeed (readlink still points at the correct, un-swapped install/)
+// while the host binary keeps failing to start. `--self-update` is only
+// ever wired to this exact persistent Host Control daemon process (see
+// this function's own header comment above, and main.cpp's --self-update
+// help text: "never set this for melonDS's in-process integration"), so
+// it's always correct -- not just for this one call -- to tell the
+// update chain it's a Host-Control-only update: install-steam-
+// shortcut.sh's ostree branch now skips the Distrobox/dnf provisioning
+// step entirely when DUALDECK_HOST_CONTROL=1 and does the same
+// lightweight, always-succeeds file swap the non-immutable branch
+// already uses (dualdeck-host-control.service never launches
+// melonDS/Azahar/Cemu, so there's no Distrobox container use to keep in
+// sync in the first place).
 void runSelfUpdateCommand(const std::string& command) {
-    std::string shellCommand = "nohup " + command + " >/dev/null 2>&1 &";
+    std::string shellCommand = "DUALDECK_HOST_CONTROL=1 nohup " + command + " >/dev/null 2>&1 &";
     if (std::system(shellCommand.c_str()) != 0) {
         std::fprintf(stderr, "NetServer: failed to launch self-update command (%s)\n", command.c_str());
     }

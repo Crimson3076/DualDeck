@@ -10465,6 +10465,152 @@ one of the new stderr diagnostic lines), and whether screen mirroring
 finally produces real video end to end once PipeWire itself can fully
 initialize both its loop and its context.
 
+## 2026-08-03: `dualdeck-host-service` fails to start after the PipeWire fixes -- two separate, real bugs, neither one a regression in the fixes themselves
+
+Real user report, with real evidence for both symptoms: `dualdeck-host-control.service` cycling through systemd's restart limit,
+`error while loading shared libraries: libturbojpeg.so.0: cannot open
+shared object file: No such file or directory` when running the binary
+directly, and a D-Bus assertion abort inside
+`WaylandScreenCapture::~WaylandScreenCapture()` during cleanup once the
+binary did start. Investigated with three Explore agents in parallel
+(one per hypothesis) rather than guessing which of the two symptoms was
+the real blocker, since they turned out to be entirely unrelated bugs.
+
+**libturbojpeg missing -- not a regression in `bundle_library_dependencies()`
+or `pipewire_env.sh`, confirmed by direct code read:** `bundle_library_dependencies()`
+(`scripts/lib/appimage_pack.sh`) still detects and copies
+`libturbojpeg.so.0` via `ldd` at build time (it was never added to
+`_is_never_bundle_library()`'s exclusion list), both generated launcher
+scripts still set `LD_LIBRARY_PATH` to include the bundled `internal/lib`
+before exec'ing the binary, and `pipewire_env.sh` -- sourced right before
+those `exec` lines -- never touches `LD_LIBRARY_PATH` at all, only
+`SPA_PLUGIN_DIR`/`PIPEWIRE_MODULE_DIR`. The real cause was a separate,
+genuine bug in the self-update path (see the next entry): an update
+triggered unattended by the persistent daemon could silently fail to
+activate the new files at all, leaving `install/internal/lib/` stuck on
+whatever was staged before the libturbojpeg-bundling fix ever existed --
+not something a code review of the packaging/launcher scripts alone would
+catch, since those files are correct; it's the update mechanism that
+could leave a host running old, pre-fix files indefinitely without ever
+reporting a visible error to the user.
+
+**D-Bus assertion abort in `~Impl()` -- a real, pre-existing bug, unrelated
+to any of the three PipeWire rounds:** `git log`/`git log -p` on
+`host/remote-server/src/wayland_screen_capture.cpp` confirmed
+`Impl::~Impl()`'s D-Bus teardown (`if (bus) dbus_connection_unref(bus);`)
+was written exactly this way in the very first commit that added this
+file, and neither of the two "black screen" PipeWire fixes nor the
+SPA-plugin-path env-var fix ever touched anything near it. The actual
+bug: the constructor uses `dbus_bus_get_private()` (a *private*,
+exclusively-owned connection), and libdbus's documented contract for that
+variant requires `dbus_connection_close()` before the final
+`dbus_connection_unref()` -- dropping the last reference on an unclosed
+private connection is treated as a fatal application programming error
+and made libdbus abort the whole process. Since `bus` is set as soon as
+`dbus_bus_get_private()` succeeds (before any of the portal/PipeWire
+setup that can fail), this reproduced on essentially any real desktop
+with a reachable session bus, including early-return/partial-failure
+constructor paths -- not just the fully-successful one -- which is why
+the existing unit test never caught it (it deliberately forces
+`dbus_bus_get_private()` itself to fail via `ScopedUnsetEnv`, specifically
+to avoid popping a real permission dialog during automated tests).
+
+**Fixes:**
+- `host/remote-server/src/wayland_screen_capture.cpp`'s `~Impl()` now
+  calls `dbus_connection_close(bus)` before `dbus_connection_unref(bus)`,
+  and, best-effort, sends an `org.freedesktop.portal.Session.Close`
+  method call first so the compositor drops its screen-share
+  permission/UI state immediately instead of only noticing once the
+  D-Bus peer disconnects.
+- The real libturbojpeg-missing root cause (unattended self-update never
+  activating on Bazzite) is fixed in the next entry below.
+
+**Verified:** clean rebuild of `dualdeck_host`/`dualdeck-host-service`
+under the project's full warning flags, zero warnings; full local `ctest`
+run (6 suites) passes with no regressions.
+
+**Not yet verified:** on the actual affected Bazzite machine -- whether the
+D-Bus abort is actually gone during a real portal permission
+grant/denial/PipeWire-teardown cycle (the unit tests can't exercise a
+real portal dialog at all), and whether the self-update fix (next entry)
+actually gets `libturbojpeg.so.0` onto the affected host once the daemon
+self-updates again.
+
+## 2026-08-03: Host Control's own unattended self-update could silently leave `install/` stuck on stale, pre-fix files on Bazzite -- explains the libturbojpeg regression above
+
+Root-caused as part of the same investigation as the entry above, via a
+third Explore agent tracing the actual self-update mechanism end to end
+(`host/internal/apply-update.sh`'s generation in `scripts/build-release.sh`,
+`net_server.cpp`'s `runSelfUpdateCommand()`/its `--self-update` trigger,
+and `install-steam-shortcut.sh`/`install-host-distrobox.sh`'s stage-then-
+swap logic) rather than guessing at "maybe it's a partial update."
+
+**Root cause:** the persistent Host Control daemon
+(`dualdeck-host-control.service`) can trigger its own update
+unattended -- the moment an already-approved client hits a version
+mismatch, `net_server.cpp`'s `runSelfUpdateCommand()` fires
+`nohup <host_root>/internal/apply-update.sh >/dev/null 2>&1 &` via
+`std::system()`, fully detached, no TTY, all output discarded. That script
+downloads+extracts the new release and hands off to
+`install-steam-shortcut.sh --force`, which -- on an immutable (rpm-ostree)
+system like Bazzite -- unconditionally delegated to
+`install-host-distrobox.sh --install-only`. That script's own
+stage-then-swap logic (by design, so a failed package install never
+activates unverified files) only activates the newly staged `install/`
+directory *after* an unattended `sudo dnf install` of the Distrobox
+container's packages succeeds. With no TTY to authenticate sudo, that
+step silently fails, `set -euo pipefail` aborts the script before the
+activation swap ever runs, and `install/` -- including
+`internal/lib/libturbojpeg.so.0` -- is left exactly as it was before the
+update, however old that was. This produces precisely the reported
+symptom: `readlink` on the running binary correctly shows `install/`, not
+`install.previous/` (there was no successful swap to create that
+ambiguity), while the files underneath are silently stale.
+
+The fix doesn't need to make the unattended `sudo dnf install` work
+somehow -- `dualdeck-host-control.service` never launches
+melonDS/Azahar/Cemu, so it never actually needs the Distrobox container's
+GUI-library packages kept in sync at all (matching
+`install-host-distrobox.sh`'s own pre-existing `DUALDECK_HOST_CONTROL=1`
+short-circuit at its top, which already skips container provisioning
+entirely for Host Control mode when invoked directly -- this same
+short-circuit just never reached the self-update path specifically).
+
+**Fix:** `runSelfUpdateCommand()` now sets `DUALDECK_HOST_CONTROL=1` on
+the self-update command it launches (`--self-update` is, by design, only
+ever wired to this exact persistent-daemon process -- see its own
+existing header comment and `main.cpp`'s help text: "never set this for
+melonDS's in-process integration"). `install-steam-shortcut.sh`'s
+ostree-booted branch now checks that variable: when set, it skips
+`install-host-distrobox.sh --install-only` entirely and does the same
+lightweight, always-succeeds `cp -a` stage-then-swap the non-immutable
+branch already uses -- safe on its own for the same reason that branch
+already is (no separate package-install step to gate on). A regular
+interactive "Check for updates" click (`DUALDECK_HOST_CONTROL` unset)
+still goes through the full Distrobox-provisioning path as before, since
+that session might also launch melonDS/Azahar/Cemu and does need the
+container's packages kept current.
+
+**Verified:** `bash -n` clean on `build-release.sh`; extracted and
+syntax-checked the regenerated `install-steam-shortcut.sh`/`apply-update.sh`
+heredocs directly; manually simulated all three branch combinations
+(ostree + `DUALDECK_HOST_CONTROL` unset -> Distrobox path; ostree +
+`DUALDECK_HOST_CONTROL=1` -> lightweight swap; non-ostree -> lightweight
+swap, unaffected) and confirmed each picks the intended branch; also
+regenerated `host/melonds-patches/0001-remote-server-integration.patch`'s
+frozen `net_server.cpp` copy (the `runSelfUpdateCommand()` change touched
+live source melonDS vendors a full standalone copy of, per this session's
+established convention of never letting that copy drift again) and
+confirmed it applies cleanly and byte-identical against a fresh clone of
+melonDS at the pinned commit. Full local `ctest` run (6 suites) passes
+with no regressions.
+
+**Not yet verified:** on the actual affected Bazzite machine -- whether a
+real self-update triggered by an approved device now actually activates
+the new files (including `libturbojpeg.so.0`) without needing `sudo`
+input, and whether the D-Bus abort from the entry above is also gone once
+the host is running fresh, non-stale files end to end.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

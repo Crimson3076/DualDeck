@@ -2909,6 +2909,27 @@ cat > "${pkg_dir}/host/internal/install-steam-shortcut.sh" <<'WRAP'
 # exactly the bug this is meant to prevent. On a regular (non-immutable)
 # system there's no separate package-install step to gate on, so a
 # plain stage-then-swap file copy here is already safe on its own.
+#
+# Real user report, 2026-08-03 (Bazzite): the persistent Host Control
+# daemon's own unattended self-update (net_server.cpp's
+# runSelfUpdateCommand(), backgrounded via `nohup ... &` with no TTY
+# attached) was routing through this same immutable-system branch and
+# hanging on install-host-distrobox.sh --install-only's `sudo dnf
+# install` step -- no TTY means no way to authenticate sudo, so that
+# step silently failed and the activation swap never ran, leaving
+# install/ (including internal/lib/libturbojpeg.so.0) stuck on whatever
+# was staged before the update. dualdeck-host-control.service never
+# launches melonDS/Azahar/Cemu, so it never needs the Distrobox
+# container's packages in the first place (see
+# install-host-distrobox.sh's own DUALDECK_HOST_CONTROL check) --
+# runSelfUpdateCommand() now sets DUALDECK_HOST_CONTROL=1 for exactly
+# this reason, so a Host-Control-only self-update goes straight to the
+# same lightweight, always-succeeds file swap the non-immutable branch
+# below already uses instead of waiting on a dnf install nothing can
+# authenticate. A regular interactive "Check for updates" click
+# (DUALDECK_HOST_CONTROL unset) still goes through the full
+# Distrobox-provisioning path as before, since that session might also
+# launch melonDS/Azahar/Cemu and does need the container kept in sync.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 host_root="$(cd .. && pwd)"
@@ -2972,7 +2993,8 @@ if [[ -d "${old_central_install_dir}" && "${dry_run}" -eq 0 ]]; then
 fi
 
 if [[ "${dry_run}" -eq 0 ]]; then
-    if [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1; then
+    if { [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1; } && \
+       [[ "${DUALDECK_HOST_CONTROL:-0}" != "1" ]]; then
         echo "Preparing the Distrobox container (this can take a few minutes the first time) ..."
         ./install-host-distrobox.sh --install-only
     else
