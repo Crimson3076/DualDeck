@@ -12,6 +12,72 @@
 
 namespace melonds_remote::host {
 
+// Fallback downscale target when no client has reported a real display
+// size yet (targetDisplayWidth_/Height_ still 0) -- the Steam Deck LCD's
+// native resolution, this project's primary target device. Only used as
+// a starting point until the first real Hello handshake arrives; see
+// HostControlAdapter::setTargetDisplaySize().
+constexpr uint16_t kFallbackTargetDisplayWidth = 1280;
+constexpr uint16_t kFallbackTargetDisplayHeight = 800;
+
+// Downscales one BGRA8888 frame via box-filter (area-average) resampling
+// -- real user report, 2026-08-03: streaming a 4096x2160 desktop
+// mirror to a Steam Deck-sized display was consistently sluggish even
+// though no single stage (host CPU, network, reported encode latency)
+// was individually saturated; the user's own investigation concluded
+// the full native desktop resolution was being captured, compressed,
+// transmitted, and decoded every frame for zero visual benefit, since
+// the client can't show more detail than its own display anyway. Box-
+// filter (rather than nearest-neighbor) because this is desktop content
+// -- fine text/UI edges alias visibly under simple point-sampling at
+// the ~3x+ reduction ratios this feature targets (e.g. 4096x2160 ->
+// ~1280x675). Deliberately hand-written rather than pulling in a new
+// scaling library (libyuv/swscale) for what's currently this one call
+// site -- O(srcW*srcH) total work, the same order as the memcpy this
+// replaces, negligible next to JPEG compression's own cost.
+void downscaleBgra8888(const uint8_t* src, int srcWidth, int srcHeight, std::vector<uint8_t>& dst, int dstWidth,
+                        int dstHeight) {
+    dst.resize(static_cast<size_t>(dstWidth) * dstHeight * 4);
+    for (int dy = 0; dy < dstHeight; ++dy) {
+        int srcY0 = dy * srcHeight / dstHeight;
+        int srcY1 = std::max(srcY0 + 1, (dy + 1) * srcHeight / dstHeight);
+        for (int dx = 0; dx < dstWidth; ++dx) {
+            int srcX0 = dx * srcWidth / dstWidth;
+            int srcX1 = std::max(srcX0 + 1, (dx + 1) * srcWidth / dstWidth);
+            uint32_t sums[4] = {0, 0, 0, 0};
+            int count = 0;
+            for (int sy = srcY0; sy < srcY1; ++sy) {
+                const uint8_t* row = src + static_cast<size_t>(sy) * srcWidth * 4;
+                for (int sx = srcX0; sx < srcX1; ++sx) {
+                    const uint8_t* px = row + static_cast<size_t>(sx) * 4;
+                    sums[0] += px[0];
+                    sums[1] += px[1];
+                    sums[2] += px[2];
+                    sums[3] += px[3];
+                    ++count;
+                }
+            }
+            uint8_t* outPx = dst.data() + (static_cast<size_t>(dy) * dstWidth + dx) * 4;
+            outPx[0] = static_cast<uint8_t>(sums[0] / count);
+            outPx[1] = static_cast<uint8_t>(sums[1] / count);
+            outPx[2] = static_cast<uint8_t>(sums[2] / count);
+            outPx[3] = static_cast<uint8_t>(sums[3] / count);
+        }
+    }
+}
+
+// Computes the largest size that fits within (maxWidth, maxHeight)
+// while preserving (srcWidth, srcHeight)'s aspect ratio, never
+// exceeding the source size (this is a downscale-only fit -- upscaling
+// a capture before JPEG compression would waste work for zero benefit,
+// since the client's own render path already scales-to-fit whatever
+// size frame actually arrives).
+void fitDownscaleTarget(int srcWidth, int srcHeight, int maxWidth, int maxHeight, int& outWidth, int& outHeight) {
+    double scale = std::min({1.0, static_cast<double>(maxWidth) / srcWidth, static_cast<double>(maxHeight) / srcHeight});
+    outWidth = std::max(1, static_cast<int>(srcWidth * scale));
+    outHeight = std::max(1, static_cast<int>(srcHeight * scale));
+}
+
 // Plain `-axis` overflows int16_t's range at the negative extreme
 // (-(-32768) doesn't fit in 16 bits) -- same clamp-to-range technique as
 // client/src/main.cpp's own negateStickAxis(), duplicated here rather than
@@ -599,7 +665,23 @@ bool HostControlAdapter::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t
                              ? mirrorX11Capture_->capture(frame, width, height)
                              : mirrorWaylandCapture_->capture(frame, width, height);
         if (captured) {
-            mirrorLastFrame_ = std::move(frame);
+            // See setTargetDisplaySize()'s own comment for the real
+            // user report this fixes. Falls back to this project's
+            // primary target device's native resolution until a real
+            // client has connected and reported its own.
+            int targetWidth = targetDisplayWidth_ != 0 ? targetDisplayWidth_ : kFallbackTargetDisplayWidth;
+            int targetHeight = targetDisplayHeight_ != 0 ? targetDisplayHeight_ : kFallbackTargetDisplayHeight;
+            int fitWidth = 0, fitHeight = 0;
+            fitDownscaleTarget(width, height, targetWidth, targetHeight, fitWidth, fitHeight);
+            if (fitWidth != width || fitHeight != height) {
+                std::vector<uint8_t> downscaled;
+                downscaleBgra8888(frame.data(), width, height, downscaled, fitWidth, fitHeight);
+                mirrorLastFrame_ = std::move(downscaled);
+                width = static_cast<uint16_t>(fitWidth);
+                height = static_cast<uint16_t>(fitHeight);
+            } else {
+                mirrorLastFrame_ = std::move(frame);
+            }
             mirrorLastWidth_ = width;
             mirrorLastHeight_ = height;
             mirrorLastFrameIndex_ = mirrorNextFrameIndex_++;
@@ -630,6 +712,11 @@ void HostControlAdapter::frameDimensions(uint16_t& outWidth, uint16_t& outHeight
     }
     outWidth = static_cast<uint16_t>(kFrameWidth);
     outHeight = static_cast<uint16_t>(kFrameHeight);
+}
+
+void HostControlAdapter::setTargetDisplaySize(uint16_t width, uint16_t height) {
+    targetDisplayWidth_ = width;
+    targetDisplayHeight_ = height;
 }
 
 } // namespace melonds_remote::host

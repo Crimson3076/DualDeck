@@ -4288,10 +4288,10 @@ index 0000000..b5e6f7084
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/frame_source.h b/src/frontend/qt_sdl/remote_server/host/frame_source.h
 new file mode 100644
-index 0000000..c6f70895a
+index 0000000..0000000
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/frame_source.h
-@@ -0,0 +1,63 @@
+@@ -0,0 +1,80 @@
 +#pragma once
 +
 +// Seam between the network layer and wherever the bottom-screen pixels come
@@ -4352,6 +4352,23 @@ index 0000000..c6f70895a
 +        outWidth = static_cast<uint16_t>(kFrameWidth);
 +        outHeight = static_cast<uint16_t>(kFrameHeight);
 +    }
++
++    // Tells this source the connecting client's real display resolution
++    // (HelloPayload::displayWidth/displayHeight), so a source capturing
++    // something much larger than what the client can even show
++    // (HostControlAdapter's full-desktop mirror capture) can downscale
++    // before compressing. Real user report, 2026-08-03: streaming a
++    // 4096x2160 desktop to a Steam Deck-sized display encoded/
++    // transmitted ~4x more pixel data than useful, and -- even with no
++    // single stage (CPU, network, reported encode latency) individually
++    // saturated -- the accumulated extra copy/compress/transmit/decode
++    // work per frame was enough to make the stream feel visibly
++    // sluggish. No-op default: only HostControlAdapter's desktop-mirror
++    // path needs this -- every other source already produces frames at
++    // the actual emulated console's native surface size (DS/3DS/Wii U
++    // GamePad top out around 410k pixels), never large enough to need
++    // downscaling.
++    virtual void setTargetDisplaySize(uint16_t /*width*/, uint16_t /*height*/) {}
 +};
 +
 +} // namespace melonds_remote::host
@@ -4401,7 +4418,7 @@ new file mode 100644
 index 0000000..0000000
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
-@@ -0,0 +1,1282 @@
+@@ -0,0 +1,1303 @@
 +#include "host/net_server.h"
 +
 +#include <arpa/inet.h>
@@ -4945,6 +4962,12 @@ index 0000000..0000000
 +        bool handshakeOk = false;
 +        HelloRejectReason rejectReason = HelloRejectReason::ProtocolVersionMismatch;
 +        bool clientRequestedExplicitVideoQuality = false;
++        // Captured here (not read directly from `hello` further down)
++        // because `hello` goes out of scope well before the
++        // frameSource_->setTargetDisplaySize() call site below needs
++        // it -- see that call site's own comment.
++        uint16_t clientDisplayWidth = 0;
++        uint16_t clientDisplayHeight = 0;
 +
 +        uint8_t headerBuf[kPacketHeaderWireSize];
 +        ssize_t n = ::recv(clientFd, headerBuf, sizeof(headerBuf), MSG_WAITALL);
@@ -4980,6 +5003,10 @@ index 0000000..0000000
 +                                  : ::recv(clientFd, payloadBuf.data(), payloadBuf.size(), MSG_WAITALL);
 +                if (got == static_cast<ssize_t>(payloadBuf.size())) {
 +                    auto hello = parseHelloPayload(payloadBuf.data(), payloadBuf.size());
++                    if (hello) {
++                        clientDisplayWidth = hello->displayWidth;
++                        clientDisplayHeight = hello->displayHeight;
++                    }
 +                    if (!hello) {
 +                        std::fprintf(stderr, "NetServer: rejecting handshake (malformed Hello payload)\n");
 +                    } else if (protocolVersionMismatch ||
@@ -5089,6 +5116,17 @@ index 0000000..0000000
 +            ack.system = currentSystemIdentity_;
 +            ack.adapter = currentAdapterIdentity_;
 +            ack.mode = currentMode_;
++            // See IFrameSource::setTargetDisplaySize()'s own comment --
++            // only for an actually-accepted handshake, so a rejected/
++            // malformed connection's reported size (clientDisplayWidth/
++            // Height default to 0 either way, so this is mostly a
++            // belt-and-suspenders guard against re-arming with stale
++            // values from a since-rejected reconnect attempt) never
++            // affects a source shared with whatever session is already
++            // active.
++            if (handshakeOk) {
++                frameSource_->setTargetDisplaySize(clientDisplayWidth, clientDisplayHeight);
++            }
 +            // See IFrameSource::frameDimensions()'s comment -- reports the
 +            // connected source's real dimensions (e.g. AzaharAdapter's
 +            // 320x240) instead of always claiming DS's 256x192, so the

@@ -58,6 +58,23 @@ public:
         outWidth = static_cast<uint16_t>(kFrameWidth);
         outHeight = static_cast<uint16_t>(kFrameHeight);
     }
+
+    // Tells this source the connecting client's real display resolution
+    // (HelloPayload::displayWidth/displayHeight), so a source capturing
+    // something much larger than what the client can even show
+    // (HostControlAdapter's full-desktop mirror capture) can downscale
+    // before compressing. Real user report, 2026-08-03: streaming a
+    // 4096x2160 desktop to a Steam Deck-sized display encoded/
+    // transmitted ~4x more pixel data than useful, and -- even with no
+    // single stage (CPU, network, reported encode latency) individually
+    // saturated -- the accumulated extra copy/compress/transmit/decode
+    // work per frame was enough to make the stream feel visibly
+    // sluggish. No-op default: only HostControlAdapter's desktop-mirror
+    // path needs this -- every other source already produces frames at
+    // the actual emulated console's native surface size (DS/3DS/Wii U
+    // GamePad top out around 410k pixels), never large enough to need
+    // downscaling.
+    virtual void setTargetDisplaySize(uint16_t /*width*/, uint16_t /*height*/) {}
 };
 
 } // namespace melonds_remote::host

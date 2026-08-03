@@ -10753,6 +10753,93 @@ manual workaround -- whether a real release build with this fix, self-
 updated onto a clean install, produces working screen mirroring with no
 manual file-moving required.
 
+## 2026-08-03: Host Control screen mirroring works, but streaming a 4K desktop to a Steam Deck-sized display is sluggish -- full native resolution was captured/compressed/sent every frame
+
+Real, well-diagnosed user report, once mirroring itself finally worked
+end to end (all four entries above): a 4096x2160 host display produced a
+consistent ~5fps stream that "feels extremely sluggish," while switching
+the host's own desktop resolution to 1920x1080 (no other config changes)
+was noticeably smoother. The user's own investigation ruled out both
+obvious suspects before concluding this: CPU wasn't saturated (~94%
+system idle), and network/encode latency both stayed in the tens-of-
+milliseconds range -- pointing at accumulated per-frame work (copy,
+TurboJPEG compression, network transmit, client-side decode), each stage
+individually fine but all four scaling with pixel count, none of which
+show up as "high latency" or "high CPU" in isolation.
+
+**Root cause, confirmed by reading the actual pipeline:**
+`HostControlAdapter::getLatestFrame()` (`host_control_adapter.cpp`)
+handed the capture backend's raw frame straight to
+`compressFrameBgraToJpeg()` (`net_server.cpp`) with no resizing step at
+all -- the full native desktop resolution was JPEG-compressed and sent
+every single frame, regardless of what the connecting client could
+actually display. At 4096x2160 that's ~4x the pixels of 1080p and ~7x a
+Steam Deck's own 1280x800 LCD -- work and bandwidth spent on detail the
+client physically cannot show. Separately found while designing the fix:
+`HelloPayload::displayWidth`/`displayHeight` -- the client's own real
+display resolution -- was already on the wire (`client/src/net_client.cpp`
+sends it on every Hello) but the host never read it anywhere; another
+"fully wired, never consumed" gap matching several others found earlier
+this session.
+
+**Fix:** added `IFrameSource::setTargetDisplaySize()` (no-op default --
+only `HostControlAdapter`'s desktop-mirror path needs this; every other
+source already produces frames at the actual emulated console's native
+surface size, never large enough to matter). `NetServer`'s Hello
+handling now calls it with the client's real reported
+`displayWidth`/`displayHeight` once a handshake is accepted, before
+querying `frameDimensions()` for the HelloAck. `HostControlAdapter::
+getLatestFrame()` now fits each captured frame within that size (falling
+back to 1280x800 -- this project's primary target device's native
+resolution -- until a client has actually connected), preserving aspect
+ratio and never upscaling, via a hand-written box-filter (area-average)
+downscale -- chosen over nearest-neighbor specifically because this is
+desktop content (fine text/UI edges visibly alias under point-sampling
+at the ~3x+ reduction ratios this targets), and over pulling in a new
+scaling library (libyuv/swscale) for what's currently a single call
+site, since the box filter is O(srcW*srcH) total work, the same order as
+the memcpy it replaces.
+
+Confirmed the client-side impact of a downscaled frame is harmless by
+reading `net_client.cpp`'s own receive path: `hostNativeWidth_`/
+`hostNativeHeight_` (from HelloAck) is only ever used as a generous
+sanity ceiling on incoming payload size, not a strict equality check,
+and gets overwritten from each frame's real decoded dimensions every
+single frame (already fixed for a similar reason previously -- see that
+code's own comment) -- so `frameDimensions()` continuing to report the
+native (undownscaled) desktop size in HelloAck needed no changes at all.
+
+**Verified:** clean rebuild under the project's full warning flags,
+zero warnings. Added direct unit tests for the new pure functions
+(`fitDownscaleTarget`/`downscaleBgra8888`, declared in the header
+alongside `translateControllerState()` specifically so they're testable
+without a real capture backend, matching that function's own precedent):
+the exact reported scenario (4096x2160 fit within 1280x800 -> 1280x675),
+never-upscale, exact-fit-unchanged, and two box-filter correctness
+checks (a solid-quadrant test and a true-average test that a uniform-
+color test can't catch). Full local `ctest` run (6 suites, 102 host
+test cases) passes with no regressions. Regenerated melonDS patch's
+frozen `net_server.cpp`/`frame_source.h` copies (both changed by this
+fix; `host_control_adapter.cpp/.h` isn't vendored there at all --
+melonDS's own in-process integration never uses `HostControlAdapter`),
+verified byte-identical against a fresh clone of melonDS at the pinned
+commit. Confirmed Azahar/Cemu's patches don't vendor these two files
+either (out-of-process, only mention `net_server.cpp` in comments) --
+no regeneration needed there. `check-patch-protocol-sync.sh` still
+reports every patch in sync (no wire-format change -- `displayWidth`/
+`displayHeight` already existed on the wire; only host-side consumption
+of an existing field changed).
+
+**Not yet verified:** on the actual affected Bazzite machine -- whether
+this actually resolves the reported sluggishness end to end at 4K, and
+whether 1280x800 (the fallback/typical-Deck-client target) is a good
+enough downscale target in practice or would benefit from being
+adaptive/configurable later, per the user's own longer-term suggestions
+(bandwidth-adaptive resolution, hardware H.264/HEVC/AV1 encoding) --
+deliberately out of scope for this pass, which targets the specific,
+evidenced regression (full-native-resolution encoding) rather than a
+broader encoder rewrite.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

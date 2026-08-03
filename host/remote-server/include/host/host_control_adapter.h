@@ -82,6 +82,14 @@ struct HostControlGamepadState {
 // Pure translation, no I/O -- see HostControlGamepadState's own comment.
 HostControlGamepadState translateControllerState(const ControllerState& state);
 
+// Pure math, no I/O -- see the .cpp's own comment on getLatestFrame()'s
+// downscaling for why these exist. Declared here (like
+// translateControllerState() above) specifically so they're directly
+// unit-testable without a real capture backend.
+void fitDownscaleTarget(int srcWidth, int srcHeight, int maxWidth, int maxHeight, int& outWidth, int& outHeight);
+void downscaleBgra8888(const uint8_t* src, int srcWidth, int srcHeight, std::vector<uint8_t>& dst, int dstWidth,
+                        int dstHeight);
+
 // Pure description of "what the virtual mouse should do this tick" --
 // same no-I/O rationale as HostControlGamepadState. dx/dy are relative
 // motion (protocol.h's ControllerState::mouseDeltaX/Y, forwarded
@@ -202,6 +210,15 @@ public:
     // every other frame source's behavior in that case.
     void frameDimensions(uint16_t& outWidth, uint16_t& outHeight) const override;
 
+    // See IFrameSource::setTargetDisplaySize()'s own comment for the
+    // full "why" -- NetServer calls this once per accepted handshake,
+    // from HelloPayload::displayWidth/displayHeight, before the first
+    // frame is captured for that connection. getLatestFrame() uses it
+    // to downscale (never upscale) a captured desktop frame to fit
+    // within this size, preserving aspect ratio, before it's handed off
+    // for JPEG compression.
+    void setTargetDisplaySize(uint16_t width, uint16_t height) override;
+
     // True once a real mirror-capture backend is actually working --
     // distinct from mirrorEnabled_ (the env var was set): this is the
     // one a caller wanting to know "is this actually working" should
@@ -299,6 +316,15 @@ private:
     uint64_t mirrorNextFrameIndex_ = 0;
     std::chrono::steady_clock::time_point mirrorLastCaptureTime_;
     std::chrono::milliseconds mirrorCaptureInterval_{200};
+
+    // Set by setTargetDisplaySize() once a client's real Hello handshake
+    // reports its display resolution; 0 means "not known yet" (e.g. no
+    // client has connected this session), in which case getLatestFrame()
+    // falls back to kFallbackTargetDisplayWidth/Height (this project's
+    // primary target device's native resolution) rather than skipping
+    // downscaling entirely.
+    uint16_t targetDisplayWidth_ = 0;
+    uint16_t targetDisplayHeight_ = 0;
 };
 
 } // namespace melonds_remote::host

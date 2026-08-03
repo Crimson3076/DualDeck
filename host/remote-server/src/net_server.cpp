@@ -541,6 +541,12 @@ void NetServer::controlLoop() {
         bool handshakeOk = false;
         HelloRejectReason rejectReason = HelloRejectReason::ProtocolVersionMismatch;
         bool clientRequestedExplicitVideoQuality = false;
+        // Captured here (not read directly from `hello` further down)
+        // because `hello` goes out of scope well before the
+        // frameSource_->setTargetDisplaySize() call site below needs
+        // it -- see that call site's own comment.
+        uint16_t clientDisplayWidth = 0;
+        uint16_t clientDisplayHeight = 0;
 
         uint8_t headerBuf[kPacketHeaderWireSize];
         ssize_t n = ::recv(clientFd, headerBuf, sizeof(headerBuf), MSG_WAITALL);
@@ -576,6 +582,10 @@ void NetServer::controlLoop() {
                                   : ::recv(clientFd, payloadBuf.data(), payloadBuf.size(), MSG_WAITALL);
                 if (got == static_cast<ssize_t>(payloadBuf.size())) {
                     auto hello = parseHelloPayload(payloadBuf.data(), payloadBuf.size());
+                    if (hello) {
+                        clientDisplayWidth = hello->displayWidth;
+                        clientDisplayHeight = hello->displayHeight;
+                    }
                     if (!hello) {
                         std::fprintf(stderr, "NetServer: rejecting handshake (malformed Hello payload)\n");
                     } else if (protocolVersionMismatch ||
@@ -685,6 +695,17 @@ void NetServer::controlLoop() {
             ack.system = currentSystemIdentity_;
             ack.adapter = currentAdapterIdentity_;
             ack.mode = currentMode_;
+            // See IFrameSource::setTargetDisplaySize()'s own comment --
+            // only for an actually-accepted handshake, so a rejected/
+            // malformed connection's reported size (clientDisplayWidth/
+            // Height default to 0 either way, so this is mostly a
+            // belt-and-suspenders guard against re-arming with stale
+            // values from a since-rejected reconnect attempt) never
+            // affects a source shared with whatever session is already
+            // active.
+            if (handshakeOk) {
+                frameSource_->setTargetDisplaySize(clientDisplayWidth, clientDisplayHeight);
+            }
             // See IFrameSource::frameDimensions()'s comment -- reports the
             // connected source's real dimensions (e.g. AzaharAdapter's
             // 320x240) instead of always claiming DS's 256x192, so the

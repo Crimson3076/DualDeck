@@ -413,3 +413,99 @@ MDR_TEST(translate_ignores_mouse_fields) {
     MDR_CHECK_EQ(out.leftStickX, static_cast<int16_t>(0));
     MDR_CHECK_EQ(out.leftStickY, static_cast<int16_t>(0));
 }
+
+// Real user report, 2026-08-03: a 4096x2160 host desktop mirrored to a
+// Steam Deck-sized display was consistently sluggish -- the full native
+// resolution was being captured/JPEG-compressed/transmitted/decoded
+// every frame for no visual benefit. fitDownscaleTarget()/
+// downscaleBgra8888() are the fix; both are pure math/pixel logic, no
+// I/O, so directly testable without a real capture backend (matching
+// translateControllerState()'s own testing rationale above).
+
+MDR_TEST(fit_downscale_target_matches_the_reported_scenario) {
+    // 4096x2160 (the exact resolution from the report) fit within
+    // 1280x800 (Steam Deck's native LCD, this project's fallback
+    // target): width is the binding constraint (4096/1280 = 3.2 >
+    // 2160/800 = 2.7), so height comes out to 2160/3.2 = 675.
+    int outWidth = 0, outHeight = 0;
+    fitDownscaleTarget(4096, 2160, 1280, 800, outWidth, outHeight);
+    MDR_CHECK_EQ(outWidth, 1280);
+    MDR_CHECK_EQ(outHeight, 675);
+}
+
+MDR_TEST(fit_downscale_target_never_upscales) {
+    // A source already smaller than the target (e.g. a 1280x800 desktop
+    // mirrored to a 1280x800 client) must come back unchanged -- there's
+    // no benefit to upscaling before JPEG compression, since the
+    // client's own render path already scales-to-fit whatever size
+    // frame actually arrives.
+    int outWidth = 0, outHeight = 0;
+    fitDownscaleTarget(640, 480, 1280, 800, outWidth, outHeight);
+    MDR_CHECK_EQ(outWidth, 640);
+    MDR_CHECK_EQ(outHeight, 480);
+}
+
+MDR_TEST(fit_downscale_target_exact_fit_is_unchanged) {
+    int outWidth = 0, outHeight = 0;
+    fitDownscaleTarget(1280, 800, 1280, 800, outWidth, outHeight);
+    MDR_CHECK_EQ(outWidth, 1280);
+    MDR_CHECK_EQ(outHeight, 800);
+}
+
+MDR_TEST(downscale_bgra_averages_a_solid_quadrant_correctly) {
+    // A 4x4 frame split into four solid-color 2x2 quadrants, downscaled
+    // to 2x2 -- each output pixel should be exactly the pure color of
+    // the one quadrant it maps to (box-filter over a uniform region is
+    // just that region's own color, an easy exactness check for the
+    // averaging logic itself).
+    std::vector<uint8_t> src(4 * 4 * 4, 0);
+    auto setPixel = [&](int x, int y, uint8_t b, uint8_t g, uint8_t r, uint8_t a) {
+        uint8_t* p = src.data() + (static_cast<size_t>(y) * 4 + x) * 4;
+        p[0] = b;
+        p[1] = g;
+        p[2] = r;
+        p[3] = a;
+    };
+    for (int y = 0; y < 2; ++y)
+        for (int x = 0; x < 2; ++x) setPixel(x, y, 10, 20, 30, 255);       // top-left
+    for (int y = 0; y < 2; ++y)
+        for (int x = 2; x < 4; ++x) setPixel(x, y, 40, 50, 60, 255);      // top-right
+    for (int y = 2; y < 4; ++y)
+        for (int x = 0; x < 2; ++x) setPixel(x, y, 70, 80, 90, 255);      // bottom-left
+    for (int y = 2; y < 4; ++y)
+        for (int x = 2; x < 4; ++x) setPixel(x, y, 100, 110, 120, 255);   // bottom-right
+
+    std::vector<uint8_t> dst;
+    downscaleBgra8888(src.data(), 4, 4, dst, 2, 2);
+    MDR_CHECK_EQ(dst.size(), static_cast<size_t>(2 * 2 * 4));
+
+    auto getPixel = [&](int x, int y) { return dst.data() + (static_cast<size_t>(y) * 2 + x) * 4; };
+    const uint8_t* topLeft = getPixel(0, 0);
+    MDR_CHECK_EQ(topLeft[0], static_cast<uint8_t>(10));
+    MDR_CHECK_EQ(topLeft[1], static_cast<uint8_t>(20));
+    MDR_CHECK_EQ(topLeft[2], static_cast<uint8_t>(30));
+    const uint8_t* bottomRight = getPixel(1, 1);
+    MDR_CHECK_EQ(bottomRight[0], static_cast<uint8_t>(100));
+    MDR_CHECK_EQ(bottomRight[1], static_cast<uint8_t>(110));
+    MDR_CHECK_EQ(bottomRight[2], static_cast<uint8_t>(120));
+}
+
+MDR_TEST(downscale_bgra_to_one_pixel_is_the_true_average) {
+    // 1x2 source (two distinct pixels) downscaled to 1x1 must produce
+    // the exact arithmetic mean of the two -- catches an off-by-one in
+    // the box filter's source-range computation that a uniform-color
+    // test (like the one above) can't, since averaging identical values
+    // trivially reproduces them regardless of exactly which pixels were
+    // summed.
+    std::vector<uint8_t> src = {
+        10, 20, 30, 255, // row 0
+        50, 60, 70, 255, // row 1
+    };
+    std::vector<uint8_t> dst;
+    downscaleBgra8888(src.data(), 1, 2, dst, 1, 1);
+    MDR_CHECK_EQ(dst.size(), static_cast<size_t>(4));
+    MDR_CHECK_EQ(dst[0], static_cast<uint8_t>(30)); // (10+50)/2
+    MDR_CHECK_EQ(dst[1], static_cast<uint8_t>(40)); // (20+60)/2
+    MDR_CHECK_EQ(dst[2], static_cast<uint8_t>(50)); // (30+70)/2
+    MDR_CHECK_EQ(dst[3], static_cast<uint8_t>(255));
+}
