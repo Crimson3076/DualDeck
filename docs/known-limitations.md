@@ -9628,6 +9628,82 @@ provisioned for melonDS, not audited specifically against Azahar's own
 `ensure_packages()` list of `qt6-base-dev`/`libvulkan1`/`libsdl2-2.0-0`/
 `libopenal1`/`libboost-iostreams`/`libboost-thread`).
 
+## 2026-08-03: MelonDS and Host Control mirror -- both root-caused from real host diagnostics
+
+**Real user reports followed up with actual host-side evidence** (run
+directly on the Bazzite host, per this project's established "get real
+logs before guessing further" discipline):
+
+### MelonDS: missing `libturbojpeg.so.0` in the Distrobox container
+
+Running `~/.config/dualdeck/install/melonDS` directly showed the real
+cause immediately: `error while loading shared libraries:
+libturbojpeg.so.0: cannot open shared object file`. melonDS runs its own
+in-process `NetServer` (its patch vendors a full copy of
+`net_server.cpp`/`.h`, unlike Azahar/Cemu, which delegate video encoding
+to the separate `dualdeck-host-service` process -- already fixed to
+bundle this same library for exactly this reason, see that binary's own
+`internal/lib` bundling), so melonDS's own binary links TurboJPEG
+directly and needs `libturbojpeg.so.0` itself at runtime.
+`install-host-distrobox.sh`'s `dualdeck-host` container package list
+simply never included `turbojpeg-devel` at all -- not a devel-vs-runtime
+naming mismatch like some other packages in that list, a plain omission.
+A binary that can't pass the dynamic linker before `main()` explains
+both halves of the report at once: no server ever starts, and no window
+ever opens (so no menu, no checkbox to see either).
+
+**Fix:** added `turbojpeg-devel` to the `dnf install` list in
+`install-host-distrobox.sh`, matching the exact package name already
+verified correct elsewhere in this file's own `ensure_packages()` calls
+for the same library. Takes effect automatically the next time this
+script (re-)runs against the user's existing container -- including via
+the normal self-update path, since `apply-update.sh` delegates to this
+exact script on immutable systems.
+
+### Host Control mirror: X11 "succeeding" against XWayland's own empty root, never actually reaching the Wayland fallback
+
+`journalctl` showed `HostControlAdapter: screen-mirror capture ready
+(X11)` -- on a confirmed Wayland session. This was the exact failure
+mode already named (but not actually fixed) in this same file's
+2026-08-03 mirror entry above: `X11ScreenCapture::isReady()` only checks
+"can I connect to a display and does XShm work," which XWayland (the
+X11-compatibility layer every real Wayland session still runs) happily
+answers yes to, even though its root window has no real desktop content
+composited into it -- real content lives entirely in the Wayland
+compositor, invisible to X11. The previous fix built a genuine Wayland
+portal + PipeWire fallback, but kept trying X11 *first* unconditionally
+"since it's cheaper" -- and X11 kept falsely succeeding on this exact
+kind of session, so the Wayland fallback was never actually reached in
+practice. The client showing black instead of the old grey placeholder
+makes sense in hindsight: previously mirroring was never enabled at all
+(nothing to capture, client showed its own grey placeholder); once
+defaulted on, X11 was now genuinely capturing XWayland's real, empty,
+black root window and sending *that*.
+
+**Fix:** `host_control_adapter.cpp`'s constructor now checks
+`WAYLAND_DISPLAY` before choosing which backend to try first. If set (a
+real Wayland session -- XWayland's mere presence doesn't matter), it
+tries `WaylandScreenCapture` first, falling back to `X11ScreenCapture`
+only if the portal path doesn't pan out. If unset (a real X11-only
+desktop), the original X11-first behavior is unchanged (cheap,
+synchronous, no portal permission prompt). `isMirrorReady()`/
+`getLatestFrame()`/`frameDimensions()` needed no changes -- they already
+null-check and `isReady()`-check both backends independently, agnostic
+to construction order.
+
+**Verified:** full local build of `dualdeck-host-service` and the full
+host test suite (97 cases, all passing) after the
+`host_control_adapter.cpp` change; `bash -n` clean on `build-release.sh`
+and the extracted, generated `install-host-distrobox.sh` body for the
+`turbojpeg-devel` addition.
+
+**Not yet verified:** on real Bazzite hardware -- whether melonDS now
+actually starts and shows its checkbox once the container gets the new
+package, and whether the Wayland portal path (now actually reachable)
+produces a real, non-black captured frame this time, including the
+one-time interactive screen-share permission prompt actually appearing
+and being answerable from a `systemd --user` daemon context.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

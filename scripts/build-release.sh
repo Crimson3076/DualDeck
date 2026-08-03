@@ -2012,12 +2012,30 @@ fi
 echo "Creating/reusing Distrobox container \"${container_name}\" (Fedora-based) ..."
 distrobox create --name "${container_name}" --image fedora:latest --yes
 
+# Real user report, 2026-08-03: "MelonDS is still broken, not hosting a
+# server, toggle still missing from menu" -- running melonDS directly
+# showed the actual cause plainly: "error while loading shared
+# libraries: libturbojpeg.so.0: cannot open shared object file." melonDS
+# runs its own in-process NetServer (its patch vendors a full copy of
+# net_server.cpp/h, unlike Azahar/Cemu, which delegate video encoding to
+# the separate dualdeck-host-service process -- already fixed to bundle
+# this same library, see that binary's own "internal/lib" comments
+# elsewhere in this file), so melonDS's own binary links libjpeg-turbo's
+# TurboJPEG API directly and needs libturbojpeg.so.0 itself at runtime.
+# turbojpeg-devel (matching every other package in this list's -devel
+# convention, and the same Fedora package name already verified correct
+# elsewhere in this file's own ensure_packages() calls) was simply never
+# in this container's package list at all -- not a devel-vs-runtime
+# naming mismatch like some of the others here, a plain omission. No
+# server ever starting and no window (so no menu, no checkbox) is
+# exactly what a binary that can't even pass the dynamic linker before
+# main() produces.
 echo "Installing runtime libraries inside the container ..."
 distrobox enter "${container_name}" -- sudo dnf install -y \
     libcurl-devel libpcap-devel SDL2-devel libarchive-devel enet-devel libzstd-devel faad2-devel \
     qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtmultimedia-devel qt6-qtsvg-devel \
     libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel \
-    wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel
+    wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel turbojpeg-devel
 
 # Firewalld runs at the host OS level, not per-container -- opening
 # these ports here (not just in install-steam-shortcut.sh, which

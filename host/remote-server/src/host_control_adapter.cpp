@@ -164,31 +164,70 @@ HostControlAdapter::HostControlAdapter() {
     // for the full design. Neither capture backend is constructed (and
     // neither attempts an X11/D-Bus connection) unless this is actually
     // set, so a host that never opts in never even tries to reach
-    // either. X11 tried first (cheap, synchronous); WaylandScreenCapture
-    // (portal + PipeWire) only constructed as a fallback if X11 didn't
-    // work -- real user report, 2026-08-03: X11 "succeeding" against
-    // XWayland's own empty compositing root on a Wayland session
-    // produced a uniform grey, not a crash, so isReady() alone can't be
-    // trusted to mean "this will actually show something" on every
-    // system -- but it's still cheaper to try first on a real X11
-    // desktop session where it genuinely does work, rather than always
-    // paying for a portal session negotiation (including its one-time
-    // interactive permission prompt) unconditionally.
+    // either.
+    //
+    // Real user report, 2026-08-03 (Bazzite, a confirmed Wayland
+    // session): journalctl showed "screen-mirror capture ready (X11)"
+    // and the client showed solid black -- X11ScreenCapture's isReady()
+    // only checks "can I connect to a display and does XShm work,"
+    // which XWayland (the X11-compatibility layer every real Wayland
+    // session still runs, for legacy X11 app support) happily answers
+    // yes to, even though its own root window has no real desktop
+    // content composited into it at all -- true content lives in the
+    // Wayland compositor, invisible to X11's view entirely. This was
+    // already suspected (see the previous version of this comment,
+    // which chose to try X11 first anyway purely for cost reasons) but
+    // never actually fixed -- X11 kept "succeeding" every time, so the
+    // Wayland portal fallback below was never reached in practice on a
+    // Wayland session. Fixed by checking WAYLAND_DISPLAY first: a real
+    // Wayland session has this set (XWayland's presence is irrelevant to
+    // it), so this now tries WaylandScreenCapture *first* in that case,
+    // falling back to X11ScreenCapture only if the portal path doesn't
+    // pan out -- inverting the previous unconditional "X11 first, it's
+    // cheaper" priority specifically when there's a real Wayland session
+    // to prefer instead. A real X11-only desktop (WAYLAND_DISPLAY unset)
+    // keeps the original X11-first behavior: cheap, synchronous, no
+    // portal permission prompt.
     const char* mirrorEnv = std::getenv("DUALDECK_HOSTCONTROL_MIRROR_SCREEN");
     mirrorEnabled_ = mirrorEnv != nullptr && mirrorEnv[0] != '\0' && std::strcmp(mirrorEnv, "0") != 0;
     if (mirrorEnabled_) {
-        mirrorX11Capture_ = std::make_unique<X11ScreenCapture>();
-        if (mirrorX11Capture_->isReady()) {
-            std::fprintf(stderr, "HostControlAdapter: screen-mirror capture ready (X11)\n");
-        } else {
+        const char* waylandDisplayEnv = std::getenv("WAYLAND_DISPLAY");
+        bool preferWayland = waylandDisplayEnv != nullptr && waylandDisplayEnv[0] != '\0';
+        if (preferWayland) {
             std::fprintf(stderr,
-                          "HostControlAdapter: DUALDECK_HOSTCONTROL_MIRROR_SCREEN was set but no usable X11 "
-                          "display/XShm was found -- trying the Wayland portal + PipeWire path instead.\n");
+                          "HostControlAdapter: WAYLAND_DISPLAY is set -- trying the Wayland portal + "
+                          "PipeWire capture path first (X11 would only ever see XWayland's own empty "
+                          "compositing root here, not real desktop content).\n");
             mirrorWaylandCapture_ = std::make_unique<WaylandScreenCapture>();
             if (!mirrorWaylandCapture_->isReady()) {
                 std::fprintf(stderr,
-                              "HostControlAdapter: Wayland portal screen-mirror capture also unavailable -- "
-                              "screen mirroring stays disabled; everything else continues to work normally.\n");
+                              "HostControlAdapter: Wayland portal screen-mirror capture unavailable -- "
+                              "falling back to X11 (may only capture XWayland's empty root on this "
+                              "session, not real content).\n");
+                mirrorX11Capture_ = std::make_unique<X11ScreenCapture>();
+                if (!mirrorX11Capture_->isReady()) {
+                    std::fprintf(stderr,
+                                  "HostControlAdapter: X11 screen-mirror capture also unavailable -- "
+                                  "screen mirroring stays disabled; everything else continues to work "
+                                  "normally.\n");
+                }
+            }
+        } else {
+            mirrorX11Capture_ = std::make_unique<X11ScreenCapture>();
+            if (mirrorX11Capture_->isReady()) {
+                std::fprintf(stderr, "HostControlAdapter: screen-mirror capture ready (X11)\n");
+            } else {
+                std::fprintf(stderr,
+                              "HostControlAdapter: DUALDECK_HOSTCONTROL_MIRROR_SCREEN was set but no usable "
+                              "X11 display/XShm was found -- trying the Wayland portal + PipeWire path "
+                              "instead.\n");
+                mirrorWaylandCapture_ = std::make_unique<WaylandScreenCapture>();
+                if (!mirrorWaylandCapture_->isReady()) {
+                    std::fprintf(stderr,
+                                  "HostControlAdapter: Wayland portal screen-mirror capture also unavailable "
+                                  "-- screen mirroring stays disabled; everything else continues to work "
+                                  "normally.\n");
+                }
             }
         }
 
