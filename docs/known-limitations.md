@@ -10840,6 +10840,45 @@ deliberately out of scope for this pass, which targets the specific,
 evidenced regression (full-native-resolution encoding) rather than a
 broader encoder rewrite.
 
+## 2026-08-03: Host Control screen mirror never shows the mouse cursor -- known, root-caused, deliberately deferred
+
+Real user report, flagged as a "save for later" item rather than an
+urgent fix, once mirroring itself was fast enough to actually use.
+Confirmed via direct code read (`grep -i cursor` across both capture
+backends returns nothing at all): neither `x11_screen_capture.cpp` nor
+`wayland_screen_capture.cpp` does anything cursor-related, so this isn't
+a regression from any of today's other fixes -- the cursor was never
+captured at all, from this feature's very first commit.
+
+**Root cause, different for each backend (both would need a fix,
+independently, before this feature is complete on either code path):**
+- **X11**: `XGetImage()` reads the root window's own pixel buffer, which
+  never includes the hardware cursor -- the X server composites the
+  cursor as a separate XFixes overlay at display time, not something a
+  plain screenshot call captures. Getting the cursor here needs a
+  separate `XFixesGetCursorImage()` call (returns the cursor's own ARGB
+  pixel data + hotspot + position) composited into the captured frame by
+  hand, plus an `XFixesSelectCursorInput()` subscription if the cursor
+  image should update live (shape changes, e.g. a text-edit I-beam)
+  rather than being fetched fresh every capture tick.
+- **Wayland/PipeWire portal**: `createSession()`'s `SelectSources` D-Bus
+  call (`wayland_screen_capture.cpp`) never sets the portal's
+  `cursor_mode` option (bit 1 = Hidden, the implicit default when
+  unset; bit 2 = Embedded, cursor rendered directly into the video
+  frames PipeWire delivers; bit 4 = Metadata, cursor position/image
+  delivered as separate PipeWire stream metadata instead of baked into
+  the pixels). Embedded is the simpler of the two real options for this
+  project's existing "just get a flat BGRA frame out" pipeline --
+  Metadata would need `onStreamProcess()` to also parse and manually
+  composite `spa_meta_cursor`, more code for very little benefit over
+  just asking the portal to embed it directly.
+
+**Deliberately not fixed in this pass**, per the user's own explicit
+"save for later" -- documented here so the two concrete, independently-
+scoped starting points above (`XFixesGetCursorImage()` for X11;
+`cursor_mode` Embedded in the portal's `SelectSources` call for Wayland)
+don't need to be rediscovered next time this comes up.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
