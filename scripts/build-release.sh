@@ -11,7 +11,25 @@
 # needed before running this.
 set -euo pipefail
 
-SDL3_TAG="release-3.2.16"
+# Real hardware finding, 2026-08-03: SDL_GetNumGamepadTouchpads() has
+# always returned 0 for the Steam Deck's own built-in controller,
+# independent of every Steam Input change tried -- confirmed by reading
+# SDL's own git history directly (github.com/libsdl-org/SDL):
+# src/joystick/hidapi/SDL_hidapi_steamdeck.c has zero touchpad-related
+# code in every 3.2.x release, checked 3.2.16 through 3.2.30 (the last
+# 3.2.x release). Steam Controller/Deck touchpad support (PR #15528,
+# "Add Steam Controller touchpads, capacitive touch for sticks, and grip
+# sense", plus several touchpad-specific bugfixes merged afterward, e.g.
+# "Fix touchpad finger detection on Steam Deck") only landed starting in
+# the 3.4.x release series -- release-3.4.0 has partial support,
+# release-3.4.12 has the full set of touchpad fixes. Every Host Control
+# touchpad fix this project shipped before this one (SDL gamepad-
+# touchpad capture, Steam Input disable, the CWD path bug, the Steam
+# auto-restart-on-toggle fix) was correct but could never have worked at
+# all against the previously-pinned 3.2.16 -- SDL itself never exposed
+# any touchpad data for this controller in that version, regardless of
+# anything client- or host-side.
+SDL3_TAG="release-3.4.12"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/lib/pinned_commits.sh
@@ -52,10 +70,15 @@ echo "== [0/6] Checking build dependencies =="
 # find_qt6_plugins_dir()/pack_appimage()'s bundled platforms/ directory
 # (see the "Packaging prebuilt AppImages" step below) covers both
 # session types rather than relying on XWayland compatibility alone.
+# libxtst-dev/libXtst-devel/libxtst (X11 XTEST extension headers): new
+# requirement as of bumping SDL3_TAG to release-3.4.12 (see that
+# variable's own comment) -- SDL's X11 backend started hard-requiring it
+# at configure time somewhere between 3.2.16 and 3.4.12 ("Couldn't find
+# dependency package for XTEST"), where 3.2.16 built fine without it.
 ensure_packages "build" \
-    "cmake extra-cmake-modules ninja-build build-essential git python3 libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev libarchive-dev libenet-dev libzstd-dev libfaad-dev qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-svg-dev qt6-wayland libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libdecor-0-dev libturbojpeg0-dev" \
-    "cmake extra-cmake-modules ninja-build gcc-c++ git python3 libcurl-devel libpcap-devel SDL2-devel libarchive-devel enet-devel libzstd-devel faad2-devel qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtmultimedia-devel qt6-qtsvg-devel qt6-qtwayland libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel turbojpeg-devel" \
-    "cmake extra-cmake-modules ninja base-devel git python curl libpcap sdl2 libarchive enet zstd faad2 qt6-base qt6-multimedia qt6-svg qt6-wayland libx11 libxext libxrandr libxcursor libxfixes libxi libxss wayland libxkbcommon libdrm mesa libdecor libjpeg-turbo"
+    "cmake extra-cmake-modules ninja-build build-essential git python3 libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev libarchive-dev libenet-dev libzstd-dev libfaad-dev qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-svg-dev qt6-wayland libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libdecor-0-dev libturbojpeg0-dev" \
+    "cmake extra-cmake-modules ninja-build gcc-c++ git python3 libcurl-devel libpcap-devel SDL2-devel libarchive-devel enet-devel libzstd-devel faad2-devel qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtmultimedia-devel qt6-qtsvg-devel qt6-qtwayland libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel libXtst-devel wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel turbojpeg-devel" \
+    "cmake extra-cmake-modules ninja base-devel git python curl libpcap sdl2 libarchive enet zstd faad2 qt6-base qt6-multimedia qt6-svg qt6-wayland libx11 libxext libxrandr libxcursor libxfixes libxi libxss libxtst wayland libxkbcommon libdrm mesa libdecor libjpeg-turbo"
 
 # Azahar (3DS) additionally needs a Vulkan SDK and Boost headers beyond
 # melonDS's own dependency list above -- see

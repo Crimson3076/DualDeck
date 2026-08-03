@@ -8183,6 +8183,71 @@ hardware -- this is now the real next step; a fresh `client.log` after
 this build will, for the first time, actually show whether SDL sees any
 touchpads on the Deck's controller at all.
 
+## 2026-08-03: Found the real root cause -- SDL 3.2.x has zero Steam Deck touchpad support at all
+
+The fixed diagnostic above delivered, twice, on real hardware: `[input]
+gamepad connected: name=Steam Deck Controller touchpads=0`. Zero, both
+times -- once from a Desktop Mode session and once from a proper Gaming
+Mode session with client and host on matching versions, ruling out a
+Desktop-Mode-specific quirk. This means `SDL_GetNumGamepadTouchpads()`
+has genuinely always returned 0 for this exact controller, independent
+of every fix attempted so far in this file's touchpad saga (SDL
+gamepad-touchpad capture, Steam Input disable, the CWD path bug, the
+Steam auto-restart-on-toggle fix) -- none of them could ever have
+worked, because SDL itself was never exposing any touchpad data for
+this controller to begin with.
+
+**Confirmed by reading SDL's own git history directly**
+(github.com/libsdl-org/SDL, full clone, not guessed from memory):
+`src/joystick/hidapi/SDL_hidapi_steamdeck.c` -- the file responsible
+for translating the Deck's own HID reports into SDL events -- has
+**zero** touchpad-related code in `release-3.2.16` (this project's
+previously-pinned version) or any other 3.2.x release checked
+(3.2.16 through 3.2.30, the last one in that series, all zero). Steam
+Controller/Deck touchpad support (PR #15528, "Add Steam Controller
+touchpads, capacitive touch for sticks, and grip sense", merged into
+SDL's `main` branch, plus several touchpad-specific bugfixes landed
+afterward -- "Fix touchpad finger detection on Steam Deck", "Fix Steam
+Controller 2 touchpad finger detection", etc.) only reached a tagged
+release starting with `release-3.4.0`; `release-3.4.12` (the latest
+`3.4.x` release checked) has the complete set of those fixes. This
+isn't a config issue, a binding issue, or a client bug -- it's a
+version gap in a bundled dependency, and every earlier touchpad
+diagnosis in this file, however reasonable given what was knowable at
+the time, was chasing symptoms of the same underlying gap.
+
+**Fixed** by bumping `scripts/build-release.sh`'s pinned
+`SDL3_TAG` from `release-3.2.16` to `release-3.4.12`.
+
+- **A real new build-time dependency surfaced**: SDL's X11 backend
+  configure step now hard-requires the X11 XTEST extension headers
+  ("Couldn't find dependency package for XTEST"), which 3.2.16 didn't
+  need. Added `libxtst-dev`/`libXtst-devel`/`libxtst` to the `"build"`
+  `ensure_packages()` call (apt/dnf/pacman respectively).
+- **No new runtime dependency, though**: `ldd` against the freshly
+  built `libSDL3.so` for both 3.2.16 and 3.4.12 shows the identical
+  dependency set (`libc`, `libm`, the dynamic linker -- nothing else)
+  -- SDL `dlopen()`s its actual X11/Wayland/etc. backends at runtime
+  rather than linking them directly, so XTEST support being compiled in
+  doesn't turn into a hard `libxtst.so.6` requirement on whatever
+  machine actually runs the packaged client. No change needed to the
+  `"client runtime"` `ensure_packages()` list.
+
+**Verified:** SDL 3.4.12 built from source cleanly in this sandbox
+(after adding the new XTEST dev dependency); the full client rebuilt
+against it with zero warnings
+(`-Wall -Wextra -Wpedantic -Wconversion -Wshadow`) and no source changes
+needed anywhere in this project -- SDL3's public API used here is
+unchanged between 3.2.16 and 3.4.12; `ldd`-diffed both `libSDL3.so`
+builds side by side and confirmed an identical runtime dependency set.
+
+**Not yet verified:** the actual, real thing this whole investigation
+has been chasing -- whether the Deck's touchpad now reports through
+`SDL_GetNumGamepadTouchpads()`/`SDL_EVENT_GAMEPAD_TOUCHPAD_*` at all
+once built against 3.4.12, on real hardware. This is now finally a
+question with a concrete, checkable answer via the fixed diagnostic
+logging above, rather than another guess.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
