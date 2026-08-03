@@ -1308,10 +1308,36 @@ std::string runCaptureStdout(const std::string& command) {
 // place (its internal gamecontrollerdb mapping, keyed off the reported
 // name/VID/PID) -- logged here so a real report of what SDL actually
 // sees for this exact connection replaces guessing.
+//
+// Real hardware report, 2026-08-03: still touchpads=0 even after
+// bundling SDL 3.4.12 (which does unconditionally register 2 touchpads
+// the moment HIDAPI_DriverSteamDeck_OpenJoystick() runs, confirmed by
+// reading that exact function's source -- no gating condition at all).
+// Since that function is unconditional once reached, touchpads=0
+// despite it means that function is never being reached in the first
+// place: SDL isn't opening this device through its native Steam Deck
+// HIDAPI driver at all. The leading suspect: Steam Input's synthetic
+// "Xbox 360-compatible" virtual gamepad (created via uinput, exposed to
+// any app that doesn't request raw Steam Input access -- the exact same
+// VID/PID convention this project's OWN host_control_adapter.cpp reuses
+// for its own virtual gamepad, see that file's comment) reports through
+// SDL's generic joystick backend, not the HIDAPI Steam Deck driver, and
+// carries no touchpad data by construction -- disabling Steam Input for
+// just this one shortcut may not be the same as SteamOS's system-wide
+// virtual-gamepad generation being off. Logging vendor/product ID and
+// type here distinguishes the two possibilities directly: Valve's own
+// ID (0x28de) means the real hardware driver opened it (and touchpads=0
+// would then be a genuinely new mystery); Microsoft's Xbox 360 ID
+// (0x045e/0x028e) confirms it's Steam's synthetic virtual gamepad
+// instead.
 void logGamepadTouchpadDiagnostics(SDL_Gamepad* gamepad) {
     const char* name = gamepad ? SDL_GetGamepadName(gamepad) : nullptr;
     int numTouchpads = gamepad ? SDL_GetNumGamepadTouchpads(gamepad) : 0;
-    logLine("[input] gamepad connected: name=%s touchpads=%d\n", name ? name : "(null)", numTouchpads);
+    Uint16 vendor = gamepad ? SDL_GetGamepadVendor(gamepad) : 0;
+    Uint16 product = gamepad ? SDL_GetGamepadProduct(gamepad) : 0;
+    const char* typeStr = gamepad ? SDL_GetGamepadStringForType(SDL_GetGamepadType(gamepad)) : nullptr;
+    logLine("[input] gamepad connected: name=%s touchpads=%d vendor=0x%04x product=0x%04x type=%s\n",
+            name ? name : "(null)", numTouchpads, vendor, product, typeStr ? typeStr : "(null)");
     for (int tp = 0; tp < numTouchpads; ++tp) {
         logLine("[input]   touchpad %d: %d finger slot(s)\n", tp, SDL_GetNumGamepadTouchpadFingers(gamepad, tp));
     }

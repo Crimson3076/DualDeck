@@ -8248,6 +8248,63 @@ once built against 3.4.12, on real hardware. This is now finally a
 question with a concrete, checkable answer via the fixed diagnostic
 logging above, rather than another guess.
 
+### Follow-up: 3.4.12 shipped and confirmed via CI (v0.1.116), but touchpads=0 persists
+
+Real hardware, `client.log` from v0.1.116 (confirmed to be the exact
+build from this SDL bump -- `release.yml` run #116, commit `74433f5`,
+completed successfully in CI): `[input] gamepad connected:
+name=Steam Deck Controller touchpads=0`. Still zero. The SDL version
+gap was real and worth fixing regardless, but it wasn't the whole
+story, or wasn't the story at all -- this needed to be said plainly
+rather than declared fixed on the strength of the source-code reasoning
+alone once real hardware disagreed.
+
+**Re-reading SDL's actual driver code narrows it further.** SDL
+3.4.12's `HIDAPI_DriverSteamDeck_OpenJoystick()` (the function that
+would populate touchpad data) calls `SDL_PrivateJoystickAddTouchpad()`
+**unconditionally**, twice, with no gating check of any kind -- so if
+that function ever actually runs for a given connection, touchpads
+cannot be 0. The only way `touchpads=0` is possible with this exact SDL
+version is if that function is never reached in the first place, i.e.
+SDL is not opening this device through its native Steam Deck HIDAPI
+driver at all.
+
+**Leading suspect:** Steam Input's own synthetic "Xbox 360-compatible"
+virtual gamepad. When Steam Input is intercepting a controller (the
+default for any app, Steam-launched or not, that doesn't request raw
+access), it exposes a `uinput`-created virtual device using Microsoft's
+well-known Xbox 360 vendor/product ID (`0x045e`/`0x028e`) -- the exact
+same convention this project's own `host_control_adapter.cpp` reuses
+for its own host-side virtual gamepad, chosen for the identical reason
+(broad compatibility with anything expecting a standard gamepad). A
+`uinput` device carries no touchpad HID reports by construction (same
+architectural ceiling already documented for this project's own Steam
+Controller touchpad HID experiment on the host side). If SDL is reading
+*that* virtual device instead of the real hardware, `touchpads=0` is
+guaranteed regardless of SDL version -- and disabling Steam Input for
+just the one DualDeck Client shortcut (this file's earlier entries)
+may not be the same thing as SteamOS's system-wide virtual-gamepad
+generation being off for the Deck's own built-in controller.
+
+**Diagnostic added, not a fix yet:** `logGamepadTouchpadDiagnostics()`
+now also logs the connected gamepad's vendor ID, product ID, and
+`SDL_GetGamepadStringForType()` result. Valve's own vendor ID
+(`0x28de`) would mean the real hardware driver genuinely opened it (and
+`touchpads=0` despite the unconditional-registration code above would
+then be a real, different mystery worth its own investigation).
+Microsoft's Xbox 360 ID (`0x045e`/`0x028e`) would confirm it's Steam's
+synthetic virtual gamepad, redirecting the fix toward SteamOS's
+system-wide controller/gamepad-emulation settings rather than anything
+in this project's own code.
+
+**Verified:** client rebuilds clean against SDL 3.4.12 with the new
+logging (`-Wall -Wextra -Wpedantic -Wconversion -Wshadow`, zero
+warnings).
+
+**Not yet verified:** which of the two it actually is -- the next
+`client.log` will show real vendor/product IDs for the first time,
+turning this from a reasoned guess into a checkable fact.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
