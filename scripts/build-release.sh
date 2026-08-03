@@ -941,8 +941,113 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 host_root="$(cd .. && pwd)"
 
+# Real user report, 2026-08-03: every failure below this point used to
+# only ever go to stderr, which is exactly nowhere when this is launched
+# from a Steam shortcut with no terminal attached -- a missing library
+# or a bad launch looked identical to "nothing happens," which is
+# exactly what host-control mode's own dualdeck-host-service failing to
+# start looked like. Same visible-error pattern as ../dualdeck-host.sh
+# and install-host-distrobox.sh: log to the same shared install.log and
+# pop a kdialog box when one's available, instead of vanishing.
+error_log="${HOME}/.config/dualdeck/install.log"
+on_error() {
+    local exit_code="$1" line_no="$2" failing_cmd="$3"
+    mkdir -p "$(dirname "${error_log}")"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") run-host.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "DualDeck Host" --error "Failed to start: ${failing_cmd}
+(exit code ${exit_code})
+
+Details logged to:
+${error_log}" 2>/dev/null || true
+    fi
+}
+trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
+
 # shellcheck source=scripts/lib/ensure-packages.sh
 source ./ensure-packages.sh
+
+# Host-control mode (GitHub issue #4, experimental): set by
+# ../dualdeck-host.sh's "Host control only -- no emulator" menu choice,
+# not on by default. Starts the standalone dualdeck-host-service binary
+# in --adapter-ipc mode and runs it in the foreground until Ctrl+C --
+# see docs/adr/0001-host-service-and-adapter-architecture.md section 10
+# for why this is a separate process from any emulator: a client needs
+# somewhere to connect and navigate *before* an emulator has even
+# started. Uses the same zero-typing device-approval flow as melonDS's
+# own in-process dialog -- a kdialog Yes/No popup on the host's own
+# desktop (see kdialog_approval_prompt.h) -- unless
+# MELONDS_REMOTE_AUTH_TOKEN is set, in which case that static shared
+# secret is used instead. --state-dir points at the same directory
+# melonDS's own device-approval uses, so a device approved once is
+# approved for every emulator.
+#
+# Handled before melonDS's own runtime-library check/install below:
+# dualdeck-host-service (see host/remote-server/CMakeLists.txt) links
+# against nothing but pthreads and libjpeg-turbo, plus /dev/uinput at
+# runtime for its virtual gamepad -- none of melonDS's own Qt/SDL/
+# OpenGL/etc. requirements apply to it, so it doesn't need melonDS's
+# runtime libraries installed (or, on an immutable system, a Distrobox
+# container -- see launch-host.sh's comment on why this mode always
+# reaches this script directly, on every system).
+#
+# Real user report, 2026-08-01: this used to *also* launch melonDS
+# immediately afterward (as an out-of-process adapter, so it would be
+# "ready" the moment a ROM was picked). That defeated the entire point:
+# ModeCoordinator switches to Emulation mode the instant *any* adapter
+# connects, with no concept of "connected but idle, no ROM loaded yet"
+# -- so melonDS's out-of-process bridge connecting within a fraction of
+# a second of starting flipped the session out of Host Control mode
+# before the user could ever interact with it, every single time,
+# regardless of whether a ROM was ever actually loaded. The client sat
+# silently in Emulation mode waiting for video frames that would never
+# arrive (no ROM = nothing for melonDS to render), which looked
+# identical to "the touchpad/buttons just don't work." Genuinely
+# emulator-agnostic host-control-mode navigation (this session handing
+# off automatically once you separately launch *any* emulator) needs a
+# persistent daemon on a socket every emulator's own launch path already
+# checks first -- not yet built (see docs/known-limitations.md's Phase B
+# entry) -- so for now this is deliberately standalone: launch an
+# emulator the normal way (its own Steam shortcut) whenever you're ready
+# to play; it starts its own separate session rather than taking over
+# this one.
+if [[ "${DUALDECK_HOST_CONTROL:-0}" == "1" ]]; then
+    ensure_packages "host-control runtime" \
+        "libturbojpeg0" \
+        "turbojpeg" \
+        "libjpeg-turbo" \
+        || echo "warning: could not verify/install libjpeg-turbo automatically; see docs/troubleshooting.md" >&2
+
+    if [[ ! -x "${host_root}/internal/dualdeck-host-service" ]]; then
+        echo "error: host/internal/dualdeck-host-service is missing from this" >&2
+        echo "install -- re-download the release archive." >&2
+        exit 1
+    fi
+
+    run_dir="${HOME}/.config/dualdeck/run"
+    mkdir -p "${run_dir}"
+    adapter_socket="${run_dir}/adapter.sock"
+    rm -f "${adapter_socket}"
+
+    auth_token_args=()
+    if [[ -n "${MELONDS_REMOTE_AUTH_TOKEN:-}" ]]; then
+        auth_token_args=(--auth-token "${MELONDS_REMOTE_AUTH_TOKEN}")
+    fi
+
+    # See the MELONDS_REMOTE_VERSION export below for where this comes
+    # from -- read here too since this branch returns before reaching
+    # that export.
+    host_control_app_version="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+
+    echo "Starting the standalone Host Service (host-control mode, experimental) --" >&2
+    echo "no emulator will be launched. Use its own Steam shortcut/launcher" >&2
+    echo "whenever you're ready to play something -- see this script's own" >&2
+    echo "header comment for why that starts a separate session rather than" >&2
+    echo "taking over this one (yet)." >&2
+    exec "${host_root}/internal/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
+        --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
+        --app-version "${host_control_app_version}"
+fi
 
 ensure_packages "host runtime" \
     "libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev libarchive-dev libenet-dev libzstd-dev libfaad-dev qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-svg-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libdecor-0-dev libturbojpeg0-dev" \
@@ -967,68 +1072,6 @@ export MELONDS_REMOTE_ENABLE=1
 # archive root (or the central install directory's parent), matching
 # check-for-updates.sh's own VERSION lookup.
 export MELONDS_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
-
-# Host-control mode (GitHub issue #4, experimental): set by
-# ../dualdeck-host.sh's "Host control only -- no emulator" menu choice,
-# not on by default. Starts the standalone dualdeck-host-service binary
-# in --adapter-ipc mode and runs it in the foreground until Ctrl+C --
-# see docs/adr/0001-host-service-and-adapter-architecture.md section 10
-# for why this is a separate process from any emulator: a client needs
-# somewhere to connect and navigate *before* an emulator has even
-# started. Uses the same zero-typing device-approval flow as melonDS's
-# own in-process dialog -- a kdialog Yes/No popup on the host's own
-# desktop (see kdialog_approval_prompt.h) -- unless
-# MELONDS_REMOTE_AUTH_TOKEN is set, in which case that static shared
-# secret is used instead. --state-dir points at the same directory
-# melonDS's own device-approval uses, so a device approved once is
-# approved for every emulator.
-#
-# Real user report, 2026-08-01: this used to *also* launch melonDS
-# immediately afterward (as an out-of-process adapter, so it would be
-# "ready" the moment a ROM was picked). That defeated the entire point:
-# ModeCoordinator switches to Emulation mode the instant *any* adapter
-# connects, with no concept of "connected but idle, no ROM loaded yet"
-# -- so melonDS's out-of-process bridge connecting within a fraction of
-# a second of starting flipped the session out of Host Control mode
-# before the user could ever interact with it, every single time,
-# regardless of whether a ROM was ever actually loaded. The client sat
-# silently in Emulation mode waiting for video frames that would never
-# arrive (no ROM = nothing for melonDS to render), which looked
-# identical to "the touchpad/buttons just don't work." Genuinely
-# emulator-agnostic host-control-mode navigation (this session handing
-# off automatically once you separately launch *any* emulator) needs a
-# persistent daemon on a socket every emulator's own launch path already
-# checks first -- not yet built (see docs/known-limitations.md's Phase B
-# entry) -- so for now this is deliberately standalone: launch an
-# emulator the normal way (its own Steam shortcut) whenever you're ready
-# to play; it starts its own separate session rather than taking over
-# this one.
-if [[ "${DUALDECK_HOST_CONTROL:-0}" == "1" ]]; then
-    if [[ ! -x "${host_root}/internal/dualdeck-host-service" ]]; then
-        echo "error: host/internal/dualdeck-host-service is missing from this" >&2
-        echo "install -- re-download the release archive." >&2
-        exit 1
-    fi
-
-    run_dir="${HOME}/.config/dualdeck/run"
-    mkdir -p "${run_dir}"
-    adapter_socket="${run_dir}/adapter.sock"
-    rm -f "${adapter_socket}"
-
-    auth_token_args=()
-    if [[ -n "${MELONDS_REMOTE_AUTH_TOKEN:-}" ]]; then
-        auth_token_args=(--auth-token "${MELONDS_REMOTE_AUTH_TOKEN}")
-    fi
-
-    echo "Starting the standalone Host Service (host-control mode, experimental) --" >&2
-    echo "no emulator will be launched. Use its own Steam shortcut/launcher" >&2
-    echo "whenever you're ready to play something -- see this script's own" >&2
-    echo "header comment for why that starts a separate session rather than" >&2
-    echo "taking over this one (yet)." >&2
-    exec "${host_root}/internal/dualdeck-host-service" --adapter-ipc --adapter-socket "${adapter_socket}" \
-        --state-dir "${HOME}/.config/melonds-remote" "${auth_token_args[@]}" \
-        --app-version "${MELONDS_REMOTE_VERSION}"
-fi
 
 exec "${host_root}/melonDS" "$@"
 WRAP
@@ -1614,20 +1657,20 @@ if [[ ! -f /run/ostree-booted ]] && ! command -v rpm-ostree >/dev/null 2>&1; the
     exit 1
 fi
 
-# Host-control mode (GitHub issue #4, experimental -- see run-host.sh's
-# matching comment for the full explanation) isn't wired up for the
-# Distrobox path yet: it would need the standalone dualdeck-host-service
-# binary running *outside* the container (a client should be able to
-# reach it before melonDS/the container even starts) with a socket
-# shared into the container for melonDS to connect to, which hasn't been
-# built or tested. Fail loudly instead of silently falling back to
-# ordinary in-process mode, which would otherwise look like host-control
-# mode "worked" right up until a client tried to use it with no emulator
-# running.
+# Host-control mode (GitHub issue #4, experimental) never actually
+# needs a container -- dualdeck-host-service links against nothing but
+# pthreads and libjpeg-turbo (see run-host.sh's matching comment) --
+# so ../../internal/launch-host.sh now routes it straight to
+# run-host.sh directly, on every system, and never reaches this script
+# at all. This guard is now unreachable from the normal "DualDeck Host"
+# menu; kept only in case something invokes this script directly with
+# the env var set, so that case fails loudly instead of silently
+# launching melonDS in ordinary in-process mode, which would otherwise
+# look like host-control mode "worked" right up until a client tried to
+# use it with no emulator running.
 if [[ "${DUALDECK_HOST_CONTROL:-0}" == "1" ]]; then
-    echo "error: host-control mode isn't supported yet on immutable/Distrobox" >&2
-    echo "systems (see host/internal/run-host.sh's comment) -- only the regular," >&2
-    echo "non-Distrobox launch path (./run-host.sh) supports it so far." >&2
+    echo "error: host-control mode doesn't use this script -- run" >&2
+    echo "../run-host.sh directly instead (see this script's own comment)." >&2
     exit 1
 fi
 
@@ -1820,6 +1863,27 @@ cat > "${pkg_dir}/host/internal/launch-host.sh" <<'WRAP'
 # directly.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+
+# Host Control mode (DUALDECK_HOST_CONTROL=1, set by ../dualdeck-host.sh's
+# "Host control only" menu choice) always goes through run-host.sh
+# directly, on every system, immutable or not -- it never touches
+# Distrobox at all. Real user report, 2026-08-03: on Bazzite this
+# unconditionally routed into install-host-distrobox.sh, which flatly
+# refuses host-control mode (see its own comment) because *melonDS/
+# Azahar/Cemu* need a Fedora container for their Qt/SDL/OpenGL stack --
+# but host-control mode never launches any of those. The actual binary
+# it runs, dualdeck-host-service (see host/remote-server/CMakeLists.txt),
+# links against nothing but pthreads and libjpeg-turbo, plus /dev/uinput
+# at runtime for its virtual gamepad -- none of which need a container
+# on an immutable system any more than they would on a regular one. The
+# rejection meant every "Host control only" launch from the Steam
+# shortcut silently did nothing (the rejection message only ever went to
+# stderr, which nobody was watching), which read as "the toggle is
+# missing" even though the menu item itself was right there the whole
+# time.
+if [[ "${DUALDECK_HOST_CONTROL:-0}" == "1" ]]; then
+    exec ./run-host.sh "$@"
+fi
 
 if [[ -f /run/ostree-booted ]] || command -v rpm-ostree >/dev/null 2>&1; then
     exec ./install-host-distrobox.sh "$@"

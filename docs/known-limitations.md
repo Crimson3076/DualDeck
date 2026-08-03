@@ -7755,6 +7755,68 @@ else `unset` doesn't clear) is inferred from the exact precedent already
 proven for the Distrobox path, not observed directly against the
 reported symptoms.
 
+## 2026-08-03: Host Control mode never actually worked on Bazzite -- it silently refused to launch, and the failure message went nowhere
+
+Follow-up to the LD_PRELOAD/LD_LIBRARY_PATH entry above, from the same
+real user report: after that fix shipped, "Host control only" still did
+nothing when launched from the Steam shortcut. Live debugging (`cat
+~/.config/dualdeck/install.log`) turned up the actual cause, unrelated
+to LD_PRELOAD.
+
+**Root cause.** `launch-host.sh` routes every launch on an immutable
+(rpm-ostree) system through `install-host-distrobox.sh`, no exceptions
+-- and that script has always flatly refused `DUALDECK_HOST_CONTROL=1`
+with `exit 1`, on the reasoning that host-control mode would need
+`dualdeck-host-service` running *outside* the container with a socket
+shared in, "which hasn't been built or tested" (see that script's own
+comment, GitHub issue #4 Phase D). That reasoning doesn't actually apply
+to the "no emulator" case the "Host control only" menu item represents:
+`dualdeck-host-service` (`host/remote-server/CMakeLists.txt`) links
+against nothing but pthreads and libjpeg-turbo, plus `/dev/uinput` at
+runtime for its virtual gamepad -- none of which need a Fedora
+container the way melonDS/Azahar/Cemu's Qt/SDL/OpenGL stack does. The
+rejection message itself only ever went to `stderr`, which is nowhere
+when launched from a Steam shortcut with no attached terminal -- so the
+whole thing looked exactly like "the toggle does nothing," even though
+the menu item was right there and correctly wired the entire time.
+
+**Side finding, not a DualDeck bug:** the same debugging session found
+a systemd user unit, `~/.config/systemd/user/dualdeck-host-control.service`
+(`WantedBy=default.target`, `Restart=on-failure`/`RestartSec=2`),
+pointing at `internal/host-control-daemon.sh` -- a file that has never
+existed in this project's history (`git log --all -S` across the whole
+repo: zero hits). It's an orphaned leftover from an earlier, abandoned
+attempt at a persistent host-control daemon, not something DualDeck's
+installer creates or manages, and was crash-looping in the background
+the entire time regardless of what this fix does. Removing it
+(`systemctl --user disable --now dualdeck-host-control.service &&
+rm ~/.config/systemd/user/dualdeck-host-control.service`) is unrelated
+cleanup, not part of this fix.
+
+**Fix.** `launch-host.sh` now checks `DUALDECK_HOST_CONTROL` first and
+routes straight to `run-host.sh` unconditionally, on every system,
+before the immutable/Distrobox branch even runs -- host-control mode
+never reaches `install-host-distrobox.sh` at all anymore. `run-host.sh`
+itself gained: (1) the same visible-error `trap`/kdialog/install.log
+pattern `dualdeck-host.sh` and `install-host-distrobox.sh` already use,
+so any future failure here is seen instead of silently swallowed; (2) a
+host-control-specific branch, moved ahead of melonDS's own runtime-
+library installation, that only ensures `libjpeg-turbo` is present
+(not melonDS's entire Qt/SDL/X11/Wayland dependency list, which
+host-control mode never needs and which can't be `dnf install`ed on an
+immutable base anyway). `install-host-distrobox.sh`'s own rejection
+guard is kept only as a safety net for direct invocation -- the normal
+"DualDeck Host" menu path can no longer reach it.
+
+**Not verified against real hardware**: this sandbox has no Bazzite/
+Distrobox environment, no way to launch `dualdeck-host-service` outside
+a container, and no way to confirm `libjpeg-turbo` is present on a
+stock Bazzite base image versus needing an `rpm-ostree install`. If it
+turns out not to be preinstalled, `ensure_packages`'s `dnf` branch will
+still fail on an immutable system exactly like melonDS's own runtime
+check already does today -- that's a real gap to watch for on retest,
+not something this fix claims to solve.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
