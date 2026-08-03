@@ -137,10 +137,26 @@ sdl3_src="${work_dir}/sdl3-src"
 sdl3_install="${work_dir}/sdl3-install"
 
 echo "== [1/6] SDL3 (${SDL3_TAG}) =="
-if [[ -f "${sdl3_install}/lib/cmake/SDL3/SDL3Config.cmake" ]]; then
-    echo "already built at ${sdl3_install}, skipping (cache hit)"
+# Real user report, 2026-08-03 (the parallel Cemu version bug, see
+# release.yml's Cemu cache step comment for the full account): a "cache
+# hit" check that only asks "does the install directory already exist"
+# -- with no check of *what* was actually built there -- silently keeps
+# serving a stale build forever once SDL3_TAG changes, regardless of
+# how many times the pinned tag is bumped in this file, because
+# release.yml's own actions/cache key is a hardcoded literal
+# ("sdl3-release-3.2.16-...") that has to be remembered and bumped by
+# hand in lockstep -- easy to forget, exactly as it was forgotten here
+# once already. Writing (and checking) this marker file is the local,
+# root-cause half of the fix: even if a future SDL3_TAG bump forgets to
+# also bump release.yml's cache key, this check still catches the
+# mismatch and rebuilds for real, rather than silently trusting a
+# same-named-but-wrong-tag cached directory.
+sdl3_tag_marker="${sdl3_install}/.dualdeck-sdl3-tag"
+if [[ -f "${sdl3_install}/lib/cmake/SDL3/SDL3Config.cmake" ]] && \
+   [[ "$(cat "${sdl3_tag_marker}" 2>/dev/null)" == "${SDL3_TAG}" ]]; then
+    echo "already built at ${sdl3_install} (tag ${SDL3_TAG}), skipping (cache hit)"
 else
-    rm -rf "${sdl3_src}"
+    rm -rf "${sdl3_src}" "${sdl3_install}"
     git clone --depth 1 --branch "${SDL3_TAG}" https://github.com/libsdl-org/SDL.git "${sdl3_src}"
     cmake -S "${sdl3_src}" -B "${sdl3_src}/build" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="${sdl3_install}" \
@@ -148,6 +164,7 @@ else
         "${cmake_launcher_args[@]}"
     cmake --build "${sdl3_src}/build" -j"$(nproc)"
     cmake --install "${sdl3_src}/build"
+    echo "${SDL3_TAG}" > "${sdl3_tag_marker}"
 fi
 
 echo "== [2/6] Patched melonDS host (commit ${MELONDS_COMMIT}) =="

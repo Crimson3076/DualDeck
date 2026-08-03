@@ -107,8 +107,25 @@ build_cemu() {
     local cemu_patch_file="${repo_root}/host/cemu-patches/0001-remote-server-integration.patch"
     local cemu_cache_hit=0
 
+    # Real user report, 2026-08-03: "still using Cemu a6fb0a4, not 2.6"
+    # after this function gained version_major/version_minor -- traced
+    # to this cache-hit check only verifying the *patch* was still
+    # correctly applied, with no way to notice that the actual CMake
+    # invocation (the new -DEMULATOR_VERSION_MAJOR/MINOR flags) had
+    # changed underneath it, so a cache hit kept reusing a Cemu_release
+    # binary built before those flags existed -- indefinitely, since
+    # nothing about the pinned commit or the patch file itself changed
+    # (see release.yml's own Cemu/SDL3 cache-key comments for the other,
+    # GitHub-Actions-cache half of this same bug). This marker file
+    # closes the local half: a cache hit now also requires the
+    # requested version flags to match what was actually built last
+    # time, so a *future* change to this function's own CMake
+    # invocation can't silently go unnoticed the same way again.
+    local cemu_version_marker="${cemu_src}/.dualdeck-cemu-version-flags"
+    local cemu_requested_version_flags="${version_major}:${version_minor}"
     if [[ -f "${cemu_src}/bin/Cemu_release" ]] && \
-       (cd "${cemu_src}" && git apply --reverse --check "${cemu_patch_file}" 2>/dev/null); then
+       (cd "${cemu_src}" && git apply --reverse --check "${cemu_patch_file}" 2>/dev/null) && \
+       [[ "$(cat "${cemu_version_marker}" 2>/dev/null)" == "${cemu_requested_version_flags}" ]]; then
         echo "already built at ${cemu_src} with the current patch applied, skipping (cache hit)"
         cemu_cache_hit=1
     fi
@@ -124,6 +141,7 @@ build_cemu() {
         cmake -S "${cemu_src}" -B "${cemu_src}/build" -DCMAKE_BUILD_TYPE=release -G Ninja \
             "${version_args[@]}" "${cmake_launcher_args[@]}"
         cmake --build "${cemu_src}/build" -j"$(nproc)"
+        echo "${cemu_requested_version_flags}" > "${cemu_version_marker}"
     fi
 
     __build_cemu_out="${cemu_src}/bin/Cemu_release"

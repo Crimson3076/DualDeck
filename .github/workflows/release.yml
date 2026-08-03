@@ -118,11 +118,23 @@ jobs:
           path: ~/.cache/vcpkg/archives
           key: cemu-vcpkg-archives-a6fb0a48eb437a8a41c13b782ac8ae0433bf8f98-${{ runner.os }}-v1
 
+      # Real user report, 2026-08-03: the parallel Cemu cache bug below
+      # (a stale cache key never bumped when the pinned commit's *build
+      # invocation* changed, not the commit itself) applies here too --
+      # this key was still "sdl3-release-3.2.16" after SDL3_TAG was
+      # bumped to release-3.4.12 earlier this session, undetected until
+      # investigating the Cemu report surfaced the same pattern. Bumped
+      # to match the current tag, and scripts/build-release.sh's own
+      # local cache-hit check now also verifies a marker file recording
+      # which tag was actually built (see that script's own comment) --
+      # a second, root-cause layer of defense so a *future* tag bump
+      # that forgets to also bump this key still gets caught locally
+      # rather than silently serving a stale SDL3 build again.
       - name: Cache SDL3 build (pinned tag, independent of this repo's commits)
         uses: actions/cache@v4
         with:
           path: .release-work/sdl3-install
-          key: sdl3-release-3.2.16-${{ runner.os }}-v1
+          key: sdl3-release-3.4.12-${{ runner.os }}-v1
 
       # Azahar (Nintendo 3DS, GitHub issue #4 follow-up) is pinned to a
       # fixed commit the same way melonDS is, but its build is far
@@ -151,11 +163,32 @@ jobs:
       # patch is being built at all (see host/cemu-patches/README.md's
       # "What is not verified yet" section) -- expect this step to need
       # troubleshooting on its first few runs.
+      #
+      # Real user report, 2026-08-03, "after uninstalling and
+      # reinstalling, it is still using Cemu a6fb0a4, not 2.6": this key
+      # is exactly the blind spot this file's own Azahar comment above
+      # already names -- hashFiles() on the patch only invalidates the
+      # cache when the *patch* changes, not when scripts/lib/
+      # build_emulator.sh's own CMake invocation does (here:
+      # -DEMULATOR_VERSION_MAJOR/-DEMULATOR_VERSION_MINOR, added to fix
+      # Cemu showing its bare commit hash instead of "2.6" -- see
+      # pinned_commits.sh's own comment). Neither the pinned commit nor
+      # the patch file changed, so this cache kept restoring the
+      # pre-fix .release-work/cemu-src (already built, patch already
+      # applied) on every run since, and scripts/lib/build_emulator.sh's
+      # own local cache-hit check (`git apply --reverse --check`) then
+      # ALSO saw "already built, patch already applied" and skipped the
+      # actual rebuild that would have picked up the new CMake flags --
+      # so every release since kept shipping the identical unversioned
+      # binary regardless of how many times a user reinstalled. Fixed
+      # the same way Azahar's identical bug was fixed above: bump the
+      # trailing version suffix to force a real cache miss and a
+      # genuine rebuild.
       - name: Cache Cemu build (pinned commit, independent of this repo's commits)
         uses: actions/cache@v4
         with:
           path: .release-work/cemu-src
-          key: cemu-a6fb0a48eb437a8a41c13b782ac8ae0433bf8f98-${{ hashFiles('host/cemu-patches/0001-remote-server-integration.patch') }}-${{ runner.os }}-v1
+          key: cemu-a6fb0a48eb437a8a41c13b782ac8ae0433bf8f98-${{ hashFiles('host/cemu-patches/0001-remote-server-integration.patch') }}-${{ runner.os }}-v2
 
       - name: Build release package
         env:

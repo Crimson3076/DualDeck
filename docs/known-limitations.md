@@ -8914,6 +8914,85 @@ this is the actual, sole remaining gap before the original motivating
 use case (seeing Cemu's own graphics-settings screen without physical
 access to the connected TV) can work.
 
+## 2026-08-03: "still using Cemu a6fb0a4, not 2.6" after the version-flag fix -- a stale CI cache, not the fix being wrong
+
+Real user report, after updating to the release containing the
+`EMULATOR_VERSION_MAJOR`/`MINOR` fix above: "after uninstalling and
+reinstalling, it is still using Cemu a6fb0a4, not 2.6." The fix itself
+was correct (verified directly against a real Cemu checkout earlier),
+but never actually shipped -- root cause is a CI caching bug, not
+anything a reinstall on the user's end could have worked around.
+
+**Root cause:** `.github/workflows/release.yml`'s Cemu build cache key
+was `cemu-<pinned-commit>-${{ hashFiles('...patch') }}-${{ runner.os
+}}-v1` -- keyed on the pinned commit and the patch file's content hash,
+neither of which the version-flag fix touched (it only changed
+`scripts/lib/build_emulator.sh`'s own CMake invocation). The cache key
+stayed byte-for-byte identical before and after the fix, so
+`actions/cache` kept restoring the *pre-fix* `.release-work/cemu-src`
+directory on every run since. Worse, `build_cemu()`'s own local
+cache-hit check (`git apply --reverse --check` against the patch file)
+then *also* saw "patch still applies cleanly in reverse" -- true, since
+only the CMake flags changed, not the patched source -- and skipped the
+rebuild that would have actually applied the new flags. Two independent
+"is this still valid" checks, and neither one happened to be sensitive
+to the one thing that had actually changed. This is the exact same bug
+class this file's own Azahar cache-key comment already documents having
+shipped once before (v0.1.39/v0.1.40, identical binaries despite a
+patch change) -- that fix (hashing the patch file into the key) covers
+a *patch* changing, but not a *build-invocation-only* change like this
+one.
+
+**A second, latent instance of the same bug found while investigating,
+fixed proactively (not yet reported broken, but a live risk):** the
+SDL3 cache key was still the literal string `sdl3-release-3.2.16-...`,
+unchanged since before `SDL3_TAG` was bumped to `release-3.4.12`
+earlier this session (see the touchpad-fix entry above) -- and
+`build-release.sh`'s own local check was just "does
+`SDL3Config.cmake` exist," with no verification of *which tag* was
+actually installed there. That the touchpad fix demonstrably works on
+real hardware is strong evidence this particular branch's cache
+happened to be populated fresh (first write under this key on this
+branch, not a stale restore) -- but the bug was real and live: any
+future SDL3_TAG bump that forgot to also bump this string, or any
+scenario where an old cache entry under this exact key got inherited,
+would have silently kept serving 3.2.16 again with zero visible error.
+
+**Fixed, both instances, two layers each (matching the project's
+existing Azahar-cache-key precedent for the CI-side half):**
+- CI cache keys bumped (`v1` -> `v2` for Cemu; the SDL3 key's literal
+  tag string corrected to match `SDL3_TAG`'s actual current value) to
+  force a genuine cache miss and real rebuild on the next release.
+- **Root-cause, local-script-side fix, so this can't recur silently the
+  same way again:** both `build_cemu()` (scripts/lib/build_emulator.sh)
+  and the SDL3 build step (scripts/build-release.sh) now write a small
+  marker file recording exactly what was actually built (Cemu:
+  `version_major:version_minor`; SDL3: the tag string) immediately
+  after a successful build, and their own cache-hit checks now also
+  verify that marker matches what's currently being requested --
+  independent of whatever the GitHub Actions cache key does or doesn't
+  capture. A future change to either build's invocation that forgets to
+  bump the corresponding CI cache key will still be caught locally and
+  force a real rebuild, rather than silently reusing a stale binary
+  indefinitely the way this one did.
+
+**Verified:** the marker-file cache-hit/miss logic itself, directly --
+simulated the three real scenarios (no marker present, matching marker,
+mismatched marker) against a stand-in directory structure and confirmed
+each one reports the correct hit/miss decision, without needing to run
+an actual multi-hour Cemu rebuild to prove the *logic* is right.
+`bash -n` clean on both modified scripts; `.github/workflows/release.yml`
+parses as valid YAML.
+
+**Not yet verified:** that the next real CI release build actually
+produces a Cemu binary self-reporting as "2.6" rather than a commit
+hash -- the previous entry's own verification (a live checkout,
+patched, with the version flags visibly present in the printed build
+command) proved the *fix* is correct; this entry's fix addresses why
+that correct fix never reached a real release. The next release build
+triggered after this entry is the one that should finally confirm the
+whole chain end to end.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
