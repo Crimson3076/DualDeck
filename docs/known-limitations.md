@@ -7780,18 +7780,40 @@ when launched from a Steam shortcut with no attached terminal -- so the
 whole thing looked exactly like "the toggle does nothing," even though
 the menu item was right there and correctly wired the entire time.
 
-**Side finding, not a DualDeck bug:** the same debugging session found
-a systemd user unit, `~/.config/systemd/user/dualdeck-host-control.service`
+**Side finding -- stale test scaffolding, not shipped code:** the same
+debugging session found a systemd user unit,
+`~/.config/systemd/user/dualdeck-host-control.service`
 (`WantedBy=default.target`, `Restart=on-failure`/`RestartSec=2`),
-pointing at `internal/host-control-daemon.sh` -- a file that has never
-existed in this project's history (`git log --all -S` across the whole
-repo: zero hits). It's an orphaned leftover from an earlier, abandoned
-attempt at a persistent host-control daemon, not something DualDeck's
-installer creates or manages, and was crash-looping in the background
-the entire time regardless of what this fix does. Removing it
-(`systemctl --user disable --now dualdeck-host-control.service &&
-rm ~/.config/systemd/user/dualdeck-host-control.service`) is unrelated
-cleanup, not part of this fix.
+pointing at `internal/host-control-daemon.sh`. That unit is left over
+from hand-testing the persistent-daemon approach directly on the host
+machine during an earlier session -- it was written straight to the
+Deck, never committed, so it appears nowhere in this repo (`git log
+--all -S` for both `dualdeck-host-control` and `host-control-daemon`:
+zero hits outside this doc entry). Nothing in any released archive
+creates, updates, or removes it, and the daemon script it points at was
+never part of a release either, so the unit has been failing and
+restarting every 2s in the background the whole time, independent of
+anything this fix changes.
+
+Two things follow from that, both worth checking on any machine that
+was used for that testing:
+
+- The unit is dead weight and safe to remove once that experiment is
+  over: `systemctl --user disable --now dualdeck-host-control.service &&
+  rm ~/.config/systemd/user/dualdeck-host-control.service &&
+  systemctl --user daemon-reload`.
+- The reporting machine's `install.log` also shows three
+  `apply-update.sh line 1: systemctl --user restart
+  dualdeck-host-control.service` failures on 2026-08-03, all `exit 143`
+  (128+15, i.e. SIGTERM). No released `apply-update.sh` contains a
+  `systemctl` call at all, let alone on line 1 -- so that machine's
+  copy was hand-edited during the same testing. SIGTERM is the expected
+  result of a script restarting the very unit whose cgroup it is
+  running under: the restart kills the updater mid-run. Any host still
+  carrying that local edit can have updates cut off partway through,
+  which is a plausible contributor to the `VERSION`-says-newer-than-the-
+  files-actually-are state seen here. Re-running the installer restores
+  a stock `apply-update.sh`.
 
 **Fix.** `launch-host.sh` now checks `DUALDECK_HOST_CONTROL` first and
 routes straight to `run-host.sh` unconditionally, on every system,
