@@ -142,25 +142,3 @@ MDR_TEST(client_settings_round_trip_mirror_host_screen) {
     std::error_code ec;
     std::filesystem::remove_all(path.parent_path(), ec);
 }
-
-MDR_TEST(client_settings_missing_file_uses_swap_xy_buttons_off_default) {
-    auto path = temporarySettingsPath("missing-swap-xy-buttons");
-    ClientSettings settings = loadClientSettings(path.string());
-    MDR_CHECK(!settings.swapXYButtons);
-}
-
-MDR_TEST(client_settings_round_trip_swap_xy_buttons) {
-    auto path = temporarySettingsPath("swap-xy-buttons-round-trip");
-    ClientSettings settings;
-    settings.swapXYButtons = true;
-
-    MDR_CHECK(saveClientSettings(path.string(), settings));
-    MDR_CHECK(loadClientSettings(path.string()).swapXYButtons);
-
-    settings.swapXYButtons = false;
-    MDR_CHECK(saveClientSettings(path.string(), settings));
-    MDR_CHECK(!loadClientSettings(path.string()).swapXYButtons);
-
-    std::error_code ec;
-    std::filesystem::remove_all(path.parent_path(), ec);
-}

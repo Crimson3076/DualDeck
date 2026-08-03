@@ -9919,48 +9919,56 @@ entirely" escape hatch) for users who want Steam Input's other features
 undocumented compared to `localconfig.vdf`'s simple text format), not
 attempted here.
 
-## 2026-08-03: Client-side "swap X/Y buttons" option added for the Steam Input default-template issue above
+## 2026-08-03: Azahar X/Y fix, take two -- reconfigured Azahar's own mapping directly, per explicit user direction
 
-Follow-up to the entry above: the user asked for this to be "remapped in
-Azahar" specifically. That's the wrong place to fix it -- the actual
-mis-read happens on the client, upstream of the wire, in Steam Input's
-translation layer; hard-coding a swap into Azahar's own button table
-would fix it only for users hitting this exact Steam Input quirk while
-silently breaking it for everyone else (and be inconsistent with Cemu,
-melonDS, and any future adapter, all of which share the same wire-level
-convention). It's also not system-specific -- since the actual fault is
-in how the client reads its own controller, not anything about which
-emulator is running, a fix belongs at the client's input-read layer, not
-inside one host adapter.
+Follow-up to the entry above, which shipped a client-side "swap X/Y
+buttons" Settings toggle instead of touching Azahar's mapping, reasoning
+that a hard-coded swap in Azahar's own table would fix it only for users
+hitting this exact Steam Input quirk while breaking it for anyone whose
+Steam Input config doesn't have it. The user explicitly rejected that:
+"I did NOT want a swap x/y toggle in the menu, I want DualDeck to
+reconfigure emulator controls when they are patched. Remove that from
+the client and actually reconfigure Azahar."
 
-**Fix:** added `ClientSettings::swapXYButtons` (default off, persisted in
-`settings.conf` as `swap_xy_buttons=`), a new "SWAP X/Y BUTTONS" entry in
-the client's Settings screen, and a `swapXY` parameter to
-`buildButtonsFromGamepad()` that swaps the `DSButton_X`/`DSButton_Y` bits
-after the normal mapping loop runs -- applied uniformly to whatever
-system is connected (the real per-frame gameplay call site), not the
-setup wizard's raw controller-test screen (deliberately left unswapped,
-since that screen exists to show the user exactly what their controller
-is really reporting, which is useful for noticing this exact issue in
-the first place). Because `ControllerState.dsButtons` is the one shared
-field both Emulation and Host Control modes read from, enabling this
-correctly follows through to Host Control's own virtual gamepad too --
-unrelated to and not a re-fix of the earlier 2026-08-03 Host Control
-X/Y-swap entry (that one was a raw evdev/BTN_X-alias bug in the host's
-own uinput device construction, a completely different bug already
-fixed).
+**Reverted:** `ClientSettings::swapXYButtons`, the "SWAP X/Y BUTTONS"
+Settings entry, `buildButtonsFromGamepad()`'s `swapXY` parameter, and its
+two round-trip tests -- all removed back to their pre-toggle state.
 
-**Verified:** full client build against SDL3 3.4.12 headers (via the
-project's own CMake client target) compiles clean; new
-`client_settings_missing_file_uses_swap_xy_buttons_off_default`/
-`client_settings_round_trip_swap_xy_buttons` tests pass, along with the
-full existing `client_settings_tests` suite and the rest of `ctest` (6
-suites, 0 failures) -- no regressions.
+**Fix, this time in the right place per the user's direction:**
+`host/azahar-patches/0001-remote-server-integration.patch`'s
+`kNativeButtonToGenericBit` table (`AzaharAdapter.cpp`) now cross-wires
+X and Y -- index 2 (X) reads `GenericButton_North` and index 3 (Y) reads
+`GenericButton_West`, instead of the straight West->X/North->Y mapping
+every other DualDeck adapter uses. This compensates directly for Steam
+Input's default template reporting the physical X/Y buttons in swapped
+positions (confirmed via the user's own Steam Input action-set
+screenshot in the entry above), so `DSButton_X`/`DSButton_Y` arrive at
+Azahar already swapped from what was physically pressed, and this table
+un-swaps them.
 
-**Not yet verified:** on real hardware, that toggling this actually
-fixes the reported flip for this user's specific Steam Input
-configuration (expected to, based on the root-cause finding, but not yet
-confirmed against a live session).
+**Explicitly flagged tradeoff, not hidden:** this table is shared by
+every DualDeck-patched Azahar install, not just this user's. Any user
+whose Steam Input setup does *not* have this exact quirk (Steam Input
+disabled for the shortcut, or a template that already reports face
+buttons correctly) will now see X/Y flipped the other way, as a new
+regression. This was raised once to the user before implementing; they
+confirmed to proceed anyway, reading Steam's default template as the
+likely common case for most DualDeck installs (launched via a Steam
+shortcut with default, unconfigured Steam Input settings) rather than an
+edge case specific to one machine.
+
+**Verified:** the regenerated patch applies cleanly (`git apply --check`,
+then a real apply) to a fresh clone of Azahar at the pinned commit
+(`75134fca8`), and the applied `AzaharAdapter.cpp`'s
+`kNativeButtonToGenericBit` table reads exactly as intended (North for
+X, West for Y). Client removal verified via a full client build (SDL3
+3.4.12 headers) with zero warnings, and the full `ctest` suite (6
+suites, 0 failures) after removing the two now-deleted test cases.
+
+**Not yet verified:** on real hardware, that this now shows the correct
+face button when pressed for this user's session, and whether it
+regresses X/Y for any DualDeck user without this exact Steam Input
+quirk (the tradeoff above, not yet observed either way).
 
 ## 2026-08-03: Azahar aborts opening Configure -- "QtMultimedia is not currently supported" -- another unbundled dlopen()'d Qt plugin category
 

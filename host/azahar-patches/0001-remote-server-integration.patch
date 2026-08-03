@@ -260,7 +260,7 @@ new file mode 100644
 index 000000000..298900e8c
 --- /dev/null
 +++ b/src/citra_qt/remote_server/AzaharAdapter.cpp
-@@ -0,0 +1,434 @@
+@@ -0,0 +1,454 @@
 +#include "citra_qt/remote_server/AzaharAdapter.h"
 +
 +#include <algorithm>
@@ -346,11 +346,31 @@ index 000000000..298900e8c
 +// also the same physical-button order protocol.h's DSButton uses, so
 +// this table is deliberately parallel to (not derived from) the one
 +// host/adapter_bridge.cpp already has for melonDS.
++//
++// X/Y intentionally cross-wired (West -> Y, North -> X), not straight
++// like every other entry here: real user report, 2026-08-03, confirmed
++// via the user's own screenshot of Steam Input's action-set legend for
++// the DualDeck Client's Steam shortcut -- Steam Input's default
++// controller template for that shortcut reports the physical X/Y face
++// buttons in the swapped positions (SDL_GAMEPAD_BUTTON_WEST fires for a
++// physical Y press and vice versa), so DSButton_X/DSButton_Y arrive
++// here already swapped from what the user actually pressed. The rest of
++// the DualDeck-owned pipeline (client kButtonMappings, protocol.h's
++// DSButton values, adapter_bridge.cpp's dsButtonsToGenericButtons(),
++// and the bundled SDL3's own Xbox 360 HID driver) was independently
++// re-verified correct at every layer -- the fault is entirely in Steam
++// Input's own template, upstream of anything DualDeck's code sees, and
++// this table is the one place that can compensate for it without a
++// runtime toggle. This does mean any DualDeck user whose Steam Input
++// config does *not* have this exact quirk (Steam Input fully disabled
++// for the shortcut, or a template that reports face buttons correctly)
++// will see X/Y flipped the other way -- see docs/known-limitations.md's
++// 2026-08-03 entry for the full tradeoff.
 +constexpr std::array<uint32_t, 12> kNativeButtonToGenericBit = {
 +    melonds_remote::adapter::GenericButton_South,     // A
 +    melonds_remote::adapter::GenericButton_East,      // B
-+    melonds_remote::adapter::GenericButton_West,      // X
-+    melonds_remote::adapter::GenericButton_North,     // Y
++    melonds_remote::adapter::GenericButton_North,     // X (see comment above)
++    melonds_remote::adapter::GenericButton_West,      // Y (see comment above)
 +    melonds_remote::adapter::GenericButton_DpadUp,    // Up
 +    melonds_remote::adapter::GenericButton_DpadDown,  // Down
 +    melonds_remote::adapter::GenericButton_DpadLeft,  // Left

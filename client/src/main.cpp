@@ -176,15 +176,7 @@ uint64_t wallClockNowUs() {
 // registerInputEngine(), which binds the D-Pad's four native buttons to
 // GenericButton_Dpad* independently of the Circle Pad's own analog
 // engine binding, so a game watching either one would see it.
-// swapXY: opt-in workaround for Steam Input default controller
-// templates that assign the X/Y face buttons to the physically wrong
-// positions -- see ClientSettings::swapXYButtons's own comment for the
-// full root-cause writeup. Applied uniformly regardless of which system
-// is running (this is a controller-reading issue, not specific to any
-// one emulator), by swapping the two bits after the normal mapping loop
-// below rather than touching kButtonMappings itself, so the default
-// (off) path is provably unchanged.
-uint16_t buildButtonsFromGamepad(SDL_Gamepad* gamepad, bool stickEmulatesDpad = true, bool swapXY = false) {
+uint16_t buildButtonsFromGamepad(SDL_Gamepad* gamepad, bool stickEmulatesDpad = true) {
     if (!gamepad) return 0;
 
     uint16_t buttons = 0;
@@ -192,14 +184,6 @@ uint16_t buildButtonsFromGamepad(SDL_Gamepad* gamepad, bool stickEmulatesDpad = 
         if (SDL_GetGamepadButton(gamepad, mapping.sdlButton)) {
             buttons |= mapping.dsBit;
         }
-    }
-
-    if (swapXY) {
-        const bool xPressed = (buttons & DSButton_X) != 0;
-        const bool yPressed = (buttons & DSButton_Y) != 0;
-        buttons &= static_cast<uint16_t>(~(DSButton_X | DSButton_Y));
-        if (xPressed) buttons |= DSButton_Y;
-        if (yPressed) buttons |= DSButton_X;
     }
 
     if (stickEmulatesDpad) {
@@ -2077,7 +2061,6 @@ int main(int argc, char** argv) {
                     (trackpadExperimentEnabled ? "ON" : "OFF"),
                 std::string("MIRROR HOST SCREEN (EXPERIMENTAL): ") +
                     (clientSettings.mirrorHostScreen ? "ON" : "OFF"),
-                std::string("SWAP X/Y BUTTONS: ") + (clientSettings.swapXYButtons ? "ON" : "OFF"),
             };
             if (!hostExplicit) items.push_back("RUN SETUP WIZARD");
             if (net.hostMicSupported()) {
@@ -2391,9 +2374,6 @@ int main(int argc, char** argv) {
                             } else if (picked.rfind("MIRROR HOST SCREEN", 0) == 0) {
                                 clientSettings.mirrorHostScreen = !clientSettings.mirrorHostScreen;
                                 settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
-                            } else if (picked.rfind("SWAP X/Y BUTTONS", 0) == 0) {
-                                clientSettings.swapXYButtons = !clientSettings.swapXYButtons;
-                                settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                             } else if (picked == "RUN SETUP WIZARD") {
                                 setupWizardRequested = true;
                                 runningInner = false;
@@ -2474,9 +2454,6 @@ int main(int argc, char** argv) {
                                     toggleTrackpadExperiment();
                                 } else if (picked.rfind("MIRROR HOST SCREEN", 0) == 0) {
                                     clientSettings.mirrorHostScreen = !clientSettings.mirrorHostScreen;
-                                    settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
-                                } else if (picked.rfind("SWAP X/Y BUTTONS", 0) == 0) {
-                                    clientSettings.swapXYButtons = !clientSettings.swapXYButtons;
                                     settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                                 } else if (picked == "RUN SETUP WIZARD") {
                                     setupWizardRequested = true;
@@ -2720,8 +2697,7 @@ int main(int argc, char** argv) {
                 // "3ds" specifically, so a future system (e.g. Wii U,
                 // whose GamePad has two real analog sticks already)
                 // doesn't inherit DS's convenience by accident.
-                state.dsButtons =
-                    buildButtonsFromGamepad(gamepad, sessionSystemId == "nds", clientSettings.swapXYButtons);
+                state.dsButtons = buildButtonsFromGamepad(gamepad, sessionSystemId == "nds");
 
                 // Real analog stick data (protocol.h's leftStickX/Y,
                 // rightStickX/Y) -- always sent regardless of session
