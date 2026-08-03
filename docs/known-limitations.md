@@ -10684,6 +10684,75 @@ be `exec`'d.
 failure mode) or something else was going on, and whether the daemon
 actually starts and stays up once this fix lands.
 
+## 2026-08-03: Wayland screen-mirror -- the real, final root cause: the bundled `libpipewire-0.3.so.0` itself was ABI-mismatched with the host's own PipeWire modules
+
+After all of the above (SPA plugin path, PIPEWIRE_MODULE_DIR path, the
+`set -e` bug), the daemon finally started cleanly and stayed up, but
+screen mirroring still failed at the exact same point as before:
+`WaylandScreenCapture: pw_context_new failed`, no further detail. Root-
+caused by the user (via their own independent investigation, not this
+session's) with `LD_DEBUG=libs`: the launcher's
+`LD_LIBRARY_PATH="${host_root}/internal/lib:..."` was loading a
+*bundled* `libpipewire-0.3.so.0` (a CI-build-machine copy, shipped
+because `dualdeck_host` links `libpipewire-0.3` directly for this same
+screen-capture feature, and `bundle_library_dependencies()`'s `ldd`-based
+scan picks up anything a binary links, with no awareness that this
+particular library shouldn't travel) -- while `PIPEWIRE_MODULE_DIR`
+(correctly fixed in the three entries above) still pointed the *modules*
+at the host's own real, matching PipeWire install. Mixing those two is
+not ABI-safe: the host's real `libpipewire-module-rt.so` (and presumably
+others) require `pw_log_topic_register`, a symbol the bundled core
+library doesn't export (confirmed directly: `strings` on the bundled
+copy finds no `pw_log_topic_register`; the host's own
+`/usr/lib64/libpipewire-0.3.so.0` has it) -- so the host's own, correctly
+version-matched modules failed to load into the bundled, CI-version core
+library, and `pw_context_new()` failed with no way to surface a specific
+symbol-mismatch error through this project's own logging (that detail
+only showed up via `LD_DEBUG=libs`, a linker-level trace, not anything
+PipeWire itself reports). Manually moving the bundled
+`libpipewire-0.3.so.0` out of the way and restarting confirmed this was
+the whole remaining problem -- screen mirroring worked immediately.
+
+This is the exact same class of bug this project already has an explicit
+policy against, for the exact same reason -- `_is_never_bundle_library()`
+in `scripts/lib/appimage_pack.sh` already excludes Mesa/Vulkan/GL/DRM/GBM
+and Wayland-client libraries from bundling, with its own header comment
+explaining why: those must always match the host's live driver/compositor
+stack, not a build machine's, in a way an ordinary linked library doesn't
+need to. PipeWire's core library has exactly the same
+tightly-version-coupled-to-what's-actually-running-on-this-host
+relationship with its own dlopen()'d modules (this is precisely why
+`SPA_PLUGIN_DIR`/`PIPEWIRE_MODULE_DIR` needed host-detection at all,
+earlier today) -- it was simply never added to this exclusion list, so
+`ldd`-based bundling picked it up like any ordinary application
+dependency.
+
+**Fix:** added `libpipewire-*.so.*` to `_is_never_bundle_library()`'s
+case pattern, with the same style of inline root-cause comment as every
+other entry in that list. `libdbus-1.so.3` (`dualdeck_host`'s other
+D-Bus/PipeWire-dev-gated direct link) was deliberately left bundled as
+before -- D-Bus's wire-protocol ABI is stable and doesn't have PipeWire's
+module-loading architecture, and there's no evidence implicating it here.
+A future self-update naturally clears out any already-bundled bad copy
+on an existing install, since `install-steam-shortcut.sh`'s stage-then-
+swap logic replaces the entire `internal/lib/` directory wholesale from
+the new release archive, not in place.
+
+**Verified:** `bash -n` clean; directly exercised
+`_is_never_bundle_library()` against the real linked library names
+(`libpipewire-0.3.so.0` now excluded, `libdbus-1.so.3`/`libturbojpeg.so.0`
+still bundled as intended); ran `bundle_library_dependencies()` end to
+end against the actual locally-built `dualdeck-host-service` binary and
+confirmed `libpipewire-0.3.so.0` is genuinely absent from the resulting
+bundle while every other real dependency (including
+`libturbojpeg.so.0`, the earlier fix) is still present. Full local
+`ctest` run (6 suites) passes with no regressions.
+
+**Not yet verified:** on the actual affected Bazzite machine, past this
+manual workaround -- whether a real release build with this fix, self-
+updated onto a clean install, produces working screen mirroring with no
+manual file-moving required.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

@@ -177,13 +177,39 @@ find_qt6_plugins_dir() {
 # libvulkan.so.1 itself. Added defensively for the same reason as the
 # rest of this list: these must always match the host's live Wayland
 # compositor/client library ecosystem, not a build machine's.
+#
+# Real user report, 2026-08-03 (Bazzite): Host Control's Wayland
+# screen-mirroring failed at pw_context_new() with no useful detail
+# ("pw_context_new failed"), even after scripts/lib/pipewire_env.sh
+# correctly pointed PIPEWIRE_MODULE_DIR at the host's own real, matching
+# PipeWire modules. LD_DEBUG=libs traced the actual cause: this
+# function's exclusion list covered Mesa/Vulkan/GL/Wayland-client for
+# exactly this failure shape already, but never PipeWire's own core
+# library -- dualdeck_host links libpipewire-0.3 directly (for this
+# same screen-capture feature), so ldd-based bundling had been quietly
+# shipping a CI-build-machine copy of libpipewire-0.3.so.0 in
+# internal/lib all along. LD_LIBRARY_PATH puts that bundled copy first,
+# so the host's own PipeWire *modules* (correctly found via
+# PIPEWIRE_MODULE_DIR) end up loaded into a mismatched, CI-version core
+# library -- confirmed directly: the bundled copy is missing
+# pw_log_topic_register (`strings ... | grep pw_log_topic_register`
+# empty on the bundled copy, present on the host's own
+# /usr/lib64/libpipewire-0.3.so.0), a symbol the host's real PipeWire
+# modules require. Moving the bundled copy out of the way and
+# restarting immediately fixed screen mirroring, confirming this exact
+# cause. Same root shape and same fix as every other entry in this
+# list: PipeWire's core library is exactly as tightly version-coupled
+# to the modules/daemon actually running on this host as Mesa's Vulkan
+# ICD is to the kernel's GPU driver -- not a portable application
+# dependency, must always come from the host.
 _is_never_bundle_library() {
     case "$(basename "$1")" in
         libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|\
         libresolv.so.*|libnsl.so.*|libutil.so.*|libnss_*.so.*|\
         libvulkan.so.*|libGL.so.*|libGLX.so.*|libGLdispatch.so.*|\
         libEGL.so.*|libgbm.so.*|libdrm.so.*|libdrm_*.so.*|\
-        libwayland-client.so.*|libwayland-egl.so.*|libwayland-cursor.so.*)
+        libwayland-client.so.*|libwayland-egl.so.*|libwayland-cursor.so.*|\
+        libpipewire-*.so.*)
             return 0 ;;
         *)
             return 1 ;;
