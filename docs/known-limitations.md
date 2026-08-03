@@ -8145,6 +8145,44 @@ rebuilt clean again afterward.
 after this reliably picks up the change, and whether the touchpad and
 host-control mouse cap finally resolve once it does.
 
+### Fourth follow-up, same day: the touchpad diagnostics themselves never actually ran
+
+Real user report: "ok it enables, but ... screen resolution is still
+limiting mouse movement on the host." A full `client.log` from an
+actual connected session on real hardware was requested to check the
+2026-08-01 touchpad diagnostic entry's logging (gamepad name,
+`SDL_GetNumGamepadTouchpads()` count, per-touchpad finger-slot counts) --
+but the log showed only `[input] opened gamepad: Steam Deck Controller`
+and nothing else input-related, even though the session fully connected
+and ran.
+
+**Root cause, found by re-reading `main.cpp`:** the Deck's own built-in
+controller is already present the instant this app starts (unlike a
+hot-plugged USB pad), so it's opened by a separate startup path near the
+top of `main()` (`SDL_GetGamepads()` + `SDL_OpenGamepad()` directly,
+before the event loop even begins). The touchpad diagnostic logging
+only ever lived inside the `SDL_EVENT_GAMEPAD_ADDED` event handler
+further down, guarded by `if (!gamepad)` -- which never runs, since the
+startup path has already opened one by the time that handler could ever
+fire. **This diagnostic has never actually collected real data from a
+Steam Deck at all** -- the touchpad investigation has been proceeding
+on an empty log the whole time, not on "touchpads=0" or any other real
+finding.
+
+**Fixed** by factoring the logging into its own function
+(`logGamepadTouchpadDiagnostics()`) and calling it from both places a
+gamepad can become the active one: the startup path (new) and the
+`SDL_EVENT_GAMEPAD_ADDED` handler (unchanged, now just calls the shared
+function instead of duplicating the same lines).
+
+**Verified:** client rebuilds clean from source SDL3 again
+(`-Wall -Wextra -Wpedantic -Wconversion -Wshadow`, zero warnings).
+
+**Not yet verified:** what the diagnostic actually says on real
+hardware -- this is now the real next step; a fresh `client.log` after
+this build will, for the first time, actually show whether SDL sees any
+touchpads on the Deck's controller at all.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

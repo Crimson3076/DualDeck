@@ -1280,6 +1280,43 @@ std::string runCaptureStdout(const std::string& command) {
     return result;
 }
 
+// logGamepadTouchpadDiagnostics <gamepad>
+//
+// Real user report, 2026-08-02: a full client.log from an actual
+// connected session on real Steam Deck hardware showed only "[input]
+// opened gamepad: Steam Deck Controller" -- never any of the touchpad
+// diagnostic lines the 2026-08-01 entry describes below, even though a
+// full session ran. Root cause, found by re-reading this file: the
+// Deck's own built-in controller is already present the instant this
+// app starts (unlike a hot-plugged USB pad), so it gets opened by the
+// separate startup path near the top of main() (SDL_GetGamepads() +
+// SDL_OpenGamepad() directly, before the event loop even begins) --
+// this diagnostic used to live ONLY inside the SDL_EVENT_GAMEPAD_ADDED
+// handler further down, guarded by `if (!gamepad)`, which never runs
+// once the startup path has already opened one. This diagnostic has
+// therefore never actually collected real data from a Steam Deck at
+// all -- factored into its own function so both the startup path and
+// the event-driven hotplug path call the exact same logging, rather
+// than the original single copy silently only covering one of the two.
+//
+// Real user report, 2026-08-01, the diagnostic itself: touchpad input
+// in Host Control mode never registered at all, on real hardware,
+// despite the code reading SDL's dedicated gamepad-touchpad API (which
+// should work regardless of Steam Input's control-scheme binding). SDL
+// only exposes touchpad capability at all if it identifies *this
+// specific gamepad instance* as a touchpad-capable device in the first
+// place (its internal gamecontrollerdb mapping, keyed off the reported
+// name/VID/PID) -- logged here so a real report of what SDL actually
+// sees for this exact connection replaces guessing.
+void logGamepadTouchpadDiagnostics(SDL_Gamepad* gamepad) {
+    const char* name = gamepad ? SDL_GetGamepadName(gamepad) : nullptr;
+    int numTouchpads = gamepad ? SDL_GetNumGamepadTouchpads(gamepad) : 0;
+    logLine("[input] gamepad connected: name=%s touchpads=%d\n", name ? name : "(null)", numTouchpads);
+    for (int tp = 0; tp < numTouchpads; ++tp) {
+        logLine("[input]   touchpad %d: %d finger slot(s)\n", tp, SDL_GetNumGamepadTouchpadFingers(gamepad, tp));
+    }
+}
+
 // Orchestrates the whole wizard as an explicit step state machine. Returns
 // true if the user reached the end (Done), false if they exited entirely
 // (window close, or Exit/B from the very first screen) -- callers decide
@@ -1569,6 +1606,11 @@ int main(int argc, char** argv) {
     if (gamepadIds && gamepadCount > 0) {
         gamepad = SDL_OpenGamepad(gamepadIds[0]);
         logLine("[input] opened gamepad: %s\n", gamepad ? SDL_GetGamepadName(gamepad) : "?");
+        // See logGamepadTouchpadDiagnostics's own comment -- the Deck's
+        // built-in controller is opened right here, not through the
+        // SDL_EVENT_GAMEPAD_ADDED handler further down, so this is the
+        // one place that actually needs to call it for that case.
+        logGamepadTouchpadDiagnostics(gamepad);
     }
     if (gamepadIds) SDL_free(gamepadIds);
 
@@ -2078,27 +2120,7 @@ int main(int argc, char** argv) {
                     case SDL_EVENT_GAMEPAD_ADDED:
                         if (!gamepad) {
                             gamepad = SDL_OpenGamepad(event.gdevice.which);
-                            // Real user report, 2026-08-01: touchpad input
-                            // in Host Control mode never registered at all,
-                            // on real hardware, despite the code reading
-                            // SDL's dedicated gamepad-touchpad API (which
-                            // should work regardless of Steam Input's
-                            // control-scheme binding). SDL only exposes
-                            // touchpad capability at all if it identifies
-                            // *this specific gamepad instance* as a
-                            // touchpad-capable device in the first place
-                            // (its internal gamecontrollerdb mapping, keyed
-                            // off the reported name/VID/PID) -- logged here
-                            // so a real report of what SDL actually sees for
-                            // this exact connection replaces guessing.
-                            const char* name = gamepad ? SDL_GetGamepadName(gamepad) : nullptr;
-                            int numTouchpads = gamepad ? SDL_GetNumGamepadTouchpads(gamepad) : 0;
-                            logLine("[input] gamepad connected: name=%s touchpads=%d\n",
-                                    name ? name : "(null)", numTouchpads);
-                            for (int tp = 0; tp < numTouchpads; ++tp) {
-                                logLine("[input]   touchpad %d: %d finger slot(s)\n", tp,
-                                        SDL_GetNumGamepadTouchpadFingers(gamepad, tp));
-                            }
+                            logGamepadTouchpadDiagnostics(gamepad);
                         }
                         break;
                     case SDL_EVENT_GAMEPAD_REMOVED:
