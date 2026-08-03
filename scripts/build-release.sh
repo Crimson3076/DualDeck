@@ -1845,6 +1845,26 @@ cat > "${pkg_dir}/host/dualdeck-host.sh" <<'WRAP'
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
+# Real user report, 2026-08-03: launched via its Steam shortcut (the
+# normal path -- see install-steam-shortcut.sh), Host Control mode's
+# dualdeck-host-service failed to start at all, and Cemu's Vulkan
+# renderer failed to recognize a perfectly good GPU. Same root cause,
+# same fix, as install-host-distrobox.sh's identical unset (see its own
+# 2026-08-01 comment): Steam injects its own LD_PRELOAD (overlay
+# renderer) and LD_LIBRARY_PATH (Steam Runtime libs) into every
+# shortcut's process, and this script -- unlike install-host-
+# distrobox.sh -- is the direct Exe target of the "DualDeck Host"
+# shortcut, so every script it dispatches to (run-host.sh,
+# run-host-cemu.sh, run-host-azahar.sh, launch-host.sh) inherited that
+# pollution too. A Steam Runtime libvulkan.so.1/ICD shadowing the
+# system one, or the overlay's own Vulkan layer, is exactly the kind of
+# thing that makes Vulkan misdetect or reject a real GPU; the same
+# shared-library shadowing is what made dualdeck-host-service (and, on
+# an immutable system, melonDS itself) fail outright. Unset here, once,
+# before any of those scripts run, rather than duplicating this fix in
+# each of them.
+unset LD_PRELOAD LD_LIBRARY_PATH
+
 error_log="${HOME}/.config/dualdeck/install.log"
 on_error() {
     local exit_code="$1" line_no="$2" failing_cmd="$3"

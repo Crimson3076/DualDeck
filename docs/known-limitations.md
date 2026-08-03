@@ -7715,6 +7715,46 @@ absence would mean SDL isn't firing either event for this transition at
 all, pointing at a different mechanism (e.g. a window
 occlusion/minimize event instead, which this fix does not handle).
 
+## 2026-08-03: Host Control wouldn't launch and Cemu's Vulkan renderer "wouldn't recognize the GPU" -- both launched via the Steam shortcut, both Steam's environment leaking through
+
+Real user report: launched via the "DualDeck Host" Steam shortcut (the
+normal path), "Host control only" failed to start at all, and Cemu's
+Vulkan renderer failed to recognize the GPU -- the same Vulkan symptom
+already fixed once before (`679d2e4`, a genuine capture-side crash), so
+initial suspicion was a regression there. It wasn't: that fix is still
+intact in `host/cemu-patches/0001-remote-server-integration.patch`
+after the v2.6 rebase.
+
+**Root cause.** `install-host-distrobox.sh` already documents (2026-08-01
+entry above) that Steam injects its own `LD_PRELOAD` (overlay renderer)
+and `LD_LIBRARY_PATH` (Steam Runtime libraries) into every shortcut's
+process, and that this can make a directly-linked binary either fail to
+load shared libraries outright or silently pick up the wrong ones. That
+fix only unset those two variables on the Distrobox (immutable-system)
+launch path. The Steam shortcut's `Exe` (see
+`install-steam-shortcut.sh`) points directly at `dualdeck-host.sh` --
+the top-level kdialog menu script -- which had no such unset, so every
+script it `exec`s (`run-host.sh`, `run-host-cemu.sh`,
+`run-host-azahar.sh`, `launch-host.sh`) inherited Steam's polluted
+environment on *every* system, not just immutable ones. A Steam Runtime
+`libvulkan.so.1`/ICD shadowing the real system one (or the overlay's own
+Vulkan layer) is exactly the kind of thing that makes Vulkan misdetect
+or reject a perfectly working GPU; the same shared-library shadowing is
+what made `dualdeck-host-service` fail to start for Host Control mode.
+
+**Fix.** Added the identical `unset LD_PRELOAD LD_LIBRARY_PATH` to
+`dualdeck-host.sh` itself, right after it changes into its own
+directory and before anything else runs -- since it's the single entry
+point every launch path (including the Distrobox one, which already had
+its own belt-and-suspenders copy) flows through first.
+
+**Not verified against real hardware**: this sandbox has no Steam
+client, GPU, or Cemu/melonDS binaries to actually launch, so whether
+this is the complete fix (versus, say, Steam also injecting something
+else `unset` doesn't clear) is inferred from the exact precedent already
+proven for the Distrobox path, not observed directly against the
+reported symptoms.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
