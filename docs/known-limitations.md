@@ -8670,6 +8670,149 @@ end-to-end (client Settings toggle on, host env var set) for the
 original motivating purpose: seeing Cemu's own graphics-settings screen
 without physical access to the connected TV.
 
+## 2026-08-03: Cemu "nightly build" report -- real bug found, but not the one guessed
+
+Real user report: "EmuDeck Installs the latest stable version of Cemu
+(2.6 in this case). DualDeck Compiles a nightly build (a6fb0a4 in this
+case)." A concrete, checkable hypothesis, investigated against Cemu's
+real upstream git history rather than assumed either way (cloned
+github.com/cemu-project/Cemu directly, fetched all tags):
+`a6fb0a48eb437a8a41c13b782ac8ae0433bf8f98` (`scripts/lib/pinned_commits.sh`'s
+`CEMU_COMMIT`, what `scripts/build-release.sh`'s real release pipeline
+actually builds) **is** exactly and only tag `v2.6` -- `git rev-parse
+v2.6` resolves to that identical hash. The "DualDeck builds a nightly"
+hypothesis, taken literally (wrong commit), is false.
+
+**What's actually true, and a real bug regardless:** Cemu's own
+`src/Common/version.h` only shows a real version string ("2.6") when
+the build passes `-DEMULATOR_VERSION_MAJOR`/`-DEMULATOR_VERSION_MINOR`
+as CMake cache variables -- its own comment states plainly: "no version
+provided. Only show commit hash." `scripts/lib/build_emulator.sh`'s
+`build_cemu()` never passed these at all, for either
+`scripts/build-release.sh`'s official release build or
+`scripts/patch-existing-emulator.sh`'s local-iteration build. The
+result: a build of the genuine v2.6 tag still self-identifies in
+Cemu's own UI as its bare commit hash (`a6fb0a4`) -- exactly what made
+a real stable release look, quite reasonably, like a nightly build to
+the user. Confirmed by reading Cemu's own official release CI
+(`.github/workflows/build.yml`/`determine_release_version.yml`), which
+does pass these flags for every build including the real tagged
+releases.
+
+**Fixed:** `pinned_commits.sh` gained `CEMU_VERSION_MAJOR="2"`/
+`CEMU_VERSION_MINOR="6"` (kept in sync with `CEMU_COMMIT` by hand each
+time it's bumped -- there's no way to derive them automatically without
+also depending on Cemu's own release-tag-naming convention staying
+`vMAJOR.MINOR` forever, which felt like the wrong thing to build
+against). `build_cemu()` gained optional `version_major`/
+`version_minor` parameters, passed through as the CMake flags Cemu
+needs. `build-release.sh`'s call site now passes them.
+
+**A second, independent, real bug found while investigating:**
+`scripts/patch-existing-emulator.sh` used to keep its own separate copy
+of `MELONDS_COMMIT`/`AZAHAR_COMMIT`/`CEMU_COMMIT` rather than sourcing
+`pinned_commits.sh` (whose own header comment already warned this exact
+scenario was the reason it was factored out in the first place -- "a
+second script... can't silently drift onto a different commit"). Its
+melonDS/Azahar copies had stayed in sync by luck; its Cemu copy had
+drifted onto `50b9e4ba1d4d7cf9821a9cd416378bb94e1ba0ca`, an untagged
+commit dated months after v2.6 -- a **genuine** nightly/dev commit,
+confirmed via the same upstream-clone check (no tag points at it, and
+it postdates v2.6's commit by over five months). Anyone using "patch my
+own existing emulator" for Cemu really was getting a nightly build,
+just not through the path the user actually hit.
+
+**Fixed, and directly implementing the user's own stated policy**
+("make sure DualDeck only uses the latest stable version, unless
+specified by the user during the patching"): `patch-existing-emulator.sh`
+now `source`s `pinned_commits.sh` instead of keeping its own copy
+(eliminating this whole class of drift structurally, not just this one
+instance of it), and gained a new `--commit <sha>` flag -- the explicit,
+opt-in way to patch against something other than the pinned stable
+default on purpose. When `--commit` is used for Cemu, the
+`EMULATOR_VERSION_MAJOR`/`MINOR` passthrough is deliberately skipped
+(an arbitrary user-chosen commit doesn't necessarily correspond to any
+real released version number -- Cemu's own honest commit-hash fallback
+is more correct than a guessed version string would be).
+
+**Still an open, undecided question -- flagged, not resolved:** whether
+`VkApplicationInfo::applicationVersion` being `VK_MAKE_VERSION(0,0,0)`
+(what the unfixed build sent to the GPU driver) versus `(2,6,0)` (what
+it sends now) is actually related to the user's separately-reported
+Vulkan renderer/graphics-device issue. Some GPU vendor drivers key
+app-specific compatibility profiles off exactly this field, which makes
+it a real, plausible mechanism -- but nothing here proves it's *the*
+cause, and it doesn't explain "no graphics device recognized" or OpenGL
+crashing outright by itself. Worth fixing regardless of whether it
+turns out to be the answer; not claimed as a confirmed fix for that
+issue.
+
+**Verified:** live-tested against a real clone of the pinned Cemu
+commit (not just read the diff) -- `patch-existing-emulator.sh --system
+wiiu --source <real Cemu v2.6 checkout>` applies cleanly and prints a
+build command containing `-DEMULATOR_VERSION_MAJOR=2
+-DEMULATOR_VERSION_MINOR=6`; the same command with `--commit
+<arbitrary-sha>` correctly omits those flags and prints the expected
+commit-mismatch warning. `bash -n` clean on every modified script.
+
+**Not yet verified:** whether a Cemu build with the correct version
+flags actually changes anything observable about the Vulkan/graphics-
+device issue on real Bazzite/Fedora hardware -- the next release build
+will carry this fix, but it should not be assumed to be the whole
+answer to that separate, still-open report.
+
+## 2026-08-03: Host Control screen mirror showed solid grey on real hardware -- confirmed Wayland-vs-X11, not a new bug
+
+Real user report, testing the X11-only screen-mirror experiment above
+on both machines: "the Screen mirroring is just grey, nothing on either
+fedora or bazzite," followed by confirmation both sessions are Wayland.
+This matches -- exactly, not approximately -- the gap that feature's
+own header comment already named as a known, deliberate first-cut
+limitation, not a new mystery: `X11ScreenCapture` opens a display via
+plain `XOpenDisplay(nullptr)`. On a Wayland session where XWayland
+happens to be running (common -- many Wayland compositors auto-start it
+for X11-app compatibility and set `DISPLAY` accordingly), this call
+*succeeds* -- so `isMirrorReady()` comes back true and capture proceeds
+-- but it's connecting to XWayland's own compositing root window, which
+carries none of the real Wayland desktop's actual content. A uniform
+grey (XWayland's typical empty-root color) is exactly what capturing
+"nothing" through that path looks like -- not a crash, not the
+test-pattern fallback (which would look different and would mean
+`isMirrorReady()` was false), but a technically-successful capture of
+an essentially blank compositing layer.
+
+**Why this isn't a quick fix:** the only broadly-compatible way to
+capture a real Wayland compositor's actual output across both of the
+user's actual environments (Fedora -- almost certainly GNOME/Mutter;
+Bazzite -- KDE Plasma/KWin, or gamescope specifically in Gaming Mode)
+is the `xdg-desktop-portal` `ScreenCast` interface over PipeWire --
+DBus session negotiation, a one-time interactive permission grant, and
+real PipeWire stream/buffer-format negotiation code. The simpler
+`wlr-screencopy-unstable-v1` protocol (no permission dialog, much less
+code) only exists on wlroots-based compositors (Sway, Hyprland,
+gamescope) -- it does **not** work on KWin or Mutter, i.e. not on either
+of the user's actual desktop sessions as tested (though it would work
+for Bazzite's Gaming-Mode/gamescope session specifically, arguably
+Host Control's real primary use case). Neither PipeWire, a portal
+backend, nor any wlroots compositor is available in this sandbox to
+build and verify against the way the X11 path was verified end-to-end
+against a real Xvfb server -- shipping a from-scratch PipeWire
+integration unverified would repeat the exact mistake this file's
+touchpad-investigation entries spent several rounds correcting
+(declaring something fixed on reasoning alone, without real-environment
+confirmation).
+
+**Not yet fixed.** Real Wayland capture (portal + PipeWire) is
+substantial, unbudgeted engineering -- this project's own earlier
+planning notes already flagged Wayland screen capture as likely the
+single largest piece of work in the whole Host-Control-video effort,
+before this feature request even existed. Decision on how to proceed
+deferred to the user (asked directly, not assumed) given the real
+verification-risk tradeoff of building it blind versus deprioritizing
+it in favor of a more direct, mirror-independent path to the actual
+blocking issue (getting Cemu's own terminal/stderr output, which needs
+no video at all).
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

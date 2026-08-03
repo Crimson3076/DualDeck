@@ -7,9 +7,15 @@
 # install alongside it.
 #
 # Usage:
-#   scripts/patch-existing-emulator.sh --system ds   --source /path/to/your/melonDS/checkout [--build]
-#   scripts/patch-existing-emulator.sh --system 3ds  --source /path/to/your/azahar/checkout  [--build]
-#   scripts/patch-existing-emulator.sh --system wiiu --source /path/to/your/Cemu/checkout    [--build]
+#   scripts/patch-existing-emulator.sh --system ds   --source /path/to/your/melonDS/checkout [--commit <sha>] [--build]
+#   scripts/patch-existing-emulator.sh --system 3ds  --source /path/to/your/azahar/checkout  [--commit <sha>] [--build]
+#   scripts/patch-existing-emulator.sh --system wiiu --source /path/to/your/Cemu/checkout    [--commit <sha>] [--build]
+#
+# Defaults to this project's own pinned commit for each system (see
+# scripts/lib/pinned_commits.sh -- always a tagged, latest-stable
+# upstream release, never a nightly/dev commit). Pass --commit to patch
+# a different commit on purpose (e.g. testing against a newer/nightly
+# build) -- the explicit, opt-in way to deviate from that default.
 #
 # Without --build, only applies the patch (git apply) and prints the
 # commands to build it yourself. With --build, also configures and
@@ -29,26 +35,42 @@
 # that script, or run-host.sh/run-host-azahar.sh, for exactly which
 # ones each system needs).
 #
-# The patch is generated against a specific pinned upstream commit (see
-# MELONDS_COMMIT/AZAHAR_COMMIT below, kept in sync with
-# scripts/build-release.sh's own pinned commits) -- applying it to a
-# checkout at a different commit may fail outright (git apply refuses a
-# hunk that doesn't match cleanly) or, worse, apply with unintended
-# differences if the surrounding code happens to have drifted just
-# enough to still match. This script warns (does not block) on a commit
-# mismatch; git apply's own hunk-matching is the real safety net either
-# way.
+# The patch is generated against a specific pinned upstream commit --
+# see scripts/lib/pinned_commits.sh, the single source of truth for
+# these three, shared with scripts/build-release.sh and
+# scripts/emudeck-replace-in-place.sh so this script can't silently
+# drift onto a different commit than the actual release pipeline uses.
+# (Real user report, 2026-08-03, "DualDeck compiles a nightly build":
+# this script used to keep its own separate copy of these three
+# commits, and its Cemu one had drifted onto a genuinely untagged,
+# months-past-the-latest-stable-release commit while
+# pinned_commits.sh's copy -- used by the real release build -- was
+# correctly on the latest tagged release. Sourcing the same file both
+# scripts already share eliminates that whole class of drift outright,
+# and directly implements the user's own stated policy: "make sure
+# DualDeck only uses the latest stable version, unless specified by the
+# user during the patching" -- pinned_commits.sh's pin IS that latest
+# stable default; --commit below is the explicit opt-in override for a
+# user who wants something else on purpose.)
+#
+# Applying the patch to a checkout at a different commit than the pin
+# (or an explicit --commit override) may fail outright (git apply
+# refuses a hunk that doesn't match cleanly) or, worse, apply with
+# unintended differences if the surrounding code happens to have
+# drifted just enough to still match. This script warns (does not
+# block) on a commit mismatch; git apply's own hunk-matching is the
+# real safety net either way.
 set -euo pipefail
 
-MELONDS_COMMIT="10a173b5536fc75cd93f8a3868349dad963542ef"
-AZAHAR_COMMIT="75134fca82eab4e1a86dca0aaa4a188cefff5469"
-CEMU_COMMIT="50b9e4ba1d4d7cf9821a9cd416378bb94e1ba0ca"
-
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# shellcheck source=scripts/lib/pinned_commits.sh
+source "${repo_root}/scripts/lib/pinned_commits.sh"
 
 system=""
 source_dir=""
 do_build=0
+commit_override=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -64,6 +86,17 @@ while [[ $# -gt 0 ]]; do
             do_build=1
             shift
             ;;
+        --commit)
+            # Explicit opt-in override (see the header comment above) --
+            # e.g. a user deliberately testing against a newer/nightly
+            # commit than this project's own pinned stable default.
+            # Skips this script's own EMULATOR_VERSION_MAJOR/MINOR
+            # passthrough for Cemu below (see that section's comment):
+            # an arbitrary user-chosen commit doesn't necessarily
+            # correspond to any known release version number.
+            commit_override="$2"
+            shift 2
+            ;;
         *)
             echo "unknown argument: $1" >&2
             exit 1
@@ -72,7 +105,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "${system}" || -z "${source_dir}" ]]; then
-    echo "usage: $0 --system <ds|3ds|wiiu> --source /path/to/checkout [--build]" >&2
+    echo "usage: $0 --system <ds|3ds|wiiu> --source /path/to/checkout [--commit <sha>] [--build]" >&2
     exit 1
 fi
 
@@ -115,6 +148,19 @@ case "${system}" in
         exit 1
         ;;
 esac
+
+# cemu_version_args stays empty (Cemu falls back to showing its own
+# bare commit hash as a version string -- see pinned_commits.sh's own
+# comment) whenever --commit overrode the pin: an arbitrary user-chosen
+# commit doesn't necessarily correspond to any real released version
+# number, and guessing would be worse than Cemu's own honest fallback.
+cemu_version_args=()
+if [[ -n "${commit_override}" ]]; then
+    echo "Using --commit override (${commit_override}) instead of the pinned ${pinned_commit}." >&2
+    pinned_commit="${commit_override}"
+elif [[ "${system}" == "wiiu" ]]; then
+    cemu_version_args=(-DEMULATOR_VERSION_MAJOR="${CEMU_VERSION_MAJOR}" -DEMULATOR_VERSION_MINOR="${CEMU_VERSION_MINOR}")
+fi
 
 if [[ ! -f "${patch_file}" ]]; then
     echo "error: ${patch_file} not found -- is this the full DualDeck repo checkout?" >&2
@@ -209,6 +255,10 @@ fi
 if [[ "${system}" == "3ds" ]]; then
     cmake_configure_args+=(-DENABLE_LTO=OFF -DENABLE_WEB_SERVICE=OFF -DENABLE_SCRIPTING=OFF -DENABLE_GDBSTUB=OFF)
     speedup_notes+=("LTO/web-service/scripting/GDB-stub disabled")
+fi
+
+if [[ "${#cemu_version_args[@]}" -gt 0 ]]; then
+    cmake_configure_args+=("${cemu_version_args[@]}")
 fi
 
 # Cap parallelism by available RAM as well as core count -- a Qt+Vulkan

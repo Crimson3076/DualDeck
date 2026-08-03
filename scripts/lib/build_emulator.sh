@@ -80,16 +80,29 @@ build_azahar() {
     __build_azahar_out="${azahar_src}/build/bin/Release/azahar"
 }
 
-# build_cemu <out_var> <work_dir> <repo_root> <commit>
+# build_cemu <out_var> <work_dir> <repo_root> <commit> [version_major] [version_minor]
 #
 # Same cache-across-runs technique and rationale as build_azahar() above
 # (an even heavier build: Cemu's own vcpkg submodule resolves to roughly
 # 108 packages). vcpkg's own binary archive cache at
 # $HOME/.cache/vcpkg/archives lives outside cemu_src, so it survives the
 # `rm -rf cemu_src` below on a patch-hash cache miss.
+#
+# version_major/version_minor are optional -- passed straight through as
+# Cemu's own -DEMULATOR_VERSION_MAJOR/-DEMULATOR_VERSION_MINOR CMake
+# cache variables (see scripts/lib/pinned_commits.sh's own comment on
+# CEMU_VERSION_MAJOR/CEMU_VERSION_MINOR for the real bug this fixes:
+# without them, Cemu's own src/Common/version.h falls back to showing
+# the raw commit hash as its version string instead of a real "2.6",
+# regardless of whether the checked-out commit is genuinely a tagged
+# stable release). Omit both (e.g. scripts/patch-existing-emulator.sh's
+# --commit override, where the caller doesn't necessarily know what
+# version number an arbitrary user-chosen commit corresponds to) to
+# fall back to Cemu's own default behavior.
 build_cemu() {
     local -n __build_cemu_out="$1"
     local work_dir="$2" repo_root="$3" commit="$4"
+    local version_major="${5:-}" version_minor="${6:-}"
     local cemu_src="${work_dir}/cemu-src"
     local cemu_patch_file="${repo_root}/host/cemu-patches/0001-remote-server-integration.patch"
     local cemu_cache_hit=0
@@ -104,8 +117,12 @@ build_cemu() {
         git clone --recurse-submodules https://github.com/cemu-project/Cemu.git "${cemu_src}"
         (cd "${cemu_src}" && git checkout "${commit}" && git submodule update --init --recursive)
         (cd "${cemu_src}" && git apply "${cemu_patch_file}")
+        local version_args=()
+        if [[ -n "${version_major}" && -n "${version_minor}" ]]; then
+            version_args=(-DEMULATOR_VERSION_MAJOR="${version_major}" -DEMULATOR_VERSION_MINOR="${version_minor}")
+        fi
         cmake -S "${cemu_src}" -B "${cemu_src}/build" -DCMAKE_BUILD_TYPE=release -G Ninja \
-            "${cmake_launcher_args[@]}"
+            "${version_args[@]}" "${cmake_launcher_args[@]}"
         cmake --build "${cemu_src}/build" -j"$(nproc)"
     fi
 

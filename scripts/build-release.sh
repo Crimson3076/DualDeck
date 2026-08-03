@@ -180,7 +180,7 @@ echo "== [4/6] Patched Cemu host (Nintendo Wii U, commit ${CEMU_COMMIT}) =="
 # times it runs for real (see Cemu's own BUILD.md "Troubleshooting
 # Steps" section for common vcpkg issues). Cached the same way Azahar's
 # step above is -- see build_cemu() in scripts/lib/build_emulator.sh.
-build_cemu cemu_bin "${work_dir}" "${repo_root}" "${CEMU_COMMIT}"
+build_cemu cemu_bin "${work_dir}" "${repo_root}" "${CEMU_COMMIT}" "${CEMU_VERSION_MAJOR}" "${CEMU_VERSION_MINOR}"
 
 echo "== [5/6] Client + host prototype (this repo) =="
 repo_build="${work_dir}/repo-build"
