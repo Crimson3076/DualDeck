@@ -10011,6 +10011,65 @@ multimedia plugin present, and real-hardware confirmation that Azahar's
 Configure dialog opens without aborting once the next EmuDeck
 replace-in-place run (or drift-check) downloads the fixed AppImage.
 
+## 2026-08-03: Wayland screen-mirror prompts for permission, then shows black -- format negotiation was only ever offering one format
+
+Real user report, on the same session as the earlier `WAYLAND_DISPLAY`
+X11-vs-Wayland preference fix: the portal's one-time screen-share
+permission dialog now appears and can be accepted (confirming
+`WaylandScreenCapture`'s `Start()` call succeeds, proving that fix
+worked), but the client still shows a solid black screen afterward.
+
+Root-caused via direct code reading, not guessing: the constructor's
+PipeWire format request (`SPA_FORMAT_VIDEO_format`) only ever offered
+`SPA_VIDEO_FORMAT_BGRx`, a single fixed value, not a real choice --
+`onStreamProcess()`'s own comment already flagged "commonly BGRx,
+sometimes RGBx" as a real possibility, but the actual negotiation never
+gave PipeWire any alternative to offer if the compositor's screen-capture
+source doesn't happen to natively produce BGRx (RGBx/RGBA/BGRA are all
+just as plausible depending on compositor/GPU). When there's no format
+both sides can agree on, `SPA_PARAM_EnumFormat` negotiation simply never
+completes: `onStreamParamChanged()` never fires with a usable Format,
+`width`/`height` stay 0, no frame is ever produced, the constructor's
+5-second wait times out, `isReady()` stays false, and
+`host_control_adapter.cpp`'s existing fallback chain drops back to
+`X11ScreenCapture` -- which "succeeds" against XWayland's own empty
+compositing root and streams solid black, exactly matching the report
+(permission granted, still black) and the code's own fallback-path
+comment ("may only capture XWayland's empty root on this session, not
+real content").
+
+**Fix:** the format request now offers BGRx (still the preferred
+default), BGRA, RGBx, and RGBA as acceptable alternatives via
+`SPA_POD_CHOICE_ENUM_Id` (per `spa_choice_type`'s own "list: default,
+alternative,..." semantics -- confirmed by reading the real installed
+SPA headers directly, not assumed, including why the default value is
+listed twice: once as the choice's default slot, once as its own member
+of the alternatives list). `onStreamParamChanged()` now also records
+whichever format actually got negotiated (`info.format`), and
+`onStreamProcess()` branches on it: BGRx/BGRA copy straight through as
+before (already this project's BGRA8888 byte order), RGBx/RGBA get a
+per-pixel R/B channel swap so red and blue don't come out silently
+reversed instead of the stream just failing to start at all.
+
+**Verified:** full local build of `dualdeck-host-service` (this sandbox
+has real `dbus-1`/`libpipewire-0.3` dev headers, so
+`DUALDECK_HAVE_WAYLAND_SCREEN_CAPTURE`'s real implementation actually
+compiles here, not just the stub) under the project's full
+`-Wall -Wextra -Wpedantic -Wconversion -Wshadow` warnings set -- zero
+warnings, zero errors. Full `ctest` run (6 suites) passes with no
+regressions.
+
+**Not yet verified:** against a real xdg-desktop-portal + PipeWire
+session on real hardware -- there is no way to exercise actual format
+negotiation or a live permission prompt hermetically (this project's
+existing `test_host_control_adapter.cpp` tests deliberately force the
+"no session bus reachable" path for exactly this reason, see that file's
+`ScopedUnsetEnv` comment). Whether this specific user's compositor now
+successfully negotiates one of these four formats, and whether the
+RGBx/RGBA swap path is byte-order-correct against real captured content
+(not just plausible from reading the SPA headers), remains unconfirmed
+until tested on the actual affected machine.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

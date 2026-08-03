@@ -94,6 +94,10 @@ struct WaylandScreenCapture::Impl {
     std::vector<uint8_t> latestFrame;
     uint16_t width = 0;
     uint16_t height = 0;
+    // Set from the actually-negotiated SPA_PARAM_Format in
+    // onStreamParamChanged() -- see onStreamProcess()'s own comment for
+    // why this can't just be assumed to always be BGRx.
+    spa_video_format format = SPA_VIDEO_FORMAT_UNKNOWN;
     bool haveFrame = false;
     bool ready = false;
 
@@ -339,15 +343,34 @@ struct WaylandScreenCapture::Impl {
         std::lock_guard<std::mutex> lock(self->frameMutex);
         self->width = static_cast<uint16_t>(info.size.width);
         self->height = static_cast<uint16_t>(info.size.height);
+        self->format = info.format;
     }
 
-    // PipeWire negotiates whatever raw format the compositor's capture
-    // source actually produces -- commonly BGRx, sometimes RGBx.
-    // Converted to this project's BGRA8888 convention here (the unused
-    // 4th byte is harmless padding either way, same as every other
-    // frame source in this project) rather than assumed to already
-    // match, since a wrong assumption here would silently swap red and
-    // blue instead of failing loudly.
+    // Real bug, 2026-08-03: the format request this constructor sends
+    // PipeWire used to offer exactly one format (BGRx) with no
+    // alternatives -- on any compositor whose screen-capture source
+    // doesn't happen to natively produce BGRx (RGBx/RGBA/BGRA are all
+    // just as common depending on compositor/GPU), SPA_PARAM_EnumFormat
+    // negotiation had nothing to intersect against and silently never
+    // completed: onStreamParamChanged() never fired with a usable
+    // Format, width/height stayed 0, no frame was ever produced, the
+    // 5-second wait in the constructor timed out, isReady() stayed
+    // false, and host_control_adapter.cpp's fallback chain dropped back
+    // to X11ScreenCapture -- which "succeeds" against XWayland's own
+    // empty root and streams solid black. Symptom exactly matched a real
+    // report: the portal's one-time permission prompt appeared and was
+    // accepted (proving Start() succeeded), but the client still showed
+    // a black screen. The constructor's format offer now lists BGRx,
+    // BGRA, RGBx, and RGBA as acceptable alternatives (see the
+    // SPA_POD_CHOICE_ENUM_Id call below), so this now negotiates
+    // successfully against whatever the compositor actually produces.
+    // Whichever one gets negotiated is converted to this project's
+    // BGRA8888 wire convention here: BGRx/BGRA need no per-pixel work
+    // (straight row copy, same reasoning as X11ScreenCapture's own
+    // row-copy comment -- the unused 4th byte is harmless padding
+    // either way); RGBx/RGBA have their R and B bytes swapped per pixel,
+    // since copying those straight would silently swap red and blue in
+    // every streamed frame instead of failing loudly.
     static void onStreamProcess(void* userdata) {
         auto* self = static_cast<Impl*>(userdata);
         pw_buffer* b = pw_stream_dequeue_buffer(self->stream);
@@ -361,13 +384,24 @@ struct WaylandScreenCapture::Impl {
             uint32_t stride = buf->datas[0].chunk->stride > 0
                                    ? static_cast<uint32_t>(buf->datas[0].chunk->stride)
                                    : self->width * 4;
-            // BGRx/BGRA source layout already matches this project's
-            // BGRA8888 byte order directly -- straight row copy
-            // respecting the source stride, same reasoning as
-            // X11ScreenCapture's own row-copy comment.
-            for (uint16_t y = 0; y < self->height; ++y) {
-                std::memcpy(self->latestFrame.data() + static_cast<size_t>(y) * self->width * 4,
-                            src + static_cast<size_t>(y) * stride, static_cast<size_t>(self->width) * 4);
+            const bool needsRbSwap =
+                self->format == SPA_VIDEO_FORMAT_RGBx || self->format == SPA_VIDEO_FORMAT_RGBA;
+            if (needsRbSwap) {
+                for (uint16_t y = 0; y < self->height; ++y) {
+                    const uint8_t* srcRow = src + static_cast<size_t>(y) * stride;
+                    uint8_t* dstRow = self->latestFrame.data() + static_cast<size_t>(y) * self->width * 4;
+                    for (uint16_t x = 0; x < self->width; ++x) {
+                        dstRow[x * 4 + 0] = srcRow[x * 4 + 2]; // B <- R
+                        dstRow[x * 4 + 1] = srcRow[x * 4 + 1]; // G
+                        dstRow[x * 4 + 2] = srcRow[x * 4 + 0]; // R <- B
+                        dstRow[x * 4 + 3] = srcRow[x * 4 + 3]; // A/x
+                    }
+                }
+            } else {
+                for (uint16_t y = 0; y < self->height; ++y) {
+                    std::memcpy(self->latestFrame.data() + static_cast<size_t>(y) * self->width * 4,
+                                src + static_cast<size_t>(y) * stride, static_cast<size_t>(self->width) * 4);
+                }
             }
             self->haveFrame = true;
         }
@@ -467,7 +501,18 @@ WaylandScreenCapture::WaylandScreenCapture() : impl_(std::make_unique<Impl>()) {
     params[0] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
         &podBuilder, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat, SPA_FORMAT_mediaType,
         SPA_POD_Id(SPA_MEDIA_TYPE_video), SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
-        SPA_FORMAT_VIDEO_format, SPA_POD_Id(SPA_VIDEO_FORMAT_BGRx), SPA_FORMAT_VIDEO_size,
+        SPA_FORMAT_VIDEO_format,
+        // See onStreamProcess()'s comment: offering only BGRx here used
+        // to make negotiation silently fail (no frame, ever) against any
+        // compositor whose capture source doesn't produce BGRx natively.
+        // BGRx stays the preferred/default value (first argument after
+        // the count -- see spa_choice_type's own "list: default,
+        // alternative,..." doc comment, which is why it's listed twice:
+        // once as the default slot, once as its own alternative-list
+        // member), with BGRA/RGBx/RGBA offered as acceptable fallbacks.
+        SPA_POD_CHOICE_ENUM_Id(5, SPA_VIDEO_FORMAT_BGRx, SPA_VIDEO_FORMAT_BGRx, SPA_VIDEO_FORMAT_BGRA,
+                               SPA_VIDEO_FORMAT_RGBx, SPA_VIDEO_FORMAT_RGBA),
+        SPA_FORMAT_VIDEO_size,
         SPA_POD_CHOICE_RANGE_Rectangle(&defSize, &minSize, &maxSize), SPA_FORMAT_VIDEO_framerate,
         SPA_POD_CHOICE_RANGE_Fraction(&defFramerate, &minFramerate, &maxFramerate)));
 
