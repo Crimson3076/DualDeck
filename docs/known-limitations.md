@@ -10611,6 +10611,79 @@ the new files (including `libturbojpeg.so.0`) without needing `sudo`
 input, and whether the D-Bus abort from the entry above is also gone once
 the host is running fresh, non-stale files end to end.
 
+## 2026-08-03: `pipewire_env.sh`'s round-3 rewrite silently killed the whole launcher script under `set -e` on a host with no pkg-config -- a testing gap, not a code-review gap
+
+Real user report following the two fixes above: after updating (confirmed
+via `VERSION`/`libturbojpeg.so.0` being present and current -- the
+self-update fix above genuinely worked), `dualdeck-host-control.service`
+still failed instantly. Running `host-control-daemon.sh` directly showed
+the real, load-bearing symptom: **exit code 1, completely silent, no
+`coredumpctl` entry at all** -- ruling out both a crash (no core dump)
+and `dualdeck-host-service` ever actually printing anything (a genuine
+runtime failure, e.g. the D-Bus abort or an `EADDRINUSE` bind error,
+always prints at least one line first). That combination -- silent,
+clean exit code 1, nothing running -- meant the failure had to be in the
+*launcher script itself*, before `dualdeck-host-service` was ever
+`exec`'d.
+
+**Root cause:** `pipewire_env.sh`'s round-3 rewrite (the PipeWire
+`MODULE_DIR` detection fix, above) added
+`pc_dir="$(_pw_pkgconfig_dir "${pkg}" "${pkgvar}")"` -- a *plain*
+(non-`local`) assignment whose right-hand command substitution can
+legitimately return 1 (`_pw_pkgconfig_dir` returns 1 whenever
+`pkg-config` itself isn't on `PATH`, exactly the "real possibility on
+Bazzite's minimal/atomic image" this file's own comments already flagged
+as a risk, but never actually tested against). Every real caller of this
+file (`host-control-daemon.sh`, `run-host.sh`'s manual Host-Control
+branch) sources it under `set -euo pipefail`. Bash has a well-known,
+easy-to-miss asymmetry here: `local x="$(cmd)"` is *exempt* from
+`set -e` (the exit status `set -e` sees is `local`'s own, which is 0 as
+long as the declaration itself succeeds, regardless of what the
+substituted command returned) -- but a plain `x="$(cmd)"`, with no
+`local`, is *not* exempt; a failing command substitution there
+propagates its exit status straight to `set -e` and kills the whole
+script. This line was the one command substitution in the file not
+already guarded with `|| ...` (the other one, in the candidate-scan
+fallback, already had it). The result: on any host without `pkg-config`
+installed, sourcing this file under `set -e` silently killed the entire
+launcher script the instant it reached this line -- before the candidate-
+path fallback tier ever got a chance to run, before any of the file's own
+diagnostic `echo` messages could print, and before `dualdeck-host-service`
+was ever `exec`'d at all. Exactly the silent-exit-1-with-nothing-running
+symptom reported.
+
+**Why testing missed this:** every verification of the round-3 rewrite
+(four scenarios: normal resolution, bogus pre-set override, pkg-config
+hidden, total failure) was run by directly `source`-ing the file with no
+`set -e` in the test shell -- correctly exercising each function's own
+logic, but never reproducing the actual environment every real caller
+uses. The "pkg-config hidden" test in particular *should* have caught
+this and didn't, purely because it wasn't run under `set -euo pipefail`
+like its real call sites are. Retested all four scenarios with `set -euo
+pipefail` added directly to the test harness this time, specifically
+because this gap was found the hard way.
+
+**Fix:** guarded the one unguarded assignment: `pc_dir="$(_pw_pkgconfig_dir
+"${pkg}" "${pkgvar}")" || pc_dir=""`. Confirmed no other unguarded command
+substitutions exist in the file (`grep -n '="\$('` shows both sites, the
+other already guarded).
+
+**Verified:** re-ran all four resolution/failure scenarios from the round-3
+entry above, this time with `set -euo pipefail` in the test shell (matching
+every real call site) -- all four now complete with exit code 0 and the
+expected diagnostic messages, including the exact pkg-config-hidden case
+that previously killed the script silently. Also simulated the real
+`host-control-daemon.sh` sourcing pattern directly (copy of the library
+file, `cd` into its directory, `source ./pipewire_env.sh`, call the
+function, all under `set -euo pipefail`) with `pkg-config` hidden from
+`PATH` -- survives cleanly through to where `dualdeck-host-service` would
+be `exec`'d.
+
+**Not yet verified:** on the actual affected Bazzite machine -- whether
+`pkg-config` is genuinely absent there (which would confirm this exact
+failure mode) or something else was going on, and whether the daemon
+actually starts and stays up once this fix lands.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

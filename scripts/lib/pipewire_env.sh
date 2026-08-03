@@ -117,7 +117,23 @@ _pw_resolve_dir() {
              "${verify_rel} -- ignoring it and re-detecting" >&2
     fi
 
-    pc_dir="$(_pw_pkgconfig_dir "${pkg}" "${pkgvar}")"
+    # Guarded with `|| pc_dir=""`, not a bare assignment: every real
+    # caller of this file (host-control-daemon.sh, run-host.sh) sources
+    # it under `set -euo pipefail`, and this is a *non-local* assignment
+    # -- unlike `local x="$(cmd)"` (a well-known set -e exemption where
+    # `local`'s own exit status masks the substitution's), a plain
+    # `var="$(cmd)"` DOES propagate a failing command's exit status to
+    # set -e. Without this guard, a host with no pkg-config at all (a
+    # real possibility on Bazzite's minimal/atomic image -- see
+    # _pw_pkgconfig_dir's own comment) silently kills the *entire
+    # launcher script* right here, before dualdeck-host-service is ever
+    # exec'd -- exactly the failure this file exists to prevent, just
+    # moved one level up. Confirmed by reproducing it directly: sourcing
+    # this file under `set -euo pipefail` with pkg-config hidden from
+    # PATH exits with status 1 and zero output, matching a real user
+    # report of the persistent Host Control daemon exiting instantly and
+    # completely silently.
+    pc_dir="$(_pw_pkgconfig_dir "${pkg}" "${pkgvar}")" || pc_dir=""
     if _pw_dir_has_file "${pc_dir}" "${verify_rel}"; then
         resolved="${pc_dir}"
         echo "pipewire_env.sh: resolved ${var_name}='${resolved}' via pkg-config (${pkg})" >&2
