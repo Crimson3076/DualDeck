@@ -102,6 +102,44 @@ HostControlAdapter::HostControlAdapter() {
     const char* touchpadEnv = std::getenv("DUALDECK_HOSTCONTROL_STEAM_TOUCHPAD");
     touchpadEnabled_ = touchpadEnv != nullptr && touchpadEnv[0] != '\0' && std::strcmp(touchpadEnv, "0") != 0;
 
+    // Screen-mirror experiment, same opt-in-env-var-read-once style as
+    // touchpadEnabled_ above -- see getLatestFrame()'s header comment
+    // for the full design. mirrorCapture_ is only constructed (and only
+    // then attempts an X11 connection) when this is actually set, so a
+    // host that never opts in never even tries to reach an X server.
+    const char* mirrorEnv = std::getenv("DUALDECK_HOSTCONTROL_MIRROR_SCREEN");
+    mirrorEnabled_ = mirrorEnv != nullptr && mirrorEnv[0] != '\0' && std::strcmp(mirrorEnv, "0") != 0;
+    if (mirrorEnabled_) {
+        mirrorCapture_ = std::make_unique<X11ScreenCapture>();
+        if (mirrorCapture_->isReady()) {
+            std::fprintf(stderr, "HostControlAdapter: screen-mirror capture ready (X11)\n");
+        } else {
+            std::fprintf(stderr,
+                          "HostControlAdapter: DUALDECK_HOSTCONTROL_MIRROR_SCREEN was set but no usable X11 "
+                          "display/XShm was found -- screen mirroring stays disabled (Wayland-only sessions "
+                          "aren't supported yet, see docs/known-limitations.md); everything else continues "
+                          "to work normally.\n");
+        }
+
+        // Optional override of the default ~5fps capture rate (a full
+        // desktop capture is real work, not worth repeating at
+        // videoLoop()'s up-to-60fps poll rate for a feature whose whole
+        // point is periodic menu/setup visibility -- see
+        // getLatestFrame()'s comment). Clamped the same way other
+        // capture-fps env vars in this project are (e.g. the Azahar/Cemu
+        // patches' *_REMOTE_CAPTURE_FPS) -- an out-of-range or
+        // unparseable value falls back to the default rather than
+        // producing a nonsensical interval.
+        const char* fpsEnv = std::getenv("DUALDECK_HOSTCONTROL_MIRROR_FPS");
+        if (fpsEnv != nullptr && fpsEnv[0] != '\0') {
+            char* end = nullptr;
+            long fps = std::strtol(fpsEnv, &end, 10);
+            if (end != fpsEnv && *end == '\0' && fps >= 1 && fps <= 30) {
+                mirrorCaptureInterval_ = std::chrono::milliseconds(1000 / fps);
+            }
+        }
+    }
+
     uinputFd_ = ::open("/dev/uinput", O_WRONLY | O_NONBLOCK);
     if (uinputFd_ < 0) {
         std::fprintf(stderr,
@@ -405,9 +443,43 @@ void HostControlAdapter::releaseAll() {
     }
 }
 
-bool HostControlAdapter::getLatestFrame(std::vector<uint8_t>& /*outFrame*/, uint64_t& /*outFrameIndex*/,
-                                        uint16_t& /*outWidth*/, uint16_t& /*outHeight*/) {
-    return false;
+bool HostControlAdapter::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
+                                        uint16_t& outWidth, uint16_t& outHeight) {
+    if (!isMirrorReady()) return false;
+
+    auto now = std::chrono::steady_clock::now();
+    if (mirrorLastFrame_.empty() || now - mirrorLastCaptureTime_ >= mirrorCaptureInterval_) {
+        std::vector<uint8_t> frame;
+        uint16_t width = 0;
+        uint16_t height = 0;
+        if (mirrorCapture_->capture(frame, width, height)) {
+            mirrorLastFrame_ = std::move(frame);
+            mirrorLastWidth_ = width;
+            mirrorLastHeight_ = height;
+            mirrorLastFrameIndex_ = mirrorNextFrameIndex_++;
+        }
+        // Reset the deadline regardless of whether the capture actually
+        // succeeded this tick -- a transient capture failure should be
+        // retried at the configured rate, not on every single poll
+        // (which could be up to 60/sec, per videoLoop()'s own comment).
+        mirrorLastCaptureTime_ = now;
+    }
+
+    if (mirrorLastFrame_.empty()) return false;
+    outFrame = mirrorLastFrame_;
+    outFrameIndex = mirrorLastFrameIndex_;
+    outWidth = mirrorLastWidth_;
+    outHeight = mirrorLastHeight_;
+    return true;
+}
+
+void HostControlAdapter::frameDimensions(uint16_t& outWidth, uint16_t& outHeight) const {
+    if (mirrorCapture_ && mirrorCapture_->isReady()) {
+        mirrorCapture_->nativeSize(outWidth, outHeight);
+        return;
+    }
+    outWidth = static_cast<uint16_t>(kFrameWidth);
+    outHeight = static_cast<uint16_t>(kFrameHeight);
 }
 
 } // namespace melonds_remote::host

@@ -6,11 +6,35 @@ add_library(dualdeck_host STATIC
     src/logging_mic_audio_sink.cpp
     src/adapter_bridge.cpp
     src/host_control_adapter.cpp
+    src/x11_screen_capture.cpp
     src/mode_coordinator.cpp
     src/host_session_state.cpp
     src/capability_bridge.cpp
     src/kdialog_approval_prompt.cpp
 )
+
+# Host Control screen-mirror experiment (DUALDECK_HOSTCONTROL_MIRROR_SCREEN,
+# see host_control_adapter.cpp's own comment) -- optional at configure
+# time, unlike TurboJPEG above: X11 dev headers are already a hard
+# requirement of this project's melonDS/Azahar Qt builds (see
+# scripts/build-release.sh's "build" ensure_packages() list), so this CI
+# environment already has them, but a from-source build of just the host
+# (DUALDECK_BUILD_HOST=ON without ever touching melonDS/Qt at all --
+# exactly how this target is built and tested standalone) shouldn't be
+# forced to install X11 dev headers just to compile a narrow, opt-in
+# feature it may never use. x11_screen_capture.cpp itself always
+# compiles either way (see its own DUALDECK_HAVE_X11_SCREEN_CAPTURE
+# guard) -- this only decides which half of it: a real implementation,
+# or an always-not-ready stub.
+find_package(X11)
+if(X11_FOUND AND X11_Xext_FOUND)
+    target_compile_definitions(dualdeck_host PRIVATE DUALDECK_HAVE_X11_SCREEN_CAPTURE)
+    target_link_libraries(dualdeck_host PRIVATE ${X11_LIBRARIES} ${X11_Xext_LIB})
+    target_include_directories(dualdeck_host PRIVATE ${X11_INCLUDE_DIR})
+else()
+    message(STATUS "dualdeck_host: X11/Xext not found -- Host Control screen-mirroring "
+                    "(DUALDECK_HOSTCONTROL_MIRROR_SCREEN) will be compiled out as a no-op in this build")
+endif()
 
 target_include_directories(dualdeck_host PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

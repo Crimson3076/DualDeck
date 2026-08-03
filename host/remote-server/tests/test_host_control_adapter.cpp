@@ -11,6 +11,7 @@
 #include "test_framework.h"
 
 #include <cstdlib>
+#include <string>
 
 using namespace melonds_remote;
 using namespace melonds_remote::host;
@@ -251,6 +252,51 @@ MDR_TEST(host_control_adapter_touchpad_opt_in_degrades_gracefully_without_uinput
         adapter.applyControllerState(state);
         adapter.releaseAll();
     }
+}
+
+// Real user request, 2026-08-03: "add an option to the client's host
+// control to mirror the screen." Same degrade-gracefully expectation as
+// the touchpad opt-in test above, applied to the screen-mirror
+// experiment: getLatestFrame() must stay a safe false, not crash or
+// throw, whether the feature is off entirely (the default) or on but
+// unable to reach a usable X11 display (this sandbox/CI's actual
+// situation either way -- headless, no X server).
+MDR_TEST(host_control_adapter_mirror_disabled_by_default_returns_no_frame) {
+    HostControlAdapter adapter;
+    MDR_CHECK(!adapter.isMirrorReady());
+    std::vector<uint8_t> frame;
+    uint64_t frameIndex = 0;
+    uint16_t width = 0, height = 0;
+    MDR_CHECK(!adapter.getLatestFrame(frame, frameIndex, width, height));
+    // frameDimensions() must still fall back to the DS default rather
+    // than reporting some stale/uninitialized size when mirroring was
+    // never enabled at all.
+    uint16_t dimWidth = 0, dimHeight = 0;
+    adapter.frameDimensions(dimWidth, dimHeight);
+    MDR_CHECK_EQ(dimWidth, static_cast<uint16_t>(kFrameWidth));
+    MDR_CHECK_EQ(dimHeight, static_cast<uint16_t>(kFrameHeight));
+}
+
+MDR_TEST(host_control_adapter_mirror_opt_in_degrades_gracefully_without_x11_display) {
+    // Deterministic regardless of what this test happens to run under:
+    // force the "no reachable X11 display" path explicitly rather than
+    // relying on this sandbox/CI coincidentally having no DISPLAY set.
+    const char* previousDisplay = std::getenv("DISPLAY");
+    std::string savedDisplay = previousDisplay ? previousDisplay : "";
+    bool hadDisplay = previousDisplay != nullptr;
+    ::unsetenv("DISPLAY");
+
+    ::setenv("DUALDECK_HOSTCONTROL_MIRROR_SCREEN", "1", 1);
+    HostControlAdapter adapter;
+    ::unsetenv("DUALDECK_HOSTCONTROL_MIRROR_SCREEN");
+
+    if (hadDisplay) ::setenv("DISPLAY", savedDisplay.c_str(), 1);
+
+    MDR_CHECK(!adapter.isMirrorReady());
+    std::vector<uint8_t> frame;
+    uint64_t frameIndex = 0;
+    uint16_t width = 0, height = 0;
+    MDR_CHECK(!adapter.getLatestFrame(frame, frameIndex, width, height));
 }
 
 MDR_TEST(translate_ignores_mouse_fields) {

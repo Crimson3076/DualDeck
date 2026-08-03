@@ -20,10 +20,14 @@
 // button layout is just this project's one existing physical-button
 // vocabulary today.
 
+#include <chrono>
 #include <cstdint>
+#include <memory>
+#include <vector>
 
 #include "host/emulator_input_sink.h"
 #include "host/frame_source.h"
+#include "host/x11_screen_capture.h"
 
 namespace melonds_remote::host {
 
@@ -145,13 +149,47 @@ public:
     void applyControllerState(const ControllerState& state) override;
     void releaseAll() override;
 
-    // Host-control mode has no video to stream -- there is no emulated
-    // screen while no emulator is running; a connected client shows its
-    // own local UI instead (GitHub issue #4 Phase E). Always returns
-    // false; NetServer's videoLoop() already treats that as "nothing to
-    // send this tick" with no special-casing needed here.
+    // Real user request, 2026-08-03: "I want to add an option to the
+    // client's host control to mirror the screen, as I cannot access
+    // the TV I am testing on currently." Opt-in (env var
+    // DUALDECK_HOSTCONTROL_MIRROR_SCREEN, read once in the constructor,
+    // same style as DUALDECK_HOSTCONTROL_STEAM_TOUCHPAD above), default
+    // off -- zero behavior change, including zero X11 connection
+    // attempt, for anyone who doesn't set it. When enabled and an X11
+    // display is actually reachable (see X11ScreenCapture's own header
+    // comment for the honest Wayland gap and why this is X11-only for
+    // now), periodically captures the host's root window and returns it
+    // here instead of always returning false. Rate-limited internally
+    // (mirrorCaptureInterval_, default 5fps -- "a few frames per
+    // second, good enough to see settings menus," the user's own
+    // explicit choice over investing in a smoother capture path right
+    // away) rather than on every call: NetServer's videoLoop() polls
+    // this at up to videoSendFps (default 60), and a full-resolution
+    // desktop capture is real, non-negligible work worth not repeating
+    // 60 times a second for a feature whose whole point is periodic
+    // menu/setup visibility, not smooth gameplay video.
     bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
                         uint16_t& outWidth, uint16_t& outHeight) override;
+
+    // Overridden because a screen-mirror frame's real size (the host's
+    // actual desktop resolution) is essentially never DS's fixed
+    // 256x192 default -- see frame_source.h's own comment on why a
+    // variable-size source must report its true dimensions here, not
+    // just rely on getLatestFrame()'s per-frame outWidth/outHeight
+    // (used for HelloAck's initial buffer-sizing estimate, before any
+    // frame has necessarily been captured yet). Falls back to the
+    // 256x192 default when mirroring isn't enabled/ready, matching
+    // every other frame source's behavior in that case.
+    void frameDimensions(uint16_t& outWidth, uint16_t& outHeight) const override;
+
+    // True once a real mirrored frame has actually been sent at least
+    // once -- distinct from mirrorEnabled_ (the env var was set) and
+    // mirrorCapture_->isReady() (X11/XShm setup succeeded): this is the
+    // one a caller wanting to know "is this actually working" should
+    // check, matching isDeviceReady()/isTouchpadReady()'s naming
+    // convention above even though the underlying readiness state lives
+    // one layer down in X11ScreenCapture.
+    bool isMirrorReady() const { return mirrorCapture_ && mirrorCapture_->isReady(); }
 
 private:
     void emitState(const HostControlGamepadState& state);
@@ -196,6 +234,32 @@ private:
     // dedicated virtual mouse node rather than overloading one device.
     int mouseUinputFd_ = -1;
     HostControlMouseState lastEmittedMouse_;
+
+    // Screen-mirror experiment state -- see getLatestFrame()'s own
+    // comment above for the full design. mirrorCapture_ is only ever
+    // constructed at all when mirrorEnabled_ is true (never attempts an
+    // X11 connection otherwise); mirrorLastFrame_/mirrorLastFrameIndex_
+    // cache the most recent successful capture so getLatestFrame() can
+    // keep returning it between actual captures (rate-limited by
+    // mirrorCaptureInterval_) without re-capturing every single poll.
+    bool mirrorEnabled_ = false;
+    std::unique_ptr<X11ScreenCapture> mirrorCapture_;
+    std::vector<uint8_t> mirrorLastFrame_;
+    uint16_t mirrorLastWidth_ = 0;
+    uint16_t mirrorLastHeight_ = 0;
+    // mirrorLastFrameIndex_ is what getLatestFrame() actually reports
+    // (stable across repeated cache-hit calls returning the same
+    // captured frame); mirrorNextFrameIndex_ is the counter that
+    // actually advances, one real capture at a time -- kept separate so
+    // a cache hit (no new capture this tick) never skips an index the
+    // way incrementing a single shared counter unconditionally would.
+    // Starts at 0 for the first frame ever produced, matching every
+    // other IFrameSource in this project (see frame_source.h's own
+    // getLatestFrame() comment).
+    uint64_t mirrorLastFrameIndex_ = 0;
+    uint64_t mirrorNextFrameIndex_ = 0;
+    std::chrono::steady_clock::time_point mirrorLastCaptureTime_;
+    std::chrono::milliseconds mirrorCaptureInterval_{200};
 };
 
 } // namespace melonds_remote::host

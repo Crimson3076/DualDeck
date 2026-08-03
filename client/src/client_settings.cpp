@@ -45,6 +45,7 @@ ClientSettings loadClientSettings(const std::string& settingsPath) {
         constexpr const char* kMicDevicePrefix = "mic_device_name=";
         constexpr const char* kMicMutedPrefix = "mic_muted=";
         constexpr const char* kVideoQualityPrefix = "video_quality=";
+        constexpr const char* kMirrorHostScreenPrefix = "mirror_host_screen=";
 
         if (line.rfind(kAutoUpdatePrefix, 0) == 0) {
             std::string value = line.substr(std::char_traits<char>::length(kAutoUpdatePrefix));
@@ -75,6 +76,13 @@ ClientSettings loadClientSettings(const std::string& settingsPath) {
             } catch (const std::exception&) {
                 // Leave the default in place.
             }
+        } else if (line.rfind(kMirrorHostScreenPrefix, 0) == 0) {
+            std::string value = line.substr(std::char_traits<char>::length(kMirrorHostScreenPrefix));
+            if (value == "1" || value == "true" || value == "on") {
+                settings.mirrorHostScreen = true;
+            } else if (value == "0" || value == "false" || value == "off") {
+                settings.mirrorHostScreen = false;
+            }
         }
     }
     return settings;
@@ -99,6 +107,7 @@ bool saveClientSettings(const std::string& settingsPath, const ClientSettings& s
         out << "mic_device_name=" << settings.micDeviceName << '\n';
         out << "mic_muted=" << (settings.micMuted ? "1" : "0") << '\n';
         out << "video_quality=" << settings.videoQuality << '\n';
+        out << "mirror_host_screen=" << (settings.mirrorHostScreen ? "1" : "0") << '\n';
         if (!out.good()) {
             out.close();
             std::error_code cleanupError;

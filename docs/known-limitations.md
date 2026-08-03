@@ -8542,6 +8542,134 @@ identical failure mode already confirmed and fixed once for melonDS in
 this exact codebase), not a guess, but real-hardware confirmation is the
 next step once a build with this fix is available to test.
 
+## 2026-08-03: Host Control screen-mirror experiment (X11 only, opt-in)
+
+Real user request, while diagnosing the Cemu Vulkan issue above without
+access to the TV the Bazzite host is normally connected to: "I want to
+add an option to the client's host control to mirror the screen... if we
+can bake that in as well." Host Control mode has never sent any video
+(`HostControlAdapter::getLatestFrame()` was hard-coded to `return
+false`, with a comment stating "there is no emulated screen while no
+emulator is running") -- true when the mode only meant "navigate the
+host's own Big Picture/desktop via a virtual gamepad," but not the whole
+story once the actual ask became "let me see the host's screen." Scoped
+per the user's own explicit choice (`AskUserQuestion`): X11 only, not
+Wayland, and a "quick and good enough" (~5fps) capture rather than
+investing in a smoother pipeline right away.
+
+**Design**, entirely additive, zero protocol changes:
+- **Host side** (`host/remote-server/include/host/x11_screen_capture.h`
+  + `.cpp`, new files): a small, PIMPL'd `X11ScreenCapture` class using
+  Xlib + the XShm extension to grab the root window's pixels. PIMPL'd
+  specifically so the header stays includable, and the class safely
+  inert, even in a build with no X11 dev headers at all --
+  `host/remote-server/CMakeLists.txt` does `find_package(X11)` (not
+  `REQUIRED` -- unlike TurboJPEG, this is a narrow opt-in feature, not
+  something every host build needs) and only defines
+  `DUALDECK_HAVE_X11_SCREEN_CAPTURE` when both X11 and Xext are found;
+  the .cpp file compiles a real implementation or an always-not-ready
+  stub depending on that macro, and it's unconditionally added to
+  `dualdeck_host`'s sources either way so `host_control_adapter.cpp`
+  never needs its own separate guard.
+- **`HostControlAdapter`** (host_control_adapter.h/.cpp): new opt-in env
+  var `DUALDECK_HOSTCONTROL_MIRROR_SCREEN` (same read-once-in-
+  constructor style as the existing `DUALDECK_HOSTCONTROL_STEAM_TOUCHPAD`
+  experiment), default off -- `X11ScreenCapture` is only ever
+  constructed (and only then attempts an X11 connection at all) when
+  this is set. `getLatestFrame()` now actually captures, internally
+  rate-limited to ~5fps (`DUALDECK_HOSTCONTROL_MIRROR_FPS`, optional,
+  1-30, same clamp-and-fall-back-to-default style as other capture-fps
+  env vars in this project) rather than on every call -- `NetServer::
+  videoLoop()` polls this at up to `videoSendFps` (default 60), and a
+  full-resolution desktop capture is real work not worth repeating 60
+  times a second for a feature whose whole point is periodic menu/setup
+  visibility, not smooth gameplay video. `frameDimensions()` is now
+  overridden to report the real captured resolution (essentially never
+  DS's fixed 256x192 default).
+- **No new wire protocol message needed at all**: the host already sends
+  real captured frames as ordinary `VideoFrame` packets over the exact
+  same video socket/JPEG-compression path Emulation mode always has
+  (`net_server.cpp`'s `videoLoop()`/`compressFrameBgraToJpeg()` needed
+  zero changes) -- Host Control mode was never "video-incapable" at the
+  wire level, just never had anything to send.
+- **Client side** (`client/src/client_settings.h/.cpp`, `main.cpp`): new
+  persisted `ClientSettings::mirrorHostScreen` (default off, same
+  opt-in-experimental convention as the trackpad experiment), a new
+  "MIRROR HOST SCREEN (EXPERIMENTAL)" Settings-menu toggle (both
+  keyboard and gamepad handlers, matching every other toggle there). The
+  render loop's existing `if (nowConnected && nowHostMode ==
+  HostMode::HostControl) { renderHostControlScreen(...); continue; }`
+  branch now only takes that early-exit when the toggle is off --
+  turning it on just lets the loop fall through to the exact same
+  video-decode/render path Emulation mode already uses, no new
+  client-side rendering logic needed. If the host isn't actually
+  mirroring (env var unset there, or no usable X11 display), this
+  degrades to showing the built-in test-pattern texture instead of real
+  video -- harmless, if not especially informative; a known rough edge
+  of this first cut, not a crash or hang.
+
+**How to actually turn this on** (no GUI toggle on the host side yet,
+same as the touchpad experiment): export `DUALDECK_HOSTCONTROL_MIRROR_SCREEN=1`
+in whatever environment starts the host process -- before running
+`./dualdeck-host.sh`/`./internal/run-host.sh` directly, or via
+`systemctl --user edit dualdeck-host-control.service` to add an
+`Environment=DUALDECK_HOSTCONTROL_MIRROR_SCREEN=1` line if using the
+persistent daemon.
+
+**Explicit, deliberate scope limits, not oversights:**
+- **X11 only.** Capturing an arbitrary Wayland compositor's output needs
+  either the wlr-screencopy protocol or the xdg-desktop-portal
+  ScreenCast/PipeWire API -- both substantially more code, and neither
+  verifiable without real Wayland hardware in hand (this session's
+  sandbox has no Wayland compositor to test against, only Xvfb). On a
+  Wayland-only session (no XWayland reachable either), `isMirrorReady()`
+  stays false and the feature is a clean no-op with a logged reason, not
+  a crash or a silent wrong-looking capture.
+- **Standard 24/32-bit TrueColor visual only.** `X11ScreenCapture`
+  checks the actual `red_mask`/`green_mask`/`blue_mask`/`bits_per_pixel`
+  values from the real XShm image rather than assuming them, and
+  disables itself (logged) rather than emitting corrupted color if some
+  genuinely unusual visual is in use.
+- **No resolution capping/downscaling.** A 4K host screen captures and
+  streams at full native resolution -- likely slow/bandwidth-heavy
+  (`defaultVideoQualityForFrameSize()` already lowers JPEG quality for
+  large surfaces, tuned against Cemu's 854x480 GamePad output, not
+  necessarily against a full desktop's resolution) -- a real
+  future-improvement candidate, not attempted in this first cut.
+
+**Verified:**
+- Real end-to-end capture against an actual X server (Xvfb, not just a
+  compile check): correct captured dimensions, correct raw byte count
+  (`width * height * 4`), and -- critically, not merely assumed --
+  correct BGRA8888 channel ordering confirmed by drawing a known pure-red
+  rectangle onto the root window and checking the captured bytes exactly
+  match (`B=0x00 G=0x00 R=0xFF`) via a small standalone smoke-test
+  program built directly against the real `host_control_adapter.cpp`/
+  `x11_screen_capture.cpp` sources.
+- Graceful degradation verified two ways: the default (env var unset)
+  path, and the opt-in-but-no-display path (`DISPLAY` explicitly
+  unset), both confirmed to return `false`/stay inert rather than crash
+  -- new `host_control_adapter_mirror_disabled_by_default_returns_no_frame`
+  and `host_control_adapter_mirror_opt_in_degrades_gracefully_without_x11_display`
+  tests (host_tests).
+- Full host (`dualdeck_host`, `dualdeck-host-service`,
+  `melonds_remote_host_tests` -- 90 cases, 0 failures, including the two
+  new mirror tests) and protocol (`dualdeck_protocol_tests` -- 104
+  cases, 0 failures) suites rebuilt and passing, with `find_package(X11)`
+  actually succeeding and the real (non-stub) capture code compiling in
+  this sandbox's own environment. Client (`dualdeck-client`,
+  `melonds_remote_client_settings_tests` -- including two new
+  `mirrorHostScreen` round-trip tests) rebuilds clean against SDL 3.4.12
+  with `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`, zero warnings.
+
+**Not yet verified:** on real Bazzite hardware -- whether the actual
+desktop session there is X11 or Wayland (unknown as of this entry; the
+user had not yet confirmed `$XDG_SESSION_TYPE` when this was
+implemented), and if X11, whether the mirrored image is visibly usable
+end-to-end (client Settings toggle on, host env var set) for the
+original motivating purpose: seeing Cemu's own graphics-settings screen
+without physical access to the connected TV.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

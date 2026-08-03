@@ -2059,6 +2059,8 @@ int main(int argc, char** argv) {
                 std::string("VIDEO QUALITY: ") + videoQualityLabel(clientSettings.videoQuality),
                 std::string("TRACKPAD AS NATIVE INPUT (EXPERIMENTAL): ") +
                     (trackpadExperimentEnabled ? "ON" : "OFF"),
+                std::string("MIRROR HOST SCREEN (EXPERIMENTAL): ") +
+                    (clientSettings.mirrorHostScreen ? "ON" : "OFF"),
             };
             if (!hostExplicit) items.push_back("RUN SETUP WIZARD");
             if (net.hostMicSupported()) {
@@ -2369,6 +2371,9 @@ int main(int argc, char** argv) {
                                 cycleVideoQuality();
                             } else if (picked.rfind("TRACKPAD AS NATIVE INPUT", 0) == 0) {
                                 toggleTrackpadExperiment();
+                            } else if (picked.rfind("MIRROR HOST SCREEN", 0) == 0) {
+                                clientSettings.mirrorHostScreen = !clientSettings.mirrorHostScreen;
+                                settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                             } else if (picked == "RUN SETUP WIZARD") {
                                 setupWizardRequested = true;
                                 runningInner = false;
@@ -2447,6 +2452,9 @@ int main(int argc, char** argv) {
                                     cycleVideoQuality();
                                 } else if (picked.rfind("TRACKPAD AS NATIVE INPUT", 0) == 0) {
                                     toggleTrackpadExperiment();
+                                } else if (picked.rfind("MIRROR HOST SCREEN", 0) == 0) {
+                                    clientSettings.mirrorHostScreen = !clientSettings.mirrorHostScreen;
+                                    settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                                 } else if (picked == "RUN SETUP WIZARD") {
                                     setupWizardRequested = true;
                                     runningInner = false;
@@ -2760,13 +2768,30 @@ int main(int argc, char** argv) {
             }
 
             // GitHub issue #4 Phase E: while the host is in HostControl
-            // mode there is no video to show (see renderHostControlScreen()'s
-            // comment) -- ControllerState was just sent above unconditionally,
-            // same as in Emulation mode, so a real host's HostControlAdapter
-            // is already receiving input; only the on-screen presentation
-            // differs. Falls through to the normal texture path the instant
-            // nowHostMode flips back to Emulation (e.g. an adapter connects).
-            if (nowConnected && nowHostMode == HostMode::HostControl) {
+            // mode there is normally no video to show (see
+            // renderHostControlScreen()'s comment) -- ControllerState was
+            // just sent above unconditionally, same as in Emulation mode,
+            // so a real host's HostControlAdapter is already receiving
+            // input; only the on-screen presentation differs. Falls
+            // through to the normal texture path the instant nowHostMode
+            // flips back to Emulation (e.g. an adapter connects).
+            //
+            // Real user request, 2026-08-03: "add an option to the
+            // client's host control to mirror the screen, as I cannot
+            // access the TV I am testing on currently." When
+            // clientSettings.mirrorHostScreen is on, skip the
+            // placeholder and fall through to the exact same video
+            // decode/render path Emulation mode already uses below --
+            // no new logic needed there at all, since a host with
+            // DUALDECK_HOSTCONTROL_MIRROR_SCREEN set sends real
+            // VideoFrame packets over the same wire path regardless of
+            // mode (see host_control_adapter.cpp's getLatestFrame()).
+            // If the host isn't actually mirroring (env var unset, or
+            // no usable X11 display there), net.getLatestFrame() below
+            // just keeps returning false and the built-in test-pattern
+            // texture shows instead -- harmless, if not especially
+            // informative; good enough for this experiment's first cut.
+            if (nowConnected && nowHostMode == HostMode::HostControl && !clientSettings.mirrorHostScreen) {
                 renderHostControlScreen(renderer, identityLine());
                 continue;
             }

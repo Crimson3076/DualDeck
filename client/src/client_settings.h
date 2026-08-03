@@ -33,6 +33,23 @@ struct ClientSettings {
     // dial it back up (or down further, for a genuinely slow link)
     // per client rather than being stuck with one host-wide value.
     int videoQuality = 0;
+
+    // Real user request, 2026-08-03: "add an option to the client's
+    // host control to mirror the screen." Purely a local rendering
+    // choice -- the host already sends real video during Host Control
+    // mode whenever it has DUALDECK_HOSTCONTROL_MIRROR_SCREEN set (see
+    // host/remote-server/src/host_control_adapter.cpp), over the exact
+    // same VideoFrame wire path Emulation mode already uses, so no new
+    // protocol message is needed here: this just decides whether the
+    // client falls through to the normal video-render path while in
+    // Host Control mode, or keeps showing its own static placeholder
+    // screen (renderHostControlScreen() in main.cpp). Defaults off,
+    // matching this project's "opt-in experimental feature" convention
+    // (e.g. trackpadExperimentEnabled) -- if the host isn't actually
+    // mirroring, turning this on just falls back to showing the built-in
+    // test pattern texture instead of real video, which is harmless but
+    // not the point, so it's not force-enabled by default.
+    bool mirrorHostScreen = false;
 };
 
 // $HOME/.config/dualdeck-client/settings.conf, or empty if HOME is
