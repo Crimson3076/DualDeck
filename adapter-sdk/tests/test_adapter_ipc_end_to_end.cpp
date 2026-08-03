@@ -122,15 +122,89 @@ MDR_TEST(ipc_client_connection_changed_relayed_from_server_to_adapter) {
     MDR_CHECK(client.connect());
     MDR_CHECK(waitUntil([&] { return server.hasConnectedAdapter(); }));
 
+    // serveConnection() always sends one catch-up ClientConnectionChanged
+    // message right after a successful handshake (see
+    // ipc_adapter_connecting_after_notify_still_learns_current_state's
+    // own comment) -- "not connected," since no client has connected yet
+    // at this point in this test.
+    MDR_CHECK(waitUntil([&] { return callbackCount.load() == 1; }));
+    MDR_CHECK(!lastConnected.load());
+
     // notifyClientConnectionChanged() is a Host-Service-facing call
     // (mirrors applyGenericInput()/releaseAllInputs() above) -- must
     // reach AdapterIpcClient's callback on the other side of the socket.
     server.notifyClientConnectionChanged(true);
-    MDR_CHECK(waitUntil([&] { return callbackCount.load() == 1; }));
+    MDR_CHECK(waitUntil([&] { return callbackCount.load() == 2; }));
     MDR_CHECK(lastConnected.load());
 
     server.notifyClientConnectionChanged(false);
-    MDR_CHECK(waitUntil([&] { return callbackCount.load() == 2; }));
+    MDR_CHECK(waitUntil([&] { return callbackCount.load() == 3; }));
+    MDR_CHECK(!lastConnected.load());
+
+    client.disconnect();
+    server.stop();
+}
+
+// Real user report, 2026-08-03 (Azahar): "shows both screens on the host
+// until the client disconnects, then it changes to just the top screen...
+// as intended." Root cause: notifyClientConnectionChanged() used to be a
+// pure pass-through with no memory -- calling it with no adapter
+// connected yet (the real first-launch race: a remote client can finish
+// connecting to NetServer before the out-of-process adapter finishes its
+// own separate IPC handshake with this Host Service) silently dropped
+// the notification forever, so an adapter connecting moments later never
+// learned "a client is already connected" until the next real
+// transition. Fixed by remembering the last known state and replaying it
+// to a newly-connected adapter right after its handshake completes (see
+// AdapterIpcServer::serveConnection()).
+MDR_TEST(ipc_adapter_connecting_after_notify_still_learns_current_state) {
+    std::string path = uniqueSocketPath();
+    AdapterIpcServer server(path);
+    MDR_CHECK(server.start());
+
+    // The "client already connected" notification arrives with no
+    // adapter listening at all -- must not be lost.
+    server.notifyClientConnectionChanged(true);
+
+    FakeDsAdapter ds;
+    AdapterIpcClient client(ds, path);
+    std::atomic<int> callbackCount{0};
+    std::atomic<bool> lastConnected{false};
+    client.setConnectionStateCallback([&](bool connected) {
+        lastConnected = connected;
+        ++callbackCount;
+    });
+    MDR_CHECK(client.connect());
+    MDR_CHECK(waitUntil([&] { return server.hasConnectedAdapter(); }));
+
+    // The adapter should be caught up to "connected" immediately, without
+    // any further notifyClientConnectionChanged() call from the caller.
+    MDR_CHECK(waitUntil([&] { return callbackCount.load() == 1; }));
+    MDR_CHECK(lastConnected.load());
+
+    client.disconnect();
+    server.stop();
+}
+
+// Same as above, but the last known state is "not connected" -- confirms
+// this isn't just "always tell a newly-connected adapter true".
+MDR_TEST(ipc_adapter_connecting_with_no_prior_notify_learns_not_connected) {
+    std::string path = uniqueSocketPath();
+    AdapterIpcServer server(path);
+    MDR_CHECK(server.start());
+
+    FakeDsAdapter ds;
+    AdapterIpcClient client(ds, path);
+    std::atomic<int> callbackCount{0};
+    std::atomic<bool> lastConnected{true};
+    client.setConnectionStateCallback([&](bool connected) {
+        lastConnected = connected;
+        ++callbackCount;
+    });
+    MDR_CHECK(client.connect());
+    MDR_CHECK(waitUntil([&] { return server.hasConnectedAdapter(); }));
+
+    MDR_CHECK(waitUntil([&] { return callbackCount.load() == 1; }));
     MDR_CHECK(!lastConnected.load());
 
     client.disconnect();

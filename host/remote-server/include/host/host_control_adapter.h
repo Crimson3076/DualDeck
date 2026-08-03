@@ -68,7 +68,7 @@ struct HostControlGamepadState {
     // work. same with stick clicking." rightStickX/Y were already on the
     // wire (ControllerState) but never read here; leftTrigger/rightTrigger/
     // thumb clicks needed a protocol v12 addition (see protocol.h's
-    // HostControlButton/leftTrigger/rightTrigger comments) since the DS/
+    // ExtraButton/leftTrigger/rightTrigger comments) since the DS/
     // 3DS/Wii U devices this wire protocol was originally built for have
     // neither.
     int16_t rightStickX = 0;

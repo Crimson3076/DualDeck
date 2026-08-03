@@ -127,6 +127,48 @@ MDR_TEST(adapter_bridge_translates_button_combination) {
     MDR_CHECK_EQ(ds.lastAppliedInput().buttons & GenericButton_L2, 0u);
 }
 
+// Real gap found while investigating "bumpers register, but Triggers do
+// not work. same with stick clicking" (host_control_adapter.cpp's own
+// bugs are covered in test_host_control_adapter.cpp; this table is a
+// separate, previously-invisible one -- AdapterBridge, used by every
+// out-of-process emulator adapter, never forwarded leftTrigger/
+// rightTrigger or L3/R3 at all, so Cemu's real Wii U ZL/ZR and stick
+// clicks -- see host/cemu-patches/'s RemoteController.cpp, which already
+// expects GenericButton_L3/R3 -- always saw zero regardless of whether
+// the wire carried real data).
+MDR_TEST(adapter_bridge_translates_triggers) {
+    FakeDsAdapter ds;
+    AdapterBridge bridge(ds);
+
+    ControllerState state;
+    state.leftTrigger = 128;
+    state.rightTrigger = 255;
+    bridge.applyControllerState(state);
+
+    MDR_CHECK_EQ(ds.lastAppliedInput().leftTrigger, static_cast<uint8_t>(128));
+    MDR_CHECK_EQ(ds.lastAppliedInput().rightTrigger, static_cast<uint8_t>(255));
+}
+
+MDR_TEST(adapter_bridge_translates_extra_buttons_to_l3_r3) {
+    FakeDsAdapter ds;
+    AdapterBridge bridge(ds);
+
+    ControllerState state;
+    state.extraButtons = ExtraButton_ThumbLeft;
+    bridge.applyControllerState(state);
+    MDR_CHECK_EQ(ds.lastAppliedInput().buttons, static_cast<uint32_t>(GenericButton_L3));
+
+    state.extraButtons = ExtraButton_ThumbRight;
+    bridge.applyControllerState(state);
+    MDR_CHECK_EQ(ds.lastAppliedInput().buttons, static_cast<uint32_t>(GenericButton_R3));
+
+    state.dsButtons = DSButton_A;
+    state.extraButtons = ExtraButton_ThumbLeft | ExtraButton_ThumbRight;
+    bridge.applyControllerState(state);
+    MDR_CHECK_EQ(ds.lastAppliedInput().buttons,
+                 static_cast<uint32_t>(GenericButton_South | GenericButton_L3 | GenericButton_R3));
+}
+
 MDR_TEST(adapter_bridge_translates_touch_active) {
     FakeDsAdapter ds;
     AdapterBridge bridge(ds);

@@ -2050,6 +2050,25 @@ host_root="$(cd .. && pwd)"
 
 export DUALDECK_HOST_CONTROL_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
 
+# Real user report, 2026-08-03: "Host Control Screen mirroring still does
+# not work, as falls back to a grey screen" -- even after the X11/Wayland
+# portal+PipeWire capture backends were built and unit-verified,
+# DUALDECK_HOSTCONTROL_MIRROR_SCREEN (the env var HostControlAdapter's
+# constructor actually gates capture on -- see host_control_adapter.cpp)
+# was never exported by any real install/launch path, including this
+# persistent daemon -- grep confirms it appears nowhere else in this
+# repo's scripts. The feature was fully built but structurally
+# unreachable without hand-editing a systemd unit override yourself.
+# Defaulted on here (not in HostControlAdapter's own opt-in design,
+# which stays unchanged for other launch paths like run-host.sh's manual
+# Host-Control-only branch) since this is the actual, user-facing,
+# always-running Host Control entry point, and the client already has
+# its own Settings toggle (clientSettings.mirrorHostScreen) to opt out
+# of *displaying* whatever the host sends -- still overridable via a
+# systemd unit Environment= override for anyone who wants the host to
+# never even attempt capture.
+export DUALDECK_HOSTCONTROL_MIRROR_SCREEN="${DUALDECK_HOSTCONTROL_MIRROR_SCREEN:-1}"
+
 auth_token_args=()
 if [[ -n "${DUALDECK_HOST_CONTROL_AUTH_TOKEN:-}" ]]; then
     auth_token_args=(--auth-token "${DUALDECK_HOST_CONTROL_AUTH_TOKEN}")

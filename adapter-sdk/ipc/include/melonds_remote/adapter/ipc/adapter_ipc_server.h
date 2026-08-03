@@ -103,6 +103,27 @@ private:
     AdapterCapabilities capabilities_;
     SessionState state_ = SessionState::Available;
     std::unordered_map<std::string, SurfaceFrame> latestFrames_;
+
+    // Real user report, 2026-08-03 (Azahar): "shows both screens on the
+    // host until the client disconnects, then it changes to just the top
+    // screen... as intended" -- on first launch, the remote client can
+    // finish its own connection to NetServer (main.cpp's
+    // config_.onClientConnectionChanged callback -> here) before the
+    // out-of-process adapter (Azahar/Cemu) has finished its own,
+    // separate IPC handshake with this Host Service. notifyClientConnection
+    // Changed() below used to be a pure pass-through with no memory: if no
+    // adapter was connected at that exact moment, the "client is now
+    // connected" notification was simply dropped forever, and nothing
+    // re-sent it once an adapter did connect a moment later -- so the
+    // adapter's own "show single screen while streaming" logic (e.g.
+    // Azahar's GMainWindow::OnRemoteClientConnectionChanged) never ran
+    // until the NEXT real transition (a disconnect, which now correctly
+    // notifies since the adapter is connected by then, followed by a
+    // reconnect). This remembers the last known state regardless of
+    // whether an adapter happened to be listening at the time, so a
+    // newly-connecting adapter can be caught up to the current state
+    // immediately after its handshake completes (see serveConnection()).
+    bool lastKnownClientConnected_ = false;
 };
 
 } // namespace melonds_remote::adapter::ipc

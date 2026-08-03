@@ -22,15 +22,16 @@ namespace melonds_remote {
 
 // Bumped whenever the wire format changes incompatibly.
 //
-// v12: ControllerState gained leftTrigger/rightTrigger/hostControlButtons
-// -- analog trigger values and a HostControlButton (thumbstick click)
-// bitmask for host::HostControlAdapter, same host-control-only rationale
-// as v11's mouseDeltaX/Y/mouseButtons (see HostControlButton's own
-// comment). Real user report, 2026-08-03 (Steam Controller Tester):
-// "bumpers register, but Triggers do not work. same with stick
-// clicking." ControllerState's wire size grows by 3 bytes, so an old/new
-// version mismatch on either side would misparse every field after
-// mouseButtons.
+// v12: ControllerState gained leftTrigger/rightTrigger/extraButtons --
+// analog trigger values and an ExtraButton (thumbstick click) bitmask,
+// consumed by host::HostControlAdapter's virtual gamepad AND forwarded
+// to every out-of-process emulator adapter via GenericInputState (real
+// Wii U GamePad hardware has both analog ZL/ZR and clickable sticks --
+// see ExtraButton's/leftTrigger's own comments). Real user report,
+// 2026-08-03 (Steam Controller Tester): "bumpers register, but Triggers
+// do not work. same with stick clicking." ControllerState's wire size
+// grows by 3 bytes, so an old/new version mismatch on either side would
+// misparse every field after mouseButtons.
 //
 // v11: ControllerState gained mouseDeltaX/mouseDeltaY/mouseButtons --
 // relative host-mouse motion and click state for host::HostControlAdapter
@@ -191,17 +192,24 @@ enum MouseButton : uint8_t {
     MouseButton_Right = 1u << 1,
 };
 
-// Host-control-mode-only, same "every emulator adapter simply never reads
-// this" contract as MouseButton above: no DS/3DS/Wii U game has a
-// clickable analog stick, but host::HostControlAdapter's virtual gamepad
-// is a full Xbox-360-style device (BTN_THUMBL/BTN_THUMBR), and Steam Big
-// Picture / most desktop UIs treat stick clicks as ordinary navigation
-// input. Real user report, 2026-08-03 (tested via Steam's Controller
-// Tester): "bumpers register, but... stick clicking" doesn't -- there was
-// no wire field for it at all before this.
-enum HostControlButton : uint8_t {
-    HostControlButton_ThumbLeft  = 1u << 0,
-    HostControlButton_ThumbRight = 1u << 1,
+// Thumbstick-click state DS/3DS have no notion of (no clickable stick on
+// either), but both host::HostControlAdapter's virtual gamepad (a full
+// Xbox-360-style device, BTN_THUMBL/BTN_THUMBR -- Steam Big Picture /
+// most desktop UIs treat stick clicks as ordinary navigation input) and
+// Cemu's real Wii U GamePad emulation (its control sticks are genuinely
+// clickable hardware buttons -- see host/cemu-patches/'s
+// RemoteController.cpp raw_state(), which already maps
+// GenericButton_L3/R3 to the Wii U's real kButton6/kButton7 stick-click
+// bits) want it. NOT host-control-only despite the field's original
+// name while this was being designed -- kept as ExtraButton/extraButtons
+// once that became clear, rather than HostControlButton/
+// hostControlButtons, which would have been actively misleading once
+// Cemu started reading it too. Real user report, 2026-08-03 (tested via
+// Steam's Controller Tester): "bumpers register, but... stick clicking"
+// doesn't -- there was no wire field for it at all before this.
+enum ExtraButton : uint8_t {
+    ExtraButton_ThumbLeft  = 1u << 0,
+    ExtraButton_ThumbRight = 1u << 1,
 };
 
 // Native DS bottom-screen touch range (spec section 7.4).
@@ -559,19 +567,24 @@ struct ControllerState {
     int16_t mouseDeltaX = 0;
     int16_t mouseDeltaY = 0;
     uint8_t mouseButtons = 0;      // MouseButton bitmask, 1 = held
-    // Host-control-mode-only (protocol v12), same "no DS/3DS/Wii U game
-    // reads these" contract as mouseDeltaX/Y/mouseButtons above. Real user
-    // report, 2026-08-03 (Steam Controller Tester): "bumpers register,
-    // but Triggers do not work. same with stick clicking." rightStickX/Y
-    // above were already wired through, but there was no wire
-    // representation at all for analog triggers or thumbstick clicks
-    // before this -- host::HostControlAdapter's virtual gamepad is a full
-    // Xbox-360-style device, but the wire protocol only ever carried what
-    // an actual DS/3DS/Wii U game needs (neither has analog triggers or
-    // clickable sticks).
-    uint8_t leftTrigger = 0;       // 0..255, host-control mode only
-    uint8_t rightTrigger = 0;      // 0..255, host-control mode only
-    uint8_t hostControlButtons = 0; // HostControlButton bitmask, 1 = held
+    // Protocol v12. Real user report, 2026-08-03 (Steam Controller
+    // Tester): "bumpers register, but Triggers do not work. same with
+    // stick clicking." rightStickX/Y above were already wired through,
+    // but there was no wire representation at all for analog triggers or
+    // thumbstick clicks before this. NOT DS/3DS-only fields like
+    // mouseDeltaX/Y/mouseButtons above (neither system has either
+    // concept) -- but Wii U's real GamePad hardware has both (analog
+    // ZL/ZR, clickable sticks), so host::AdapterBridge forwards these to
+    // GenericInputState::leftTrigger/rightTrigger and
+    // GenericButton_L2/R2/L3/R3 for every emulator adapter, not just
+    // host::HostControlAdapter -- see adapter_bridge.cpp's
+    // dsButtonsToGenericButtons()/applyControllerState(). A DS/3DS
+    // adapter simply never reads the resulting GenericButton_L2/R2/L3/R3
+    // bits or leftTrigger/rightTrigger values, the same way it already
+    // never reads mouseDeltaX/Y.
+    uint8_t leftTrigger = 0;       // 0..255
+    uint8_t rightTrigger = 0;      // 0..255
+    uint8_t extraButtons = 0;      // ExtraButton bitmask, 1 = held
 };
 
 // Wire size of a serialized ControllerState payload (not including the

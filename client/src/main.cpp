@@ -2718,7 +2718,7 @@ int main(int argc, char** argv) {
 
                     // Host-control-mode-only (protocol v12): analog
                     // triggers and thumbstick clicks -- no DS/3DS/Wii U
-                    // game reads these (see protocol.h's HostControlButton/
+                    // game reads these (see protocol.h's ExtraButton/
                     // leftTrigger/rightTrigger comments), but
                     // host::HostControlAdapter's virtual gamepad wants
                     // them. Real user report, 2026-08-03 (Steam Controller
@@ -2737,14 +2737,14 @@ int main(int argc, char** argv) {
                     // kMenuChordHoldUs's comment); a lone click of either
                     // stick is never part of that chord and is safe to
                     // forward every tick.
-                    uint8_t hostControlButtons = 0;
+                    uint8_t extraButtons = 0;
                     if (SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_LEFT_STICK)) {
-                        hostControlButtons |= HostControlButton_ThumbLeft;
+                        extraButtons |= ExtraButton_ThumbLeft;
                     }
                     if (SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_RIGHT_STICK)) {
-                        hostControlButtons |= HostControlButton_ThumbRight;
+                        extraButtons |= ExtraButton_ThumbRight;
                     }
-                    state.hostControlButtons = hostControlButtons;
+                    state.extraButtons = extraButtons;
                 }
                 // See pendingEmulatorAction's declaration above for why this
                 // resends for a window instead of just the one packet that

@@ -89,7 +89,7 @@ void serializeControllerState(ByteBuffer& out, const ControllerState& state) {
     out.push_back(state.mouseButtons);
     out.push_back(state.leftTrigger);
     out.push_back(state.rightTrigger);
-    out.push_back(state.hostControlButtons);
+    out.push_back(state.extraButtons);
 }
 
 std::optional<ControllerState> parseControllerState(const uint8_t* data, size_t size) {
@@ -128,7 +128,7 @@ std::optional<ControllerState> parseControllerState(const uint8_t* data, size_t 
     state.mouseButtons = data[offset]; offset += 1;
     state.leftTrigger = data[offset]; offset += 1;
     state.rightTrigger = data[offset]; offset += 1;
-    state.hostControlButtons = data[offset]; offset += 1;
+    state.extraButtons = data[offset]; offset += 1;
 
     return state;
 }

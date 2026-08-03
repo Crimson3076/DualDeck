@@ -63,8 +63,8 @@ HostControlGamepadState translateControllerState(const ControllerState& state) {
     out.rightStickY = negateStickAxis(state.rightStickY);
     out.leftTrigger = state.leftTrigger;
     out.rightTrigger = state.rightTrigger;
-    out.thumbL = (state.hostControlButtons & HostControlButton_ThumbLeft) != 0;
-    out.thumbR = (state.hostControlButtons & HostControlButton_ThumbRight) != 0;
+    out.thumbL = (state.extraButtons & ExtraButton_ThumbLeft) != 0;
+    out.thumbR = (state.extraButtons & ExtraButton_ThumbRight) != 0;
     return out;
 }
 

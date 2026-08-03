@@ -230,14 +230,32 @@ void AdapterIpcServer::serveConnection(int clientFd) {
         return;
     }
 
+    bool clientAlreadyConnected = false;
     {
         std::lock_guard<std::mutex> lock(sessionMutex_);
         capabilities_ = negotiatedCaps;
         state_ = SessionState::Available;
         latestFrames_.clear();
         connected_ = true;
+        clientAlreadyConnected = lastKnownClientConnected_;
     }
     clientFd_ = clientFd;
+
+    // Catch this newly-connected adapter up to the real, current remote-
+    // client-connection state -- see lastKnownClientConnected_'s own
+    // comment for the real bug this fixes (a client that connected
+    // before this adapter finished its own handshake would otherwise
+    // never be reported to it at all, until the next connect/disconnect
+    // transition). A "false" is just as worth sending as a "true": either
+    // way this adapter's own state (e.g. Azahar's remote_client_have_
+    // saved_layout) should reflect reality from the moment it's ready to
+    // receive messages, not assume a default.
+    {
+        melonds_remote::ByteBuffer payload;
+        serializeClientConnectionChanged(payload, clientAlreadyConnected);
+        std::lock_guard<std::mutex> lock(writeMutex_);
+        sendMessage(clientFd, IpcMessageType::ClientConnectionChanged, payload);
+    }
 
     // Sends a periodic heartbeat to the connected adapter so its own
     // recv() (5s SO_RCVTIMEO -- see AdapterIpcClient::readLoop()) never
@@ -352,6 +370,14 @@ void AdapterIpcServer::releaseAllInputs() {
 }
 
 void AdapterIpcServer::notifyClientConnectionChanged(bool connected) {
+    // Recorded unconditionally, even with no adapter currently connected
+    // to actually tell -- see lastKnownClientConnected_'s own comment for
+    // why: whichever adapter connects next needs to learn the real
+    // current state instead of assuming "not connected" by default.
+    {
+        std::lock_guard<std::mutex> lock(sessionMutex_);
+        lastKnownClientConnected_ = connected;
+    }
     int fd = clientFd_.load();
     if (fd < 0) return; // no adapter connected -- safe no-op, matches releaseAllInputs()'s same pattern
     melonds_remote::ByteBuffer payload;

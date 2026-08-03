@@ -9308,6 +9308,214 @@ new axes, the actual `BTN_X`/`BTN_Y`/`BTN_THUMBL`/`BTN_THUMBR` events)
 cannot be exercised in this sandbox (no `/dev/uinput`) -- only compile-
 clean and the pure `translateControllerState()` logic are verified here.
 
+## 2026-08-03: Real-hardware multi-emulator bug sweep -- Cemu/Wii U triggers+L3/R3 never wired, Azahar/Cemu dual-screen race, mirror never actually reachable, Cemu touch confirmed not implemented
+
+**Real user report** (single message, after testing all three emulators plus
+Host Control mode on real hardware): "Cemu Touch screen does not work,
+Keybinds are also not automatically applied... Launching Azahar (possibly
+for the first time) shows both screens on the host until the client
+disconnects and reconnects... opening Configure on Azahar crashes it...
+MelonDS integration seems to be completely broken... also, it seems the
+toggle for dualdeck is not integrated into melonDS's GUI anymore... Host
+Control Screen mirroring still does not work, as falls back to a grey
+screen." (The gamepad-specific parts of this same report -- X/Y swap,
+inverted stick, missing triggers/stick-clicks in Host Control mode --
+have their own entry above.)
+
+### Fixed: Cemu's real Wii U ZL/ZR triggers and stick-clicks never had data
+
+**Root cause:** `host::AdapterBridge::applyControllerState()` -- the
+translation every out-of-process emulator adapter's input goes through --
+never populated `GenericInputState::leftTrigger`/`rightTrigger`, and never
+set `GenericButton_L2`/`R2`/`L3`/`R3`. `host/cemu-patches/`'s
+`RemoteController::raw_state()` already reads `m_status->leftTrigger`/
+`rightTrigger` and already maps `GenericButton_L3`/`R3` to the Wii U
+GamePad's real `kButton6`/`kButton7` stick-click bits (confirmed by
+reading that file directly -- the Wii U GamePad genuinely does have
+clickable analog sticks and analog ZL/ZR, unlike DS/3DS) -- but nothing
+upstream of it ever supplied real values, so these were always zero
+regardless of what the client sent.
+
+**Fix:** `host/remote-server/src/adapter_bridge.cpp` now forwards
+`state.leftTrigger`/`rightTrigger` straight through to
+`GenericInputState`, and a new `extraButtonsToGenericButtons()` maps
+protocol v12's `ExtraButton_ThumbLeft`/`ThumbRight` (see the gamepad
+entry above -- renamed from the original `HostControlButton`/
+`hostControlButtons` once it became clear Cemu needed these too, not
+just `host::HostControlAdapter`) to `GenericButton_L3`/`R3`. The client
+already sends real trigger/thumb-click data unconditionally (not gated
+on session mode), so this alone closes the gap for Cemu without any
+further client changes.
+
+**Verified:** new unit tests (`adapter_bridge_translates_triggers`,
+`adapter_bridge_translates_extra_buttons_to_l3_r3`) in
+`test_adapter_bridge.cpp`; full local build of `dualdeck-host-service`
+and the entire host test suite (96 cases, all passing).
+
+**Not yet verified:** on real Cemu gameplay -- whether ZL/ZR and stick
+clicks now register. This may also be some or all of what the user
+described as "keybinds are also not automatically applied" if what they
+actually meant was "triggers don't do anything even though I bound
+them" -- worth confirming specifically once this ships, since the
+*separate*, already-existing auto-mapping mechanism (`CemuAdapter`'s
+constructor calling `add_controller()`/`set_default_mapping()` against
+VPAD player 1, mirroring Azahar's `registerInputEngine()`) was traced in
+full and found correct, gated only on a pre-existing, already-logged
+prerequisite ("player 1 isn't currently configured as a Wii U GamePad
+controller" -- Controller Settings -> Player 1). If keybinds still don't
+auto-apply after this fix and that prerequisite is confirmed met, that's
+a genuinely separate bug needing its own report.
+
+### Fixed: Azahar/Cemu "both screens until reconnect" -- a real race in the adapter IPC layer
+
+**Root cause**, confirmed via direct reading of both DualDeck's own
+`adapter-sdk/ipc/src/adapter_ipc_server.cpp` and the real, unmodified
+upstream Azahar source at the pinned commit: the remote client's
+connection to `NetServer` (host/remote-server) can complete *before* the
+out-of-process emulator adapter (Azahar/Cemu) finishes its own, entirely
+separate IPC handshake with the Host Service -- both connect
+concurrently on process startup, and there is no ordering guarantee
+between them. `AdapterIpcServer::notifyClientConnectionChanged()` was a
+pure pass-through with no memory: if it was called with no adapter
+connected yet, the notification was silently dropped forever, and
+nothing re-sent it once an adapter did connect moments later. Azahar's
+own `GMainWindow::OnRemoteClientConnectionChanged()` (which forces
+`layout_option = SingleScreen`) therefore never ran until the *next* real
+transition -- a disconnect (correctly delivered, since the adapter is
+connected by then), followed by a reconnect (also now correctly
+delivered) -- exactly matching "both screens until disconnect, then
+correct after reconnect." Two independent research agents traced this
+end to end against real source (one ruled out a stock-Azahar-reapplies-
+layout hypothesis and a callback-registered-too-late hypothesis first,
+before finding the actual mechanism).
+
+**Fix:** `AdapterIpcServer` now remembers the last known
+client-connection state (`lastKnownClientConnected_`) regardless of
+whether an adapter happens to be listening at the time.
+`notifyClientConnectionChanged()` records it unconditionally before its
+existing no-adapter-connected early return. `serveConnection()` sends
+one catch-up `ClientConnectionChanged` message to a newly-handshaked
+adapter immediately, so it learns the real current state instead of
+defaulting to "not connected." Affects Cemu identically (same
+`AdapterIpcServer`, same race window), even though only Azahar was
+explicitly reported.
+
+**Verified:** two new end-to-end tests
+(`ipc_adapter_connecting_after_notify_still_learns_current_state`,
+`ipc_adapter_connecting_with_no_prior_notify_learns_not_connected`)
+using a real `AdapterIpcServer` + `AdapterIpcClient` over a real Unix
+socket in the same test process (not mocked); the existing
+`ipc_client_connection_changed_relayed_from_server_to_adapter` test
+updated for the new catch-up message's extra callback firing. Full
+adapter-sdk test suite (53 cases) and host test suite (96 cases) both
+passing.
+
+### Fixed: Host Control screen mirroring was structurally unreachable, not just failing
+
+**Root cause:** `DUALDECK_HOSTCONTROL_MIRROR_SCREEN` -- the env var
+`HostControlAdapter`'s constructor actually gates screen capture on --
+was never exported by any real install or launch path in this repo (a
+repo-wide grep found zero matches outside this very documentation file).
+The X11 and Wayland portal+PipeWire capture backends built earlier this
+session were fully implemented and unit-verified, but completely
+unreachable in a real install without hand-editing a systemd unit
+override yourself -- explaining "still does not work, as falls back to a
+grey screen" independent of whatever the original X11-vs-Wayland
+diagnosis found.
+
+**Fix:** `scripts/build-release.sh`'s generated
+`host/internal/host-control-daemon.sh` (the persistent
+`dualdeck-host-control.service`'s actual `ExecStart` command, and the
+real, always-running Host Control entry point today) now defaults
+`DUALDECK_HOSTCONTROL_MIRROR_SCREEN=1` unless already set in the
+process's own environment. `HostControlAdapter`'s own opt-in design is
+unchanged for every other launch path (e.g. `run-host.sh`'s manual,
+Steam-shortcut-based Host-Control branch) -- only the daemon that's
+actually meant to be the persistent, real-world entry point now reaches
+it by default, and the client already has its own Settings toggle
+(`clientSettings.mirrorHostScreen`) to opt out of *displaying* whatever
+the host sends.
+
+**Verified:** `bash -n` clean on both `build-release.sh` itself and the
+extracted, generated `host-control-daemon.sh` body.
+
+**Not yet verified:** on real hardware -- whether mirroring now actually
+shows something once the daemon is rebuilt/reinstalled. Also unverified:
+whether the *original* grey-screen symptom (before this fix) was ever
+actually reaching either capture backend at all, given the env var could
+never have been set through any normal install -- the earlier
+X11-vs-Wayland root-cause work may turn out to be moot for anyone using
+the persistent daemon, or may still matter once capture is actually
+reachable.
+
+### Investigated, not fixed: Azahar Configure crash
+
+A dedicated research pass cloned the real, pinned Azahar commit and
+traced the entire Configure -> Input tab construction path
+(`ConfigureDialog` -> `ConfigureInput::LoadConfiguration()` ->
+`UpdateButtonLabels()` -> `ButtonToText`/`AnalogToText`) against the
+leading hypothesis (DualDeck's patch overwrites
+`Settings::values.current_input_profile` with a synthetic
+`"melonds_remote"` input engine string -- see `AzaharAdapter.cpp`'s
+`registerInputEngine()` -- which the Configure dialog's UI code might
+not handle gracefully). Every site that reads an unrecognized engine
+string in this path was confirmed, by reading the real source, to
+degrade safely (falls through to `"[unknown]"`, uses
+`ParamPackage::Get()`'s exception-safe defaulted lookups, or isn't even
+reachable from dialog construction at all) -- **this specific hypothesis
+is ruled out**, not just unconfirmed. The more likely remaining
+candidates (DualDeck's own `RemoteButtonFactory`/`RemoteAnalogFactory`/
+`RemoteTouchFactory::Create()`, none of which exist in upstream Azahar so
+couldn't be checked against real behavior this way, or something
+entirely unrelated to the remote-server patch) need an actual crash
+backtrace to pin down -- this project's established discipline is not to
+guess further without one. **Needed from the user next time this
+happens:** Azahar's own crash log/backtrace (stderr output, or
+`~/.local/share/azahar-emu/log/azahar_log.txt` if the crash is graceful
+enough to flush it), and whether it happens with no game running, with a
+game running but not streaming, or only while a DualDeck client is
+actively connected.
+
+### Investigated, not fixed: Cemu GamePad touch screen -- confirmed genuinely unimplemented, not a bug
+
+`host/cemu-patches/`'s `CemuAdapter::capabilities()` explicitly sets
+`gamePad.touchSupported = false`, with its own honest comment: "Cemu has
+no GamePad touch input pipeline for any controller backend today." This
+is a real, deliberate, already-documented scope decision from when this
+patch was first built, not a regression or an overlooked bug --
+confirmed by reading the patch's own source directly. Wii U GamePad
+touch input is a genuinely separate, unbuilt feature (would need a new
+path from wherever Cemu's VPAD touch state is read into
+`RemoteController`, plus routing the wire protocol's touch fields to the
+GamePad surface specifically), not something fixable as part of this bug
+sweep. Tracked as a real roadmap item, not closed out here.
+
+### Investigated, not fixed: melonDS "completely broken," GUI toggle "not there anymore"
+
+Extensive static verification found no evidence of a patch-level
+regression: `git apply --check` against the exact pinned melonDS commit
+succeeds cleanly; the "Enable DualDeck (Steam Deck streaming)" checkbox
+(`chkMelonDSRemoteEnable`) is present and correctly wired in both
+`EmuSettingsDialog.ui` and `.cpp`; `EmuInstance::startRemoteServer()`'s
+env-var-or-Config-key precedence, port-bind-failure logging, and
+management-listener wiring all read correctly; the known Flatpak-vs-
+AppImage EmuDeck install-shape gap (`find_emudeck_melonds_flatpak_
+launcher()`) was already discovered and fixed on 2026-08-01, before this
+report. The only concrete, confirmed regression risk found this session
+-- melonDS's frozen `protocol.h`/`protocol.cpp` copy going out of sync
+with today's v12 wire bump -- has already been closed (see the gamepad
+entry above); melonDS was still correctly at v11 (matching the live repo)
+*before* that fix, so it cannot explain the user's original report, which
+predates today's protocol change entirely. No other static-analysis
+avenue turned up a plausible mechanism. **Needed from the user next
+time:** melonDS's own log output (stderr, or whatever
+`docs/known-limitations.md`'s existing melonDS log-location guidance
+points to) from a session where the checkbox was confirmed missing, and
+confirmation of whether that melonDS install is the AppImage DualDeck's
+replace-in-place installer produced (check the sidecar
+`.dualdeck.json` manifest next to it) or something else entirely (a
+stock EmuDeck download, a manually-built copy, etc.).
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

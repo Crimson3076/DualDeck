@@ -147,7 +147,7 @@ MDR_TEST(translate_right_stick_x_passes_through_y_is_renegated) {
 
 // Real user report (Steam Controller Tester), 2026-08-03: "Triggers do
 // not work. same with stick clicking" -- protocol v12 added
-// leftTrigger/rightTrigger/hostControlButtons specifically so Host
+// leftTrigger/rightTrigger/extraButtons specifically so Host
 // Control mode's virtual gamepad could report these.
 MDR_TEST(translate_triggers_pass_through_unscaled) {
     ControllerState state;
@@ -160,12 +160,12 @@ MDR_TEST(translate_triggers_pass_through_unscaled) {
 
 MDR_TEST(translate_thumb_clicks_from_host_control_buttons) {
     ControllerState state;
-    state.hostControlButtons = HostControlButton_ThumbLeft;
+    state.extraButtons = ExtraButton_ThumbLeft;
     HostControlGamepadState out = translateControllerState(state);
     MDR_CHECK(out.thumbL);
     MDR_CHECK(!out.thumbR);
 
-    state.hostControlButtons = HostControlButton_ThumbRight;
+    state.extraButtons = ExtraButton_ThumbRight;
     out = translateControllerState(state);
     MDR_CHECK(!out.thumbL);
     MDR_CHECK(out.thumbR);

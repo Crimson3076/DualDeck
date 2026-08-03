@@ -21,7 +21,7 @@ MDR_TEST(controller_state_round_trip) {
     state.mouseButtons = MouseButton_Left | MouseButton_Right;
     state.leftTrigger = 200;
     state.rightTrigger = 55;
-    state.hostControlButtons = HostControlButton_ThumbLeft | HostControlButton_ThumbRight;
+    state.extraButtons = ExtraButton_ThumbLeft | ExtraButton_ThumbRight;
 
     ByteBuffer buf;
     serializeControllerState(buf, state);
@@ -45,7 +45,7 @@ MDR_TEST(controller_state_round_trip) {
     MDR_CHECK_EQ(parsed->mouseButtons, state.mouseButtons);
     MDR_CHECK_EQ(parsed->leftTrigger, state.leftTrigger);
     MDR_CHECK_EQ(parsed->rightTrigger, state.rightTrigger);
-    MDR_CHECK_EQ(parsed->hostControlButtons, state.hostControlButtons);
+    MDR_CHECK_EQ(parsed->extraButtons, state.extraButtons);
 }
 
 MDR_TEST(controller_state_mouse_fields_default_to_zero) {
@@ -66,7 +66,7 @@ MDR_TEST(controller_state_mouse_fields_default_to_zero) {
     MDR_CHECK_EQ(parsed->mouseButtons, static_cast<uint8_t>(0));
     MDR_CHECK_EQ(parsed->leftTrigger, static_cast<uint8_t>(0));
     MDR_CHECK_EQ(parsed->rightTrigger, static_cast<uint8_t>(0));
-    MDR_CHECK_EQ(parsed->hostControlButtons, static_cast<uint8_t>(0));
+    MDR_CHECK_EQ(parsed->extraButtons, static_cast<uint8_t>(0));
 }
 
 MDR_TEST(controller_state_mouse_deltas_negative_round_trip) {

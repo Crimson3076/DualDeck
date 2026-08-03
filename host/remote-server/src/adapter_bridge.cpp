@@ -55,6 +55,21 @@ uint32_t dsButtonsToGenericButtons(uint16_t dsButtons) {
     return generic;
 }
 
+// Real Wii U GamePad hardware has clickable analog sticks (L3/R3) --
+// unlike DSButton, which has no bits for these at all (the DS/3DS have
+// no such concept), protocol v12's ExtraButton bitmask carries them
+// (see protocol.h's own comment). host/cemu-patches/'s RemoteController.cpp
+// already maps GenericButton_L3/R3 to the Wii U's real kButton6/kButton7
+// stick-click bits -- this table is what actually populates them from
+// the wire, closing a real gap where they were always 0 regardless of
+// whether the wire carried real data (it didn't, before v12).
+uint32_t extraButtonsToGenericButtons(uint8_t extraButtons) {
+    uint32_t generic = 0;
+    if (extraButtons & melonds_remote::ExtraButton_ThumbLeft) generic |= melonds_remote::adapter::GenericButton_L3;
+    if (extraButtons & melonds_remote::ExtraButton_ThumbRight) generic |= melonds_remote::adapter::GenericButton_R3;
+    return generic;
+}
+
 } // namespace
 
 std::string AdapterBridge::targetSurfaceId() const {
@@ -65,11 +80,16 @@ void AdapterBridge::applyControllerState(const ControllerState& state) {
     melonds_remote::adapter::GenericInputState generic;
     generic.sequence = state.sequence;
     generic.clientTimestampUs = state.clientTimestampUs;
-    generic.buttons = dsButtonsToGenericButtons(state.dsButtons);
+    generic.buttons = dsButtonsToGenericButtons(state.dsButtons) | extraButtonsToGenericButtons(state.extraButtons);
     generic.leftStickX = state.leftStickX;
     generic.leftStickY = state.leftStickY;
     generic.rightStickX = state.rightStickX;
     generic.rightStickY = state.rightStickY;
+    // Real Wii U GamePad hardware has analog ZL/ZR -- see protocol.h's
+    // leftTrigger/rightTrigger comment for why these aren't DS/3DS-only
+    // despite living next to the other host-control-era additions.
+    generic.leftTrigger = state.leftTrigger;
+    generic.rightTrigger = state.rightTrigger;
     if (state.touchActive) {
         generic.touches.push_back(
             melonds_remote::adapter::TouchContact{targetSurfaceId(), state.touchX, state.touchY});
