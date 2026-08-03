@@ -2671,10 +2671,10 @@ index 0000000..a441296
 +} // namespace melonds_remote::adapter
 diff --git a/src/remote_server/adapter_sdk/include/melonds_remote/protocol.h b/src/remote_server/adapter_sdk/include/melonds_remote/protocol.h
 new file mode 100644
-index 0000000..e743ba3
+index 0000000..c2ef192d1
 --- /dev/null
 +++ b/src/remote_server/adapter_sdk/include/melonds_remote/protocol.h
-@@ -0,0 +1,752 @@
+@@ -0,0 +1,817 @@
 +#pragma once
 +
 +// DualDeck wire protocol definitions.
@@ -2698,6 +2698,17 @@ index 0000000..e743ba3
 +namespace melonds_remote {
 +
 +// Bumped whenever the wire format changes incompatibly.
++//
++// v12: ControllerState gained leftTrigger/rightTrigger/extraButtons --
++// analog trigger values and an ExtraButton (thumbstick click) bitmask,
++// consumed by host::HostControlAdapter's virtual gamepad AND forwarded
++// to every out-of-process emulator adapter via GenericInputState (real
++// Wii U GamePad hardware has both analog ZL/ZR and clickable sticks --
++// see ExtraButton's/leftTrigger's own comments). Real user report,
++// 2026-08-03 (Steam Controller Tester): "bumpers register, but Triggers
++// do not work. same with stick clicking." ControllerState's wire size
++// grows by 3 bytes, so an old/new version mismatch on either side would
++// misparse every field after mouseButtons.
 +//
 +// v11: ControllerState gained mouseDeltaX/mouseDeltaY/mouseButtons --
 +// relative host-mouse motion and click state for host::HostControlAdapter
@@ -2738,7 +2749,7 @@ index 0000000..e743ba3
 +// negotiating an optional codec keeps both sides simple, matching how
 +// every other incompatible wire-format change in this project has been
 +// handled (see the mic-support v5 bump above).
-+inline constexpr uint16_t kProtocolVersion = 11;
++inline constexpr uint16_t kProtocolVersion = 12;
 +
 +// Sentinel at the start of every packet so malformed/foreign traffic on the
 +// same port can be rejected cheaply before any further parsing.
@@ -2856,6 +2867,26 @@ index 0000000..e743ba3
 +enum MouseButton : uint8_t {
 +    MouseButton_Left  = 1u << 0,
 +    MouseButton_Right = 1u << 1,
++};
++
++// Thumbstick-click state DS/3DS have no notion of (no clickable stick on
++// either), but both host::HostControlAdapter's virtual gamepad (a full
++// Xbox-360-style device, BTN_THUMBL/BTN_THUMBR -- Steam Big Picture /
++// most desktop UIs treat stick clicks as ordinary navigation input) and
++// Cemu's real Wii U GamePad emulation (its control sticks are genuinely
++// clickable hardware buttons -- see host/cemu-patches/'s
++// RemoteController.cpp raw_state(), which already maps
++// GenericButton_L3/R3 to the Wii U's real kButton6/kButton7 stick-click
++// bits) want it. NOT host-control-only despite the field's original
++// name while this was being designed -- kept as ExtraButton/extraButtons
++// once that became clear, rather than HostControlButton/
++// hostControlButtons, which would have been actively misleading once
++// Cemu started reading it too. Real user report, 2026-08-03 (tested via
++// Steam's Controller Tester): "bumpers register, but... stick clicking"
++// doesn't -- there was no wire field for it at all before this.
++enum ExtraButton : uint8_t {
++    ExtraButton_ThumbLeft  = 1u << 0,
++    ExtraButton_ThumbRight = 1u << 1,
 +};
 +
 +// Native DS bottom-screen touch range (spec section 7.4).
@@ -3081,6 +3112,22 @@ index 0000000..e743ba3
 +    // Never raised when either side's appVersion is empty (unknown/dev
 +    // build) -- see net_server.cpp.
 +    AppVersionMismatch = 5,
++    // Same underlying condition as AppVersionMismatch, but the presented
++    // device identity was already in the host's approved-devices list
++    // (see host::DeviceApprovalManager::isApproved()) -- real user
++    // request, 2026-08-03: "auto-trigger [a host update] for already-
++    // approved devices" specifically, not any connecting client, since
++    // this tells the host to download and install an update and restart
++    // itself. The host has already kicked that off in the background by
++    // the time this is sent; the client should show a distinct "updating,
++    // hang on" message rather than the plain "update one side to match
++    // the other" AppVersionMismatch tells an unapproved client. Purely
++    // additive to the wire format (HelloRejectReason is a plain uint8_t,
++    // see protocol.cpp's serialization) -- no kProtocolVersion bump
++    // needed; an older client that doesn't recognize this value still
++    // sees `accepted == 0` and falls back to its own default rejection
++    // handling.
++    AppVersionMismatchUpdateTriggered = 6,
 +};
 +
 +// HelloAck (host -> client) handshake payload.
@@ -3197,12 +3244,30 @@ index 0000000..e743ba3
 +    int16_t mouseDeltaX = 0;
 +    int16_t mouseDeltaY = 0;
 +    uint8_t mouseButtons = 0;      // MouseButton bitmask, 1 = held
++    // Protocol v12. Real user report, 2026-08-03 (Steam Controller
++    // Tester): "bumpers register, but Triggers do not work. same with
++    // stick clicking." rightStickX/Y above were already wired through,
++    // but there was no wire representation at all for analog triggers or
++    // thumbstick clicks before this. NOT DS/3DS-only fields like
++    // mouseDeltaX/Y/mouseButtons above (neither system has either
++    // concept) -- but Wii U's real GamePad hardware has both (analog
++    // ZL/ZR, clickable sticks), so host::AdapterBridge forwards these to
++    // GenericInputState::leftTrigger/rightTrigger and
++    // GenericButton_L2/R2/L3/R3 for every emulator adapter, not just
++    // host::HostControlAdapter -- see adapter_bridge.cpp's
++    // dsButtonsToGenericButtons()/applyControllerState(). A DS/3DS
++    // adapter simply never reads the resulting GenericButton_L2/R2/L3/R3
++    // bits or leftTrigger/rightTrigger values, the same way it already
++    // never reads mouseDeltaX/Y.
++    uint8_t leftTrigger = 0;       // 0..255
++    uint8_t rightTrigger = 0;      // 0..255
++    uint8_t extraButtons = 0;      // ExtraButton bitmask, 1 = held
 +};
 +
 +// Wire size of a serialized ControllerState payload (not including the
 +// common PacketHeader). Kept explicit so tests can catch accidental growth.
 +inline constexpr size_t kControllerStateWireSize =
-+    4 + 8 + 2 + 2 + 2 + 2 + 2 + 2 + 1 + 2 + 2 + 2 + 2 + 1;
++    4 + 8 + 2 + 2 + 2 + 2 + 2 + 2 + 1 + 2 + 2 + 2 + 2 + 1 + 1 + 1 + 1;
 +
 +// Wire size of VideoFramePayload's fixed timestamp prefix (protocol
 +// v10) -- the JPEG bytes that follow are variable-length, sized however
@@ -4079,10 +4144,10 @@ index 0000000..4cac76e
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/remote_server/adapter_sdk/src/protocol.cpp b/src/remote_server/adapter_sdk/src/protocol.cpp
 new file mode 100644
-index 0000000..38c4ced
+index 0000000..a91fb3d84
 --- /dev/null
 +++ b/src/remote_server/adapter_sdk/src/protocol.cpp
-@@ -0,0 +1,560 @@
+@@ -0,0 +1,573 @@
 +#include "melonds_remote/protocol.h"
 +
 +#include <cstring>
@@ -4169,6 +4234,12 @@ index 0000000..38c4ced
 +    out.push_back(state.touchActive ? 1 : 0);
 +    appendU16(out, state.touchX);
 +    appendU16(out, state.touchY);
++    appendI16(out, state.mouseDeltaX);
++    appendI16(out, state.mouseDeltaY);
++    out.push_back(state.mouseButtons);
++    out.push_back(state.leftTrigger);
++    out.push_back(state.rightTrigger);
++    out.push_back(state.extraButtons);
 +}
 +
 +std::optional<ControllerState> parseControllerState(const uint8_t* data, size_t size) {
@@ -4201,6 +4272,13 @@ index 0000000..38c4ced
 +            return std::nullopt;
 +        }
 +    }
++
++    state.mouseDeltaX = readI16(data, offset); offset += 2;
++    state.mouseDeltaY = readI16(data, offset); offset += 2;
++    state.mouseButtons = data[offset]; offset += 1;
++    state.leftTrigger = data[offset]; offset += 1;
++    state.rightTrigger = data[offset]; offset += 1;
++    state.extraButtons = data[offset]; offset += 1;
 +
 +    return state;
 +}
@@ -4398,7 +4476,7 @@ index 0000000..38c4ced
 +    ack.accepted = accepted;
 +
 +    uint8_t reason = data[offset]; offset += 1;
-+    if (reason > static_cast<uint8_t>(HelloRejectReason::AppVersionMismatch)) {
++    if (reason > static_cast<uint8_t>(HelloRejectReason::AppVersionMismatchUpdateTriggered)) {
 +        return std::nullopt;
 +    }
 +    ack.rejectReason = static_cast<HelloRejectReason>(reason);

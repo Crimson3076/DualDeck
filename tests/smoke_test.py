@@ -32,11 +32,13 @@ MAGIC = 0x444D5231
 # the live header directly) -- a stale value here doesn't fail loudly on
 # its own: every Hello this script sends gets rejected as
 # REJECT_VERSION_MISMATCH instead of whatever that specific test case
-# actually meant to exercise (real 2026-08-01 CI failure: the
-# AuthenticationFailed case above got reject_reason=1 -- VERSION_MISMATCH,
-# not REJECT_AUTH_FAILED -- because this constant had drifted to 10 while
-# the live header had moved to 11).
-VERSION = 11
+# actually meant to exercise. Real CI failures from exactly this drift:
+# 2026-08-01 (drifted to 10 while the live header had moved to 11) and
+# 2026-08-03 (drifted to 11 while the live header moved to 12, in the
+# same commit that bumped kProtocolVersion for Host Control's
+# leftTrigger/rightTrigger/hostControlButtons fields but didn't touch
+# this file).
+VERSION = 12
 
 PT_HELLO = 1
 PT_HELLO_ACK = 2

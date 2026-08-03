@@ -9808,6 +9808,67 @@ pattern now actually appears immediately after an emulator exits with
 specifically addresses) versus the already-working case with mirroring
 off.
 
+## 2026-08-03: CI red for six commits straight -- stale frozen protocol.h in Azahar/Cemu patches, and a stale test constant, both from the v12 bump
+
+Found while checking CI status after pushing this session's Cemu and
+stale-frame fixes, not from a user report: CI's `Check host patches embed
+the current protocol version` and `Run integration smoke test` jobs had
+both been failing since commit `837e7d20` (the Host Control gamepad fix
+that bumped `kProtocolVersion` from 11 to 12) -- six commits, including
+two of this session's own -- without anyone noticing, since neither CI
+red nor a release build failure was checked after any of those pushes.
+
+**`check-patch-protocol-sync.sh` failure:** `837e7d20`'s own commit
+message says it "regenerates melonDS's frozen protocol.h/protocol.cpp
+copy to match" the v12 bump -- but only melonDS's copy was actually
+regenerated. `host/azahar-patches/` and `host/cemu-patches/` each also
+vendor a full copy of `adapter_sdk/` (including `protocol.h`/
+`protocol.cpp`) inside their own patch files, wholesale ("new file mode
+100644" diff hunks, not a reference to the live `protocol/` directory --
+same reason melonDS's copy needs regenerating, these two do too), and
+both were left frozen at v11. Azahar/Cemu are out-of-process adapters
+that talk to `dualdeck-host-service` over the local adapter-IPC contract,
+not the raw client<->host wire `kProtocolVersion` gates directly, so this
+was not confirmed to be an active wire-corruption bug for real sessions
+-- but it is a genuine build-time staleness bug (a freshly built
+Azahar/Cemu host would compile against out-of-date shared type
+definitions) that CI exists specifically to catch, per this check's own
+header comment about the exact failure mode it was written for.
+
+**Fix:** regenerated both patches' embedded `protocol.h`/`protocol.cpp`
+copies from the live files, replacing just those two "new file" diff
+hunks (path prefixes differ per patch: Azahar's under
+`src/citra_qt/remote_server/adapter_sdk/...`, Cemu's under
+`src/remote_server/adapter_sdk/...`) while leaving the rest of
+`adapter_sdk/` (session_state, ipc/*, adapter_contract.h, etc. --
+untouched by the v12 bump) alone.
+
+**`smoke_test.py` failure:** `AssertionError: expected AuthenticationFailed,
+got 1` -- the exact same drift class this file's own comment already
+documented happening once before (2026-08-01, VERSION drifted to 10 while
+the live header moved to 11): `tests/smoke_test.py`'s hand-maintained
+`VERSION` constant (no build step reads the live header directly) was
+still `11`, so every Hello it sent got rejected as
+`ProtocolVersionMismatch` (reject_reason=1) before the test case's actual
+condition (a bad auth token) was ever reached.
+
+**Fix:** bumped `VERSION = 11` to `VERSION = 12` in `tests/smoke_test.py`,
+expanded the comment to record this second occurrence.
+
+**Verified:** `scripts/check-patch-protocol-sync.sh` now reports all
+three patches in sync at v12. Both regenerated patches apply cleanly
+(`git apply --check`, then a real apply) to a fresh pristine clone at
+their respective pinned commits, and the resulting embedded
+`protocol.h`/`protocol.cpp` are byte-identical to the live files (`diff`,
+zero output). `tests/smoke_test.py` run directly against a freshly built
+`dualdeck-host-service` now passes end to end ("SMOKE TEST PASSED"). Full
+local `ctest` run (6 suites) still passes with zero regressions.
+
+**Not yet verified:** whether this specific staleness (v11 vs v12 in
+Azahar/Cemu's own vendored `adapter_sdk` copy) was ever actually visible
+to a real user as a symptom, versus being a pure build-hygiene issue with
+no runtime effect via the adapter-IPC path -- not confirmed either way.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
