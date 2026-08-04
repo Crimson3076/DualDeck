@@ -120,6 +120,17 @@ def main() -> int:
     check_p = sub.add_parser("check", help="Check an installed AppImage for drift; prints the outcome")
     check_p.add_argument("appimage_path", type=Path)
 
+    # Read-back counterpart to "write". Every field this prints has been
+    # recorded since the manifest was introduced -- there was simply no
+    # way to ask for it back, so "which DualDeck build patched this
+    # emulator?" was unanswerable without hand-reading the JSON. Real
+    # user request, 2026-08-04, after a run of releases whose version
+    # numbers rose while their contents went backwards: version numbers
+    # you cannot interrogate on the installed artifact are not much use
+    # for working out where things went wrong.
+    status_p = sub.add_parser("status", help="Print what DualDeck installed at this path, and whether it is still there")
+    status_p.add_argument("appimage_path", type=Path)
+
     args = parser.parse_args()
 
     if args.action == "write":
@@ -130,6 +141,23 @@ def main() -> int:
     if args.action == "check":
         outcome = check_drift(args.appimage_path)
         print(outcome)
+        return 0
+
+    if args.action == "status":
+        outcome = check_drift(args.appimage_path)
+        manifest = read_manifest(args.appimage_path)
+        # Deliberately one "key=value" line per field rather than JSON:
+        # the callers are shell scripts, and the whole point is that this
+        # stays readable when a user pastes it into a bug report.
+        print(f"path={args.appimage_path}")
+        print(f"state={outcome}")
+        if manifest is None:
+            print("dualdeck_version=none")
+            print("installed_at=none")
+        else:
+            print(f"dualdeck_version={manifest.get('dualdeck_version', 'unknown')}")
+            print(f"installed_at={manifest.get('installed_at', 'unknown')}")
+            print(f"backup_present={'yes' if backup_path(args.appimage_path).is_file() else 'no'}")
         return 0
 
     return 1  # unreachable, argparse enforces a valid subcommand

@@ -31,6 +31,23 @@
 #
 # Usage:
 #   ./scripts/emudeck-replace-in-place.sh [--emulator melonds|azahar|cemu]... [--yes] [--dry-run]
+#   ./scripts/emudeck-replace-in-place.sh [--emulator ...] --status
+#   ./scripts/emudeck-replace-in-place.sh [--emulator ...] --restore [--dry-run]
+#
+# --status  Report, per emulator, where EmuDeck's install is, whether the
+#           file there is still the one DualDeck installed (or the stock
+#           original, or something newer EmuDeck has since replaced it
+#           with), which DualDeck version patched it, and when. Changes
+#           nothing. Start here when an emulator misbehaves after an
+#           update -- it answers "what am I actually running?", which
+#           a rising version number on its own does not.
+# --restore Put the stock emulator back from the .dualdeck-original saved
+#           at patch time, and clear the manifest so a later run patches
+#           it cleanly from the original again. For melonDS this also
+#           restores EmuDeck's launcher script, which the patcher rewrites
+#           too -- restoring only the AppImage leaves a launcher still
+#           pointing at the patched binary, which still looks broken.
+#           The backup is copied, not moved, so this stays repeatable.
 #
 # With no --emulator given, every emulator EmuDeck has installed (detected
 # via scripts/lib/emudeck_paths.sh) is replaced. Requires interactive
@@ -99,6 +116,15 @@ trap 'log "FAILED at line ${LINENO}: ${BASH_COMMAND}"' ERR
 emulators=()
 dry_run=0
 assume_yes=0
+# --status: report only, change nothing. --restore: put the stock
+# emulator back from the .dualdeck-original this script saved. Both added
+# 2026-08-04 on a real user request, after an EmuDeck re-patch left
+# melonDS broken and there was no supported way either to ask what was
+# installed or to undo it -- the backup and the manifest (with its
+# dualdeck_version) had existed all along, but nothing exposed them, so
+# the only recovery was hand-copying files.
+status_only=0
+restore_only=0
 # Counts real installs this run (incremented in replace_in_place_one),
 # so the firewall step at the end only runs when it might actually
 # matter -- not on a --dry-run, and not when every emulator was skipped
@@ -112,8 +138,15 @@ while [[ $# -gt 0 ]]; do
             ;;
         --dry-run) dry_run=1; shift ;;
         --yes) assume_yes=1; shift ;;
+        --status) status_only=1; shift ;;
+        --restore) restore_only=1; shift ;;
         -h|--help)
-            sed -n '2,39p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
+            # Prints the header block by finding where it actually ends
+            # rather than hardcoding a line number: the previous fixed
+            # '2,39p' silently truncated --help mid-sentence the moment
+            # the header grew, which is a documentation bug that hides
+            # exactly the options a confused user is looking for.
+            awk 'NR>1 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"
             exit 0
             ;;
         *)
@@ -122,6 +155,23 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+# Validated here, up with the rest of the argument checking, rather than
+# down beside the code that acts on it: the failure trap installed near
+# the top of this script prints "work directory preserved for debugging"
+# on any non-zero exit, which is actively misleading for what is just a
+# bad pair of flags.
+if [[ "${status_only}" -eq 1 && "${restore_only}" -eq 1 ]]; then
+    # The EXIT trap is cleared first so this exits cleanly: that trap is
+    # installed before any argument parsing can have happened, and would
+    # otherwise announce "work directory preserved for debugging" for
+    # what is simply a bad pair of flags -- pointing the user at an empty
+    # temp directory and implying something broke mid-run.
+    trap - EXIT
+    rm -rf "${work_dir}"
+    echo "error: --status and --restore are mutually exclusive." >&2
+    exit 1
+fi
+
 if [[ "${#emulators[@]}" -eq 0 ]]; then
     emulators=(melonds azahar cemu)
 fi
@@ -132,13 +182,20 @@ for e in "${emulators[@]}"; do
     esac
 done
 
-if ! command -v curl >/dev/null 2>&1; then
-    echo "error: curl is required to download DualDeck's patched builds -- install it and try again." >&2
-    exit 1
-fi
-if ! command -v sha256sum >/dev/null 2>&1; then
-    echo "error: sha256sum is required to verify downloads -- install coreutils and try again." >&2
-    exit 1
+# Only the patching path downloads anything, so --status and --restore
+# deliberately skip these checks: a host whose install is already broken
+# is exactly where you most want to be able to ask what happened and undo
+# it, and refusing to do either over a missing download tool would be
+# perverse.
+if [[ "${status_only}" -eq 0 && "${restore_only}" -eq 0 ]]; then
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "error: curl is required to download DualDeck's patched builds -- install it and try again." >&2
+        exit 1
+    fi
+    if ! command -v sha256sum >/dev/null 2>&1; then
+        echo "error: sha256sum is required to verify downloads -- install coreutils and try again." >&2
+        exit 1
+    fi
 fi
 
 # ---- download + verify ----
@@ -444,6 +501,96 @@ print(json.load(open('${appimage_path}.dualdeck.json'))['original_sha256'])
     log "${emulator}: installed dualdeck_version=${dualdeck_version}"
     installed_count=$((installed_count + 1))
 }
+
+# resolve_installed_appimage <emulator>
+#
+# Prints the EmuDeck AppImage path for <emulator>, or returns non-zero if
+# there isn't one. Read-only: unlike replace_in_place_one()'s own
+# resolution it never bootstraps a Flatpak launcher or prints progress,
+# so --status and --restore can ask "where is it?" without changing
+# anything on the way past.
+resolve_installed_appimage() {
+    case "$1" in
+        melonds) find_emudeck_melonds_appimage ;;
+        azahar)  find_emudeck_azahar_appimage ;;
+        cemu)    find_emudeck_cemu_appimage ;;
+        *)       return 1 ;;
+    esac
+}
+
+status_one() {
+    local emulator="$1" appimage_path
+    if ! appimage_path="$(resolve_installed_appimage "${emulator}")"; then
+        echo "${emulator}: no EmuDeck AppImage install found"
+        return 0
+    fi
+    echo "${emulator}:"
+    python3 "${manifest_py}" status "${appimage_path}" | sed 's/^/  /'
+}
+
+restore_one() {
+    local emulator="$1" appimage_path
+    if ! appimage_path="$(resolve_installed_appimage "${emulator}")"; then
+        echo "${emulator}: no EmuDeck AppImage install found, nothing to restore"
+        return 0
+    fi
+    local backup_path="${appimage_path}.dualdeck-original"
+    if [[ ! -f "${backup_path}" ]]; then
+        echo "${emulator}: no backup at ${backup_path} -- DualDeck never patched this install," >&2
+        echo "   or the backup was removed. Nothing to restore." >&2
+        return 0
+    fi
+
+    if [[ "${dry_run}" -eq 1 ]]; then
+        echo "${emulator}: [dry run] would restore ${backup_path} -> ${appimage_path}"
+        return 0
+    fi
+
+    echo "== ${emulator}: restoring the original from ${backup_path} =="
+    # cp, not mv: the backup stays put so this is repeatable, and so a
+    # half-finished restore can't leave the install with neither file.
+    cp -a "${backup_path}" "${appimage_path}"
+
+    # melonDS's EmuDeck install is launched through a launcher script that
+    # the patcher also rewrites (see bootstrap_melonds_flatpak_launcher).
+    # Restoring only the AppImage would leave that script still pointing
+    # at the patched binary -- a half-restore that still looks broken,
+    # which is exactly the trap a by-hand recovery falls into.
+    if [[ "${emulator}" == "melonds" ]]; then
+        local launcher launcher_backup
+        if launcher="$(find_emudeck_melonds_flatpak_launcher)"; then
+            launcher_backup="${launcher}.dualdeck-original"
+            if [[ -f "${launcher_backup}" ]]; then
+                echo "== melonds: also restoring the EmuDeck launcher ${launcher} =="
+                cp -a "${launcher_backup}" "${launcher}"
+                rm -f "${launcher}.dualdeck.json"
+            fi
+        fi
+    fi
+
+    # Drop the manifest last, so an interrupted restore still looks
+    # "patched" (and therefore recoverable) rather than pristine-but-
+    # actually-patched. Clearing it resets this install to first-time
+    # state, so a later re-patch starts from the stock binary instead of
+    # refusing or stacking on top of itself.
+    rm -f "${appimage_path}.dualdeck.json"
+    echo "== ${emulator}: restored. Re-run this script without --restore to patch it again. =="
+    log "${emulator}: restored original from backup"
+}
+
+if [[ "${status_only}" -eq 1 ]]; then
+    for emulator in "${emulators[@]}"; do
+        status_one "${emulator}"
+    done
+    exit 0
+fi
+
+if [[ "${restore_only}" -eq 1 ]]; then
+    for emulator in "${emulators[@]}"; do
+        restore_one "${emulator}"
+    done
+    exit 0
+fi
 
 for emulator in "${emulators[@]}"; do
     replace_in_place_one "${emulator}"
