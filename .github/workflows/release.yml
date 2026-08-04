@@ -206,7 +206,25 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: "DualDeck -- ${{ steps.version.outputs.tag }}"
-          make_latest: true
+          # Point the tag at the commit that was actually built. Without
+          # this, softprops creates the tag against the repository's
+          # DEFAULT branch, so a release built from any other branch got
+          # a tag pointing at unrelated code. That is not theoretical:
+          # v0.1.144 was built from 0681bfb but its tag resolves to
+          # fbc0a7e, and rebuilding "from tag v0.1.144" to recover a
+          # known-good release therefore rebuilt the wrong tree
+          # (2026-08-04). A tag that does not identify its own build
+          # makes every rollback a guess.
+          target_commitish: ${{ github.sha }}
+          # Only the default branch may claim the rolling "latest" that
+          # every user's "Check for updates" resolves to. Previously any
+          # branch running this workflow took it: three releases built
+          # from a 46-commit-stale branch became `latest` in sequence,
+          # each one silently rolling users back while the version number
+          # went up (2026-08-03/04). Comparing against the repo's own
+          # default branch rather than a hardcoded name means this keeps
+          # working if the default is ever repointed.
+          make_latest: ${{ github.ref_name == github.event.repository.default_branch }}
           body: |
             Built from commit ${{ github.sha }} on `${{ github.ref_name }}`,
             triggered manually via workflow_dispatch.
