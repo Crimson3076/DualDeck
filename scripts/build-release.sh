@@ -1434,12 +1434,28 @@ export QT_QPA_PLATFORMTHEME=""
 
 if [[ "${on_immutable_system}" -eq 1 ]]; then
     container_name="dualdeck-host"
-    if ! command -v distrobox >/dev/null 2>&1 || ! distrobox list 2>/dev/null | grep -qw "${container_name}"; then
+    # Deliberately an actual `distrobox enter ... -- true`, NOT
+    # `distrobox list | grep -q`. Real user report, 2026-08-04, with the
+    # root cause diagnosed in the report itself: `grep -q` exits the
+    # moment it matches, which SIGPIPEs the still-writing `distrobox
+    # list`, and under this script's own `set -o pipefail` that makes
+    # the whole pipeline report failure *even though the container was
+    # found*. The result was this branch firing on Bazzite hosts where
+    # `distrobox list` plainly showed a running, fully provisioned
+    # "dualdeck-host" and `distrobox enter` worked fine -- i.e. Azahar
+    # refused to start precisely when everything it needed was present.
+    # Entering is also the stronger check: it proves the container is
+    # usable, not merely listed, which is the thing that actually has to
+    # hold before Azahar is launched inside it.
+    if ! command -v distrobox >/dev/null 2>&1 || \
+       ! distrobox enter "${container_name}" -- true >/dev/null 2>&1; then
         echo "error: this looks like an immutable (rpm-ostree) system, e.g. Bazzite, but the" >&2
         echo "\"${container_name}\" Distrobox container Azahar needs (for Qt6, which Bazzite's" >&2
-        echo "own base image doesn't ship) doesn't exist yet. Launch melonDS at least once" >&2
-        echo "first (../dualdeck-host.sh -> DS/melonDS), which creates and provisions it --" >&2
-        echo "or run internal/install-host-distrobox.sh --install-only directly." >&2
+        echo "own base image doesn't ship) could not be entered -- it either doesn't exist" >&2
+        echo "yet or isn't usable. Launch melonDS at least once first (../dualdeck-host.sh" >&2
+        echo "-> DS/melonDS), which creates and provisions it -- or run" >&2
+        echo "internal/install-host-distrobox.sh --install-only directly to create or" >&2
+        echo "repair it." >&2
         exit 1
     fi
     # Distrobox forwards DISPLAY/WAYLAND_DISPLAY/XDG_RUNTIME_DIR and
@@ -2000,7 +2016,18 @@ container_name="dualdeck-host"
 # container from before the rename so this doesn't end up with two
 # (the old one orphaned, plus a freshly created "dualdeck-host"). No-op
 # if it doesn't exist.
-if command -v distrobox >/dev/null 2>&1 && distrobox list 2>/dev/null | grep -qw "melonds-remote-host"; then
+#
+# The list is captured into a variable first rather than piped straight
+# into `grep -q` -- see run-host-azahar.sh's own comment for the full
+# story: `grep -q` exits on its first match, SIGPIPEs the still-writing
+# `distrobox list`, and `set -o pipefail` then reports the pipeline as
+# failed even on a match. Here that failure mode is quiet rather than
+# loud (the stale container just never gets cleaned up), which is
+# exactly why it went unnoticed. Not `distrobox enter`, unlike Azahar's
+# launch gate: starting a container purely to decide whether to delete
+# it would be backwards.
+distrobox_containers="$(command -v distrobox >/dev/null 2>&1 && distrobox list 2>/dev/null || true)"
+if grep -qw "melonds-remote-host" <<<"${distrobox_containers}"; then
     echo "Removing old Distrobox container \"melonds-remote-host\" (renamed to \"${container_name}\") ..."
     distrobox rm "melonds-remote-host" --force 2>/dev/null || true
 fi
@@ -2094,8 +2121,47 @@ echo "Launching the host inside the container ..."
 # See run-host.sh's identical MELONDS_REMOTE_VERSION comment -- read from
 # the same central-directory sibling copy of VERSION staged above.
 host_app_version="$(cat "$(dirname "${central_install_dir}")/VERSION" 2>/dev/null || true)"
+
+# Persistent-Host-Control-daemon handoff, mirroring run-host.sh's own
+# probe. Real user report, 2026-08-04: with the daemon running, picking
+# DS/melonDS on Bazzite produced "remote server failed to start -- a
+# port it needs is already in use" and the session never switched out
+# of Host Control mode into Emulation.
+#
+# Root cause was that this handoff lived *only* in run-host.sh, which
+# an immutable system never reaches for melonDS: dualdeck-host.sh's
+# "ds" choice execs launch-host.sh, which routes straight here on
+# rpm-ostree hosts and launched melonDS with nothing but
+# MELONDS_REMOTE_ENABLE=1. melonDS therefore always tried to stand up
+# its own in-process remote server, on ports the already-running daemon
+# was holding -- so the one configuration where the daemon is most
+# useful was the one configuration where melonDS could not coexist with
+# it.
+#
+# The socket path is resolved out here and passed in explicitly rather
+# than letting default_adapter_socket_path() re-evaluate inside the
+# container: distrobox does forward XDG_RUNTIME_DIR, but pinning the
+# value the probe actually succeeded against removes any chance of the
+# two disagreeing.
+#
+# Probe-only, never spawn -- same reasoning as run-host.sh: with no
+# daemon running this leaves melonDS's proven in-process default
+# completely untouched, so this can only add the better path, never
+# take away the working one.
+# shellcheck source=scripts/lib/adapter_socket_probe.sh
+source ./adapter_socket_probe.sh
+melonds_adapter_env=()
+default_socket="$(default_adapter_socket_path)"
+if is_adapter_socket_live "${default_socket}"; then
+    echo "DualDeck: found a running Host Control daemon -- melonDS will connect to" >&2
+    echo "it out-of-process instead of running its own in-process remote server." >&2
+    melonds_adapter_env=(MELONDS_REMOTE_OUT_OF_PROCESS=1
+                         "MELONDS_REMOTE_ADAPTER_SOCKET=${default_socket}")
+fi
+
 exec distrobox enter "${container_name}" -- env MELONDS_REMOTE_ENABLE=1 \
-    "MELONDS_REMOTE_VERSION=${host_app_version}" "${central_install_dir}/melonDS" "$@"
+    "MELONDS_REMOTE_VERSION=${host_app_version}" "${melonds_adapter_env[@]}" \
+    "${central_install_dir}/melonDS" "$@"
 WRAP
 chmod +x "${pkg_dir}/host/internal/install-host-distrobox.sh"
 
@@ -2315,7 +2381,12 @@ container_name="dualdeck-host"
 
 removed_anything=0
 
-if command -v distrobox >/dev/null 2>&1 && distrobox list 2>/dev/null | grep -qw "${container_name}"; then
+# Captured, not piped into `grep -q` -- see run-host-azahar.sh's comment
+# for why that combination silently reports "not found" under pipefail.
+# An uninstaller that quietly skips removing the container is precisely
+# the bug that pattern produces here.
+distrobox_containers="$(command -v distrobox >/dev/null 2>&1 && distrobox list 2>/dev/null || true)"
+if grep -qw "${container_name}" <<<"${distrobox_containers}"; then
     echo "Removing Distrobox container \"${container_name}\" ..."
     distrobox rm "${container_name}" --force
     removed_anything=1
@@ -3172,14 +3243,20 @@ for arg in "$@"; do
 done
 
 if [[ "${dry_run}" -eq 0 ]]; then
-    if command -v distrobox >/dev/null 2>&1 && distrobox list 2>/dev/null | grep -qw "${container_name}"; then
+    # Captured once, not piped into `grep -q` -- see
+    # run-host-azahar.sh's comment for why `distrobox list | grep -q`
+    # under pipefail can report "not found" for a container that is
+    # plainly there, which in an uninstaller means silently leaving it
+    # behind.
+    distrobox_containers="$(command -v distrobox >/dev/null 2>&1 && distrobox list 2>/dev/null || true)"
+    if grep -qw "${container_name}" <<<"${distrobox_containers}"; then
         echo "Removing Distrobox container \"${container_name}\" ..."
         distrobox rm "${container_name}" --force
     fi
     # Same melonDS-Remote -> DualDeck rebrand cleanup as the shortcut
     # removal above, for the container this project itself created
     # under the old name before the rename.
-    if command -v distrobox >/dev/null 2>&1 && distrobox list 2>/dev/null | grep -qw "melonds-remote-host"; then
+    if grep -qw "melonds-remote-host" <<<"${distrobox_containers}"; then
         echo "Removing old Distrobox container \"melonds-remote-host\" ..."
         distrobox rm "melonds-remote-host" --force
     fi
