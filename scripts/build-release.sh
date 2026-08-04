@@ -444,6 +444,32 @@ cp "${repo_root}/scripts/lib/pipewire_env.sh" "${pkg_dir}/host/internal/pipewire
 
 cp "${repo_build}/client/dualdeck-client" "${pkg_dir}/client/dualdeck-client"
 chmod +x "${pkg_dir}/client/dualdeck-client"
+
+# Bundle the client's own linked dependencies, exactly as the host
+# service already does (see the dualdeck-host-service call earlier in
+# this file). Real user report, 2026-08-04: the client would not start
+# on a Bazzite *client* Deck because libturbojpeg.so.0 was missing --
+# the client links it to decode incoming video frames (protocol v8's
+# JPEG frames), but only libSDL3 was ever bundled, so everything else
+# silently relied on the host distribution shipping it.
+#
+# That reliance cannot hold on an immutable system, which is the whole
+# point: client/internal/ensure-packages.sh's dnf branch cannot install
+# anything on an rpm-ostree base without a reboot, so "just install
+# libjpeg-turbo" is not a fix available to the launcher at runtime. Same
+# root cause as the melonDS libturbojpeg failure on the host side; this
+# is the client half of it.
+#
+# Deliberately the shared bundler rather than another one-off `cp`:
+# it already excludes Mesa/Vulkan/GL and libwayland-client/-egl/-cursor,
+# each of which was added after a real breakage when bundled copies
+# shadowed the host's own drivers. A hand-rolled copy here would have to
+# rediscover all of that.
+bundle_library_dependencies "${pkg_dir}/client/dualdeck-client" "${pkg_dir}/client/lib"
+
+# After the bundler, so this stays the authoritative copy of the SDL3
+# this client was actually built against rather than whatever ldd
+# happened to resolve.
 cp -a "${sdl3_install}"/lib/libSDL3.so* "${pkg_dir}/client/lib/"
 
 cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/client/internal/ensure-packages.sh"
