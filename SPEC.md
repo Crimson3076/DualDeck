@@ -205,19 +205,40 @@ The Steam Deck client must:
 * Allow the user to exit through a controller-accessible interface
 * Avoid requiring a keyboard or mouse during normal use
 ## 7.3 Nintendo DS input mapping
+Face buttons map by **physical position, not by printed letter**. The two
+consoles arrange their letters in mirrored positions:
+
+```
+    Steam Deck (Xbox layout)          Nintendo DS / 3DS
+               Y                              X
+            X     B                        Y     A
+               A                              B
+```
+
+A letter-for-letter mapping (Deck A to DS A, and so on) is therefore
+wrong on all four buttons: it puts "confirm" under the wrong thumb
+position and mirrors the pair a player reaches for without looking. The
+button physically nearest the player at the bottom is confirm on both
+machines -- labelled A on a Deck, B on a DS.
+
+This has to be correct here, in the client: remote input travels as an
+already-decoded DS button bitmask (protocol.h's `DSButton_*`), so it
+never passes through the emulator's own SDL binding layer and cannot be
+fixed by reconfiguring melonDS or Azahar.
+
 Required controls:
-| Steam Deck control      | Nintendo DS action |
-| ----------------------- | ------------------ |
-| D-pad                   | DS D-pad           |
-| A                       | DS A               |
-| B                       | DS B               |
-| X                       | DS X               |
-| Y                       | DS Y               |
-| L1                      | DS L               |
-| R1                      | DS R               |
-| Menu or assigned button | DS Start           |
-| View or assigned button | DS Select          |
-| Touchscreen             | DS touchscreen     |
+| Steam Deck control      | SDL3 positional name           | Nintendo DS action |
+| ----------------------- | ------------------------------ | ------------------ |
+| D-pad                   | `SDL_GAMEPAD_BUTTON_DPAD_*`    | DS D-pad           |
+| A (bottom)              | `SDL_GAMEPAD_BUTTON_SOUTH`     | DS B               |
+| B (right)               | `SDL_GAMEPAD_BUTTON_EAST`      | DS A               |
+| X (left)                | `SDL_GAMEPAD_BUTTON_WEST`      | DS Y               |
+| Y (top)                 | `SDL_GAMEPAD_BUTTON_NORTH`     | DS X               |
+| L1                      | `SDL_GAMEPAD_BUTTON_LEFT_SHOULDER`  | DS L          |
+| R1                      | `SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER` | DS R          |
+| Menu or assigned button | `SDL_GAMEPAD_BUTTON_START`     | DS Start           |
+| View or assigned button | `SDL_GAMEPAD_BUTTON_BACK`      | DS Select          |
+| Touchscreen             | --                             | DS touchscreen     |
 Optional default mappings:
 | Steam Deck control | Suggested action        |
 | ------------------ | ----------------------- |

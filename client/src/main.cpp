@@ -123,11 +123,35 @@ struct ButtonMapping {
     uint16_t dsBit;
 };
 
-const ButtonMapping kButtonMappings[] = {
-    {SDL_GAMEPAD_BUTTON_SOUTH, DSButton_A},
-    {SDL_GAMEPAD_BUTTON_EAST, DSButton_B},
-    {SDL_GAMEPAD_BUTTON_WEST, DSButton_X},
-    {SDL_GAMEPAD_BUTTON_NORTH, DSButton_Y},
+// Mapped by PHYSICAL POSITION, not by the letter printed on the client's
+// controller. Real user report, 2026-08-04: the face buttons were wired
+// letter-to-letter (Deck A -> DS A, Deck B -> DS B, ...), which is the
+// one arrangement that is wrong on every single button, because the two
+// consoles put their letters in mirrored places:
+//
+//       Steam Deck (Xbox layout)        Nintendo DS / 3DS
+//                  Y                            X
+//               X     B                      Y     A
+//                  A                            B
+//
+// SDL3's SOUTH/EAST/WEST/NORTH names are already positional (that is why
+// SDL renamed them from A/B/X/Y), so the fix is to map position to
+// position: the button under your thumb on the bottom is "confirm" on
+// both machines, and on a DS that button is labelled B.
+//
+// This cannot be corrected downstream in the emulator's own controller
+// config: remote input arrives as an already-decoded DS button bitmask
+// over the protocol (see buildButtonsFromGamepad() below and protocol.h's
+// DSButton_* bits), so it never passes through Azahar's or melonDS's SDL
+// binding layer at all. The reporting user confirmed exactly that --
+// resetting Azahar's controls and running EmuDeck's Reset Controls
+// changed nothing, while Azahar's own local SDL mapping was already
+// correct.
+constexpr ButtonMapping kButtonMappings[] = {
+    {SDL_GAMEPAD_BUTTON_SOUTH, DSButton_B},
+    {SDL_GAMEPAD_BUTTON_EAST, DSButton_A},
+    {SDL_GAMEPAD_BUTTON_WEST, DSButton_Y},
+    {SDL_GAMEPAD_BUTTON_NORTH, DSButton_X},
     {SDL_GAMEPAD_BUTTON_DPAD_UP, DSButton_Up},
     {SDL_GAMEPAD_BUTTON_DPAD_DOWN, DSButton_Down},
     {SDL_GAMEPAD_BUTTON_DPAD_LEFT, DSButton_Left},
@@ -137,6 +161,33 @@ const ButtonMapping kButtonMappings[] = {
     {SDL_GAMEPAD_BUTTON_START, DSButton_Start},
     {SDL_GAMEPAD_BUTTON_BACK, DSButton_Select}, // "View" on Steam Deck
 };
+
+// Compile-time regression guard for the four face buttons. The bug this
+// replaces was invisible in review -- {SOUTH, DSButton_A} reads
+// perfectly naturally, and is wrong only once you know the two consoles
+// mirror their labels -- and it survived until somebody played a game
+// and found every face button transposed. It is also exactly the kind of
+// line a future edit would "tidy" back into letter order.
+//
+// Asserted here rather than in client/tests/ because these are the SDL
+// enum constants: the client test target deliberately doesn't link SDL3,
+// and a test that redeclared the values would only be checking its own
+// copy of them. A static_assert costs nothing, cannot drift from the
+// table it guards, and fails the build in CI rather than in a game.
+constexpr uint16_t dsBitFor(SDL_GamepadButton button) {
+    for (const auto& mapping : kButtonMappings) {
+        if (mapping.sdlButton == button) return mapping.dsBit;
+    }
+    return 0;
+}
+static_assert(dsBitFor(SDL_GAMEPAD_BUTTON_SOUTH) == DSButton_B,
+              "Face buttons map by physical position: the bottom button is DS B, not DS A (SPEC.md 7.3)");
+static_assert(dsBitFor(SDL_GAMEPAD_BUTTON_EAST) == DSButton_A,
+              "Face buttons map by physical position: the right button is DS A, not DS B (SPEC.md 7.3)");
+static_assert(dsBitFor(SDL_GAMEPAD_BUTTON_WEST) == DSButton_Y,
+              "Face buttons map by physical position: the left button is DS Y, not DS X (SPEC.md 7.3)");
+static_assert(dsBitFor(SDL_GAMEPAD_BUTTON_NORTH) == DSButton_X,
+              "Face buttons map by physical position: the top button is DS X, not DS Y (SPEC.md 7.3)");
 
 constexpr int16_t kStickDeadzone = 8000;
 

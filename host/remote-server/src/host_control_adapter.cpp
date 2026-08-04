@@ -88,10 +88,29 @@ int16_t negateStickAxis(int16_t axis) {
 
 HostControlGamepadState translateControllerState(const ControllerState& state) {
     HostControlGamepadState out;
-    out.south = (state.dsButtons & DSButton_A) != 0;
-    out.east = (state.dsButtons & DSButton_B) != 0;
-    out.west = (state.dsButtons & DSButton_X) != 0;
-    out.north = (state.dsButtons & DSButton_Y) != 0;
+    // Nintendo label -> PHYSICAL position, because the other side of this
+    // is uinput: BTN_SOUTH really is the bottom button, and desktop/Steam
+    // UI treats it as "confirm". The DS puts B at the bottom and A on the
+    // right, the mirror of the Xbox arrangement uinput names describe --
+    // so a label-for-label copy here (A -> south) lands confirm on the
+    // wrong physical button.
+    //
+    // Deliberately NOT symmetric with adapter_bridge.cpp's
+    // dsButtonsToGenericButtons(), which keeps A -> South and is correct
+    // to do so: its GenericButton_* values are consumed by the emulator
+    // adapters, which map straight back (South -> A, see the Azahar
+    // patch's button table), making that path a label round-trip. This
+    // path has no such round-trip -- it ends at a real virtual gamepad,
+    // where position is the only thing that means anything.
+    //
+    // Companion to the 2026-08-04 client-side fix in client/src/main.cpp:
+    // once the client began sending the DS button that matches the
+    // physical position pressed, leaving this table alone would have
+    // silently moved Host Control's confirm button one position clockwise.
+    out.south = (state.dsButtons & DSButton_B) != 0;
+    out.east = (state.dsButtons & DSButton_A) != 0;
+    out.west = (state.dsButtons & DSButton_Y) != 0;
+    out.north = (state.dsButtons & DSButton_X) != 0;
     out.tl = (state.dsButtons & DSButton_L) != 0;
     out.tr = (state.dsButtons & DSButton_R) != 0;
     out.start = (state.dsButtons & DSButton_Start) != 0;

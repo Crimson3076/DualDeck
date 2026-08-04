@@ -34,31 +34,48 @@ MDR_TEST(translate_no_buttons_is_all_released) {
     MDR_CHECK_EQ(out.hatY, 0);
 }
 
-// A -> south, B -> east: DS's low two button bits map straight onto the
-// Xbox pad's low two face buttons.
-MDR_TEST(translate_a_and_b_map_to_south_and_east) {
+// DS B -> south, DS A -> east. This target is a real uinput virtual
+// gamepad, so the output names are physical positions, and the DS puts B
+// at the bottom and A on the right -- mirrored from the Xbox arrangement
+// those position names describe. Updated 2026-08-04 alongside the
+// client-side positional fix: the previous expectation here (A -> south)
+// encoded a label-for-label copy, which put "confirm" on the wrong
+// physical button for desktop navigation.
+MDR_TEST(translate_a_and_b_map_by_physical_position_not_by_letter) {
     ControllerState state;
-    state.dsButtons = DSButton_A | DSButton_B;
+    state.dsButtons = DSButton_B;
     HostControlGamepadState out = translateControllerState(state);
-    MDR_CHECK(out.south);
-    MDR_CHECK(out.east);
-    MDR_CHECK(!out.west);
-    MDR_CHECK(!out.north);
+    MDR_CHECK(out.south); // bottom button -> bottom button
+    MDR_CHECK(!out.east);
+
+    state.dsButtons = DSButton_A;
+    out = translateControllerState(state);
+    MDR_CHECK(out.east); // DS A sits on the right
+    MDR_CHECK(!out.south);
 }
 
-// DS X -> west, DS Y -> north: matches host::AdapterBridge's
-// dsButtonsToGenericButtons table exactly (see that function's own
-// comment on why X/Y don't map straight onto their own bit positions),
-// so this project has one consistent DS-button-meaning across every
-// translation table, not two disagreeing ones.
-MDR_TEST(translate_x_and_y_map_to_west_and_north_not_the_reverse) {
+// DS X -> north, DS Y -> west, for the same reason: DS X is the top
+// button and DS Y the left one.
+//
+// Deliberately NOT the same table as host::AdapterBridge's
+// dsButtonsToGenericButtons(), which keeps A -> South. That asymmetry is
+// correct rather than an oversight: the GenericButton_* values it emits
+// are consumed by emulator adapters that map straight back (South -> A,
+// see the Azahar patch's button table), so that path is a label
+// round-trip and stays right. This path terminates at a virtual gamepad
+// where only position carries meaning, so it must convert rather than
+// round-trip.
+MDR_TEST(translate_x_and_y_map_by_physical_position_not_by_letter) {
     ControllerState state;
-    state.dsButtons = DSButton_X | DSButton_Y;
+    state.dsButtons = DSButton_X;
     HostControlGamepadState out = translateControllerState(state);
-    MDR_CHECK(out.west);
-    MDR_CHECK(out.north);
-    MDR_CHECK(!out.south);
-    MDR_CHECK(!out.east);
+    MDR_CHECK(out.north); // DS X is the top button
+    MDR_CHECK(!out.west);
+
+    state.dsButtons = DSButton_Y;
+    out = translateControllerState(state);
+    MDR_CHECK(out.west); // DS Y is the left button
+    MDR_CHECK(!out.north);
 }
 
 MDR_TEST(translate_shoulders_and_start_select) {
