@@ -500,6 +500,13 @@ print(json.load(open('${appimage_path}.dualdeck.json'))['original_sha256'])
     echo "   (original backed up at ${backup_path})"
     log "${emulator}: installed dualdeck_version=${dualdeck_version}"
     installed_count=$((installed_count + 1))
+
+    # Redirect EmuDeck's launcher too, every run. Replacing the AppImage
+    # alone leaves Steam shortcuts launching the stock emulator (for
+    # melonDS, the Flatpak, which never referenced the AppImage in the
+    # first place), and re-running this after an EmuDeck reinstall is
+    # exactly when the launcher needs putting back.
+    install_emudeck_launcher_shims "${emulator}"
 }
 
 # resolve_installed_appimage <emulator>
@@ -516,6 +523,149 @@ resolve_installed_appimage() {
         cemu)    find_emudeck_cemu_appimage ;;
         *)       return 1 ;;
     esac
+}
+
+# ---- EmuDeck launcher shims (real user report, 2026-08-04) ----
+#
+# Replacing ~/Applications/<emu>.AppImage is not enough to make Steam
+# shortcuts work, and for melonDS it never was: EmuDeck's stock
+# melonds.sh runs the Flatpak (net.kuribo64.melonDS) and never mentions
+# that AppImage at all, so a Steam launch got an entirely unpatched
+# emulator. Azahar's launcher does use the AppImage, but running it
+# directly on Bazzite dies in Vulkan init with ErrorIncompatibleDriver,
+# where the same build works inside the dualdeck-host container.
+#
+# So the launcher itself has to be redirected. It is redirected to a
+# one-line `exec` of a DualDeck-owned script under the central install
+# directory, rather than having the real logic written into a file
+# EmuDeck manages: releases can then replace the logic wholesale, the
+# patch applied to EmuDeck's file stays trivial to verify, and there is
+# no large generated script sitting somewhere EmuDeck may rewrite.
+#
+# Re-applied on every patch run, which is the drift repair the reporter
+# asked for: reinstalling melonDS through EmuDeck restores its stock
+# Flatpak launcher, and before this, re-running the DualDeck patch did
+# not put the working launcher back.
+
+emudeck_launcher_targets() {
+    # Both locations matter: EmuDeck keeps launchers in tools/launchers,
+    # but Steam ROM Manager shortcuts have been observed pointing at
+    # roms/emulators too, and the reporter had to replace both before
+    # shortcuts worked reliably.
+    local emulator="$1"
+    echo "$(emudeck_launchers_dir)/${emulator}.sh"
+    echo "${HOME}/Emulation/roms/emulators/${emulator}.sh"
+}
+
+dualdeck_shim_for() {
+    case "$1" in
+        melonds) echo "launch-emudeck-melonds.sh" ;;
+        azahar)  echo "launch-emudeck-azahar.sh" ;;
+        *)       return 1 ;;
+    esac
+}
+
+install_emudeck_launcher_shims() {
+    local emulator="$1" shim target backup
+    shim="$(dualdeck_shim_for "${emulator}")" || return 0  # cemu: no shim yet
+    local shim_path="${HOME}/.config/dualdeck/install/internal/${shim}"
+    local wrote_any=0
+
+    for target in $(emudeck_launcher_targets "${emulator}"); do
+        # Only touch launchers that already exist. Creating one where
+        # EmuDeck never put one would invent a path nothing launches and
+        # that EmuDeck might later collide with.
+        [[ -f "${target}" ]] || continue
+
+        if grep -q "internal/${shim}" "${target}" 2>/dev/null; then
+            echo "== ${emulator}: launcher already points at DualDeck: ${target} =="
+            wrote_any=1
+            continue
+        fi
+
+        # Back up EmuDeck's own launcher once, and only when the current
+        # contents are genuinely theirs -- guarded by the grep above, so
+        # a second run can never overwrite the pristine copy with our own
+        # shim (the failure mode that would make --restore useless).
+        backup="${target}.dualdeck-original"
+        if [[ ! -f "${backup}" ]]; then
+            echo "== ${emulator}: backing up EmuDeck's launcher to ${backup} =="
+            cp -a "${target}" "${backup}"
+        fi
+
+        if [[ "${dry_run}" -eq 1 ]]; then
+            echo "== ${emulator}: [dry run] would redirect ${target} -> ${shim} =="
+            wrote_any=1
+            continue
+        fi
+
+        echo "== ${emulator}: redirecting ${target} -> ${shim} =="
+        cat > "${target}" <<SHIM
+#!/usr/bin/env bash
+# Replaced by DualDeck (scripts/emudeck-replace-in-place.sh). The stock
+# EmuDeck launcher is preserved next to this file as
+# $(basename "${target}").dualdeck-original, and DualDeck's
+# --restore mode puts it back.
+exec "\$HOME/.config/dualdeck/install/internal/${shim}" "\$@"
+SHIM
+        chmod +x "${target}"
+        wrote_any=1
+    done
+
+    if [[ "${wrote_any}" -eq 0 ]]; then
+        echo "== ${emulator}: no EmuDeck launcher found to redirect (looked in" \
+             "$(emudeck_launchers_dir) and ${HOME}/Emulation/roms/emulators) =="
+        return 0
+    fi
+
+    verify_emudeck_launcher_shims "${emulator}"
+}
+
+# Fail loudly rather than reporting a successful patch that did not take
+# -- explicitly requested, after a run that claimed success while Steam
+# still launched the stock Flatpak.
+verify_emudeck_launcher_shims() {
+    local emulator="$1" shim target failed=0
+    shim="$(dualdeck_shim_for "${emulator}")" || return 0
+    local shim_path="${HOME}/.config/dualdeck/install/internal/${shim}"
+
+    if [[ "${dry_run}" -ne 1 && ! -x "${shim_path}" ]]; then
+        echo "error: ${emulator}: launcher now points at ${shim_path}, which is missing or" >&2
+        echo "not executable. Install/update the DualDeck host first (its Steam shortcut," >&2
+        echo "or host/internal/install-steam-shortcut.sh) so that file exists." >&2
+        failed=1
+    fi
+
+    for target in $(emudeck_launcher_targets "${emulator}"); do
+        [[ -f "${target}" ]] || continue
+        if [[ "${dry_run}" -eq 1 ]]; then continue; fi
+        if ! grep -q "internal/${shim}" "${target}"; then
+            echo "error: ${emulator}: ${target} does not reference ${shim} after patching." >&2
+            failed=1
+        fi
+    done
+
+    if [[ "${failed}" -ne 0 ]]; then
+        echo "error: ${emulator}: EmuDeck launcher integration could not be verified --" >&2
+        echo "Steam shortcuts would still launch the unpatched emulator." >&2
+        return 1
+    fi
+    echo "== ${emulator}: EmuDeck launcher integration verified =="
+}
+
+restore_emudeck_launcher_shims() {
+    local emulator="$1" target backup
+    dualdeck_shim_for "${emulator}" >/dev/null || return 0
+    for target in $(emudeck_launcher_targets "${emulator}"); do
+        backup="${target}.dualdeck-original"
+        [[ -f "${backup}" ]] || continue
+        if [[ "${dry_run}" -eq 1 ]]; then
+            echo "${emulator}: [dry run] would restore launcher ${target}"
+            continue
+        fi
+        echo "== ${emulator}: restoring EmuDeck's launcher ${target} =="
+        cp -a "${backup}" "${target}"
+    done
 }
 
 status_one() {
@@ -574,6 +724,13 @@ restore_one() {
     # state, so a later re-patch starts from the stock binary instead of
     # refusing or stacking on top of itself.
     rm -f "${appimage_path}.dualdeck.json"
+
+    # Put EmuDeck's own launcher back as well, for the same reason the
+    # melonDS launcher script is restored above: leaving a launcher that
+    # still execs DualDeck's shim, after the emulator underneath it has
+    # been reverted to stock, is a half-restore that still looks broken.
+    restore_emudeck_launcher_shims "${emulator}"
+
     echo "== ${emulator}: restored. Re-run this script without --restore to patch it again. =="
     log "${emulator}: restored original from backup"
 }
