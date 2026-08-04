@@ -10918,6 +10918,69 @@ either backend -- whether the cursor is now genuinely visible and
 correctly positioned in the mirrored stream, on both the X11 and
 Wayland capture paths.
 
+## 2026-08-04: face buttons mapped by letter instead of physical position, and the Azahar X/Y compensation that then double-swapped
+
+Two related reports, a few hours apart, that have to be read together.
+
+**The original bug.** `client/src/main.cpp`'s `kButtonMappings` paired
+SDL's positional face-button names with the DS button of the *same
+letter* -- `SOUTH -> DSButton_A`, `EAST -> DSButton_B`, and so on. The
+Steam Deck uses the Xbox arrangement (`Y` top, `A` bottom) while the
+DS/3DS mirror it (`X` top, `B` bottom), so a letter-for-letter table is
+wrong on all four buttons at once. Reported as: every face button
+transposed on both melonDS and Azahar.
+
+It could not be corrected in the emulator's own controller config,
+which is what made it confusing to diagnose from the outside. Remote
+input arrives as an already-decoded DS button bitmask over the protocol
+and never passes through Azahar's or melonDS's SDL binding layer -- the
+reporting user confirmed this by resetting Azahar's controls and
+running EmuDeck's Reset Controls to no effect, while Azahar's own local
+SDL mapping was already correct. Fixed by mapping position to position
+(SPEC.md 7.3), guarded by `static_assert` next to the table.
+
+**The follow-on bug that fix exposed.** With the client corrected,
+melonDS became right but Azahar's X/Y were now flipped. Cause: Azahar's
+adapter carried a deliberate X/Y cross-wiring added 2026-08-03 to
+compensate for Steam Input's default template reporting the physical
+X/Y face buttons swapped (see the entry above this one). Once the
+client fixed the same symptom one layer earlier, the two swaps composed
+and cancelled into a flip. melonDS was unaffected precisely because it
+has no compensating table -- which is the tell that identified the
+cause.
+
+The Azahar compensation is now removed rather than the client fix being
+reverted: correcting it in the client covers every emulator, not just
+the one that happened to carry a workaround, and it retires the old
+tradeoff where any user *without* that Steam Input quirk saw X/Y wrong
+in the other direction.
+
+**Why `adapter_bridge.cpp` was deliberately not touched.** Three tables
+translate these bits and they do not all mean the same thing:
+
+- `adapter_bridge.cpp`'s `dsButtonsToGenericButtons()` maps by letter
+  (`DSButton_A -> GenericButton_South`), and the emulator adapters map
+  straight back (`South -> A`). That round-trip is what makes the
+  emulator path correct, so changing it would have broken melonDS and
+  Azahar together.
+- The Azahar adapter's table was *mixed*: A/B by letter, X/Y by
+  position. That inconsistency is the whole bug, and is now uniform.
+- `host_control_adapter.cpp` targets uinput, where `BTN_SOUTH` really
+  is the bottom button and desktop UI treats it as confirm. It has no
+  round-trip, so it must convert, and it was flipped alongside the
+  client fix. Left alone it would have moved Host Control's confirm one
+  position clockwise.
+
+The resulting asymmetry between `adapter_bridge` (letter) and
+`host_control_adapter` (position) is intentional. It is documented at
+both sites and asserted in `test_host_control_adapter.cpp`, which
+previously contained a test asserting the opposite -- that the two
+tables should always agree.
+
+**Not verified on real hardware from here**: the Host Control uinput
+direction was derived by reading the target, not from a reported
+symptom, so desktop navigation is the part most worth re-testing.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
