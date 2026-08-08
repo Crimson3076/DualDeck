@@ -3,7 +3,8 @@
 A Linux-focused system for running Nintendo DS games through melonDS on an
 HTPC while using a Steam Deck as the handheld controller and bottom
 screen — like a Wii U GamePad, with the TV showing the DS top screen and
-the Steam Deck showing the bottom screen plus all controls.
+the Steam Deck showing the bottom screen plus all controls. Experimental
+support also exists for the Nintendo 3DS (Azahar) and Wii U (Cemu).
 
 See [`SPEC.md`](SPEC.md) for the full project scope and requirements.
 
@@ -39,8 +40,7 @@ if a controller-driven menu is awkward to navigate, or for scripting.
 If you'd rather review the script before running it, download
 **`DualDeck-Installer.sh`** from the Releases page and run it locally
 instead -- functionally identical. See `docs/known-limitations.md`'s
-installer section for exactly what it does and doesn't cover yet (it's
-Phase 1 of GitHub issue #26's larger installer/auto-update rework).
+installer section for exactly what it does and doesn't cover yet.
 
 Everything you need to run is one script per side, no typing required:
 double-click `host/dualdeck-host.sh` on the machine running the
@@ -49,89 +49,82 @@ any Linux machine with a gamepad). Each opens a small menu; the host's
 "Launch..." choice picks which system to run -- Nintendo DS (melonDS,
 the default/most-supported path), Nintendo 3DS (Azahar, experimental --
 see `docs/known-limitations.md`'s AzaharAdapter entry), Nintendo Wii U
-(Cemu, experimental and not yet build-verified -- see
-`host/cemu-patches/README.md`), host-control mode only (no emulator,
-browse the host's own UI from the client instead -- also experimental),
-or a custom emulator you've already patched yourself with
-`scripts/patch-existing-emulator.sh`, for anyone who doesn't want a
-separate DualDeck-managed copy. The 3DS, Wii U, and host-control-only
-choices all get the same zero-typing device-approval prompt as
-melonDS's own in-process dialog -- a `kdialog` Yes/No popup on
-the host's own desktop the first time an unrecognized device connects,
-no shared secret to type or copy anywhere. Add to Steam (Big Picture/Gaming Mode), Remove from Steam, and
-Check for updates (which offers to install one automatically if it
-finds one) round out the rest of the menu, so there's nothing else in
-either `host/` or `client/` you need to open directly; the rest of
-what's in there (under each directory's `internal/` subfolder) is what
-the menu calls on your behalf. The client additionally checks for and
-installs updates automatically on every launch (Steam shortcut
-included), no menu or confirmation needed. On SteamOS Desktop Mode or
-Bazzite (both KDE Plasma/Dolphin),
-double-clicking an executable `.sh` file offers to run it directly --
-see `docs/steam-deck-setup.md`/`docs/bazzite-host-setup.md` for the
-quick-start section at the top of each, and the archive's own bundled
-`README.md` for the full rundown.
+(Cemu, experimental -- see `host/cemu-patches/README.md` for what's
+verified), host-control mode only (no emulator, browse the host's own
+UI from the client instead -- also experimental), or a custom emulator
+you've already patched yourself with `scripts/patch-existing-emulator.sh`,
+for anyone who doesn't want a separate DualDeck-managed copy. The 3DS,
+Wii U, and host-control-only choices all get the same zero-typing
+device-approval prompt as melonDS's own in-process dialog -- a `kdialog`
+Yes/No popup on the host's own desktop the first time an unrecognized
+device connects, no shared secret to type or copy anywhere. Add to Steam
+(Big Picture/Gaming Mode), Remove from Steam, and Check for updates
+(which offers to install one automatically if it finds one) round out
+the rest of the menu, so there's nothing else in either `host/` or
+`client/` you need to open directly; the rest of what's in there (under
+each directory's `internal/` subfolder) is what the menu calls on your
+behalf. The client additionally checks for and installs updates
+automatically on every launch (Steam shortcut included), no menu or
+confirmation needed. On SteamOS Desktop Mode or Bazzite (both KDE
+Plasma/Dolphin), double-clicking an executable `.sh` file offers to run
+it directly -- see `docs/steam-deck-setup.md`/`docs/bazzite-host-setup.md`
+for the quick-start section at the top of each, and the archive's own
+bundled `README.md` for the full rundown.
 
-## Status
+## Features
 
-**Phase 0, a Phase 1 skeleton, Phase 2 network-robustness work, and a
-first melonDS integration patch are all implemented, and the SDL3 client
-is now build- and run-verified.** The patch builds, its handshake/device-approval
-and video-capture/input-injection paths are all confirmed end-to-end
-against an actual running (homebrew) program driven through the real
-network pipeline with the real client binary — see below for exactly
-what is and isn't verified yet.
+- Stream the DS bottom screen (or, experimentally, the 3DS/Wii U
+  GamePad screen) to a Steam Deck or any Linux x86_64 machine with a
+  gamepad, while the TV shows the top screen -- full D-pad, face
+  buttons, shoulders, Start/Select, and direct touchscreen input,
+  injected straight into the emulator's own input system, not a
+  keyboard/mouse/virtual-controller stand-in.
+- **Device-approval authentication** -- the first time a client
+  connects, a human approves it once (a popup on the host, or a
+  name/address prompt in its console), nothing typed on the client
+  side. Approval persists across restarts. A static pre-shared token is
+  also supported for scripting/CI use.
+- **Automatic LAN discovery** -- the client scans and shows a
+  pick-a-host list instead of requiring a typed IP address.
+- **Automatic reconnect** with capped exponential backoff, and
+  fail-safe input release (every button, stick, and touch state
+  cleared) the moment a client disconnects or times out.
+- A checkbox in melonDS's own Emu Settings to turn remote streaming on
+  or off, plus a lightweight management listener for toggling it live
+  (used by the bundled Decky Loader plugin's Quick Access Menu panel)
+  without restarting the emulator.
+- Video capture works with both the Software and OpenGL/OpenGLCompute
+  3D renderers.
 
-- [`docs/melonds-integration-analysis.md`](docs/melonds-integration-analysis.md) —
-  where melonDS exposes bottom-screen frames and accepts input, verified
-  by building and patching real melonDS, not just reading source.
-- [`protocol/`](protocol/) — versioned wire format (including the Hello/
-  HelloAck handshake payloads and LAN discovery), touch-coordinate
-  mapping, fail-safe input-state tracking, and connection-attempt rate
-  limiting. Fully unit tested, no external dependencies.
-- [`host/remote-server/`](host/remote-server/) — a standalone host binary
-  implementing the full network/threading model (TCP control, UDP input,
-  TCP video) against a synthetic test-pattern frame source and a logging
-  input sink, so it can be built and tested without melonDS or a display.
-  Authenticates either via device approval (default -- a human at the
-  host approves or denies each new client by name/address, no typing on
-  either side; see `docs/protocol.md`'s "Authentication and device
-  approval") or a static pre-shared token (`--auth-token`, opt-in); UDP
-  input and the video channel are both gated on a completed,
-  authenticated handshake from the same source address. Also broadcasts
-  itself for LAN discovery so the client doesn't need to be told its
-  address.
-- [`host/melonds-patches/`](host/melonds-patches/) — a real patch against
-  upstream melonDS (`0001-remote-server-integration.patch`) that vendors
-  the protocol/host code above into melonDS's own build and wires it to
-  `GPU::GetFramebuffers()` and the input/hotkey system, pops an
-  Approve/Deny dialog for new connection requests, and defaults the "Open
-  ROM" dialog to EmuDeck's NDS folder. Confirmed to build from a fresh
-  clone; its video path was confirmed to deliver a real, non-static frame
-  from a minimal original homebrew ROM
-  ([`tests/homebrew-test-rom/`](tests/homebrew-test-rom/)) direct-booted
-  in the patched binary — and, going further, that ROM was extended to
-  read real DS button input and driven through the actual UDP-input →
-  `SetKeyMask()` → CPU → framebuffer → network pipeline, confirming DS
-  controls sent remotely genuinely affect a running program, and
-  conclusively resolving the pixel format as **BGRA8888** with engine B
-  as the bottom screen. See `host/melonds-patches/README.md` and
-  `tests/homebrew-test-rom/README.md` for the full verification account,
-  including the honest caveat that this is an original homebrew program,
-  not a commercial game.
-- [`client/`](client/) — an SDL3 Steam Deck client with automatic
-  reconnect (capped exponential backoff), a LAN host-discovery/selection
-  screen shown on every launch, and no typing required anywhere in the
-  connection flow (device approval happens on the host). Built from
-  source (SDL3 3.2.16, not packaged for the development environment used
-  here) and **run successfully** against both the standalone host
-  prototype and the actual patched melonDS host — real handshake, real
-  device-approval flow, real sustained video/input traffic. Not yet
-  tested on real Steam Deck hardware — see
-  [`docs/building.md`](docs/building.md) and
-  [`docs/known-limitations.md`](docs/known-limitations.md).
+## Planned features & fixes
 
-## Quick start
+- Real-game verification for the Nintendo 3DS (Azahar) path -- currently
+  build-verified only, not yet run against an actual 3DS game.
+- GamePad touchscreen input for the Nintendo Wii U (Cemu) path -- Cemu
+  has no touch-injection plumbing yet, so touch isn't forwarded there.
+- Save state, load state, and the rest of the emulator-action set --
+  only pause/resume, fast-forward, and screen-swap are wired up so far.
+- A settings UI for bind address, ports, auth token, state directory,
+  and discovery options -- currently config-file/env-var only.
+- A way to list and revoke individual approved devices, instead of
+  only clearing the whole approved-devices file at once.
+- Session-ID validation on packets after the initial handshake.
+- Independent verification of the OpenGLCompute renderer capture path
+  (same code as OpenGL, but not yet exercised in a compute-capable
+  environment).
+- Testing on real Steam Deck hardware for the client -- verified so far
+  against a standalone host and patched melonDS, not on-device.
+
+See `docs/known-limitations.md` for the complete, per-platform list.
+
+## First connection
+
+The first time a client connects to a host, a human needs to approve it
+at the host (shown as a popup if you're at the emulator's window, or in
+its terminal output otherwise) -- nothing to type on the client side.
+After that, it's remembered automatically.
+
+## Quick start (running from source)
 
 ```sh
 # Build and test everything that doesn't need SDL3 or melonDS:
@@ -153,17 +146,21 @@ python3 tests/smoke_test.py build/host/remote-server/dualdeck-host-service
 
 ## Documentation
 
-- [`docs/melonds-integration-analysis.md`](docs/melonds-integration-analysis.md) — Phase 0 findings
-- [`host/melonds-patches/README.md`](host/melonds-patches/README.md) — the melonDS patch itself and what's verified
-- [`tests/homebrew-test-rom/README.md`](tests/homebrew-test-rom/README.md) — the original homebrew ROM used to verify the patch's video path
-- [`docs/architecture.md`](docs/architecture.md) — component overview and threading model
-- [`docs/protocol.md`](docs/protocol.md) — wire format reference
-- [`docs/building.md`](docs/building.md) — build instructions
-- [`docs/testing.md`](docs/testing.md) — unit tests and the integration smoke test
-- [`docs/bazzite-host-setup.md`](docs/bazzite-host-setup.md) — Bazzite-specific host build/run notes (Distrobox, firewalld)
-- [`docs/steam-deck-setup.md`](docs/steam-deck-setup.md) — Steam Deck client setup (Desktop Mode + Gaming Mode shortcut)
-- [`docs/troubleshooting.md`](docs/troubleshooting.md) — fixes for problems you're likely to hit
-- [`docs/known-limitations.md`](docs/known-limitations.md) — consolidated list of what isn't done yet
+- [`docs/melonds-integration-analysis.md`](docs/melonds-integration-analysis.md) -- how melonDS exposes bottom-screen frames and accepts input
+- [`docs/azahar-integration-analysis.md`](docs/azahar-integration-analysis.md) -- the same investigation for Azahar/3DS
+- [`host/melonds-patches/README.md`](host/melonds-patches/README.md) -- the melonDS patch and what's verified
+- [`host/azahar-patches/README.md`](host/azahar-patches/README.md) -- the Azahar/3DS patch and what's verified
+- [`host/cemu-patches/README.md`](host/cemu-patches/README.md) -- the Cemu/Wii U patch and what's verified
+- [`decky-plugin/README.md`](decky-plugin/README.md) -- the Decky Loader plugin for live start/stop from Gaming Mode
+- [`tests/homebrew-test-rom/README.md`](tests/homebrew-test-rom/README.md) -- the original homebrew ROM used to verify the DS video/input path
+- [`docs/architecture.md`](docs/architecture.md) -- component overview and threading model
+- [`docs/protocol.md`](docs/protocol.md) -- wire format reference
+- [`docs/building.md`](docs/building.md) -- build instructions
+- [`docs/testing.md`](docs/testing.md) -- unit tests and the integration smoke test
+- [`docs/bazzite-host-setup.md`](docs/bazzite-host-setup.md) -- Bazzite-specific host build/run notes (Distrobox, firewalld)
+- [`docs/steam-deck-setup.md`](docs/steam-deck-setup.md) -- Steam Deck client setup (Desktop Mode + Gaming Mode shortcut)
+- [`docs/troubleshooting.md`](docs/troubleshooting.md) -- fixes for problems you're likely to hit
+- [`docs/known-limitations.md`](docs/known-limitations.md) -- consolidated list of what isn't done yet
 
 ## License
 
