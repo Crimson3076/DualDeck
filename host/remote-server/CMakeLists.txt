@@ -12,6 +12,7 @@ add_library(dualdeck_host STATIC
     src/host_session_state.cpp
     src/capability_bridge.cpp
     src/kdialog_approval_prompt.cpp
+    src/h264_encoder.cpp
 )
 
 # Host Control screen-mirror experiment (DUALDECK_HOSTCONTROL_MIRROR_SCREEN,
@@ -87,6 +88,31 @@ else()
     message(STATUS "dualdeck_host: dbus-1/libpipewire-0.3 not found -- Host Control screen-mirroring's "
                     "Wayland fallback will be compiled out as a no-op in this build (X11 path, if available, "
                     "is unaffected)")
+endif()
+
+# H.264 encode (protocol v13's optional codec alongside JPEG -- see
+# docs/known-limitations.md's 2026-08-25 video-codec-negotiation entry
+# and h264_encoder.h's own comment). Optional-at-configure-time exactly
+# like X11/Wayland above, not required like TurboJPEG: no session can
+# ever *require* H.264 (NetServer::selectVideoCodec() only ever picks it
+# when the connecting client also advertised support), so a host built
+# without it simply never gets the option and every session runs JPEG
+# exactly as before. OpenH264 (Cisco, BSD-licensed) rather than
+# libx264+FFmpeg -- one dependency covers both encode and decode,
+# purpose-built for real-time low-latency streaming (the same library
+# WebRTC/Firefox use), and avoids the GPL question libx264 would raise
+# for a project that ships prebuilt binaries via GitHub Releases.
+if(PkgConfig_FOUND)
+    pkg_check_modules(OPENH264 openh264)
+endif()
+if(OPENH264_FOUND)
+    target_compile_definitions(dualdeck_host PRIVATE DUALDECK_HAVE_OPENH264)
+    target_link_libraries(dualdeck_host PRIVATE ${OPENH264_LIBRARIES})
+    target_include_directories(dualdeck_host SYSTEM PRIVATE ${OPENH264_INCLUDE_DIRS})
+    target_link_directories(dualdeck_host PRIVATE ${OPENH264_LIBRARY_DIRS})
+else()
+    message(STATUS "dualdeck_host: openh264 not found -- H.264 video encoding will be compiled out "
+                    "as unavailable in this build (JPEG, protocol v8's existing codec, is unaffected)")
 endif()
 
 target_include_directories(dualdeck_host PUBLIC

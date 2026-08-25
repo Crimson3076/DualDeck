@@ -75,10 +75,25 @@ echo "== [0/6] Checking build dependencies =="
 # variable's own comment) -- SDL's X11 backend started hard-requiring it
 # at configure time somewhere between 3.2.16 and 3.4.12 ("Couldn't find
 # dependency package for XTEST"), where 3.2.16 built fine without it.
+# libopenh264-dev/openh264-devel/openh264 (protocol v13's optional H.264
+# video codec, host/remote-server/src/h264_encoder.cpp -- see
+# docs/known-limitations.md's 2026-08-25 video-codec-negotiation entry):
+# purely opt-in at configure time, same as X11/Wayland above, never
+# FATAL_ERROR like TurboJPEG -- a build without it just never gets H.264
+# capability, every session still runs JPEG. apt's name is confirmed
+# (Ubuntu ships it in universe); dnf/pacman names are best-effort and
+# unverified the same way this file's own Azahar Vulkan/Boost packages
+# already are below -- Fedora in particular has historically kept
+# H.264-capable codecs out of its own repos over patent licensing, even
+# though OpenH264's source itself is BSD and Cisco's royalty coverage is
+# specifically what makes that a non-issue for an *official* OpenH264
+# build (not necessarily a distro's own rebuild) -- so `dnf install
+# openh264-devel` may need Fedora's separate Cisco-hosted repo enabled,
+# not just the base repos this script otherwise assumes.
 ensure_packages "build" \
-    "cmake extra-cmake-modules ninja-build build-essential git python3 libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev libarchive-dev libenet-dev libzstd-dev libfaad-dev qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-svg-dev qt6-wayland libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libdecor-0-dev libturbojpeg0-dev libdbus-1-dev libpipewire-0.3-dev" \
-    "cmake extra-cmake-modules ninja-build gcc-c++ git python3 libcurl-devel libpcap-devel SDL2-devel libarchive-devel enet-devel libzstd-devel faad2-devel qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtmultimedia-devel qt6-qtsvg-devel qt6-qtwayland libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel libXtst-devel wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel turbojpeg-devel dbus-devel pipewire-devel" \
-    "cmake extra-cmake-modules ninja base-devel git python curl libpcap sdl2 libarchive enet zstd faad2 qt6-base qt6-multimedia qt6-svg qt6-wayland libx11 libxext libxrandr libxcursor libxfixes libxi libxss libxtst wayland libxkbcommon libdrm mesa libdecor libjpeg-turbo dbus libpipewire"
+    "cmake extra-cmake-modules ninja-build build-essential git python3 libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev libarchive-dev libenet-dev libzstd-dev libfaad-dev qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-svg-dev qt6-wayland libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libdecor-0-dev libturbojpeg0-dev libdbus-1-dev libpipewire-0.3-dev libopenh264-dev" \
+    "cmake extra-cmake-modules ninja-build gcc-c++ git python3 libcurl-devel libpcap-devel SDL2-devel libarchive-devel enet-devel libzstd-devel faad2-devel qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtmultimedia-devel qt6-qtsvg-devel qt6-qtwayland libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel libXtst-devel wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel turbojpeg-devel dbus-devel pipewire-devel openh264-devel" \
+    "cmake extra-cmake-modules ninja base-devel git python curl libpcap sdl2 libarchive enet zstd faad2 qt6-base qt6-multimedia qt6-svg qt6-wayland libx11 libxext libxrandr libxcursor libxfixes libxi libxss libxtst wayland libxkbcommon libdrm mesa libdecor libjpeg-turbo dbus libpipewire openh264"
 
 # Azahar (3DS) additionally needs a Vulkan SDK and Boost headers beyond
 # melonDS's own dependency list above -- see

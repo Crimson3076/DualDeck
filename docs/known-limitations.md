@@ -11121,6 +11121,79 @@ negotiation scaffold those stages will plug into. `selectVideoCodec()`'s
 own comment names the one line that needs to change once a real encoder
 exists.
 
+## 2026-08-25: Real H.264 encoder built (OpenH264) -- standalone and tested, not wired into a live session yet
+
+Stage 2 of the video-codec-negotiation plan (see the entry directly
+above): a real, working H.264 encoder, built as an independently-tested
+component rather than wired straight into `NetServer::videoLoop()` in
+the same pass -- this project's own history (JPEG's v7->v8 addition, the
+Cemu integration's many real-hardware rounds) shows video-path changes
+need verification between steps, and session-level wiring (resolution-
+change handling, the client-side setting, actually flipping the host's
+advertised codec bit) is its own separable piece of work, still pending.
+
+`host/remote-server/include/host/h264_encoder.h` + `src/h264_encoder.cpp`:
+a new `H264Encoder` class wrapping OpenH264 (Cisco, BSD-licensed) --
+`initialize(width, height, fps, bitrate)`, `encodeFrame(bgra, ...)`
+(hand-rolled BGRA->I420 conversion, since OpenH264 has no built-in RGB
+input path -- the one extra step JPEG's own `compressFrameBgraToJpeg()`
+didn't need, since libjpeg-turbo does BGRA->YCbCr internally), and
+`requestKeyframe()`. Tuned for real-time low latency, not offline
+max-compression: single temporal/spatial layer, frame skip *enabled*
+(after first shipping it disabled on the wrong reasoning that skipping
+frames would hurt latency -- OpenH264 itself flagged this at runtime,
+"bitrate can't be controlled ... without enabling skip frame": frame
+skip is unrelated to B-frame lookahead, and disabling it meant
+`RC_BITRATE_MODE` couldn't actually enforce the target bitrate,
+letting a congested link's queue grow the same unbounded way the
+pre-`SO_SNDBUF` JPEG path once did -- see that fix's own
+known-limitations entry), and a ~2-second keyframe interval.
+Optional at CMake configure time exactly like X11/Wayland screen
+capture (`host/remote-server/CMakeLists.txt`'s existing pattern) rather
+than required like TurboJPEG: `pkg_check_modules(openh264)`, gated
+behind a new `DUALDECK_HAVE_OPENH264` compile definition -- a build
+without it compiles a stub `H264Encoder` (`isAvailable()` returns
+false, every other method fails cleanly) rather than failing to
+configure at all, so this stays a genuinely optional dependency. Also
+added to `scripts/build-release.sh`'s `ensure_packages()` list
+(confirmed apt package name; dnf/pacman names best-effort/unverified,
+flagged the same way this file's own Azahar Vulkan/Boost packages
+already are, since Fedora in particular has historically kept
+H.264-capable codecs out of its own repos over patent licensing).
+
+Explicitly handles the case JPEG never had to think about:
+`initialize()` can be called again with a different size, tearing down
+and recreating the underlying `ISVCEncoder` (`encodeFrame()` rejects a
+size that doesn't match the currently-initialized one rather than
+silently reading past the source buffer) -- the resolution-change
+handling this project's own Cemu integration already needed once for
+real (its "sheared/torn" video bug, root-caused to a per-title GamePad
+resolution that isn't always the hardware default).
+
+**Verified**: full local rebuild (`-Wall -Wextra -Wpedantic -Wconversion
+-Wshadow -Werror`, zero warnings) with OpenH264 actually detected and
+linked in this sandbox. New `test_h264_encoder.cpp` cases include a
+real round trip -- not just "produces non-empty bytes": the encoder's
+own Annex-B output is fed into OpenH264's own decoder (a second,
+independent code path, not this project's), and the test asserts the
+decoded output actually reports the right width/height and non-null
+Y/U/V planes. Also covers the resolution-change reinit path (a frame at
+the wrong size is rejected; reinitializing and retrying succeeds, and
+produces a fresh IDR), and the always-available-regardless-of-build
+behavior (`encodeFrame()` before `initialize()`, invalid width/height/fps
+all fail cleanly). The `#else` (no-OpenH264) branch of `h264_encoder.cpp`
+was separately compiled standalone with the project's full strict-warnings
+set to confirm it's real, buildable code, not just theoretically correct.
+All 6 `ctest` suites (protocol/adapter-sdk/client-settings/net-client/
+config-migration/host, including the new H.264 cases) pass.
+
+**Not yet done**: wiring this encoder into `NetServer::videoLoop()`'s
+actual per-session frame-sending path, flipping the host's advertised
+`VideoCodecBit_H264` capability (still hardcoded off in
+`selectVideoCodec()`), the client-side OpenH264 *decoder* and its
+"VIDEO CODEC" setting, and real end-to-end testing against a live
+Cemu/melonDS/Azahar session on real hardware.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
