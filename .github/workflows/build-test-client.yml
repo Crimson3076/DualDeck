@@ -1,0 +1,217 @@
+name: Build test client (H.264 opt-in)
+
+# On-demand build of just the two binaries you actually iterate on --
+# dualdeck-client and dualdeck-host-service -- for testing protocol v13's
+# opt-in H.264 video codec (see docs/known-limitations.md's 2026-08-25
+# video-codec-negotiation entries) against your already-patched Cemu/
+# melonDS/Azahar hosts. Deliberately NOT release.yml: that workflow also
+# rebuilds the patched emulators from scratch (Cemu alone is ~108 vcpkg
+# packages) and publishes a public, versioned GitHub Release -- overkill
+# and the wrong audience for "let me try the new codec on my own
+# hardware." This just builds the two binaries with SDL3 and OpenH264,
+# bundles their runtime shared libraries, and uploads the result as a
+# workflow artifact you download from this run's page. Nothing here is
+# published anywhere public.
+#
+# Manual only (workflow_dispatch) -- this is not part of ci.yml's
+# every-push build, so it never slows down normal iteration.
+
+on:
+  workflow_dispatch:
+    inputs:
+      default_to_h264:
+        description: "Ship this build with VIDEO CODEC defaulting to H264 instead of JPEG (only affects a fresh settings.conf -- an existing one on the test machine is untouched, and this never touches what real users get from main)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-client:
+    name: Build client + host test binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same package list build-release.sh's ensure_packages() installs
+      # for Ubuntu, trimmed to just what dualdeck-client/dualdeck-host-
+      # service and the SDL3 build itself need -- none of the emulator-
+      # only deps (Qt6, enet, libarchive, libpcap, faad2, ...) that list
+      # also carries.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build git pkg-config \
+            libturbojpeg0-dev libopenh264-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+            libxfixes-dev libxi-dev libxss-dev libxtst-dev \
+            libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev \
+            libdecor-0-dev libdbus-1-dev libpipewire-0.3-dev
+
+      # Pinned to the same tag build-release.sh uses (SDL3_TAG) -- see
+      # that variable's own comment for why: anything older than
+      # release-3.4.0 has no Steam Deck touchpad support at all. Cached
+      # by tag so a re-run of this workflow without an SDL3_TAG bump
+      # doesn't rebuild SDL3 from scratch every time.
+      - name: Cache SDL3 build
+        id: sdl3-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/sdl3-install
+          key: sdl3-release-3.4.12-${{ runner.os }}
+
+      - name: Build SDL3
+        if: steps.sdl3-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch release-3.4.12 https://github.com/libsdl-org/SDL.git "${{ runner.temp }}/sdl3-src"
+          cmake -S "${{ runner.temp }}/sdl3-src" -B "${{ runner.temp }}/sdl3-src/build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="${{ runner.temp }}/sdl3-install" \
+            -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF
+          cmake --build "${{ runner.temp }}/sdl3-src/build" -j"$(nproc)"
+          cmake --install "${{ runner.temp }}/sdl3-src/build"
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DDUALDECK_BUILD_CLIENT=ON -DDUALDECK_BUILD_HOST=ON \
+            -DCMAKE_PREFIX_PATH="${{ runner.temp }}/sdl3-install" \
+            | tee configure.log
+
+          # The whole point of this workflow is a build that CAN do
+          # H.264 -- both host/remote-server/CMakeLists.txt and
+          # client/CMakeLists.txt fall back to a silent JPEG-only stub
+          # if pkg-config can't find openh264 (see h264_encoder.h/
+          # h264_decoder.h's own comments), which would ship a "test
+          # build" that can never actually negotiate H.264 no matter
+          # what VIDEO CODEC is set to. libopenh264-dev was just
+          # installed above, so treat either fallback message as a hard
+          # configure failure rather than a silently-degraded artifact.
+          if grep -q "openh264 not found" configure.log; then
+            echo "::error::OpenH264 was not detected by CMake even though libopenh264-dev was installed -- this build would be JPEG-only despite being requested as an H.264 test build. See configure.log above." >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      # Runs against the real, untouched source -- before the optional
+      # default-flip below -- specifically so
+      # client_settings_missing_file_uses_video_codec_h264_off_default
+      # (client/tests/test_client_settings.cpp) still means what it
+      # says. Flipping the compiled-in default first and testing after
+      # would make that test fail for a reason that has nothing to do
+      # with a real regression.
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      # Ephemeral, this-runner-only edit -- NOT committed back to the
+      # repo. This is exactly the "flip ClientSettings' default" test-
+      # build override, scoped to this one artifact: a fresh
+      # settings.conf on the test machine starts with VIDEO CODEC set
+      # to H264 instead of the real default (JPEG) main.cpp ships to
+      # everyone else. An existing settings.conf on the test machine is
+      # untouched either way -- see ClientSettings::
+      # videoCodecH264Experimental's own comment in client_settings.h
+      # for why JPEG stays the real default until this has real
+      # hardware testing. Deliberately after the Test step above, not
+      # before: this one-line default change is exactly what
+      # client_settings_round_trip_video_codec_h264_experimental already
+      # covers, so re-running the whole suite against it isn't needed --
+      # only rebuilding (below) to actually pick it up into the binary
+      # is.
+      - name: Flip H264 default for this build only
+        if: ${{ inputs.default_to_h264 }}
+        run: |
+          sed -i \
+            's/bool videoCodecH264Experimental = false;/bool videoCodecH264Experimental = true; \/\/ TEST BUILD OVERRIDE, see build-test-client.yml/' \
+            client/src/client_settings.h
+          grep -n "videoCodecH264Experimental = true" client/src/client_settings.h
+          cmake --build build -j"$(nproc)" --target dualdeck-client dualdeck-host-service
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          . scripts/lib/appimage_pack.sh # for bundle_library_dependencies()
+
+          commit_short="$(git rev-parse --short HEAD)"
+          pkg_dir="${{ runner.temp }}/dualdeck-test-client-${commit_short}"
+          mkdir -p "${pkg_dir}/client/lib" "${pkg_dir}/host"
+
+          cp build/client/dualdeck-client "${pkg_dir}/client/dualdeck-client"
+          bundle_library_dependencies "${pkg_dir}/client/dualdeck-client" "${pkg_dir}/client/lib"
+          # bundle_library_dependencies copies whatever ldd resolved on
+          # this runner, which can be an unversioned dev symlink rather
+          # than the real SONAME file SDL3 itself installs -- always
+          # overwrite with the actual installed copy afterward, same
+          # ordering build-release.sh's own packaging step uses.
+          cp -a "${{ runner.temp }}/sdl3-install"/lib/libSDL3.so* "${pkg_dir}/client/lib/"
+
+          cp build/host/remote-server/dualdeck-host-service "${pkg_dir}/host/dualdeck-host-service"
+          bundle_library_dependencies "${pkg_dir}/host/dualdeck-host-service" "${pkg_dir}/host/lib"
+
+          # printf, not a heredoc -- this whole step is itself indented
+          # as a YAML block scalar, and a heredoc's closing delimiter
+          # must be flush-left (no `<<-`, and YAML preserves each line's
+          # literal leading spaces), so an indented `EOF` here would
+          # silently fail to terminate the heredoc.
+          run_client_script='#!/usr/bin/env bash
+          # Test build -- see README.md in this archive. Forwards all
+          # arguments to dualdeck-client, e.g.:
+          #   ./run-client.sh 192.168.1.50
+          set -euo pipefail
+          dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          LD_LIBRARY_PATH="${dir}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" exec "${dir}/dualdeck-client" "$@"'
+          printf '%s\n' "${run_client_script}" > "${pkg_dir}/client/run-client.sh"
+          chmod +x "${pkg_dir}/client/run-client.sh"
+
+          run_host_script='#!/usr/bin/env bash
+          # Test build -- see README.md in this archive.
+          set -euo pipefail
+          dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          LD_LIBRARY_PATH="${dir}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" exec "${dir}/dualdeck-host-service" "$@"'
+          printf '%s\n' "${run_host_script}" > "${pkg_dir}/host/run-host.sh"
+          chmod +x "${pkg_dir}/host/run-host.sh"
+
+          {
+            echo "DualDeck H.264 test build -- commit ${commit_short}"
+            echo
+            echo "Client + host only, built by build-test-client.yml -- no emulators"
+            echo "bundled. Use this against your existing patched Cemu/melonDS/Azahar"
+            echo "install; this is only a fresher dualdeck-client + dualdeck-host-service,"
+            echo "protocol v13, with the opt-in H.264 video codec (see"
+            echo "docs/known-limitations.md's 2026-08-25 video-codec-negotiation entries)."
+            echo
+            if [[ "${{ inputs.default_to_h264 }}" == "true" ]]; then
+              echo "This build's VIDEO CODEC setting defaults to H264 (a fresh"
+              echo "~/.config/dualdeck-client/settings.conf starts on H264 -- an existing"
+              echo "one on your machine is untouched either way). Toggle it back to JPEG"
+              echo "any time from the client's Settings menu."
+            else
+              echo "This build defaults to JPEG like a normal build -- toggle VIDEO CODEC"
+              echo "to H264 from the client's Settings menu to test it."
+            fi
+            echo
+            echo "H.264 is still opt-in and experimental: the host has final say"
+            echo "(NetServer::selectVideoCodec()) and falls back to JPEG on its own if"
+            echo "it wasn't built with OpenH264 either. This host build was built WITH"
+            echo "OpenH264 (libopenh264-dev was present), so it can serve H.264 if the"
+            echo "connecting client asks for it."
+            echo
+            echo "Run:"
+            echo "  ./host/run-host.sh     (on the machine running your emulators)"
+            echo "  ./client/run-client.sh <host-address>   (on the Steam Deck/laptop)"
+          } > "${pkg_dir}/README.md"
+
+          cp docs/known-limitations.md "${pkg_dir}/known-limitations.md"
+
+          echo "PKG_DIR=${pkg_dir}" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dualdeck-test-client-${{ github.run_number }}
+          path: ${{ env.PKG_DIR }}
+          retention-days: 14
