@@ -682,10 +682,21 @@ index f145048..39f46d0 100644
  	struct NullTexture
  	{
 diff --git a/src/gui/MainWindow.cpp b/src/gui/MainWindow.cpp
-index 4801706..7f9e0a3 100644
+index 4801706..492a2c8 100644
 --- a/src/gui/MainWindow.cpp
 +++ b/src/gui/MainWindow.cpp
-@@ -661,16 +661,21 @@ void MainWindow::OnFileMenu(wxCommandEvent& event)
+@@ -412,7 +412,9 @@ void MainWindow::DestroyGameListAndStatusBar()
+ 
+ wxString MainWindow::GetInitialWindowTitle()
+ {
+-	return BUILD_VERSION_WITH_NAME_STRING;
++	// DualDeck (github.com/crimson3076/DualDeck): same marker as
++	// gui_updateWindowTitles() in guiWrapper.cpp -- see that comment.
++	return wxString(BUILD_VERSION_WITH_NAME_STRING) + " - DualDeck";
+ }
+ 
+ void MainWindow::OnClose(wxCloseEvent& event)
+@@ -661,16 +663,21 @@ void MainWindow::OnFileMenu(wxCommandEvent& event)
  	}
  	else if (menuId == MAINFRAME_MENU_ID_FILE_END_EMULATION)
  	{
@@ -734,6 +745,23 @@ index beb86f9..a913bb2 100644
  	bool FileLoad(const fs::path launchPath, wxLaunchGameEvent::INITIATED_BY initiatedBy);
  
  	[[nodiscard]] bool IsGameLaunched() const { return m_game_launched; }
+diff --git a/src/gui/guiWrapper.cpp b/src/gui/guiWrapper.cpp
+index d887e89..3e98291 100644
+--- a/src/gui/guiWrapper.cpp
++++ b/src/gui/guiWrapper.cpp
+@@ -58,7 +58,11 @@ WindowInfo& gui_getWindowInfo()
+ void gui_updateWindowTitles(bool isIdle, bool isLoading, double fps)
+ {
+     std::string windowText;
+-    windowText = BUILD_VERSION_WITH_NAME_STRING;
++    // DualDeck (github.com/crimson3076/DualDeck): visibly marks this as
++    // the DualDeck-patched build in the one place a user actually looks
++    // to tell it apart from a stock Cemu install -- see docs/known-
++    // limitations.md's "window title" entry for why this string, here.
++    windowText = std::string(BUILD_VERSION_WITH_NAME_STRING) + " - DualDeck";
+ 
+ 	if (isIdle)
+ 	{
 diff --git a/src/input/InputManager.cpp b/src/input/InputManager.cpp
 index 64b238f..3bb9586 100644
 --- a/src/input/InputManager.cpp
@@ -870,10 +898,10 @@ index 0000000..d7c39c0
 +)
 diff --git a/src/remote_server/CemuAdapter.cpp b/src/remote_server/CemuAdapter.cpp
 new file mode 100644
-index 0000000..33a460d
+index 0000000..bd8aea7
 --- /dev/null
 +++ b/src/remote_server/CemuAdapter.cpp
-@@ -0,0 +1,388 @@
+@@ -0,0 +1,420 @@
 +#include "remote_server/CemuAdapter.h"
 +
 +#include <algorithm>
@@ -1122,9 +1150,9 @@ index 0000000..33a460d
 +    caps.surfaces.push_back(tv);
 +
 +    // GamePad/DRC output: streamed to the DualDeck client, the Wii U
-+    // analogue of DS/3DS's bottom screen. No touch support -- see
-+    // CemuAdapter.h's top comment (Cemu has no GamePad touch input
-+    // pipeline for any controller backend today).
++    // analogue of DS/3DS's bottom screen. Touch-capable -- see
++    // CemuAdapter.h's top comment's touch section and
++    // applyGenericInput()'s touch handling below.
 +    melonds_remote::adapter::VideoSurfaceDescriptor gamePad;
 +    gamePad.surfaceId = kGamePadSurfaceId;
 +    gamePad.role = melonds_remote::adapter::SurfaceRole::GamePad;
@@ -1134,7 +1162,7 @@ index 0000000..33a460d
 +        gamePad.height = m_gamePadSurface.hasFrame ? static_cast<uint16_t>(m_gamePadSurface.height) : kGamePadDefaultHeight;
 +    }
 +    gamePad.pixelFormat = melonds_remote::adapter::PixelFormat::Bgra8888;
-+    gamePad.touchSupported = false;
++    gamePad.touchSupported = true;
 +    gamePad.required = true;
 +    gamePad.locallyDisplayed = false;
 +    gamePad.remotelyDisplayed = true;
@@ -1171,6 +1199,37 @@ index 0000000..33a460d
 +            state.rightTrigger != 0   ? state.rightTrigger
 +            : (state.buttons & melonds_remote::adapter::GenericButton_R2) ? 0xFF
 +                                                                           : 0);
++
++        // Touch: mirrors AzaharAdapter.cpp's identical normalization
++        // (host/azahar-patches/) -- protocol.h's wire touchX/touchY are
++        // always quantized into the DS's fixed 0..kTouchMaxX/kTouchMaxY
++        // range regardless of which surface/aspect ratio the touch was
++        // actually made against (touch_mapping.cpp's mapPointToDSCoords()
++        // normalizes the tap's *fractional* position within the
++        // aspect-fit rect first, then rescales that fraction into
++        // DS-space, so the fraction recovered here is correct for any
++        // surface shape, including the GamePad's 16:9 854x480 output --
++        // not just the DS/3DS's native 4:3). Dividing back by
++        // kTouchMaxX/kTouchMaxY recovers that same 0..1 fraction, which
++        // is exactly the convention RemoteController::get_position() (and
++        // ControllerBase::get_position() generally) already promises.
++        // AdapterBridge::applyControllerState() only ever targets one
++        // surface (targetSurfaceId(), the one with remotelyDisplayed set
++        // -- the GamePad here), so state.touches has at most one contact
++        // in practice; matched by surfaceId anyway rather than assumed by
++        // position, in case that ever changes.
++        m_inputStatus->touchActive = false;
++        for (const auto& touch : state.touches) {
++            if (touch.surfaceId != kGamePadSurfaceId) {
++                continue;
++            }
++            m_inputStatus->touchActive = true;
++            m_inputStatus->touchX =
++                static_cast<float>(touch.x) / static_cast<float>(melonds_remote::kTouchMaxX);
++            m_inputStatus->touchY =
++                static_cast<float>(touch.y) / static_cast<float>(melonds_remote::kTouchMaxY);
++            break;
++        }
 +    }
 +
 +    // GitHub issue #25 (as implemented for melonDS/Azahar): client-side
@@ -1204,6 +1263,7 @@ index 0000000..33a460d
 +    m_inputStatus->rightStickY = 0;
 +    m_inputStatus->leftTrigger = 0;
 +    m_inputStatus->rightTrigger = 0;
++    m_inputStatus->touchActive = false;
 +}
 +
 +bool CemuAdapter::latestFrame(const std::string& surfaceId, melonds_remote::adapter::SurfaceFrame& outFrame) {
@@ -1264,10 +1324,10 @@ index 0000000..33a460d
 +} // namespace DualDeck::RemoteServer
 diff --git a/src/remote_server/CemuAdapter.h b/src/remote_server/CemuAdapter.h
 new file mode 100644
-index 0000000..68e1ed5
+index 0000000..09d6832
 --- /dev/null
 +++ b/src/remote_server/CemuAdapter.h
-@@ -0,0 +1,190 @@
+@@ -0,0 +1,204 @@
 +#pragma once
 +
 +// DualDeck's IEmulatorAdapter implementation for Cemu (Nintendo Wii U).
@@ -1323,15 +1383,29 @@ index 0000000..68e1ed5
 +//     mapped, so this never clobbers a real controller the user already
 +//     configured.
 +//
-+// Wii U GamePad touchscreen input is deliberately NOT part of this
-+// adapter: confirmed by reading Cafe/OS/libs/vpad/vpad.cpp's VPADRead()
-+// that Cemu hard-codes tpData/tpProcessed1/tpProcessed2 validity to
-+// VPAD_TP_VALIDITY_INVALID_XY unconditionally, regardless of which
-+// controller (if any) is mapped to a given VPAD channel -- i.e. no
-+// existing Cemu input backend can inject GamePad touch today, so there
-+// is no real plumbing for this adapter to hook into without inventing an
-+// entirely new Cemu-side touch pipeline, which is out of scope for the
-+// auto-mapping request that prompted this integration.
++//  3. Touch: Wii U GamePad touchscreen input. `VPADRead()`
++//     (Cafe/OS/libs/vpad/vpad.cpp) does default tpData/tpProcessed1/
++//     tpProcessed2 validity to VPAD_TP_VALIDITY_INVALID_XY before it does
++//     anything else -- but that's only the pre-controller-poll default,
++//     not the final value: for channel 0 (the Wii U GamePad) it then
++//     calls the mapped EmulatedController's own VPADRead(status, repeat)
++//     (VPADController::VPADRead(), input/emulated/VPADController.cpp),
++//     which unconditionally overwrites tpData via update_touch(). That
++//     function's first branch is `if (has_position())` -- an existing
++//     ControllerBase virtual (input/api/Controller.h) two other real
++//     backends already implement for exactly this purpose (DSUController
++//     for a DSU/cemuhook touchpad, NativeWiimoteController for the
++//     Wiimote IR pointer): a normalized [0,1]x[0,1] position plus an
++//     active flag, with no notion of *which* physical device produced it.
++//     RemoteController below implements the same pair, backed by
++//     RemoteInputStatus::touchActive/touchX/touchY (see RemoteController.h
++//     for the exact table this pairs with the shared-XInput button table
++//     above) -- so no upstream vpad.cpp/VPADController.cpp change is
++//     needed at all, unlike every other class of change this patch makes.
++//     The earlier assumption that this required "an entirely new
++//     Cemu-side touch pipeline" was wrong: that pipeline already existed,
++//     just gated behind a controller-level virtual this adapter hadn't
++//     implemented yet.
 +
 +#include <array>
 +#include <atomic>
@@ -1460,7 +1534,7 @@ index 0000000..68e1ed5
 +} // namespace DualDeck::RemoteServer
 diff --git a/src/remote_server/RemoteController.cpp b/src/remote_server/RemoteController.cpp
 new file mode 100644
-index 0000000..125495e
+index 0000000..1af7065
 --- /dev/null
 +++ b/src/remote_server/RemoteController.cpp
 @@ -0,0 +1,123 @@
@@ -1589,10 +1663,10 @@ index 0000000..125495e
 +} // namespace DualDeck::RemoteServer
 diff --git a/src/remote_server/RemoteController.h b/src/remote_server/RemoteController.h
 new file mode 100644
-index 0000000..8e95d6f
+index 0000000..bd1c312
 --- /dev/null
 +++ b/src/remote_server/RemoteController.h
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,75 @@
 +#pragma once
 +
 +// ControllerBase implementation backing DualDeck's Cemu integration. A
@@ -1609,8 +1683,17 @@ index 0000000..8e95d6f
 +// bit-for-bit (confirmed by reading that function, not assumed), so the
 +// patch's new InputAPI::DualDeckRemote case in that same function can
 +// reuse the XInput table verbatim instead of needing a new one.
++//
++// has_position()/get_position() back the Wii U GamePad touchscreen --
++// ControllerBase virtuals VPADController::update_touch()
++// (input/emulated/VPADController.cpp) already checks before falling back
++// to a local mouse click, and that DSUController/NativeWiimoteController
++// already implement for their own touch/pointer hardware. See
++// CemuAdapter.h's top comment's touch section and RemoteController.cpp
++// for the exact normalization.
 +
 +#include <memory>
++#include <mutex>
 +
 +#include "input/api/Controller.h"
 +#include "remote_server/RemoteControllerProvider.h"
@@ -1636,6 +1719,20 @@ index 0000000..8e95d6f
 +    // client has actually joined yet is a session-level concern
 +    // (CemuAdapter::currentState()), not a per-button-poll one.
 +    bool is_connected() override { return true; }
++
++    // Wii U GamePad touchscreen. Values are set by
++    // CemuAdapter::applyGenericInput() on the AdapterIpcClient readLoop()
++    // thread and read here on whatever thread polls VPAD (Cemu's HLE
++    // coreinit thread) -- always through RemoteInputStatus::mutex, same
++    // as raw_state()'s buttons/sticks/triggers below.
++    bool has_position() override {
++        std::lock_guard guard(m_status->mutex);
++        return m_status->touchActive;
++    }
++    glm::vec2 get_position() override {
++        std::lock_guard guard(m_status->mutex);
++        return {m_status->touchX, m_status->touchY};
++    }
 +
 +protected:
 +    ControllerState raw_state() override;
@@ -1738,10 +1835,10 @@ index 0000000..25b973b
 +} // namespace DualDeck::RemoteServer
 diff --git a/src/remote_server/RemoteInputStatus.h b/src/remote_server/RemoteInputStatus.h
 new file mode 100644
-index 0000000..d6dd71f
+index 0000000..987a462
 --- /dev/null
 +++ b/src/remote_server/RemoteInputStatus.h
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,43 @@
 +#pragma once
 +
 +// Shared, mutex-protected input state for DualDeck's Cemu integration.
@@ -1754,11 +1851,17 @@ index 0000000..d6dd71f
 +// Packed directly in the same Buttons2 bit layout
 +// VPADController::set_default_mapping()'s InputAPI::XInput case already
 +// expects (see RemoteController.cpp's top comment for the exact table),
-+// so no new per-API mapping logic was needed in the patch. No touch
-+// fields: see CemuAdapter.h's top comment on why Wii U GamePad touch
-+// input isn't part of this adapter (confirmed, not assumed, by reading
-+// Cafe/OS/libs/vpad/vpad.cpp's VPADRead()).
-+
++// so no new per-API mapping logic was needed in the patch.
++//
++// touchActive/touchX/touchY back RemoteController::has_position()/
++// get_position() (see RemoteController.cpp's touch comment) -- CemuAdapter
++// normalizes protocol.h's DS-shaped touch wire fields (0..kTouchMaxX/
++// kTouchMaxY) into the same 0..1 fractional convention
++// ControllerBase::get_position() already documents and DSUController/
++// NativeWiimoteController already produce, so VPADController::update_touch()
++// (input/emulated/VPADController.cpp), which already checks has_position()
++// before falling back to a local mouse click, picks this up with no
++// upstream Cemu change at all.
 +#include <cstdint>
 +#include <mutex>
 +
@@ -1773,12 +1876,15 @@ index 0000000..d6dd71f
 +    int16_t rightStickY = 0;
 +    uint8_t leftTrigger = 0;  // analog ZL, 0..255
 +    uint8_t rightTrigger = 0; // analog ZR, 0..255
++    bool touchActive = false;
++    float touchX = 0.0f; // normalized 0..1, valid only if touchActive
++    float touchY = 0.0f;
 +};
 +
 +} // namespace DualDeck::RemoteServer
 diff --git a/src/remote_server/RemoteServerBridge.cpp b/src/remote_server/RemoteServerBridge.cpp
 new file mode 100644
-index 0000000..daa6a5c
+index 0000000..36f2a74
 --- /dev/null
 +++ b/src/remote_server/RemoteServerBridge.cpp
 @@ -0,0 +1,158 @@
@@ -2671,7 +2777,7 @@ index 0000000..a441296
 +} // namespace melonds_remote::adapter
 diff --git a/src/remote_server/adapter_sdk/include/melonds_remote/protocol.h b/src/remote_server/adapter_sdk/include/melonds_remote/protocol.h
 new file mode 100644
-index 0000000..c2ef192d1
+index 0000000..eddcc10
 --- /dev/null
 +++ b/src/remote_server/adapter_sdk/include/melonds_remote/protocol.h
 @@ -0,0 +1,817 @@
@@ -4144,7 +4250,7 @@ index 0000000..4cac76e
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/remote_server/adapter_sdk/src/protocol.cpp b/src/remote_server/adapter_sdk/src/protocol.cpp
 new file mode 100644
-index 0000000..a91fb3d84
+index 0000000..add207a
 --- /dev/null
 +++ b/src/remote_server/adapter_sdk/src/protocol.cpp
 @@ -0,0 +1,573 @@
@@ -4829,35 +4935,3 @@ index 0000000..4221450
 +}
 +
 +} // namespace melonds_remote::adapter::ipc
-diff --git a/src/gui/guiWrapper.cpp b/src/gui/guiWrapper.cpp
-index 0000000..0000000 100644
---- a/src/gui/guiWrapper.cpp
-+++ b/src/gui/guiWrapper.cpp
-@@ -58,7 +58,11 @@ WindowInfo& gui_getWindowInfo()
- void gui_updateWindowTitles(bool isIdle, bool isLoading, double fps)
- {
-     std::string windowText;
--    windowText = BUILD_VERSION_WITH_NAME_STRING;
-+    // DualDeck (github.com/crimson3076/DualDeck): visibly marks this as
-+    // the DualDeck-patched build in the one place a user actually looks
-+    // to tell it apart from a stock Cemu install -- see docs/known-
-+    // limitations.md's "window title" entry for why this string, here.
-+    windowText = std::string(BUILD_VERSION_WITH_NAME_STRING) + " - DualDeck";
- 
- 	if (isIdle)
- 	{
-diff --git a/src/gui/MainWindow.cpp b/src/gui/MainWindow.cpp
-index 0000000..0000000 100644
---- a/src/gui/MainWindow.cpp
-+++ b/src/gui/MainWindow.cpp
-@@ -412,7 +412,9 @@ void MainWindow::DestroyGameListAndStatusBar()
- 
- wxString MainWindow::GetInitialWindowTitle()
- {
--	return BUILD_VERSION_WITH_NAME_STRING;
-+	// DualDeck (github.com/crimson3076/DualDeck): same marker as
-+	// gui_updateWindowTitles() in guiWrapper.cpp -- see that comment.
-+	return wxString(BUILD_VERSION_WITH_NAME_STRING) + " - DualDeck";
- }
- 
- void MainWindow::OnClose(wxCloseEvent& event)

@@ -100,8 +100,11 @@ bundled `README.md` for the full rundown.
 
 - Real-game verification for the Nintendo 3DS (Azahar) path -- currently
   build-verified only, not yet run against an actual 3DS game.
-- GamePad touchscreen input for the Nintendo Wii U (Cemu) path -- Cemu
-  has no touch-injection plumbing yet, so touch isn't forwarded there.
+- Real-hardware confirmation that GamePad touchscreen input for the
+  Nintendo Wii U (Cemu) path actually registers in-game -- implemented
+  and patch-verified (`host/cemu-patches/README.md`'s "GamePad
+  touchscreen input implemented" entry), not yet confirmed against a
+  real touch-sensitive Wii U title.
 - Save state, load state, and the rest of the emulator-action set --
   only pause/resume, fast-forward, and screen-swap are wired up so far.
 - A settings UI for bind address, ports, auth token, state directory,
