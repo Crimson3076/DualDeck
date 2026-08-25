@@ -148,7 +148,7 @@ index 0d48ee16..cfd686ea 100644
  
  DefaultList<double> DefaultDoubles =
 diff --git a/src/frontend/qt_sdl/EmuInstance.cpp b/src/frontend/qt_sdl/EmuInstance.cpp
-index a8b10218..6c67862a 100755
+index a8b10218..e5771ece 100755
 --- a/src/frontend/qt_sdl/EmuInstance.cpp
 +++ b/src/frontend/qt_sdl/EmuInstance.cpp
 @@ -20,15 +20,24 @@
@@ -1918,7 +1918,7 @@ index 00000000..a00f345a
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
 new file mode 100644
-index 00000000..1e830a79
+index 00000000..85c62328
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
 @@ -0,0 +1,152 @@
@@ -2076,7 +2076,7 @@ index 00000000..1e830a79
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
 new file mode 100644
-index 00000000..c89c42a8
+index 00000000..1f1dc6d1
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
 @@ -0,0 +1,167 @@
@@ -3669,7 +3669,7 @@ index 00000000..42214503
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/frontend/qt_sdl/remote_server/host/adapter_bridge.cpp b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.cpp
 new file mode 100644
-index 0000000..d1a2b3c40
+index 00000000..7d359cd1
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.cpp
 @@ -0,0 +1,145 @@
@@ -3820,7 +3820,7 @@ index 0000000..d1a2b3c40
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/adapter_bridge.h b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.h
 new file mode 100644
-index 0000000..e2b3c4d51
+index 00000000..44733239
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.h
 @@ -0,0 +1,92 @@
@@ -3918,7 +3918,7 @@ index 0000000..e2b3c4d51
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/device_approval_manager.cpp b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.cpp
 new file mode 100644
-index 0000000..f3c4d5e62
+index 00000000..3af7c901
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.cpp
 @@ -0,0 +1,168 @@
@@ -4092,7 +4092,7 @@ index 0000000..f3c4d5e62
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/device_approval_manager.h b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.h
 new file mode 100644
-index 0000000..a4d5e6f73
+index 00000000..42660f50
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.h
 @@ -0,0 +1,150 @@
@@ -4248,7 +4248,7 @@ index 0000000..a4d5e6f73
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/emulator_input_sink.h b/src/frontend/qt_sdl/remote_server/host/emulator_input_sink.h
 new file mode 100644
-index 0000000..b5e6f7084
+index 00000000..b6f99b86
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/emulator_input_sink.h
 @@ -0,0 +1,34 @@
@@ -4288,7 +4288,7 @@ index 0000000..b5e6f7084
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/frame_source.h b/src/frontend/qt_sdl/remote_server/host/frame_source.h
 new file mode 100644
-index 0000000..0000000
+index 00000000..391f9d87
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/frame_source.h
 @@ -0,0 +1,80 @@
@@ -4374,7 +4374,7 @@ index 0000000..0000000
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/mic_audio_sink.h b/src/frontend/qt_sdl/remote_server/host/mic_audio_sink.h
 new file mode 100644
-index 0000000..d7081960b
+index 00000000..34cb8a58
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/mic_audio_sink.h
 @@ -0,0 +1,35 @@
@@ -4415,7 +4415,7 @@ index 0000000..d7081960b
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.cpp b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
 new file mode 100644
-index 0000000..0000000
+index 00000000..455acae4
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
 @@ -0,0 +1,1303 @@
@@ -5724,7 +5724,7 @@ index 0000000..0000000
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.h b/src/frontend/qt_sdl/remote_server/host/net_server.h
 new file mode 100644
-index 0000000..c4f8a1e63
+index 00000000..632e3d24
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.h
 @@ -0,0 +1,442 @@
@@ -6242,10 +6242,10 @@ index 00000000..48014b9b
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
 new file mode 100644
-index 0000000..e8f90a1bc
+index 00000000..3f8e2062
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
-@@ -0,0 +1,817 @@
+@@ -0,0 +1,863 @@
 +#pragma once
 +
 +// DualDeck wire protocol definitions.
@@ -6269,6 +6269,17 @@ index 0000000..e8f90a1bc
 +namespace melonds_remote {
 +
 +// Bumped whenever the wire format changes incompatibly.
++//
++// v13: HelloPayload gained supportedVideoCodecs and HelloAckPayload gained
++// selectedVideoCodec -- codec capability negotiation (see VideoCodec's own
++// comment below), the groundwork for an optional H.264 video path
++// alongside the existing JPEG one. Purely additive in *behavior*: every
++// real client today only advertises VideoCodec_Jpeg, and the host only
++// ever selects VideoCodec::Jpeg back (no encoder for anything else exists
++// yet) -- but it's still a genuine payload-shape change (HelloPayload
++// gains a trailing byte, HelloAckPayload gains one after mode), so an
++// old/new version mismatch on either side still needs the usual
++// kProtocolVersion bump rather than silent misparsing.
 +//
 +// v12: ControllerState gained leftTrigger/rightTrigger/extraButtons --
 +// analog trigger values and an ExtraButton (thumbstick click) bitmask,
@@ -6320,7 +6331,7 @@ index 0000000..e8f90a1bc
 +// negotiating an optional codec keeps both sides simple, matching how
 +// every other incompatible wire-format change in this project has been
 +// handled (see the mic-support v5 bump above).
-+inline constexpr uint16_t kProtocolVersion = 12;
++inline constexpr uint16_t kProtocolVersion = 13;
 +
 +// Sentinel at the start of every packet so malformed/foreign traffic on the
 +// same port can be rejected cheaply before any further parsing.
@@ -6631,6 +6642,21 @@ index 0000000..e8f90a1bc
 +// gets rejected with `ApprovalRequired`, the same on every retry, until a
 +// human at the host approves that device -- no code is ever typed on
 +// either side.
++// Video codec capability negotiation (protocol v13). JPEG (via
++// libjpeg-turbo) has been the only video format since v8 and remains the
++// permanent, dependency-free baseline every build supports -- these
++// bits/values exist so a future codec (H.264, first candidate) can be
++// added as something both sides opt into, not a hard replacement: an
++// older client, or a client/host built without the new codec's library,
++// simply never advertises/selects it and the session runs JPEG exactly
++// as it always has.
++enum class VideoCodec : uint8_t {
++    Jpeg = 0,
++    H264 = 1,
++};
++inline constexpr uint8_t kVideoCodecBit_Jpeg = 1u << 0;
++inline constexpr uint8_t kVideoCodecBit_H264 = 1u << 1;
++
 +struct HelloPayload {
 +    std::string clientName;    // up to kMaxProtocolStringLength bytes
 +    std::string clientPlatform; // up to kMaxProtocolStringLength bytes
@@ -6661,6 +6687,17 @@ index 0000000..e8f90a1bc
 +    // Applied once, at handshake time, for this session's whole lifetime
 +    // -- there's no packet type for changing it without reconnecting.
 +    uint8_t videoQuality = 0;
++
++    // Bitmask of VideoCodecBit_* values (protocol v13) the client can
++    // decode. Every real client sets at least VideoCodecBit_Jpeg --
++    // JPEG decode has no external dependency and has been the only
++    // format since v8, so it's the one thing every build can always do.
++    // VideoCodecBit_H264 is set only by a client built with H.264 decode
++    // support; a client from before v13 (or an older wire version
++    // rejected before this is even parsed) is equivalent to advertising
++    // Jpeg-only. See HelloAckPayload::selectedVideoCodec for the host's
++    // side of this negotiation.
++    uint8_t supportedVideoCodecs = kVideoCodecBit_Jpeg;
 +};
 +
 +enum class HelloRejectReason : uint8_t {
@@ -6750,6 +6787,15 @@ index 0000000..e8f90a1bc
 +    // above) and gets rejected before either side's payload is parsed,
 +    // so there is no separate "field absent" case to handle.
 +    HostMode mode = HostMode::Emulation;
++    // Which VideoCodec this session's VideoFrame packets are actually
++    // encoded with (protocol v13), chosen by the host by intersecting
++    // this against HelloPayload::supportedVideoCodecs -- see that
++    // field's own comment. Sent regardless of accepted/rejectReason,
++    // same convention as system/adapter/mode above. Always
++    // VideoCodec::Jpeg today (no other encoder exists yet); the field
++    // exists now so a future codec doesn't need its own version bump
++    // just to tell the client which format is coming.
++    VideoCodec selectedVideoCodec = VideoCodec::Jpeg;
 +};
 +
 +// DiscoveryRequest (client -> host) has no payload: a bare packet header
@@ -7218,7 +7264,7 @@ index 00000000..a1aff532
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
 new file mode 100644
-index 0000000..f9a0b1c2d
+index 00000000..add207a1
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
 @@ -0,0 +1,573 @@

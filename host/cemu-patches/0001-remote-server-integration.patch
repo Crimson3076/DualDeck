@@ -2777,10 +2777,10 @@ index 0000000..a441296
 +} // namespace melonds_remote::adapter
 diff --git a/src/remote_server/adapter_sdk/include/melonds_remote/protocol.h b/src/remote_server/adapter_sdk/include/melonds_remote/protocol.h
 new file mode 100644
-index 0000000..eddcc10
+index 0000000..3f8e206
 --- /dev/null
 +++ b/src/remote_server/adapter_sdk/include/melonds_remote/protocol.h
-@@ -0,0 +1,817 @@
+@@ -0,0 +1,863 @@
 +#pragma once
 +
 +// DualDeck wire protocol definitions.
@@ -2804,6 +2804,17 @@ index 0000000..eddcc10
 +namespace melonds_remote {
 +
 +// Bumped whenever the wire format changes incompatibly.
++//
++// v13: HelloPayload gained supportedVideoCodecs and HelloAckPayload gained
++// selectedVideoCodec -- codec capability negotiation (see VideoCodec's own
++// comment below), the groundwork for an optional H.264 video path
++// alongside the existing JPEG one. Purely additive in *behavior*: every
++// real client today only advertises VideoCodec_Jpeg, and the host only
++// ever selects VideoCodec::Jpeg back (no encoder for anything else exists
++// yet) -- but it's still a genuine payload-shape change (HelloPayload
++// gains a trailing byte, HelloAckPayload gains one after mode), so an
++// old/new version mismatch on either side still needs the usual
++// kProtocolVersion bump rather than silent misparsing.
 +//
 +// v12: ControllerState gained leftTrigger/rightTrigger/extraButtons --
 +// analog trigger values and an ExtraButton (thumbstick click) bitmask,
@@ -2855,7 +2866,7 @@ index 0000000..eddcc10
 +// negotiating an optional codec keeps both sides simple, matching how
 +// every other incompatible wire-format change in this project has been
 +// handled (see the mic-support v5 bump above).
-+inline constexpr uint16_t kProtocolVersion = 12;
++inline constexpr uint16_t kProtocolVersion = 13;
 +
 +// Sentinel at the start of every packet so malformed/foreign traffic on the
 +// same port can be rejected cheaply before any further parsing.
@@ -3166,6 +3177,21 @@ index 0000000..eddcc10
 +// gets rejected with `ApprovalRequired`, the same on every retry, until a
 +// human at the host approves that device -- no code is ever typed on
 +// either side.
++// Video codec capability negotiation (protocol v13). JPEG (via
++// libjpeg-turbo) has been the only video format since v8 and remains the
++// permanent, dependency-free baseline every build supports -- these
++// bits/values exist so a future codec (H.264, first candidate) can be
++// added as something both sides opt into, not a hard replacement: an
++// older client, or a client/host built without the new codec's library,
++// simply never advertises/selects it and the session runs JPEG exactly
++// as it always has.
++enum class VideoCodec : uint8_t {
++    Jpeg = 0,
++    H264 = 1,
++};
++inline constexpr uint8_t kVideoCodecBit_Jpeg = 1u << 0;
++inline constexpr uint8_t kVideoCodecBit_H264 = 1u << 1;
++
 +struct HelloPayload {
 +    std::string clientName;    // up to kMaxProtocolStringLength bytes
 +    std::string clientPlatform; // up to kMaxProtocolStringLength bytes
@@ -3196,6 +3222,17 @@ index 0000000..eddcc10
 +    // Applied once, at handshake time, for this session's whole lifetime
 +    // -- there's no packet type for changing it without reconnecting.
 +    uint8_t videoQuality = 0;
++
++    // Bitmask of VideoCodecBit_* values (protocol v13) the client can
++    // decode. Every real client sets at least VideoCodecBit_Jpeg --
++    // JPEG decode has no external dependency and has been the only
++    // format since v8, so it's the one thing every build can always do.
++    // VideoCodecBit_H264 is set only by a client built with H.264 decode
++    // support; a client from before v13 (or an older wire version
++    // rejected before this is even parsed) is equivalent to advertising
++    // Jpeg-only. See HelloAckPayload::selectedVideoCodec for the host's
++    // side of this negotiation.
++    uint8_t supportedVideoCodecs = kVideoCodecBit_Jpeg;
 +};
 +
 +enum class HelloRejectReason : uint8_t {
@@ -3285,6 +3322,15 @@ index 0000000..eddcc10
 +    // above) and gets rejected before either side's payload is parsed,
 +    // so there is no separate "field absent" case to handle.
 +    HostMode mode = HostMode::Emulation;
++    // Which VideoCodec this session's VideoFrame packets are actually
++    // encoded with (protocol v13), chosen by the host by intersecting
++    // this against HelloPayload::supportedVideoCodecs -- see that
++    // field's own comment. Sent regardless of accepted/rejectReason,
++    // same convention as system/adapter/mode above. Always
++    // VideoCodec::Jpeg today (no other encoder exists yet); the field
++    // exists now so a future codec doesn't need its own version bump
++    // just to tell the client which format is coming.
++    VideoCodec selectedVideoCodec = VideoCodec::Jpeg;
 +};
 +
 +// DiscoveryRequest (client -> host) has no payload: a bare packet header

@@ -11,6 +11,7 @@ MDR_TEST(hello_payload_round_trip) {
     hello.displayHeight = 800;
     hello.authToken = "s3cr3t";
     hello.appVersion = "v0.1.24";
+    hello.supportedVideoCodecs = kVideoCodecBit_Jpeg | kVideoCodecBit_H264;
 
     ByteBuffer buf;
     serializeHelloPayload(buf, hello);
@@ -23,6 +24,17 @@ MDR_TEST(hello_payload_round_trip) {
     MDR_CHECK_EQ(parsed->displayHeight, hello.displayHeight);
     MDR_CHECK(parsed->authToken == hello.authToken);
     MDR_CHECK(parsed->appVersion == hello.appVersion);
+    MDR_CHECK_EQ(parsed->supportedVideoCodecs, hello.supportedVideoCodecs);
+}
+
+MDR_TEST(hello_payload_supported_video_codecs_defaults_to_jpeg_only) {
+    HelloPayload hello; // all default/empty
+    ByteBuffer buf;
+    serializeHelloPayload(buf, hello);
+
+    auto parsed = parseHelloPayload(buf.data(), buf.size());
+    MDR_CHECK(parsed.has_value());
+    MDR_CHECK_EQ(parsed->supportedVideoCodecs, kVideoCodecBit_Jpeg);
 }
 
 MDR_TEST(hello_payload_empty_fields_round_trip) {
@@ -88,6 +100,7 @@ MDR_TEST(hello_ack_payload_round_trip_accepted) {
     ack.system = {"nds", "Nintendo DS"};
     ack.adapter = {"melonds", "melonDS", "1.0"};
     ack.mode = HostMode::HostControl;
+    ack.selectedVideoCodec = VideoCodec::H264;
 
     ByteBuffer buf;
     serializeHelloAckPayload(buf, ack);
@@ -106,6 +119,7 @@ MDR_TEST(hello_ack_payload_round_trip_accepted) {
     MDR_CHECK(parsed->adapter.adapterName == "melonDS");
     MDR_CHECK(parsed->adapter.adapterVersion == "1.0");
     MDR_CHECK(parsed->mode == HostMode::HostControl);
+    MDR_CHECK(parsed->selectedVideoCodec == VideoCodec::H264);
 }
 
 MDR_TEST(hello_ack_payload_mode_defaults_to_emulation) {
@@ -124,7 +138,30 @@ MDR_TEST(hello_ack_payload_rejects_invalid_mode) {
     ack.accepted = 1;
     ByteBuffer buf;
     serializeHelloAckPayload(buf, ack);
-    buf.back() = 200; // mode is always the last byte
+    // mode is the second-to-last byte now that selectedVideoCodec (v13)
+    // follows it.
+    buf[buf.size() - 2] = 200;
+
+    MDR_CHECK(!parseHelloAckPayload(buf.data(), buf.size()).has_value());
+}
+
+MDR_TEST(hello_ack_payload_selected_video_codec_defaults_to_jpeg) {
+    HelloAckPayload ack;
+    ack.accepted = 1;
+
+    ByteBuffer buf;
+    serializeHelloAckPayload(buf, ack);
+    auto parsed = parseHelloAckPayload(buf.data(), buf.size());
+    MDR_CHECK(parsed.has_value());
+    MDR_CHECK(parsed->selectedVideoCodec == VideoCodec::Jpeg);
+}
+
+MDR_TEST(hello_ack_payload_rejects_invalid_selected_video_codec) {
+    HelloAckPayload ack;
+    ack.accepted = 1;
+    ByteBuffer buf;
+    serializeHelloAckPayload(buf, ack);
+    buf.back() = 200; // selectedVideoCodec is always the last byte
 
     MDR_CHECK(!parseHelloAckPayload(buf.data(), buf.size()).has_value());
 }
@@ -152,7 +189,7 @@ MDR_TEST(hello_ack_payload_rejects_truncated_identity) {
 
     ByteBuffer buf;
     serializeHelloAckPayload(buf, ack);
-    buf.resize(buf.size() - 1); // chop off the trailing mode byte
+    buf.resize(buf.size() - 1); // chop off the trailing selectedVideoCodec byte
     MDR_CHECK(!parseHelloAckPayload(buf.data(), buf.size()).has_value());
 }
 

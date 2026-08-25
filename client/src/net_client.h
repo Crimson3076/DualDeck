@@ -156,6 +156,14 @@ public:
     // connected, matching every pre-issue-#4 host's only behavior.
     HostMode hostMode() const { return hostMode_.load(); }
 
+    // Which VideoCodec the host actually selected for this session (see
+    // NetServer::selectVideoCodec()) -- always VideoCodec::Jpeg today,
+    // since videoReceiveLoop() only has a JPEG decode path so far. Set
+    // once at connect() time; unlike hostMode() there's no mid-session
+    // change to react to, since codec choice is fixed for a session's
+    // whole lifetime (same as HelloPayload::videoQuality).
+    VideoCodec negotiatedVideoCodec() const { return negotiatedVideoCodec_.load(); }
+
     // Enqueues `line` (already formatted -- see client_log.h) to be
     // forwarded to the host as a ClientLog packet on the control
     // channel, for host-side debugging/app development. Best-effort and
@@ -192,6 +200,7 @@ private:
     std::atomic<uint32_t> sessionId_{0};
     std::atomic<bool> hostMicSupported_{false};
     std::atomic<HostMode> hostMode_{HostMode::Emulation};
+    std::atomic<VideoCodec> negotiatedVideoCodec_{VideoCodec::Jpeg};
     // Read on every received video packet by videoReceiveLoop() (see
     // hostNativeWidth()/hostNativeHeight() below), so atomic like
     // sessionId_/hostMode_ above rather than mutex-guarded like

@@ -11050,6 +11050,77 @@ GamePad-touch-sensitive UI (e.g. a title's on-screen keyboard or
 touch-driven menu) on a user's hardware before this can be called
 resolved rather than "should work."
 
+## 2026-08-25: Video codec negotiation groundwork (protocol v13) -- JPEG unaffected, H.264 not implemented yet
+
+Real user request, after JPEG-vs-latency-tuning discussion on a hotspot
+connection: build H.264 as an *additional*, negotiated codec alongside
+JPEG rather than a replacement, with JPEG staying the permanent
+dependency-free default until H.264 has real track record on real
+hardware.
+
+This entry is Stage 1 of that plan only: wire-format capability
+negotiation, with **no actual H.264 encoder or decoder built yet**.
+`HelloPayload` gained `supportedVideoCodecs` (a `VideoCodec` bitmask the
+client advertises), `HelloAckPayload` gained `selectedVideoCodec` (which
+codec the host actually picked for the session) -- `protocol.h`'s new
+`VideoCodec` enum (`Jpeg = 0`, `H264 = 1`) and `kVideoCodecBit_Jpeg`/
+`kVideoCodecBit_H264` bit constants. `NetServer` gained a
+`selectVideoCodec()` helper that intersects the client's advertised bits
+against a host-side capability constant currently hardcoded to
+`VideoCodecBit_Jpeg` only -- since no other encoder exists in this host
+yet, every session still runs exactly the JPEG path it always has,
+regardless of what a forward-looking client advertises. Protocol version
+bumped 12 -> 13 (a genuine payload-shape change: both `HelloPayload` and
+`HelloAckPayload` gain a trailing byte).
+
+Deliberately staged this way rather than building the encoder/decoder in
+the same pass: this project's own history (JPEG's own v7->v8 addition,
+the Cemu integration's many real-hardware rounds) shows codec/video-path
+changes need real hardware verification between steps, and H.264 adds a
+genuinely new failure class JPEG never had -- a resolution change
+mid-session (already a real, previously-fixed bug for Cemu's dynamic
+per-title GamePad resolution) requires tearing down and reinitializing a
+stateful encoder/decoder pair, where JPEG's per-frame-independent
+encoding made it a non-issue for free. Chosen codec for the actual H.264
+work, once it starts: OpenH264 (Cisco, BSD-licensed) rather than
+libx264+FFmpeg -- one dependency covers both encode and decode, it's
+purpose-built for real-time low-latency streaming (same library
+WebRTC/Firefox use), and it avoids the GPL question `libx264` would raise
+for a project that ships prebuilt binaries via GitHub Releases.
+
+**Kept in sync as part of this change** (all vendored copies of
+`protocol.h` live inside the melonDS/Azahar/Cemu patches as full-file
+"new file" diffs, so a `kProtocolVersion` bump anywhere requires
+regenerating all three, not just the main copy -- `scripts/
+check-patch-protocol-sync.sh` catches a mismatch): all three patches'
+vendored `protocol.h`, `tests/smoke_test.py` and `tests/
+device_approval_smoke_test.py`'s hand-packed `VERSION`/`HelloPayload`/
+`HelloAckPayload` byte layouts (both needed a new trailing byte added to
+their hand-rolled `hello_payload()` packing, and `smoke_test.py`'s
+strict "no trailing bytes left unparsed" `HelloAck` assertion needed the
+new `selectedVideoCodec` byte unpacked or it would have started failing).
+
+**Verified**: full local rebuild (`-Wall -Wextra -Wpedantic -Wconversion
+-Wshadow -Werror`) and `ctest` (all 6 suites, including new
+`test_handshake.cpp` round-trip/rejection cases for both new fields) --
+clean. Both `tests/smoke_test.py` and `tests/
+device_approval_smoke_test.py` run end-to-end against the freshly built
+`dualdeck-host-service` binary and pass, exercising a real Hello/HelloAck
+round-trip with the new fields over a real socket, not just unit-level
+serialization. All three regenerated emulator patches verified via the
+established double-clone method: apply to a fresh pristine checkout of
+the pinned commit, diff the result against the independently-edited
+working copy -- byte-identical trees for melonDS, Azahar, and Cemu.
+`scripts/check-patch-protocol-sync.sh` passes (all three patches +
+both smoke tests report `kProtocolVersion=13`/`VERSION=13`, in sync).
+
+**Not yet done**: the actual OpenH264 encode (host) and decode (client)
+paths, the client-side "VIDEO CODEC" settings toggle, and the
+resolution-change/encoder-reinit handling -- this entry is purely the
+negotiation scaffold those stages will plug into. `selectVideoCodec()`'s
+own comment names the one line that needs to change once a real encoder
+exists.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

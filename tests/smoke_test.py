@@ -38,7 +38,7 @@ MAGIC = 0x444D5231
 # same commit that bumped kProtocolVersion for Host Control's
 # leftTrigger/rightTrigger/hostControlButtons fields but didn't touch
 # this file).
-VERSION = 12
+VERSION = 13
 
 PT_HELLO = 1
 PT_HELLO_ACK = 2
@@ -71,9 +71,12 @@ def hello_payload(name: str, platform: str, width: int, height: int, token: str,
     # skips the AppVersionMismatch check entirely (see protocol.h), which is
     # what every test below except a dedicated version-mismatch case wants.
     #
-    # Trailing 0 byte: HelloPayload::videoQuality (protocol v9) -- 0 means
+    # Trailing bytes: HelloPayload::videoQuality (protocol v9, 0 means
     # "defer to the host's own configured default," which is what every
-    # test here wants (none of them exercise video compression directly).
+    # test here wants -- none of them exercise video compression
+    # directly) followed by HelloPayload::supportedVideoCodecs (protocol
+    # v13, VideoCodecBit_Jpeg = 1 -- every real client supports at least
+    # JPEG decode, and this script only exercises the JPEG path).
     return (
         lp_string(name)
         + lp_string(platform)
@@ -81,6 +84,7 @@ def hello_payload(name: str, platform: str, width: int, height: int, token: str,
         + lp_string(token)
         + lp_string(app_version)
         + struct.pack("<B", 0)
+        + struct.pack("<B", 1)
     )
 
 
@@ -143,6 +147,11 @@ def do_handshake(control_port: int, token: str, app_version: str = ""):
     adapter_version, offset = read_lp_string(ack_payload, offset)
     (mode,) = struct.unpack_from("<B", ack_payload, offset)
     offset += 1
+    # HelloAckPayload::selectedVideoCodec (protocol v13) -- see
+    # hello_payload()'s comment. Always 0 (VideoCodec::Jpeg) against this
+    # project's own hosts today, since no other encoder exists yet.
+    (selected_video_codec,) = struct.unpack_from("<B", ack_payload, offset)
+    offset += 1
     assert offset == len(ack_payload), "trailing bytes left unparsed in HelloAck payload"
     return {
         "ctrl": ctrl,
@@ -156,6 +165,7 @@ def do_handshake(control_port: int, token: str, app_version: str = ""):
         "adapter_name": adapter_name,
         "adapter_version": adapter_version,
         "mode": mode,
+        "selected_video_codec": selected_video_codec,
     }
 
 
