@@ -48,13 +48,29 @@ now that the base is v2.6.
      `VPADController::set_default_mapping()`'s existing
      `InputAPI::XInput` mapping table bit-for-bit, so that function
      needed only a second `case` label, not a new table.
-   - **No GamePad touchscreen support**: confirmed by reading
-     `Cafe/OS/libs/vpad/vpad.cpp`'s `VPADRead()` that Cemu hard-codes
-     GamePad touch validity to invalid regardless of which controller (if
-     any) is mapped -- no existing Cemu input backend can inject GamePad
-     touch today, so there's no plumbing for this adapter to hook into
-     without inventing an entirely new Cemu-side touch pipeline. Out of
-     scope for this pass; see `docs/known-limitations.md`.
+   - **GamePad touchscreen support (2026-08-25)**: `VPADRead()`
+     (`Cafe/OS/libs/vpad/vpad.cpp`) does default GamePad touch validity to
+     invalid, but only as a pre-poll default -- for VPAD channel 0 it then
+     calls the mapped controller's own `VPADRead()`
+     (`VPADController::VPADRead()`, `input/emulated/VPADController.cpp`),
+     whose `update_touch()` overwrites that default by checking
+     `has_position()` first, an existing `ControllerBase` virtual
+     `DSUController` (DSU/cemuhook touchpad) and `NativeWiimoteController`
+     (Wiimote IR pointer) already implement for their own hardware. The
+     earlier assumption that touch needed "an entirely new Cemu-side
+     touch pipeline" was wrong -- that pipeline already existed, just
+     gated behind a controller-level virtual this adapter hadn't
+     implemented. `RemoteController` now implements `has_position()`/
+     `get_position()` too, backed by `RemoteInputStatus::touchActive`/
+     `touchX`/`touchY`, which `CemuAdapter::applyGenericInput()` populates
+     from `GenericInputState::touches` (matched by `kGamePadSurfaceId`),
+     normalizing the wire's DS-shaped `touchX`/`touchY` (0..`kTouchMaxX`/
+     `kTouchMaxY`) into the same 0..1 fractional convention
+     `DSUController`/`NativeWiimoteController` already use -- the exact
+     normalization `AzaharAdapter.cpp` (`host/azahar-patches/`) already
+     does for the 3DS's own non-4:3-quantized touch, reused verbatim here.
+     No upstream `vpad.cpp`/`VPADController.cpp` change needed at all,
+     unlike every other class of change in this patch.
 2. `src/remote_server/RemoteController.{h,cpp}`,
    `RemoteControllerProvider.{h,cpp}`, `RemoteInputStatus.h` (new) -- the
    `ControllerBase`/`ControllerProviderBase` implementations backing the
@@ -816,3 +832,83 @@ confirmation since the v2.6 rebase and is the next thing to verify.
 against a fresh, real `v2.6` checkout of upstream Cemu -- not yet
 compiled or run against a real misconfigured-controller scenario on
 real hardware.
+
+## GamePad touchscreen input implemented (2026-08-25)
+
+Every earlier entry in this file (including the "First real end-to-end
+run findings" and "Silent VPAD-registration failure" sections above)
+treated Wii U GamePad touch as out of scope, on the strength of one
+claim: reading `Cafe/OS/libs/vpad/vpad.cpp`'s `VPADRead()` showed it
+hard-coding `tpData`/`tpProcessed1`/`tpProcessed2` validity to
+`VPAD_TP_VALIDITY_INVALID_XY` "regardless of which controller (if any)
+is mapped." Re-reading that function's full body (not just the memset
+block quoted in earlier passes) shows that claim was incomplete: the
+`VPAD_TP_VALIDITY_INVALID_XY` assignment is only the *pre-poll default*,
+set before `VPADRead()` looks up the channel's mapped controller at all.
+For channel 0 (the Wii U GamePad), once a controller is found, `VPADRead()`
+calls straight into `controller->VPADRead(*status, ...)` --
+`VPADController::VPADRead()` (`input/emulated/VPADController.cpp`), which
+unconditionally overwrites the default via its own `update_touch()`.
+
+`update_touch()`'s first branch is `if (has_position())` -- an existing
+`ControllerBase` virtual (`input/api/Controller.h`) that two other real
+input backends already implement for their own hardware:
+`DSUController` (a DSU/cemuhook-protocol touchpad) and
+`NativeWiimoteController` (the Wiimote's IR pointer). Both return a
+plain `bool` "is something touching/pointing right now" plus a
+normalized `glm::vec2` position in `[0,1]x[0,1]` (confirmed by reading
+`DSUController::get_position()`'s own comment: "touchpad resolution is
+1920x942" divided out before returning) -- with no notion baked in of
+*which* physical device produced it. This is a real, general Cemu
+touch-injection pipeline that already existed; it was never specific to
+DSU or Wiimote hardware, this adapter just hadn't implemented the two
+virtuals that plug into it.
+
+**Fix**: `RemoteController` (`src/remote_server/RemoteController.h`) now
+implements `has_position()`/`get_position()`, reading two new fields on
+the shared `RemoteInputStatus` (`touchActive`, `touchX`, `touchY`,
+`src/remote_server/RemoteInputStatus.h`) under the same mutex `raw_state()`
+already uses for buttons/sticks/triggers. `CemuAdapter::applyGenericInput()`
+populates them from `GenericInputState::touches` (`generic_input.h`),
+matching the one contact whose `surfaceId` is `kGamePadSurfaceId` (there is
+at most one in practice -- `AdapterBridge::applyControllerState()`,
+`host/remote-server/src/adapter_bridge.cpp`, only ever targets the one
+surface `capabilities()` marks `remotelyDisplayed`).
+
+The normalization mirrors `AzaharAdapter.cpp`'s (`host/azahar-patches/`)
+identical handling of the 3DS's own non-4:3 bottom-screen touch, applied
+here for the first time to a non-4:3 *and* non-3DS-shaped surface (the
+GamePad's 854x480, 16:9): protocol.h's wire `touchX`/`touchY` fields are
+always quantized into the DS's fixed native `0..kTouchMaxX`/`kTouchMaxY`
+(255/191) range by the client's `mapPointToDSCoords()`
+(`protocol/src/touch_mapping.cpp`), regardless of which real surface the
+tap landed on -- but that function normalizes the tap's *fractional*
+position within the aspect-correct rendered rectangle before rescaling
+into DS-space, so the fraction survives correctly for any aspect ratio.
+Dividing the wire value back by `kTouchMaxX`/`kTouchMaxY` recovers that
+same `0..1` fraction, exactly the convention `has_position()`/
+`get_position()` already expect. `capabilities()`'s GamePad surface
+descriptor now also reports `touchSupported = true` (previously `false`),
+matching the `FakeWiiUAdapter` test fixture under `adapter-sdk/`, which
+had already modeled the GamePad surface as touch-capable in its own
+tests (`adapter-sdk/tests/test_fake_wiiu_adapter.cpp`) well before this
+fix landed here.
+
+No changes to upstream `vpad.cpp`, `VPADController.cpp`, or any other
+file outside `src/remote_server/` were needed -- unlike every other
+category of change in this patch, this one only had to implement an
+existing extension point, not add a new one.
+
+**Verified**: the regenerated patch reapplies cleanly (`git apply --check`
+and a real `git apply`) against a fresh `v2.6` checkout of upstream Cemu,
+and the resulting source tree is byte-identical to the previous patch's
+output tree plus exactly this change (diffed directly, not assumed).
+`scripts/check-patch-protocol-sync.sh` still reports every patch in sync
+on protocol version 12.
+
+**Not yet verified**: this project still cannot build or run Cemu in its
+own sandbox (same vcpkg/network constraint as every earlier Cemu entry in
+this file) -- needs a real CI build and a real touch test against actual
+Wii U GamePad-touch-sensitive UI (e.g. a title's on-screen keyboard or
+touch-driven menu) on a user's hardware before this can be called
+resolved rather than "should work."
