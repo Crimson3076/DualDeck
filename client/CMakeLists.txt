@@ -11,6 +11,7 @@ add_executable(dualdeck-client
     src/wizard_state.cpp
     src/bitmap_font.cpp
     src/mic_capture.cpp
+    src/h264_decoder.cpp
 )
 
 target_link_libraries(dualdeck-client PRIVATE
@@ -18,6 +19,27 @@ target_link_libraries(dualdeck-client PRIVATE
     SDL3::SDL3
     TurboJPEG::TurboJPEG
 )
+
+# H.264 decode (protocol v13's optional codec alongside JPEG -- see
+# h264_decoder.h's top comment and host/remote-server/CMakeLists.txt's
+# identical detection for the encoder side). Optional at configure time,
+# same as every other X11/Wayland/OpenH264 detection in this project: a
+# client built without it simply never advertises VideoCodecBit_H264 in
+# HelloPayload (see net_client.cpp's connect()), so every session still
+# negotiates JPEG exactly as before.
+find_package(PkgConfig)
+if(PkgConfig_FOUND)
+    pkg_check_modules(OPENH264 openh264)
+endif()
+if(OPENH264_FOUND)
+    target_compile_definitions(dualdeck-client PRIVATE DUALDECK_HAVE_OPENH264)
+    target_link_libraries(dualdeck-client PRIVATE ${OPENH264_LIBRARIES})
+    target_include_directories(dualdeck-client SYSTEM PRIVATE ${OPENH264_INCLUDE_DIRS})
+    target_link_directories(dualdeck-client PRIVATE ${OPENH264_LIBRARY_DIRS})
+else()
+    message(STATUS "dualdeck-client: openh264 not found -- H.264 video decoding will be compiled out "
+                    "as unavailable in this build (JPEG, protocol v8's existing codec, is unaffected)")
+endif()
 
 target_compile_features(dualdeck-client PRIVATE cxx_std_20)
 

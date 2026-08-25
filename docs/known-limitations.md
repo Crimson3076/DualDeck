@@ -11255,6 +11255,78 @@ wiring being live and correct), the "VIDEO CODEC" client setting, and
 real end-to-end testing against a live Cemu/melonDS/Azahar session
 (video content, not a synthetic test frame) on real hardware.
 
+## 2026-08-25: Client-side H.264 decoder built and cross-tested against this project's own encoder (Stage 4) -- decoder complete, client still doesn't ask for it
+
+Stage 4 of the video-codec-negotiation plan: `client/src/h264_decoder.h`/
+`.cpp` -- a new `H264Decoder` class (`melonds_remote::client`, the
+counterpart to `melonds_remote::host::H264Encoder`), wrapping OpenH264
+decode and converting its I420 output back to BGRA8888 (standard BT.601
+integer coefficients, the inverse of the encoder's own `bgraToI420()`)
+so nothing downstream -- `NetClient::latestFrame_`, `main.cpp`'s texture
+upload -- needs to know or care which codec actually produced a given
+frame. `NetClient::videoReceiveLoop()` now branches on
+`negotiatedVideoCodec()` (already stored from the handshake since
+Stage 1) between the existing JPEG path and this new one. Same
+optional-at-CMake-configure-time pattern as every other stage
+(`DUALDECK_HAVE_OPENH264`, wired into `client/CMakeLists.txt` for the
+real SDL3 client and `client/tests/CMakeLists.txt` for the buildable-
+here test target).
+
+Unlike the encoder, the decoder needs no upfront width/height --
+SPS/PPS in the bitstream itself carries that, self-reported back via
+`SBufferInfo`, so a real mid-session resolution change (Cemu's own
+dynamic per-title GamePad size) needs no explicit reinit call on the
+decode side at all, confirmed by a real test using two independent
+encoder sessions at different resolutions against one long-lived
+decoder instance.
+
+**Real bug caught by this project's own strict-warnings build, not
+manual review**: `-Werror=unused-function` on the no-OpenH264 config --
+`test_h264_decoder.cpp`'s synthetic-frame generator was only ever
+called from inside the `#ifdef DUALDECK_HAVE_OPENH264` test cases but
+was defined unconditionally outside that guard, so a build without
+OpenH264 failed outright rather than gracefully skipping that coverage.
+Moved inside the guard; both configurations now build clean.
+
+**New coverage, and it's the strongest round trip in this whole
+feature**: `client/tests/test_h264_decoder.cpp` doesn't decode against
+OpenH264's own raw API in isolation (that's what Stage 2's
+`test_h264_encoder.cpp` already does) -- it links this project's own
+real `H264Encoder` (via `dualdeck_host`) to produce genuine Annex-B
+bytes and feeds them straight into the new `H264Decoder`, proving the
+two halves of this project's own pipeline are actually compatible with
+each other end to end, not just each independently compatible with
+OpenH264. Verifies decoded dimensions match, and that the round-tripped
+image is recognizably close to the source gradient (bounded average
+per-channel difference) rather than noise, a solid color, or a
+channel-swapped mess a stride/color-space bug would produce. Both
+configurations (real OpenH264, and a `PKG_CONFIG_PATH`-forced
+no-OpenH264 fallback) verified: full rebuild
+(`-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror`, zero
+warnings), all 6 `ctest` suites, both Python smoke tests (the H.264
+negotiation scenario from Stage 3 still passes -- host-side wiring is
+untouched by this stage). `net_client.cpp`'s standalone compile (the
+same check `ci.yml`'s `net-client-compiles` job runs, no SDL3 needed)
+also confirmed clean -- `h264_decoder.h` has zero OpenH264 dependencies
+in the header itself (opaque `Impl` pointer), so nothing about this
+addition affects that already-established SDL3-free compile path.
+
+**Deliberately still not done, matching the real user policy this whole
+feature was built around ("keep JPEG as an option for users until [H.264]
+is fully tested")**: `NetClient::connect()` still only ever advertises
+`VideoCodecBit_Jpeg` in `HelloPayload.supportedVideoCodecs` -- the
+decoder exists and is genuinely tested, but no real client build asks a
+host to actually use it yet. Turning that on is a small, well-understood
+last step (flip the advertised bit, ideally behind an opt-in "VIDEO
+CODEC: JPEG / H264 (EXPERIMENTAL)" client setting mirroring the existing
+`VIDEO QUALITY` cycle in `main.cpp`) -- deliberately not done in this
+pass since it touches `main.cpp`, which needs SDL3 to build and so
+can't be verified in this sandbox the way every other change in this
+feature has been. Real end-to-end testing against a live Cemu/melonDS/
+Azahar session (actual game video, real network conditions, real GPU
+texture upload) on real hardware is the other thing this whole feature
+still needs before flipping that bit for real users.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

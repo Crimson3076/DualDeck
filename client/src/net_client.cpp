@@ -1,6 +1,7 @@
 #include "net_client.h"
 
 #include "client_log.h"
+#include "h264_decoder.h"
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -574,6 +575,16 @@ void NetClient::videoReceiveLoop() {
         return;
     }
 
+    // Protocol v13: constructed unconditionally, same as jpegDecompressor
+    // above, but only actually used below when negotiatedVideoCodec()
+    // reports H264 -- which itself only ever happens if this build has
+    // real OpenH264 decode available (this project's own client never
+    // advertises VideoCodecBit_H264 in HelloPayload yet -- see
+    // connect()'s own comment -- so a live session negotiating H.264
+    // isn't reachable from a shipped client today; this exists as the
+    // building block for turning that on).
+    H264Decoder h264Decoder;
+
     // Video-latency instrumentation: `networkStats` is
     // receipt-wall-clock-time minus VideoFramePayload::captureTimestampUs
     // (protocol v10) -- network transit + host-side encode + send-queue
@@ -635,14 +646,29 @@ void NetClient::videoReceiveLoop() {
 
         auto decodeStart = std::chrono::steady_clock::now();
         int decodedWidth = 0, decodedHeight = 0;
-        bool decoded = decompressJpegToBgra(jpegDecompressor, videoFrame->jpeg.data(), videoFrame->jpeg.size(),
-                                             decodedFrame, decodedWidth, decodedHeight);
+        bool decoded;
+        bool hasFrame = true;
+        if (negotiatedVideoCodec() == VideoCodec::H264) {
+            decoded = h264Decoder.decodeFrame(videoFrame->jpeg.data(), videoFrame->jpeg.size(), decodedFrame,
+                                               decodedWidth, decodedHeight, hasFrame);
+        } else {
+            decoded = decompressJpegToBgra(jpegDecompressor, videoFrame->jpeg.data(), videoFrame->jpeg.size(),
+                                            decodedFrame, decodedWidth, decodedHeight);
+        }
         decodeStats.record(static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - decodeStart)
                 .count()));
         if (!decoded) {
             logLine("video: dropping undecodable frame, closing connection\n");
             break;
+        }
+        if (!hasFrame) {
+            // H264Decoder-only case (decompressJpegToBgra() always
+            // either fails or produces a frame) -- see its own comment:
+            // an SPS/PPS-only access unit, or the first frame's output
+            // legitimately deferred to the next call. Nothing to display
+            // yet, not an error -- wait for the next packet.
+            continue;
         }
         // Real bug this fixes: hostNativeWidth_/hostNativeHeight_ used to
         // only ever be set once, from HelloAck -- if a frame's real
