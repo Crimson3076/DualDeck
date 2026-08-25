@@ -203,6 +203,28 @@ bool sendAll(int fd, const uint8_t* data, size_t size) {
     return true;
 }
 
+// Intersects the client's advertised HelloPayload::supportedVideoCodecs
+// against what this host build can actually encode, preferring the most
+// bandwidth-efficient codec both sides agree on. `hostSupportedCodecs`
+// is currently hardcoded to VideoCodecBit_Jpeg only -- no H.264 (or any
+// other) encoder exists in this host yet, so every session still runs
+// exactly the same JPEG path it always has, regardless of what a
+// forward-looking client advertises. Once a real H.264 encoder lands,
+// this is the one place that needs to change to actually start using it
+// (plus setting the matching bit here).
+VideoCodec selectVideoCodec(uint8_t clientSupportedCodecs) {
+    constexpr uint8_t hostSupportedCodecs = kVideoCodecBit_Jpeg;
+    const uint8_t agreed = clientSupportedCodecs & hostSupportedCodecs;
+    if (agreed & kVideoCodecBit_H264) {
+        return VideoCodec::H264;
+    }
+    // Jpeg is the permanent fallback: always in hostSupportedCodecs, so
+    // this is only ever reached by "agreed" being 0 (a client that
+    // somehow advertised no codecs at all, or a not-yet-mutually-
+    // supported future codec) or Jpeg itself being the actual agreement.
+    return VideoCodec::Jpeg;
+}
+
 } // namespace
 
 // Real, live tuning gap this closes: `NetServerConfig::videoJpegQuality`
@@ -547,6 +569,10 @@ void NetServer::controlLoop() {
         // it -- see that call site's own comment.
         uint16_t clientDisplayWidth = 0;
         uint16_t clientDisplayHeight = 0;
+        // Same "hello goes out of scope early" reasoning as
+        // clientDisplayWidth/Height above -- see selectVideoCodec()'s own
+        // comment for how this gets computed.
+        VideoCodec selectedVideoCodec = VideoCodec::Jpeg;
 
         uint8_t headerBuf[kPacketHeaderWireSize];
         ssize_t n = ::recv(clientFd, headerBuf, sizeof(headerBuf), MSG_WAITALL);
@@ -668,6 +694,7 @@ void NetServer::controlLoop() {
                             currentVideoQuality_ = hello->videoQuality;
                             clientRequestedExplicitVideoQuality = true;
                         }
+                        selectedVideoCodec = selectVideoCodec(hello->supportedVideoCodecs);
                     }
                 } else {
                     std::fprintf(stderr, "NetServer: rejecting handshake (short Hello payload)\n");
@@ -695,6 +722,7 @@ void NetServer::controlLoop() {
             ack.system = currentSystemIdentity_;
             ack.adapter = currentAdapterIdentity_;
             ack.mode = currentMode_;
+            ack.selectedVideoCodec = selectedVideoCodec;
             // See IFrameSource::setTargetDisplaySize()'s own comment --
             // only for an actually-accepted handshake, so a rejected/
             // malformed connection's reported size (clientDisplayWidth/

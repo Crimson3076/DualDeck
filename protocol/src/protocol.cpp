@@ -250,6 +250,7 @@ void serializeHelloPayload(ByteBuffer& out, const HelloPayload& hello) {
     appendString(out, hello.authToken);
     appendString(out, hello.appVersion);
     out.push_back(hello.videoQuality);
+    out.push_back(hello.supportedVideoCodecs);
 }
 
 std::optional<HelloPayload> parseHelloPayload(const uint8_t* data, size_t size) {
@@ -283,6 +284,9 @@ std::optional<HelloPayload> parseHelloPayload(const uint8_t* data, size_t size) 
     if (offset + 1 > size) return std::nullopt;
     hello.videoQuality = data[offset]; offset += 1;
 
+    if (offset + 1 > size) return std::nullopt;
+    hello.supportedVideoCodecs = data[offset]; offset += 1;
+
     if (offset != size) {
         // trailing garbage: reject rather than silently ignore
         return std::nullopt;
@@ -308,6 +312,7 @@ void serializeHelloAckPayload(ByteBuffer& out, const HelloAckPayload& ack) {
     appendSystemIdentity(out, ack.system);
     appendAdapterIdentity(out, ack.adapter);
     out.push_back(static_cast<uint8_t>(ack.mode));
+    out.push_back(static_cast<uint8_t>(ack.selectedVideoCodec));
 }
 
 std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t size) {
@@ -366,6 +371,16 @@ std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t 
         return std::nullopt;
     }
     ack.mode = static_cast<HostMode>(mode);
+
+    if (offset + 1 > size) {
+        // selectedVideoCodec missing entirely: reject rather than silently ignore
+        return std::nullopt;
+    }
+    uint8_t selectedVideoCodec = data[offset]; offset += 1;
+    if (selectedVideoCodec > static_cast<uint8_t>(VideoCodec::H264)) {
+        return std::nullopt;
+    }
+    ack.selectedVideoCodec = static_cast<VideoCodec>(selectedVideoCodec);
 
     if (offset != size) {
         // trailing garbage: reject rather than silently ignore

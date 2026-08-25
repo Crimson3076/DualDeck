@@ -268,6 +268,10 @@ bool NetClient::connect() {
     helloPayload.authToken = config_.authToken;
     helloPayload.appVersion = config_.appVersion;
     helloPayload.videoQuality = config_.videoQuality;
+    // Left at HelloPayload's own default (VideoCodecBit_Jpeg only) --
+    // this client has no H.264 decoder yet. See NetServer::selectVideoCodec()
+    // for the host's side of this negotiation.
+    helloPayload.supportedVideoCodecs = kVideoCodecBit_Jpeg;
     ByteBuffer hello = buildHelloPacket(helloPayload);
     if (!sendAll(controlFd_, hello.data(), hello.size())) {
         logLine("failed to send Hello\n");
@@ -333,6 +337,11 @@ bool NetClient::connect() {
     sessionId_ = ack->sessionId;
     hostMicSupported_ = ack->micSupported != 0;
     hostMode_ = ack->mode;
+    // Always VideoCodec::Jpeg today -- see NetServer::selectVideoCodec()'s
+    // comment. Stored (not just read once here) so videoReceiveLoop() has
+    // a real value to switch its decode path on once a second codec
+    // exists, rather than that loop needing its own separate plumbing.
+    negotiatedVideoCodec_ = ack->selectedVideoCodec;
 
     // Video channel: a second TCP connection dedicated to frame streaming
     // (see docs/protocol.md -- Stage 1 keeps control and video separate
