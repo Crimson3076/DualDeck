@@ -51,6 +51,15 @@ struct NetClientConfig {
     // ClientSettings::videoQuality in main.cpp.
     uint8_t videoQuality = 0;
 
+    // Protocol v13: whether to also advertise VideoCodecBit_H264 (in
+    // addition to the always-advertised VideoCodecBit_Jpeg) in
+    // HelloPayload.supportedVideoCodecs. Set from ClientSettings::
+    // videoCodecH264Experimental in main.cpp -- see that field's own
+    // comment for why this defaults off. The host still has the final
+    // say (NetServer::selectVideoCodec()); this only ever raises the
+    // possibility, never forces H.264.
+    bool preferH264 = false;
+
     // How often to send a Heartbeat packet on the control channel while
     // otherwise idle, so the host's control-channel timeout doesn't fire
     // on a live-but-quiet connection.

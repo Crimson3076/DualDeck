@@ -269,10 +269,14 @@ bool NetClient::connect() {
     helloPayload.authToken = config_.authToken;
     helloPayload.appVersion = config_.appVersion;
     helloPayload.videoQuality = config_.videoQuality;
-    // Left at HelloPayload's own default (VideoCodecBit_Jpeg only) --
-    // this client has no H.264 decoder yet. See NetServer::selectVideoCodec()
-    // for the host's side of this negotiation.
-    helloPayload.supportedVideoCodecs = kVideoCodecBit_Jpeg;
+    // VideoCodecBit_Jpeg is always advertised (no external dependency,
+    // decode always available); VideoCodecBit_H264 only if config_.
+    // preferH264 (ClientSettings::videoCodecH264Experimental, defaults
+    // off -- see that field's own comment) opted in. See
+    // NetServer::selectVideoCodec() for the host's side of this
+    // negotiation -- it has the final say either way.
+    helloPayload.supportedVideoCodecs =
+        kVideoCodecBit_Jpeg | (config_.preferH264 ? kVideoCodecBit_H264 : 0);
     ByteBuffer hello = buildHelloPacket(helloPayload);
     if (!sendAll(controlFd_, hello.data(), hello.size())) {
         logLine("failed to send Hello\n");

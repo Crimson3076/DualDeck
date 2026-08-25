@@ -1832,6 +1832,10 @@ int main(int argc, char** argv) {
         // cycleVideoQuality() below for how clientSettings.videoQuality
         // gets changed.
         netConfig.videoQuality = static_cast<uint8_t>(clientSettings.videoQuality);
+        // Same "read fresh on every (re)construction" reasoning as
+        // videoQuality above -- see NetClientConfig::preferH264's own
+        // comment for why the host still gets the final say either way.
+        netConfig.preferH264 = clientSettings.videoCodecH264Experimental;
         NetClient net(netConfig);
 
         // Forwards every logLine() call to the host as a ClientLog packet
@@ -2112,6 +2116,8 @@ int main(int argc, char** argv) {
                     (trackpadExperimentEnabled ? "ON" : "OFF"),
                 std::string("MIRROR HOST SCREEN (EXPERIMENTAL): ") +
                     (clientSettings.mirrorHostScreen ? "ON" : "OFF"),
+                std::string("VIDEO CODEC (EXPERIMENTAL): ") +
+                    (clientSettings.videoCodecH264Experimental ? "H264" : "JPEG"),
             };
             if (!hostExplicit) items.push_back("RUN SETUP WIZARD");
             if (net.hostMicSupported()) {
@@ -2425,6 +2431,10 @@ int main(int argc, char** argv) {
                             } else if (picked.rfind("MIRROR HOST SCREEN", 0) == 0) {
                                 clientSettings.mirrorHostScreen = !clientSettings.mirrorHostScreen;
                                 settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
+                            } else if (picked.rfind("VIDEO CODEC", 0) == 0) {
+                                clientSettings.videoCodecH264Experimental =
+                                    !clientSettings.videoCodecH264Experimental;
+                                settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                             } else if (picked == "RUN SETUP WIZARD") {
                                 setupWizardRequested = true;
                                 runningInner = false;
@@ -2505,6 +2515,10 @@ int main(int argc, char** argv) {
                                     toggleTrackpadExperiment();
                                 } else if (picked.rfind("MIRROR HOST SCREEN", 0) == 0) {
                                     clientSettings.mirrorHostScreen = !clientSettings.mirrorHostScreen;
+                                    settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
+                                } else if (picked.rfind("VIDEO CODEC", 0) == 0) {
+                                    clientSettings.videoCodecH264Experimental =
+                                        !clientSettings.videoCodecH264Experimental;
                                     settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                                 } else if (picked == "RUN SETUP WIZARD") {
                                     setupWizardRequested = true;

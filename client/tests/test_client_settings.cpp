@@ -142,3 +142,25 @@ MDR_TEST(client_settings_round_trip_mirror_host_screen) {
     std::error_code ec;
     std::filesystem::remove_all(path.parent_path(), ec);
 }
+
+MDR_TEST(client_settings_missing_file_uses_video_codec_h264_off_default) {
+    auto path = temporarySettingsPath("missing-video-codec-h264");
+    ClientSettings settings = loadClientSettings(path.string());
+    MDR_CHECK(!settings.videoCodecH264Experimental);
+}
+
+MDR_TEST(client_settings_round_trip_video_codec_h264_experimental) {
+    auto path = temporarySettingsPath("video-codec-h264-round-trip");
+    ClientSettings settings;
+    settings.videoCodecH264Experimental = true;
+
+    MDR_CHECK(saveClientSettings(path.string(), settings));
+    MDR_CHECK(loadClientSettings(path.string()).videoCodecH264Experimental);
+
+    settings.videoCodecH264Experimental = false;
+    MDR_CHECK(saveClientSettings(path.string(), settings));
+    MDR_CHECK(!loadClientSettings(path.string()).videoCodecH264Experimental);
+
+    std::error_code ec;
+    std::filesystem::remove_all(path.parent_path(), ec);
+}

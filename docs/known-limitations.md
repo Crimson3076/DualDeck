@@ -11327,6 +11327,63 @@ Azahar session (actual game video, real network conditions, real GPU
 texture upload) on real hardware is the other thing this whole feature
 still needs before flipping that bit for real users.
 
+## 2026-08-25: Client-side opt-in toggle for H.264 wired up (Stage 5) -- the full negotiated pipeline now exists, gated off by default pending real hardware testing
+
+The last piece of the video-codec-negotiation plan: a real, user-facing
+"VIDEO CODEC (EXPERIMENTAL): JPEG / H264" entry in the Settings menu
+(`client/src/main.cpp`), following exactly the pattern this entry above
+proposed. `ClientSettings::videoCodecH264Experimental` (new field,
+`client/src/client_settings.h`/`.cpp`, persisted as
+`video_codec_h264_experimental=` in `settings.conf`, defaulting off like
+every other "opt-in experimental feature" in this project --
+`mirrorHostScreen` is the most recent precedent) is read into
+`NetClientConfig::preferH264` at the same point and with the same "read
+fresh on every (re)construction of `NetClient`" reasoning `videoQuality`
+already uses, right before `NetClient net(netConfig)`. `NetClient::
+connect()` -- previously hardcoded to `kVideoCodecBit_Jpeg` only, as
+called out as the deliberately-unfinished piece in the Stage 4 entry
+above -- now advertises `kVideoCodecBit_Jpeg | (config_.preferH264 ?
+kVideoCodecBit_H264 : 0)`, matching the field's own comment: this only
+ever *raises the possibility* of H.264 to the host, never forces it --
+`NetServer::selectVideoCodec()` still has the final say, and a session
+can still land on JPEG even with the toggle on (e.g. a host not built
+with OpenH264).
+
+The Settings-menu toggle itself is a plain on/off (not a multi-value
+cycle like `VIDEO QUALITY`), matching `MIRROR HOST SCREEN`'s existing
+toggle pattern rather than `cycleVideoQuality()`'s preset-list pattern,
+since there are only two codecs to choose between. Wired into both
+input paths that already exist for every other settings item -- keyboard
+(`SDLK_RETURN`) and gamepad (`SDL_GAMEPAD_BUTTON_SOUTH`) -- each toggling
+`clientSettings.videoCodecH264Experimental` and immediately persisting
+via `saveClientSettings()`, identical to how `MIRROR HOST SCREEN` and
+`MIC:` already work.
+
+**Verification**: everything *except* `main.cpp` itself was rebuilt and
+tested the same way as every prior stage in this sandbox -- full clean
+rebuild, all 6 `ctest` suites passing (including two new
+`client_settings_tests` cases: the missing-file default is off, and a
+round-trip of the new field through save/load), with real OpenH264
+available (`pkg-config` found `openh264` 2.4.1 in this sandbox, so this
+pass also incidentally got the first-ever from-clean build of this
+feature's host and client code *with* OpenH264 actually present, not
+just the `PKG_CONFIG_PATH`-forced-absent configuration every earlier
+stage was limited to). `main.cpp` itself still cannot be compiled in
+this sandbox (no SDL3) -- its edits were written by careful, mechanical
+pattern-matching against the four already-existing call sites for
+`VIDEO QUALITY`/`MIRROR HOST SCREEN` (the `netConfig.videoQuality`
+assignment, `settingsMenuItems()`, and both the keyboard and gamepad
+`SDLK_RETURN`/`BUTTON_SOUTH` handlers), and checked for brace/paren
+balance, but have not been compiled or run.
+
+**Still not done**: real end-to-end testing against a live Cemu/melonDS/
+Azahar session on real hardware (actual game video, real network
+conditions, the Settings-menu toggle itself, a real GPU texture upload
+of a decoded H.264 frame) -- unchanged from the Stage 4 entry above, and
+the reason this toggle defaults off. Per the user's own stated policy,
+JPEG stays the default for everyone until that real-world testing has
+actually happened.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

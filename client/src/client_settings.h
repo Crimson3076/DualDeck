@@ -50,6 +50,21 @@ struct ClientSettings {
     // test pattern texture instead of real video, which is harmless but
     // not the point, so it's not force-enabled by default.
     bool mirrorHostScreen = false;
+
+    // Protocol v13: whether this client advertises VideoCodecBit_H264
+    // (in addition to the always-advertised VideoCodecBit_Jpeg) in
+    // HelloPayload.supportedVideoCodecs -- see
+    // docs/known-limitations.md's 2026-08-25 video-codec-negotiation
+    // entries for the full design. Defaults off, same "opt-in
+    // experimental feature" convention as mirrorHostScreen above: the
+    // decoder is real and tested (client/src/h264_decoder.h), but has
+    // not yet been exercised against a real game/network session on
+    // real hardware, so a session only ever actually negotiates H.264
+    // if a user explicitly turns this on. Even with this on, the
+    // session might still end up JPEG anyway -- the host has the final
+    // say (NetServer::selectVideoCodec()), e.g. if it wasn't built with
+    // OpenH264 either.
+    bool videoCodecH264Experimental = false;
 };
 
 // $HOME/.config/dualdeck-client/settings.conf, or empty if HOME is
