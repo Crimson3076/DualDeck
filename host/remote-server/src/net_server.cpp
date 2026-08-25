@@ -18,6 +18,7 @@
 #include <optional>
 #include <utility>
 
+#include "host/h264_encoder.h"
 #include "melonds_remote/protocol.h"
 
 namespace melonds_remote::host {
@@ -205,15 +206,16 @@ bool sendAll(int fd, const uint8_t* data, size_t size) {
 
 // Intersects the client's advertised HelloPayload::supportedVideoCodecs
 // against what this host build can actually encode, preferring the most
-// bandwidth-efficient codec both sides agree on. `hostSupportedCodecs`
-// is currently hardcoded to VideoCodecBit_Jpeg only -- no H.264 (or any
-// other) encoder exists in this host yet, so every session still runs
-// exactly the same JPEG path it always has, regardless of what a
-// forward-looking client advertises. Once a real H.264 encoder lands,
-// this is the one place that needs to change to actually start using it
-// (plus setting the matching bit here).
+// bandwidth-efficient codec both sides agree on. VideoCodecBit_H264 is
+// only ever in hostSupportedCodecs when this build actually has OpenH264
+// (see H264Encoder::isAvailable()) -- a build without it (or a client
+// that, like every client shipped so far, only ever advertises JPEG
+// support) still runs exactly the same JPEG path this project always
+// has. videoLoop() is what actually branches on the result -- see its
+// own H264Encoder usage.
 VideoCodec selectVideoCodec(uint8_t clientSupportedCodecs) {
-    constexpr uint8_t hostSupportedCodecs = kVideoCodecBit_Jpeg;
+    const uint8_t hostSupportedCodecs =
+        kVideoCodecBit_Jpeg | (H264Encoder::isAvailable() ? kVideoCodecBit_H264 : 0);
     const uint8_t agreed = clientSupportedCodecs & hostSupportedCodecs;
     if (agreed & kVideoCodecBit_H264) {
         return VideoCodec::H264;
@@ -223,6 +225,25 @@ VideoCodec selectVideoCodec(uint8_t clientSupportedCodecs) {
     // somehow advertised no codecs at all, or a not-yet-mutually-
     // supported future codec) or Jpeg itself being the actual agreement.
     return VideoCodec::Jpeg;
+}
+
+// A first-pass H.264 bitrate default, deliberately reusing the existing
+// currentVideoQuality_ (1-100, originally a JPEG-quality scale -- see
+// its own comment) rather than inventing a wholly separate H.264-only
+// control axis before any real hardware testing exists to say whether
+// that's actually needed. Maps the quality scale onto roughly
+// 0.05-0.30 bits/pixel/frame (a plausible middle-ground range for H.264
+// at real-time/low-latency tuning, not empirically measured against
+// this project's actual video content yet -- see docs/known-limitations.md's
+// 2026-08-25 H.264 entries) and scales by resolution and frame rate to
+// get a target bits-per-second the encoder's RC_BITRATE_MODE rate
+// control aims for.
+int h264TargetBitrateBps(int quality, uint16_t width, uint16_t height, int fps) {
+    const double clampedQuality = std::clamp(quality, 1, 100) / 100.0;
+    const double bitsPerPixelPerFrame = 0.05 + clampedQuality * 0.25;
+    const double bitrate =
+        static_cast<double>(width) * static_cast<double>(height) * bitsPerPixelPerFrame * fps;
+    return static_cast<int>(std::clamp(bitrate, 250'000.0, 20'000'000.0));
 }
 
 } // namespace
@@ -695,6 +716,7 @@ void NetServer::controlLoop() {
                             clientRequestedExplicitVideoQuality = true;
                         }
                         selectedVideoCodec = selectVideoCodec(hello->supportedVideoCodecs);
+                        currentVideoCodec_ = selectedVideoCodec;
                     }
                 } else {
                     std::fprintf(stderr, "NetServer: rejecting handshake (short Hello payload)\n");
@@ -1083,6 +1105,17 @@ void NetServer::videoLoop() {
         return;
     }
 
+    // One H264Encoder for this whole thread's lifetime too, same
+    // reasoning as jpegCompressor above -- real setup/teardown cost
+    // (WelsCreateSVCEncoder/InitializeExt), reused across reconnects.
+    // A no-op wrapper if this build has no OpenH264 (see
+    // H264Encoder::isAvailable()); selectVideoCodec() already never
+    // selects VideoCodec::H264 in that case, so this path is simply
+    // never taken either way.
+    host::H264Encoder h264Encoder;
+    int h264InitializedWidth = 0;
+    int h264InitializedHeight = 0;
+
     while (running_.load()) {
         sockaddr_in clientAddr{};
         socklen_t clientLen = sizeof(clientAddr);
@@ -1148,6 +1181,20 @@ void NetServer::videoLoop() {
             std::lock_guard<std::mutex> lock(targetMutex_);
             frameSource_->frameDimensions(frameWidth, frameHeight);
         }
+        // Fixed for this connection's whole lifetime, same as
+        // currentVideoQuality_'s per-session effective value -- codec
+        // choice is only ever (re)negotiated at handshake time (protocol
+        // v13), never mid-session.
+        const bool useH264 = currentVideoCodec_.load() == VideoCodec::H264;
+        // Forces the inner loop's "not yet initialized for this size"
+        // check to (re)initialize the encoder on this connection's very
+        // first frame, even if a previous connection already left it
+        // initialized at the exact same resolution -- a freshly
+        // (re)connected client has no prior decoder state of its own, so
+        // it needs a real IDR as the first frame it ever receives
+        // regardless of whether the encoder itself needed rebuilding.
+        h264InitializedWidth = 0;
+        h264InitializedHeight = 0;
         // 4 bytes/pixel raw (PixelFormat::Bgra8888 is the only pixel format
         // any adapter in this project uses) -- but what actually goes out
         // over the wire since protocol v8 is a JPEG-compressed frame (see
@@ -1179,6 +1226,7 @@ void NetServer::videoLoop() {
 
         std::vector<uint8_t> frame;
         ByteBuffer jpegFrame;
+        ByteBuffer h264Frame;
         std::optional<uint64_t> lastSentFrameIndex;
         while (running_.load()) {
             auto tickStart = std::chrono::steady_clock::now();
@@ -1227,7 +1275,66 @@ void NetServer::videoLoop() {
             // frame" read with no risk of drifting from what it's
             // actually meant to measure as the surrounding code changes.
             uint64_t captureTimestampUs = nowMicrosEpoch();
-            if (gotFrame && !compressFrameBgraToJpeg(jpegCompressor, frame.data(), currentFrameWidth, currentFrameHeight,
+            if (gotFrame && useH264) {
+                if (currentFrameWidth != h264InitializedWidth || currentFrameHeight != h264InitializedHeight) {
+                    // First frame of this connection (see the
+                    // h264InitializedWidth/Height reset above), or a real
+                    // mid-session resolution change -- Cemu's own
+                    // per-title GamePad size already did this for real,
+                    // see docs/known-limitations.md's "sheared/torn"
+                    // entry. Either way the next encodeFrame() call below
+                    // naturally produces a fresh IDR, which is exactly
+                    // what a client with no prior decoder state (or a
+                    // decoder state that just became the wrong
+                    // resolution) needs.
+                    // Deliberately NOT config_.videoSendFps: since the
+                    // "Latency: tightened the two cheap-to-poll relay
+                    // stages" pass (docs/known-limitations.md), that
+                    // value is a polling-responsiveness tick rate (240
+                    // by default) this loop's own outer interval uses,
+                    // not a real content frame rate -- no adapter
+                    // actually produces new frames anywhere near that
+                    // often (Cemu's own CEMU_REMOTE_CAPTURE_FPS default
+                    // is 30). Feeding 240 into fMaxFrameRate/uiIntraPeriod
+                    // below would badly under-tune both (a keyframe only
+                    // every ~16 real seconds at frame *count* 480, not
+                    // the intended ~2). This constant is a reasonable
+                    // assumption across today's real adapters, not a
+                    // measured value -- worth revisiting once per-adapter
+                    // real capture rate is actually plumbed through to
+                    // NetServer.
+                    constexpr int kAssumedCaptureFps = 30;
+                    if (!h264Encoder.initialize(currentFrameWidth, currentFrameHeight, kAssumedCaptureFps,
+                                                 h264TargetBitrateBps(currentVideoQuality_.load(), currentFrameWidth,
+                                                                       currentFrameHeight, kAssumedCaptureFps))) {
+                        std::fprintf(stderr, "NetServer: H264Encoder::initialize failed (%dx%d), skipping frame\n",
+                                     currentFrameWidth, currentFrameHeight);
+                        h264InitializedWidth = 0;
+                        h264InitializedHeight = 0;
+                        gotFrame = false;
+                    } else {
+                        h264InitializedWidth = currentFrameWidth;
+                        h264InitializedHeight = currentFrameHeight;
+                    }
+                }
+                bool isKeyframe = false;
+                if (gotFrame && !h264Encoder.encodeFrame(frame.data(), currentFrameWidth, currentFrameHeight,
+                                                          h264Frame, isKeyframe)) {
+                    // Same "skip this tick, don't tear down the
+                    // connection" treatment as a JPEG compress failure
+                    // below -- a transient encode failure shouldn't be
+                    // fatal.
+                    gotFrame = false;
+                }
+                if (gotFrame && h264Frame.empty()) {
+                    // The encoder's own rate control decided to skip
+                    // this frame entirely to stay within the target
+                    // bitrate (encodeFrame() still returns true for this
+                    // -- see its own comment) -- nothing to send, same
+                    // as "frame index unchanged" above, not an error.
+                    gotFrame = false;
+                }
+            } else if (gotFrame && !compressFrameBgraToJpeg(jpegCompressor, frame.data(), currentFrameWidth, currentFrameHeight,
                                                       currentVideoQuality_.load(), jpegFrame)) {
                 // Logged inside compressFrameBgraToJpeg(); skip this tick
                 // rather than tearing down the connection, same treatment
@@ -1238,7 +1345,7 @@ void NetServer::videoLoop() {
             if (gotFrame) {
                 VideoFramePayload videoPayload;
                 videoPayload.captureTimestampUs = captureTimestampUs;
-                videoPayload.jpeg = std::move(jpegFrame);
+                videoPayload.jpeg = std::move(useH264 ? h264Frame : jpegFrame);
                 ByteBuffer packet = buildVideoFramePacket(videoPayload);
                 if (!sendAll(clientFd, packet.data(), packet.size())) {
                     break;

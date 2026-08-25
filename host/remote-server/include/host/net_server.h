@@ -437,6 +437,13 @@ private:
     // clientAuthenticated_'s comment) -- there is no per-connection state
     // here, just the most recent handshake's outcome.
     std::atomic<int> currentVideoQuality_{80};
+
+    // Which VideoCodec the most recent handshake selected (protocol
+    // v13, see NetServer::selectVideoCodec() and HelloAckPayload::
+    // selectedVideoCodec's own comments) -- same "set once at handshake
+    // time, read by videoLoop() when a new video connection arrives"
+    // convention as currentVideoQuality_ above.
+    std::atomic<VideoCodec> currentVideoCodec_{VideoCodec::Jpeg};
 };
 
 } // namespace melonds_remote::host

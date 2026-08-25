@@ -66,7 +66,10 @@ def lp_string(s: str) -> bytes:
     return struct.pack("<H", len(b)) + b
 
 
-def hello_payload(name: str, platform: str, width: int, height: int, token: str, app_version: str = "") -> bytes:
+def hello_payload(
+    name: str, platform: str, width: int, height: int, token: str, app_version: str = "",
+    video_codecs: int = 1,
+) -> bytes:
     # app_version left empty by default: an empty appVersion on either side
     # skips the AppVersionMismatch check entirely (see protocol.h), which is
     # what every test below except a dedicated version-mismatch case wants.
@@ -75,8 +78,10 @@ def hello_payload(name: str, platform: str, width: int, height: int, token: str,
     # "defer to the host's own configured default," which is what every
     # test here wants -- none of them exercise video compression
     # directly) followed by HelloPayload::supportedVideoCodecs (protocol
-    # v13, VideoCodecBit_Jpeg = 1 -- every real client supports at least
-    # JPEG decode, and this script only exercises the JPEG path).
+    # v13, VideoCodecBit_Jpeg = 1, VideoCodecBit_H264 = 2 -- defaults to
+    # JPEG-only, the same as every client shipped so far; the dedicated
+    # H.264-negotiation test below passes 3 to also advertise H.264
+    # support).
     return (
         lp_string(name)
         + lp_string(platform)
@@ -84,7 +89,7 @@ def hello_payload(name: str, platform: str, width: int, height: int, token: str,
         + lp_string(token)
         + lp_string(app_version)
         + struct.pack("<B", 0)
-        + struct.pack("<B", 1)
+        + struct.pack("<B", video_codecs)
     )
 
 
@@ -118,16 +123,17 @@ def read_lp_string(buf: bytes, offset: int):
     return buf[start:end].decode("utf-8"), end
 
 
-def do_handshake(control_port: int, token: str, app_version: str = ""):
+def do_handshake(control_port: int, token: str, app_version: str = "", video_codecs: int = 1):
     """Connects, sends Hello with `token`, and returns a dict with keys:
     ctrl, accepted, reject_reason, host_app_version, mic_supported,
     system_id, system_name, adapter_id, adapter_name, adapter_version
     (GitHub issue #28's identity fields, appended to HelloAckPayload after
-    micSupported -- see docs/protocol.md's "Emulator identity model"), and
+    micSupported -- see docs/protocol.md's "Emulator identity model"),
     mode (GitHub issue #4 Phase E's HostMode field, appended after adapter
-    identity -- 0=Emulation, 1=HostControl)."""
+    identity -- 0=Emulation, 1=HostControl), and selected_video_codec
+    (protocol v13 -- 0=JPEG, 1=H.264, appended after mode)."""
     ctrl = socket.create_connection(("127.0.0.1", control_port), timeout=3)
-    payload = hello_payload("smoke-test-client", "linux", 1280, 800, token, app_version)
+    payload = hello_payload("smoke-test-client", "linux", 1280, 800, token, app_version, video_codecs)
     ctrl.sendall(header(PT_HELLO, len(payload)) + payload)
 
     ack_header = recv_exact(ctrl, 12)
@@ -335,6 +341,59 @@ def run(server_path: str) -> int:
 
         if proc.poll() is not None:
             print("[FAIL] server exited after client disconnect")
+            return 1
+
+        # --- Video codec negotiation (protocol v13): a client advertising
+        # both JPEG and H.264 support against a host actually built with
+        # OpenH264 (see host/remote-server/CMakeLists.txt's optional
+        # detection) should get H.264 selected and a real Annex-B stream,
+        # not JPEG bytes -- the strongest verification available here
+        # short of a full H.264 decoder in this script: distinguish the
+        # two formats by their very first bytes (JPEG always starts with
+        # the SOI marker 0xFFD8; H.264 Annex-B always starts with a NAL
+        # start code, 0x000001 or 0x00000001) and confirm the encoder's
+        # own first frame is a real IDR (NAL type 5 in the byte right
+        # after the start code, low 5 bits -- see ITU-T H.264 7.3.1). If
+        # this host build has no OpenH264, selectVideoCodec() never picks
+        # H.264 regardless of what's advertised here, so this degrades to
+        # confirming the negotiation correctly falls back to JPEG rather
+        # than failing outright.
+        h264 = do_handshake(control_port, token, video_codecs=3)
+        assert h264["accepted"] == 1, f"expected H.264-capable Hello accepted, got {h264}"
+        video_codec_client = socket.create_connection(("127.0.0.1", video_port), timeout=3)
+        vheader = recv_exact(video_codec_client, 12)
+        vmagic, _, vtype, vsize = struct.unpack("<IHHI", vheader)
+        assert vmagic == MAGIC and vtype == PT_VIDEO_FRAME
+        assert 0 < vsize, f"expected a non-empty video frame, got {vsize} bytes"
+        vpayload = recv_exact(video_codec_client, vsize)
+        video_codec_client.close()
+        # First 8 bytes are VideoFramePayload::captureTimestampUs
+        # (protocol v10) -- the encoded frame itself starts right after.
+        frame_bytes = vpayload[8:]
+        if h264["selected_video_codec"] == 1:
+            has_nal_start_code = frame_bytes[:3] == b"\x00\x00\x01" or frame_bytes[:4] == b"\x00\x00\x00\x01"
+            assert has_nal_start_code, (
+                f"host selected H.264 but the frame doesn't start with a NAL start code: "
+                f"{frame_bytes[:4].hex()}"
+            )
+            start_code_len = 4 if frame_bytes[:4] == b"\x00\x00\x00\x01" else 3
+            nal_unit_type = frame_bytes[start_code_len] & 0x1F
+            assert nal_unit_type in (7, 8, 5), (
+                f"expected the first NAL after negotiating H.264 to be SPS(7)/PPS(8)/IDR(5), got type {nal_unit_type}"
+            )
+            print(f"[ok] host selected H.264 for a codec-capable client, first frame is a real NAL "
+                  f"(type {nal_unit_type}, {vsize} bytes)")
+        else:
+            assert frame_bytes[:2] == b"\xff\xd8", (
+                f"host fell back to JPEG (no OpenH264 in this build) but frame doesn't start with the "
+                f"JPEG SOI marker: {frame_bytes[:2].hex()}"
+            )
+            print(f"[ok] host has no OpenH264 in this build -- correctly fell back to JPEG "
+                  f"despite the client advertising H.264 support ({vsize}-byte JPEG frame)")
+        h264["ctrl"].close()
+        time.sleep(0.2)
+        if proc.poll() is not None:
+            print("[FAIL] server exited after H.264-negotiation test")
             return 1
 
         # --- Rate limiting: hammering the control port must eventually get

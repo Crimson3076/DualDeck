@@ -11194,6 +11194,67 @@ actual per-session frame-sending path, flipping the host's advertised
 "VIDEO CODEC" setting, and real end-to-end testing against a live
 Cemu/melonDS/Azahar session on real hardware.
 
+## 2026-08-25: H.264 wired into a live session (Stage 3) -- real end-to-end negotiated streaming, host side only
+
+Stage 3 of the video-codec-negotiation plan: `NetServer::videoLoop()`
+now actually branches on the negotiated codec and streams real H.264
+when a session selects it, instead of `H264Encoder` (Stage 2) sitting
+unused. `NetServer` gained `currentVideoCodec_` (set at handshake time,
+same "most recent session's effective value" convention as
+`currentVideoQuality_`), `selectVideoCodec()`'s host-capability constant
+now actually includes `VideoCodecBit_H264` when `H264Encoder::
+isAvailable()`, and `videoLoop()` keeps one `H264Encoder` alive for the
+whole thread's lifetime (mirroring `jpegCompressor`'s existing
+per-thread reuse), reinitializing it whenever a new video connection
+starts or the source's real per-frame resolution changes -- both cases
+guarantee the next `encodeFrame()` call produces a fresh IDR, which is
+exactly what a client with no prior decoder state (a fresh connection,
+or one whose decoder just became the wrong resolution) needs.
+
+Two real bugs caught and fixed before this was verified working, not
+just written:
+
+1. **Wrong frame-rate input.** First wired using `config_.videoSendFps`
+   (240 by default) for the encoder's `fMaxFrameRate`/keyframe-interval
+   tuning -- but that value stopped meaning "real content frame rate"
+   back in the "tightened the two cheap-to-poll relay stages" pass
+   (see that entry above): it's this loop's own polling-responsiveness
+   tick rate, not anything close to what any real adapter actually
+   produces (Cemu's own default capture rate is 30). Feeding 240 in
+   would have meant a keyframe only every ~16 real seconds (`uiIntraPeriod`
+   counts frames, not time) instead of the intended ~2. Fixed with an
+   explicit `kAssumedCaptureFps = 30` constant instead, with its own
+   comment explaining why `videoSendFps` is the wrong value here --
+   flagged as worth revisiting once a real per-adapter capture rate is
+   ever plumbed through to `NetServer`.
+2. **Rate control silently non-functional.** Covered in Stage 2's own
+   entry above (`bEnableFrameSkip`) -- re-verified still correct here
+   since this stage is what actually exercises it under a real send loop.
+
+**New end-to-end coverage, not just the standalone encoder tests**:
+`tests/smoke_test.py` gained a real codec-negotiation scenario --
+connects with `supportedVideoCodecs` advertising both JPEG and H.264,
+confirms the host's `HelloAckPayload.selectedVideoCodec`, reads the
+actual video frame that comes back over the wire, and distinguishes the
+two formats by their real first bytes (JPEG's `0xFFD8` SOI marker vs.
+H.264 Annex-B's NAL start code), further asserting the first NAL's type
+is SPS/PPS/IDR (7/8/5) when H.264 was selected -- not just "some bytes
+arrived." Run twice against two real builds: one with OpenH264 actually
+linked in (confirmed H.264 selected, first NAL type 7/SPS, real
+`.hex()`-visible NAL start code) and one configured with `PKG_CONFIG_PATH`
+pointed at a nonexistent directory to force the no-OpenH264 fallback
+(confirmed the same client still gets JPEG, correctly falling back
+despite advertising H.264 support). Both builds: full local rebuild
+(`-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror`, zero
+warnings), all 6 `ctest` suites, and both Python smoke tests pass.
+
+**Not yet done**: the client-side OpenH264 *decoder* (the client still
+only ever advertises `VideoCodecBit_Jpeg`, so a real client session
+never actually negotiates H.264 yet, regardless of this host-side
+wiring being live and correct), the "VIDEO CODEC" client setting, and
+real end-to-end testing against a live Cemu/melonDS/Azahar session
+(video content, not a synthetic test frame) on real hardware.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

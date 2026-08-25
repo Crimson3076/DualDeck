@@ -656,6 +656,15 @@ inline constexpr size_t kVideoFrameTimestampWireSize = 8;
 // it, nothing about the JPEG encoding itself changed.
 struct VideoFramePayload {
     uint64_t captureTimestampUs = 0;
+    // Despite the field's name (unchanged since v8 to avoid an
+    // otherwise-mechanical rename across every call site for a field
+    // whose wire meaning never actually depended on its name), this
+    // holds whatever bytes HelloAckPayload::selectedVideoCodec (v13)
+    // negotiated for the session -- JPEG bytes today, or H.264 Annex-B
+    // NAL units once a session actually selects VideoCodec::H264 (see
+    // NetServer::videoLoop()'s own codec branch). The receiver already
+    // knows which from the handshake, so no extra framing is needed
+    // here to distinguish them.
     std::vector<uint8_t> jpeg;
 };
 
