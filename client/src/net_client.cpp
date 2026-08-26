@@ -367,6 +367,34 @@ bool NetClient::connect() {
         closePartialConnection();
         return false;
     }
+    // Real user request, 2026-08-26: on a Wi-Fi link shared with the
+    // (much bulkier) TCP video stream, ControllerState packets can end
+    // up contending for airtime against video frames headed the other
+    // way -- marking this socket's outgoing traffic with a QoS/DSCP
+    // value most access points' WMM implementation maps to a
+    // higher-priority 802.11e access category gives it a real (if
+    // statistical, not guaranteed) head start over the video stream's
+    // own default best-effort traffic when both are contending for the
+    // same channel. DSCP CS6 (0xC0) rather than the more commonly-quoted
+    // EF (0xB8): Linux's own mac80211 classifier
+    // (cfg80211_classify8021d()) derives an 802.1D user-priority from
+    // the DSCP field's top 3 bits, and priorities 6-7 are the only ones
+    // that unambiguously land in the highest access category (AC_VO)
+    // across every mapping table variant -- CS6 (0xC0 >> 5 == 0b110 ==
+    // priority 6) hits that reliably; EF's own top-3-bits value doesn't.
+    // Best-effort only: plenty of networks (a default-config home router,
+    // a network that strips DSCP entirely) will simply ignore this, and
+    // that's fine -- this is a QoS *hint*, not something the connection
+    // should ever fail over. Only this socket, not udpAudioFd_ below --
+    // scoped to what was actually asked for (control latency), not
+    // extended to microphone audio without being asked.
+    {
+        constexpr int kInputDscpTos = 0xC0; // DSCP CS6 (see comment above)
+        if (::setsockopt(udpFd_, IPPROTO_IP, IP_TOS, &kInputDscpTos, sizeof(kInputDscpTos)) < 0) {
+            logLine("setsockopt (udp input IP_TOS): %s -- continuing without QoS marking\n",
+                    std::strerror(errno));
+        }
+    }
     sockaddr_in inputAddr = addr;
     inputAddr.sin_port = htons(config_.inputPort);
     if (::connect(udpFd_, reinterpret_cast<sockaddr*>(&inputAddr), sizeof(inputAddr)) < 0) {
