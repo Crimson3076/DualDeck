@@ -11384,6 +11384,302 @@ the reason this toggle defaults off. Per the user's own stated policy,
 JPEG stays the default for everyone until that real-world testing has
 actually happened.
 
+## 2026-08-26: Cemu GamePad capture redesigned to be non-blocking -- the real root cause of Wind Waker HD running at 14-20fps instead of 30
+
+**Confirmed regression, reported with real hardware evidence on two
+independent machines**: DualDeck-patched Cemu 2.6 ran Wind Waker HD at
+~14-20fps -- Fedora laptop (i7-13620H, RTX 4070 Laptop GPU) and Bazzite
+HTPC (Ryzen 7 9800X3D, RX 7900 XTX) both confirmed, both well above the
+hardware needed to hold the game's real 30fps (confirmed on the same
+hardware/game files against an *unmodified* Cemu 2.6 build). Setting
+`CEMU_REMOTE_CAPTURE_FPS=1` (throttling capture attempts to once a
+second instead of the default 30) restored full native speed -- this is
+the single most important diagnostic fact here: it rules out
+insufficient hardware, game corruption, VSync, `GX2DrawDone`, graphics
+packs, and GPU vendor/selection all at once, and conclusively identifies
+the *frequency* of DualDeck's own capture calls, not their existence, as
+the bottleneck.
+
+### Root cause
+
+`CemuAdapter::onSurfaceRendered()` (`src/remote_server/CemuAdapter.cpp`)
+used to call `g_renderer->CaptureSurfaceBGRA()` directly, throttled to
+`CEMU_REMOTE_CAPTURE_FPS` (default 30) per surface. On Vulkan (Cemu's
+default/recommended Linux backend, and what both report machines use),
+that function's body was:
+
+```cpp
+vkCmdCopyImageToBuffer(m_state.currentCommandBuffer, dumpImage, ..., buffer, 1, &region);
+SubmitCommandBuffer();
+WaitCommandBufferFinished(GetCurrentCommandBufferId());
+```
+
+`SubmitCommandBuffer()` submits the render thread's current command
+buffer to the GPU queue and immediately opens a new one for subsequent
+drawing. `WaitCommandBufferFinished()` then blocks the calling thread
+-- Cemu's own render thread, the same thread that processes every draw
+call in the game's frame -- until the GPU has actually finished
+executing that submitted work. This is a **full GPU pipeline stall**:
+not "wait for this capture's own tiny copy command," but "wait for
+everything the GPU had queued up through this point to actually
+finish," which on a GPU that's normally comfortably ahead of the CPU
+(exactly the situation on both report machines, both well above what
+Wind Waker HD needs) means throwing away all of that queued-ahead
+parallelism on every single call.
+
+Both TV and GamePad surfaces were captured this way, both defaulting to
+30fps, so up to **60 blocking GPU synchronizations per second** on the
+render thread alone -- independent of, and in addition to, whatever
+frame rate the game itself was trying to render at. `CEMU_REMOTE_CAPTURE_FPS=1`
+brings that down to ~2/sec (one per surface), which is infrequent enough
+that the occasional stall no longer meaningfully competes with the
+game's own frame pacing -- exactly matching the reported "smooth/playable"
+result.
+
+### A second, compounding bug in the same three lines
+
+`GetCurrentCommandBufferId()` returns `m_numSubmittedCmdBuffers` --
+already incremented by the `SubmitCommandBuffer()` call immediately
+before it in the sequence above. So the ID actually passed to
+`WaitCommandBufferFinished()` was the ID the *next*, still-empty command
+buffer would get once submitted -- not the one that actually contained
+this capture's copy command. `WaitCommandBufferFinished()`'s own body:
+
+```cpp
+void VulkanRenderer::WaitCommandBufferFinished(uint64 commandBufferId)
+{
+    if (commandBufferId == m_numSubmittedCmdBuffers)
+        SubmitCommandBuffer();
+    while (HasCommandBufferFinished(commandBufferId) == false)
+        WaitForNextFinishedCommandBuffer();
+}
+```
+
+special-cases exactly this: being asked to wait on a buffer that hasn't
+been submitted yet, it submits one -- meaning every single capture call
+triggered a **second, entirely empty command buffer submission**, purely
+to have something to wait on, on top of the real one. The wait itself
+still ended up correct (command buffers complete in submission order, so
+waiting on the second one also waits out the first), just wastefully --
+this bug added extra submit/fence overhead on top of the real stall,
+never caused a correctness problem on its own.
+
+The user who reported this bug found and fixed this specific ordering
+issue independently (reading the ID *before* the submit rather than
+after), correctly, but also correctly flagged that it doesn't fix the
+larger problem: the render thread still blocks on the GPU either way.
+Both issues are fixed here -- the ordering fix is applied to the old
+synchronous `VulkanRenderer::CaptureSurfaceBGRA()` (kept, see below, as
+a documented fallback for backends without an async implementation), and
+the actual redesign below eliminates the blocking wait from the hot path
+entirely rather than just making it wait on the right thing.
+
+### The fix: schedule now, collect later
+
+`VulkanRenderer` gained five new methods (declared as virtuals on the
+abstract `Renderer` base, `src/Cafe/HW/Latte/Renderer/Renderer.h`,
+default no-op/false so a backend without a real implementation --
+currently OpenGL -- is unaffected):
+
+- `SupportsAsyncCaptureSurfaceBGRA()` -- capability check; `CemuAdapter`
+  falls back to the old, still-synchronous `CaptureSurfaceBGRA()` for any
+  backend that returns false.
+- `GetCaptureSlotCount()` -- how many reusable capture slots this
+  backend maintains (3, for Vulkan).
+- `IsCaptureSlotFree(slotIndex)` / `ScheduleCaptureSurfaceBGRA(...)` --
+  the render-thread side: check a slot is free, then **record** the
+  capture (the same blit-if-needed + copy-to-buffer commands the old
+  function issued) into the currently-recording command buffer and
+  return immediately. No `SubmitCommandBuffer()`, no
+  `WaitCommandBufferFinished()` -- `RequestSubmitSoon()`/
+  `RequestSubmitOnIdle()` (both already existed in this Cemu version,
+  confirmed by reading `VulkanRenderer.h`/`.cpp` directly, unused by
+  this feature until now) are the entire extent of "requesting
+  submission": both just lower thresholds `SubmitCommandBuffer()` itself
+  already checks on Cemu's own normal rendering cadence, never an
+  out-of-band submit forced by this code.
+- `IsCaptureSlotReady(slotIndex)` -- non-blocking: `HasCommandBufferFinished()`
+  is a plain counter comparison, not a wait.
+- `ReadAndReleaseCaptureSlot(slotIndex, outPixels)` -- once ready, pure
+  CPU work reading an already-mapped, `HOST_COHERENT` staging buffer (no
+  Vulkan calls at all) into BGRA8888, applying the same sRGB correction
+  the old function always did (decided and stored at schedule time), and
+  freeing the slot.
+
+`CemuAdapter::onSurfaceRendered()` is now the *scheduling* half: TV-
+capture and subscription gating (below), throttle check, find a free
+slot, schedule, return -- never waiting on anything. If no slot is free
+(all three still waiting on the GPU from earlier captures), the frame is
+simply dropped -- a counted diagnostic (`capturesDropped`), never a
+blocked render thread. `CemuAdapter::pumpCaptures()` is the new
+*completion* half: called once per real frame (not per surface, and not
+throttled) from the same `LatteRenderTarget.cpp` hook, before either
+`onSurfaceRendered()` call, draining every slot that's actually finished
+and publishing its pixels.
+
+**Why the completion side runs on the render thread instead of a
+dedicated worker thread**: it was considered and rejected. The render
+thread already visits this exact hook once every real frame regardless,
+so a completed capture is picked up within about one frame either way --
+a dedicated thread buys no meaningful latency improvement. It would,
+however, need its own synchronization around Vulkan/Cemu state
+(`m_state.currentCommandBuffer`, the memory manager, `LatteTextureView`)
+this render thread otherwise owns exclusively and without any lock at
+all -- introducing a whole new class of thread-safety surface for no
+real benefit. `ReadAndReleaseCaptureSlot()` itself needs no Vulkan calls
+(the staging buffer is already mapped and host-coherent), so running it
+from the render thread costs nothing there wouldn't already need to be
+paid.
+
+**Slot ownership and ordering**: each of the 3 slots owns its own
+persistent staging buffer *and* its own persistent scratch blit image
+(for surface formats that need one) -- not shared, since TV and GamePad
+captures at different resolutions can be genuinely concurrent in-flight,
+unlike the old function's single shared scratch buffer/image (safe there
+only because the old code was always fully synchronous, one capture
+completing entirely before the next could ever start). Reused across
+frames (resized only when a slot's requested dimensions actually
+change), never destroyed/recreated per capture -- eliminating the
+`vkCreateImage`/`vkAllocateMemory`/`vkDestroyImage`/`vkFreeMemory` churn
+the old blit-needed path paid on every single call for an
+indirectly-readable surface format.
+
+**Orphaned-slot self-healing**: `CemuAdapter` is created/destroyed per
+game boot (`RemoteServerBridge`), but `VulkanRenderer` -- and therefore
+its capture slots -- is process-lifetime. A `CemuAdapter` destroyed with
+a capture still in flight (confirmed: its destructor runs synchronously
+on Cemu's *GUI* thread, not the render thread -- see
+`RemoteServerBridge::stop()`'s own comment -- so it correctly does
+nothing capture-related itself, rather than attempting anything
+render-thread-only from the wrong thread) would otherwise leak that slot
+forever, silently shrinking the pool for every future title launched in
+the same process. Fixed with a self-healing reclaim inside
+`IsCaptureSlotFree()` itself: a slot found in-use *and* GPU-finished is
+freed right there -- proven safe because a *live* adapter's own
+`pumpCaptures()` always drains a truly-ready slot before its own next
+`onSurfaceRendered()` scheduling call in the same frame, so this path
+can only ever fire for a slot whose owner has actually stopped asking.
+
+### Also fixed, per the same investigation
+
+- **TV capture disabled by default** (`CEMU_REMOTE_CAPTURE_TV`, off
+  unless set): `CemuAdapter::capabilities()` has always reported the TV
+  surface with `remotelyDisplayed = false` -- its role is the host's own
+  local screen only, confirmed by reading `net_server.cpp`'s video loop,
+  which only ever streams a session's one `remotelyDisplayed` surface to
+  a client. So every TV-surface capture -- GPU work, CPU BGRA/sRGB
+  conversion, mutex-guarded publish, and a `Frame` message shipped across
+  the local adapter IPC socket by `AdapterIpcClient::writeLoop()` (it
+  iterates every declared surface, TV included) -- was, and without this
+  change still would be, 100% wasted work: nothing downstream has ever
+  actually read a TV frame. This alone roughly halves the worst-case
+  render-thread stall count from the bug above, independent of the async
+  redesign.
+- **Capture gated on an actual connected client**, not just the local
+  adapter IPC socket being up. `AdapterIpcClient::isConnected()` only
+  ever meant "this Cemu process is connected to `dualdeck-host-service`"
+  -- true for as long as the host service process is running, regardless
+  of whether any Deck is actually watching (the common case between play
+  sessions on an always-on Bazzite HTPC). The real signal already
+  existed and already reached this process, just unused for this:
+  `ipc_protocol.h`'s `ClientConnectionChanged` message (service ->
+  adapter, fired by `NetServer` on real client handshake/disconnect, see
+  `net_server.cpp`), delivered via
+  `AdapterIpcClient::setConnectionStateCallback()` (both already
+  existed, previously wired only to Azahar's own Qt-window-mirroring
+  equivalent). `RemoteServerBridge` now wires this to a new
+  `CemuAdapter::setClientConnected()`, and `onSurfaceRendered()` skips
+  all GPU capture work entirely (not even the throttle check) unless a
+  client is actually connected.
+- **Diagnostics**: a throttled (once per 10s, only if anything actually
+  happened) `cemuLog_log()` summary line --
+  `scheduled`/`completed`/`completedSync`/`dropped`/`failed`/`skippedNoViewer`/`pendingSlots`
+  -- visible in Cemu's own log window/`log.txt`, matching how every other
+  DualDeck-specific condition in this codebase already surfaces itself
+  rather than inventing a new IPC message or UI for it.
+
+### Explicitly not changed
+
+- **OpenGL's capture path** (`OpenGLRenderer::CaptureSurfaceBGRA()`,
+  `glGetTexImage`) is unchanged -- still synchronous. Both report
+  machines use Vulkan (Cemu's default/recommended backend on Linux), so
+  this fix's real-hardware verification never exercised OpenGL; a
+  PBO-based async GL readback was out of scope for this pass rather than
+  risk an unverified change to a path nothing here actually tested.
+- A pre-existing, unrelated latent inconsistency noticed (not
+  introduced) while reading this code closely: `CaptureSurfaceBGRA()`'s
+  (and now `ScheduleCaptureSurfaceBGRA()`'s identical) `isDirectlyReadable`
+  check accepts `VK_FORMAT_R8G8B8_SNORM` as directly readable, but
+  neither function's later `size`/pixel-conversion `switch` handles that
+  format (only `_UNORM`/`_SRGB`) -- so a render target in that exact
+  format would fail to capture (return false) via either path, old or
+  new. Left as-is: real-world Wii U/GX2 render targets essentially never
+  use a signed-normalized 3-channel format, and "fixing" a case that
+  can't be tested here risks introducing a real bug in the name of an
+  unencountered one.
+- **Fine-grained per-surface subscription** (as opposed to "is *any*
+  client connected at all") is not implemented -- `ClientConnectionChanged`
+  is a whole-session signal, not "is the GamePad surface specifically
+  subscribed." Since `CemuAdapter` only ever has one client-facing
+  surface in the first place (GamePad; TV is local-only, see above),
+  this distinction doesn't currently matter in practice, but a future
+  multi-surface-subscription protocol message (as this patch's own
+  `RemoteServerBridge.h` comment on `AdapterIpcClient::isConnected()`
+  already anticipated) would let a host-control-only session, for
+  instance, skip capture too.
+
+### Fedora build blockers found and fixed alongside this
+
+Unrelated to the performance bug itself, but found while trying to
+actually compile and test the fix on the reporting user's own Fedora
+machine:
+
+- **`perl-FindBin`/`perl-IPC-Cmd` missing** (dnf only): Cemu's vcpkg
+  dependency graph builds OpenSSL from source, whose Perl-based build
+  tooling needs these two Perl *core* modules -- present by default on
+  Debian/Ubuntu's and Arch's own `perl` packages, but split into
+  separate optional packages by Fedora's minimal `perl`. Added to
+  `scripts/lib/ensure-packages.sh`'s dnf list via `build-release.sh`.
+- **glslang 14.2.0 missing `<cstdint>`** and **SDL 2.30.3 vs. current
+  PipeWire headers** (`pw_node_enum_params()` argument type) -- both real
+  build-machine-header-version issues, not upstream logic bugs. Fixed
+  via two new vcpkg overlay ports (`host/cemu-patches/vcpkg-overlay/`,
+  copied into Cemu's own existing
+  `dependencies/vcpkg_overlay_ports_linux/` by `build_cemu()`) rather
+  than a global compiler flag -- see that directory's own README.md for
+  the full rationale and exactly what each one changes.
+
+### Verification
+
+Every code change in this entry was written by reading the exact pinned
+Cemu source (`a6fb0a48eb437a8a41c13b782ac8ae0433bf8f98`, tag `v2.6`)
+directly -- `GetCurrentCommandBufferId()`/`HasCommandBufferFinished()`/
+`RequestSubmitSoon()`/`RequestSubmitOnIdle()` were confirmed to already
+exist with exactly this behavior before designing around them, not
+assumed from the bug report alone. The regenerated patch
+(`host/cemu-patches/0001-remote-server-integration.patch`) was verified
+with this project's own established technique: clone pristine Cemu at
+the pinned commit, apply the existing patch, make every edit described
+above, regenerate the diff via `git diff`, then independently re-apply
+that regenerated diff to a *second*, completely fresh pristine clone and
+confirm the two resulting trees are byte-for-byte identical (`diff -rq`)
+-- confirmed clean.
+
+**Not verified**: actually compiling any of this. Cemu cannot be built
+in this project's own development sandbox at all (no unrestricted
+internet access, and the build is prohibitively heavy even where it
+is available -- see this file's own repeated notes on Azahar/Cemu). This
+entire redesign -- the render-thread scheduling/completion split, the
+orphaned-slot reclaim, the TV/subscription gating, and both vcpkg
+overlay fixes -- is verified for internal consistency (types, control
+flow, the exact Vulkan API contracts read directly from source) but has
+**not** been compiled, let alone run against real Wind Waker HD
+gameplay, by whoever wrote this. `release.yml`'s next real run against
+this commit is the first actual compile attempt; real end-to-end
+hardware verification (confirming Wind Waker HD actually holds 30fps
+now, on the same two machines that reported the regression) is still
+outstanding after that.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

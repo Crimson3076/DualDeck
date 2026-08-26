@@ -912,3 +912,49 @@ this file) -- needs a real CI build and a real touch test against actual
 Wii U GamePad-touch-sensitive UI (e.g. a title's on-screen keyboard or
 touch-driven menu) on a user's hardware before this can be called
 resolved rather than "should work."
+
+## GamePad capture made non-blocking (2026-08-26)
+
+Confirmed real-hardware regression: DualDeck-patched Cemu 2.6 ran Wind
+Waker HD at ~14-20fps instead of its native 30 (two independent
+machines: Fedora/RTX 4070 Laptop GPU, Bazzite/RX 7900 XTX), root-caused
+to `CaptureSurfaceBGRA()`'s Vulkan implementation forcing a full GPU
+pipeline stall (`SubmitCommandBuffer()` + `WaitCommandBufferFinished()`)
+on Cemu's own render thread on every capture -- up to 60 times/sec
+across both surfaces. `CemuAdapter::onSurfaceRendered()` now only
+*schedules* a capture (`VulkanRenderer::ScheduleCaptureSurfaceBGRA()`,
+into one of 3 reusable slots) and returns immediately; a new
+`pumpCaptures()`, called once per real frame, drains whatever the GPU
+has since actually finished. TV-surface capture is now off by default
+(it was never actually sent to any client -- 100% wasted work), and
+capture is now gated on a real connected client, not just the local
+adapter IPC socket being up.
+
+Also fixed alongside this: the exact `SubmitCommandBuffer()`/
+`WaitCommandBufferFinished(GetCurrentCommandBufferId())` ordering bug
+this project's own bug report identified (reading the command-buffer ID
+after, not before, the submit -- causing a redundant empty second
+submit every capture), applied to the old synchronous
+`CaptureSurfaceBGRA()`, which is kept as the documented fallback for a
+backend without an async implementation (currently: OpenGL, unchanged
+and untouched by this pass). Two real Fedora vcpkg build failures
+(glslang missing `<cstdint>`, SDL 2.30.3 vs. a newer PipeWire's
+`pw_node_enum_params()` signature) fixed via new vcpkg overlay ports
+rather than a global compiler flag -- see
+`host/cemu-patches/vcpkg-overlay/README.md`.
+
+Full design writeup, the exact Vulkan API contracts this relies on (read
+directly from Cemu's pinned source, not assumed), and what's
+still-not-verified: `docs/known-limitations.md`'s 2026-08-26 entry.
+
+**Verified**: same double-clone technique as every other entry in this
+file -- clone pristine `v2.6`, apply the previous patch, make every
+edit, regenerate the diff, independently re-apply it to a second fresh
+clone, confirm the two resulting trees are byte-identical. Confirmed
+clean. `scripts/check-patch-protocol-sync.sh` still reports every patch
+in sync (protocol version 13, unchanged by this pass).
+
+**Not yet verified**: this project still cannot build or run Cemu in its
+own development sandbox at all. Nothing in this entry has been
+compiled, let alone run against real Wind Waker HD gameplay -- `release.yml`'s
+next run against this commit is the first real compile attempt.

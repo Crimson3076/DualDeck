@@ -134,6 +134,21 @@ build_cemu() {
         git clone --recurse-submodules https://github.com/cemu-project/Cemu.git "${cemu_src}"
         (cd "${cemu_src}" && git checkout "${commit}" && git submodule update --init --recursive)
         (cd "${cemu_src}" && git apply "${cemu_patch_file}")
+        # DualDeck vcpkg overlay ports (host/cemu-patches/vcpkg-overlay/) --
+        # real Fedora build failures, 2026-08-26: glslang 14.2.0 missing a
+        # <cstdint> include under a newer libstdc++, and SDL 2.30.3's
+        # PipeWire backend passing an incompatible pointer type to
+        # pw_node_enum_params() under a newer PipeWire. See each port's
+        # own portfile.cmake comment for the fix and why it's scoped this
+        # narrowly rather than a build-wide compiler flag. `cp -r`, not a
+        # directory replace/rm -rf first -- Cemu's own
+        # dependencies/vcpkg_overlay_ports_linux/ already ships several
+        # unrelated overlay ports of its own (cairo, glm, gtk3, libpng as
+        # of this writing); this only ever adds/overwrites the two
+        # subdirectories DualDeck owns (sdl2/, glslang/), never touches
+        # Cemu's own entries alongside them.
+        mkdir -p "${cemu_src}/dependencies/vcpkg_overlay_ports_linux"
+        cp -r "${repo_root}/host/cemu-patches/vcpkg-overlay/ports/." "${cemu_src}/dependencies/vcpkg_overlay_ports_linux/"
         local version_args=()
         if [[ -n "${version_major}" && -n "${version_minor}" ]]; then
             version_args=(-DEMULATOR_VERSION_MAJOR="${version_major}" -DEMULATOR_VERSION_MINOR="${version_minor}")

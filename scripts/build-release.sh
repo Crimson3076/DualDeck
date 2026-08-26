@@ -90,9 +90,17 @@ echo "== [0/6] Checking build dependencies =="
 # build (not necessarily a distro's own rebuild) -- so `dnf install
 # openh264-devel` may need Fedora's separate Cisco-hosted repo enabled,
 # not just the base repos this script otherwise assumes.
+# perl-FindBin/perl-IPC-Cmd (dnf only): real Fedora build failure,
+# 2026-08-26 -- Cemu's vcpkg dependency graph builds OpenSSL from source,
+# whose own build tooling is Perl-based and needs FindBin.pm and
+# IPC::Cmd, both Perl *core* modules (ship with every upstream Perl) but
+# ones Fedora's own minimal `perl` package splits out into separate
+# optional packages rather than including by default -- unlike Debian/
+# Ubuntu's `perl` (apt) and Arch's `perl` (pacman), both of which include
+# the full core module set already, so this is dnf-only.
 ensure_packages "build" \
     "cmake extra-cmake-modules ninja-build build-essential git python3 libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev libarchive-dev libenet-dev libzstd-dev libfaad-dev qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-svg-dev qt6-wayland libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libdecor-0-dev libturbojpeg0-dev libdbus-1-dev libpipewire-0.3-dev libopenh264-dev" \
-    "cmake extra-cmake-modules ninja-build gcc-c++ git python3 libcurl-devel libpcap-devel SDL2-devel libarchive-devel enet-devel libzstd-devel faad2-devel qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtmultimedia-devel qt6-qtsvg-devel qt6-qtwayland libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel libXtst-devel wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel turbojpeg-devel dbus-devel pipewire-devel openh264-devel" \
+    "cmake extra-cmake-modules ninja-build gcc-c++ git python3 libcurl-devel libpcap-devel SDL2-devel libarchive-devel enet-devel libzstd-devel faad2-devel qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtmultimedia-devel qt6-qtsvg-devel qt6-qtwayland libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel libXtst-devel wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel turbojpeg-devel dbus-devel pipewire-devel openh264-devel perl-FindBin perl-IPC-Cmd" \
     "cmake extra-cmake-modules ninja base-devel git python curl libpcap sdl2 libarchive enet zstd faad2 qt6-base qt6-multimedia qt6-svg qt6-wayland libx11 libxext libxrandr libxcursor libxfixes libxi libxss libxtst wayland libxkbcommon libdrm mesa libdecor libjpeg-turbo dbus libpipewire openh264"
 
 # Azahar (3DS) additionally needs a Vulkan SDK and Boost headers beyond

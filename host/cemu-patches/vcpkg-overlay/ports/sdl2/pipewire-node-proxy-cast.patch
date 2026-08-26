@@ -1,0 +1,27 @@
+--- a/src/audio/pipewire/SDL_pipewire.c
++++ b/src/audio/pipewire/SDL_pipewire.c
+@@ -590,7 +590,23 @@
+ 
+         /* Need to parse the parameters to get the sample rate */
+         for (i = 0; i < info->n_params; ++i) {
+-            pw_node_enum_params(node->proxy, 0, info->params[i].id, 0, 0, NULL);
++            /* DualDeck: node->proxy is a struct pw_proxy* (from
++             * pw_registry_bind()); pw_node_enum_params() is a strictly-
++             * typed inline wrapper expecting struct pw_node*. The two
++             * share pw_proxy's spa_interface layout by PipeWire's own
++             * design (the whole point of pw_registry_bind() returning a
++             * generic proxy the caller casts to whichever interface it
++             * actually bound), so this cast is the documented way to
++             * call a typed method on a bound proxy, not a layout
++             * violation -- current PipeWire headers just started
++             * enforcing the parameter type strictly enough to warn/
++             * error on the implicit pointer conversion older headers
++             * silently allowed. See DualDeck's sdl2 vcpkg overlay port
++             * (host/cemu-patches/vcpkg-overlay/ports/sdl2/) for why this
++             * patch exists: a real build failure on Fedora against a
++             * newer system PipeWire than this SDL release originally
++             * targeted. */
++            pw_node_enum_params((struct pw_node *)node->proxy, 0, info->params[i].id, 0, 0, NULL);
+         }
+ 
+         hotplug_core_sync(node);

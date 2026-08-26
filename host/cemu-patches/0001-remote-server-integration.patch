@@ -98,7 +98,7 @@ index 1bf3755..6bb4927 100644
          Latte_Stop();
          // reset Cafe OS userspace modules
 diff --git a/src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp b/src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp
-index 2efef5b..0fcdef3 100644
+index 2efef5b..f3358d1 100644
 --- a/src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp
 +++ b/src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp
 @@ -15,6 +15,8 @@
@@ -131,7 +131,7 @@ index 2efef5b..0fcdef3 100644
  	if (!g_renderer->ImguiBegin(!isPadView))
  		return;
  	swkbd_render(!isPadView);
-@@ -990,6 +1006,33 @@ void LatteRenderTarget_itHLECopyColorBufferToScanBuffer(MPTR colorBufferPtr, uin
+@@ -990,6 +1006,43 @@ void LatteRenderTarget_itHLECopyColorBufferToScanBuffer(MPTR colorBufferPtr, uin
  		return;
  	}
  
@@ -139,21 +139,31 @@ index 2efef5b..0fcdef3 100644
 +	// LatteRenderTarget_copyToBackbuffer()'s comment above for why this
 +	// hook lives here instead. `texView` here is the real TV/DRC scan
 +	// buffer the HLE layer just handed over for this frame -- reading it
-+	// via CaptureSurfaceBGRA() (glGetTexImage/vkCmdCopyImageToBuffer)
 +	// needs no window or backbuffer of any kind, so both surfaces are
-+	// captured unconditionally, once per real frame, regardless of
-+	// whether Cemu's own "Enable GamePad View" window (or even its main
-+	// window) is open. `renderTarget` may have both bits set in the same
-+	// call (a game feeding an identical framebuffer to both screens),
-+	// in which case both surfaces correctly capture the same content.
++	// visited here, once per real frame, regardless of whether Cemu's
++	// own "Enable GamePad View" window (or even its main window) is
++	// open -- whether either one actually captures anything is
++	// CemuAdapter::onSurfaceRendered()'s own decision (as of 2026-08-26:
++	// not the TV surface unless CEMU_REMOTE_CAPTURE_TV is set, and not
++	// either surface unless a client is actually connected -- see its
++	// own comment). `renderTarget` may have both bits set in the same
++	// call (a game feeding an identical framebuffer to both screens), in
++	// which case both surfaces correctly capture the same content.
 +	if (auto* dualDeckAdapter = DualDeck::RemoteServer::RemoteServerBridge::currentAdapter())
 +	{
++		// Drains any captures the async (Vulkan) path scheduled on an
++		// earlier real frame and the GPU has since actually finished --
++		// see CemuAdapter::pumpCaptures()'s own comment for why this
++		// runs here, once per real frame, before either
++		// onSurfaceRendered() call below rather than only after them.
++		dualDeckAdapter->pumpCaptures();
++
 +		// LatteRenderTarget_copyToBackbuffer() below always does this
 +		// pair of calls before touching its texture (see its own
 +		// comment there) -- this function runs earlier in the pipeline
-+		// and doesn't otherwise do either, so without them here,
-+		// CaptureSurfaceBGRA() can read a texture that isn't actually
-+		// synced/current yet, producing stale or incomplete frames.
++		// and doesn't otherwise do either, so without them here, a
++		// capture can read a texture that isn't actually synced/current
++		// yet, producing stale or incomplete frames.
 +		LatteTexture_UpdateDataToLatest(texView->baseTexture);
 +		LatteTC_MarkTextureStillInUse(texView->baseTexture);
 +		if (renderTarget & RENDER_TARGET_TV)
@@ -257,10 +267,10 @@ index e29e9d4..d5831ce 100644
  	void DrawBackbufferQuad(LatteTextureView* texView, RendererOutputShader* shader, bool useLinearTexFilter, sint32 imageX, sint32 imageY, sint32 imageWidth, sint32 imageHeight, bool padView, bool clearBackground) override;
  
 diff --git a/src/Cafe/HW/Latte/Renderer/Renderer.h b/src/Cafe/HW/Latte/Renderer/Renderer.h
-index 77d588b..11758b8 100644
+index 77d588b..244f956 100644
 --- a/src/Cafe/HW/Latte/Renderer/Renderer.h
 +++ b/src/Cafe/HW/Latte/Renderer/Renderer.h
-@@ -66,8 +66,26 @@ public:
+@@ -66,8 +66,104 @@ public:
  	virtual void SwapBuffers(bool swapTV, bool swapDRC) = 0;
  
  	virtual void HandleScreenshotRequest(LatteTextureView* texView, bool padView){}
@@ -285,15 +295,93 @@ index 77d588b..11758b8 100644
 +	// applies to this capture.
 +	virtual bool CaptureSurfaceBGRA(LatteTextureView* texView, bool padView, std::vector<uint8>& outPixels, int& outWidth, int& outHeight) { return false; }
 +
++	// DualDeck (github.com/crimson3076/DualDeck): non-blocking alternative
++	// to CaptureSurfaceBGRA() above, Vulkan only for now (default no-op
++	// here; see VulkanRenderer.h/.cpp for the real implementation and its
++	// own top comment for the full design). CaptureSurfaceBGRA() above
++	// is a full GPU pipeline stall every single call (record + submit +
++	// vkWaitForFences), which is exactly what made DualDeck-patched Cemu
++	// run Wind Waker HD at ~14-20fps instead of its native 30 on real
++	// hardware (Fedora/RTX 4070 Laptop GPU and Bazzite/RX 7900 XTX both
++	// confirmed) -- every capture (up to CEMU_REMOTE_CAPTURE_FPS times/
++	// sec per surface) forced the render thread to wait for the GPU to
++	// fully catch up, not just for this capture's own tiny copy.
++	// CEMU_REMOTE_CAPTURE_FPS=1 (nearly eliminating those stalls)
++	// restored native performance, conclusively identifying the
++	// synchronous wait itself as the bottleneck rather than the capture
++	// work's own GPU/CPU cost. See docs/known-limitations.md's matching
++	// entry for the full writeup.
++	//
++	// CemuAdapter::onSurfaceRendered() (remote_server/CemuAdapter.cpp)
++	// is the only caller of any of these five methods, and only when
++	// SupportsAsyncCaptureSurfaceBGRA() is true -- it falls back to the
++	// old synchronous CaptureSurfaceBGRA() above unchanged for any
++	// backend (currently: OpenGL) that hasn't implemented these.
++	virtual bool SupportsAsyncCaptureSurfaceBGRA() { return false; }
++
++	// Upper bound on the slotIndex the four methods below accept.
++	virtual uint32 GetCaptureSlotCount() { return 0; }
++
++	// True if slot `slotIndex` isn't currently holding an unread,
++	// scheduled-but-not-yet-retrieved capture -- callers must check this
++	// (or already know from their own bookkeeping) before calling
++	// ScheduleCaptureSurfaceBGRA() with the same index, since scheduling
++	// into an in-use slot would silently stomp whatever capture it's
++	// already holding.
++	virtual bool IsCaptureSlotFree(uint32 slotIndex) { return false; }
++
++	// Records this frame's capture (blit-if-needed + copy-to-a-per-slot-
++	// staging-buffer) into the CURRENTLY RECORDING command buffer for
++	// slot `slotIndex` -- does NOT submit or wait for anything, and
++	// returns (with `outWidth`/`outHeight` set to the real captured
++	// size) as soon as the commands are recorded, same "return
++	// immediately, never block the render thread" contract every one of
++	// these five methods shares. Returns false (slot left untouched) if
++	// the capture can't be recorded at all (zero-size surface,
++	// unsupported format with no blit support, or a transient
++	// allocation failure) -- same failure cases CaptureSurfaceBGRA()
++	// above already handles, just without ever calling
++	// SubmitCommandBuffer()/WaitCommandBufferFinished() itself. Marks
++	// the slot in-use on success; the caller is responsible for actually
++	// getting this recording submitted (VulkanRenderer's implementation
++	// nudges Cemu's own normal submission cadence via
++	// RequestSubmitSoon()/RequestSubmitOnIdle() -- see its own comment)
++	// and for eventually calling ReadAndReleaseCaptureSlot() once
++	// IsCaptureSlotReady() reports true, or the slot stays permanently
++	// "in use" and unusable.
++	virtual bool ScheduleCaptureSurfaceBGRA(LatteTextureView* texView, bool padView, uint32 slotIndex, int& outWidth, int& outHeight) { return false; }
++
++	// True once the GPU has actually finished executing whatever command
++	// buffer slot `slotIndex`'s capture was recorded into -- i.e. its
++	// staging buffer is now safe to read from the CPU. Never blocks:
++	// backed by HasCommandBufferFinished(), a plain counter comparison,
++	// not a wait.
++	virtual bool IsCaptureSlotReady(uint32 slotIndex) { return false; }
++
++	// Converts slot `slotIndex`'s now-GPU-complete staging buffer to
++	// top-down BGRA8888 in `outPixels` (same conversion + srcUsesSRGB/
++	// dstUsesSRGB correction CaptureSurfaceBGRA() above always applied,
++	// decided and stored at ScheduleCaptureSurfaceBGRA() time), then
++	// marks the slot free again. Only meaningful once IsCaptureSlotReady()
++	// is true; always releases the slot even on a conversion failure
++	// (returns false) so a bad capture can't permanently strand a slot.
++	// Pure CPU work reading an already-mapped, host-coherent buffer -- no
++	// Vulkan calls at all, which is what makes it safe for
++	// CemuAdapter::onSurfaceRendered()'s "safe deferred path" (see its
++	// own comment) to call this from the render thread on a later frame
++	// than the one that scheduled it, without needing a dedicated
++	// completion thread or any new synchronization of its own.
++	virtual bool ReadAndReleaseCaptureSlot(uint32 slotIndex, std::vector<uint8>& outPixels) { return false; }
++
 +	virtual void DrawBackbufferQuad(LatteTextureView* texView, RendererOutputShader* shader, bool useLinearTexFilter,
  												sint32 imageX, sint32 imageY, sint32 imageWidth, sint32 imageHeight, 
  												bool padView, bool clearBackground) = 0;
  	virtual bool BeginFrame(bool mainWindow) = 0;
 diff --git a/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.cpp b/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.cpp
-index 4ff2faa..264f61e 100644
+index 4ff2faa..f355ccc 100644
 --- a/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.cpp
 +++ b/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.cpp
-@@ -665,6 +665,12 @@ VulkanRenderer::~VulkanRenderer()
+@@ -665,6 +665,29 @@ VulkanRenderer::~VulkanRenderer()
  	memoryManager->DeleteBuffer(m_xfbRingBuffer, m_xfbRingBufferMemory);
  	memoryManager->DeleteBuffer(m_occlusionQueries.bufferQueryResults, m_occlusionQueries.memoryQueryResults);
  	memoryManager->DeleteBuffer(m_bufferCache, m_bufferCacheMemory);
@@ -303,10 +391,27 @@ index 4ff2faa..264f61e 100644
 +		vkUnmapMemory(m_logicalDevice, m_dualDeckCaptureStagingBufferMemory);
 +		memoryManager->DeleteBuffer(m_dualDeckCaptureStagingBuffer, m_dualDeckCaptureStagingBufferMemory);
 +	}
++	// DualDeck: see VulkanRenderer.h's DualDeckCaptureSlot comment --
++	// each async capture slot owns its own staging buffer and (for
++	// formats that needed one) blit image, none of which the code below
++	// (DeleteNullObjects() etc.) or the memoryManager's own destruction
++	// queue knows about.
++	for (auto& slot : m_dualDeckCaptureSlots)
++	{
++		if (slot.stagingBuffer != VK_NULL_HANDLE)
++		{
++			vkUnmapMemory(m_logicalDevice, slot.stagingBufferMemory);
++			memoryManager->DeleteBuffer(slot.stagingBuffer, slot.stagingBufferMemory);
++		}
++		if (slot.blitImage != VK_NULL_HANDLE)
++			vkDestroyImage(m_logicalDevice, slot.blitImage, nullptr);
++		if (slot.blitImageMemory != VK_NULL_HANDLE)
++			vkFreeMemory(m_logicalDevice, slot.blitImageMemory, nullptr);
++	}
  
  	m_padSwapchainInfo = nullptr;
  	m_mainSwapchainInfo = nullptr;
-@@ -1074,6 +1080,343 @@ void VulkanRenderer::HandleScreenshotRequest(LatteTextureView* texView, bool pad
+@@ -1074,6 +1097,791 @@ void VulkanRenderer::HandleScreenshotRequest(LatteTextureView* texView, bool pad
  		SaveScreenshot(rgb_data, width, height, !padView);
  }
  
@@ -571,8 +676,33 @@ index 4ff2faa..264f61e 100644
 +		barrier_image<TRANSFER_READ, TRANSFER_WRITE | IMAGE_WRITE>(baseImageTex, region.imageSubresource, VK_IMAGE_LAYOUT_GENERAL);
 +	}
 +
++	// DualDeck: real bug, found while diagnosing the Wind Waker HD
++	// 14-20fps regression (docs/known-limitations.md) -- this used to
++	// read `GetCurrentCommandBufferId()` *after* SubmitCommandBuffer()
++	// below, which returns m_numSubmittedCmdBuffers -- already
++	// incremented by that submit, i.e. the ID the *next* (still-empty)
++	// command buffer will get once *it* is submitted, not the one that
++	// actually contains this capture's copy command. WaitCommandBufferFinished()
++	// (VulkanRenderer.h) special-cases exactly this: `if (commandBufferId
++	// == m_numSubmittedCmdBuffers) SubmitCommandBuffer();` -- so passing
++	// the just-incremented value made it submit a second, entirely empty
++	// command buffer every single call, purely to have something to wait
++	// on, before the wait itself (correctly, if wastefully) still ended
++	// up blocking until the real capture buffer completed too, since
++	// buffers are processed in submission order. Reading the ID *before*
++	// the submit below fixes the double-submit; this function still
++	// blocks the render thread until the GPU catches up either way,
++	// which is the real, larger bug this whole feature's async
++	// redesign (ScheduleCaptureSurfaceBGRA() and friends, this file's
++	// .h) exists to actually fix -- CemuAdapter no longer calls this
++	// synchronous version for Vulkan at all (see its own
++	// onSurfaceRendered() comment), but it's kept working correctly
++	// (rather than just deleted) as the documented fallback any future
++	// caller -- or a backend without an async implementation -- gets via
++	// Renderer::CaptureSurfaceBGRA()'s default dispatch.
++	const uint64 captureCommandBufferId = GetCurrentCommandBufferId();
 +	SubmitCommandBuffer();
-+	WaitCommandBufferFinished(GetCurrentCommandBufferId());
++	WaitCommandBufferFinished(captureCommandBufferId);
 +
 +	// Convert to BGRA8888 (this project's PixelFormat::Bgra8888 wire
 +	// convention) regardless of whether the source was 4- or 3-channel.
@@ -647,22 +777,464 @@ index 4ff2faa..264f61e 100644
 +	return true;
 +}
 +
++// DualDeck (github.com/crimson3076/DualDeck): non-blocking replacement
++// for the always-synchronous CaptureSurfaceBGRA() above -- see Renderer.h's
++// comment on this method (and its four siblings below) for the contract,
++// and docs/known-limitations.md's Wind Waker HD entry for the real
++// 14-20fps-instead-of-30 regression this exists to fix.
++//
++// This function's own body is CaptureSurfaceBGRA()'s recording half,
++// verbatim in structure (same firstMip check, same isDirectlyReadable/
++// blit-if-needed path, same barrier sequence, same staging-buffer-copy)
++// -- retargeted from the single shared m_dualDeckCaptureStagingBuffer/
++// its one scratch blit `image` to this slot's own persistent
++// stagingBuffer/blitImage (see VulkanRenderer.h's DualDeckCaptureSlot
++// comment for why each slot needs its own rather than sharing one), and
++// stopping the instant the copy-to-buffer command is recorded: no
++// SubmitCommandBuffer(), no WaitCommandBufferFinished(), no CPU-side
++// BGRA/sRGB conversion here at all (that all moves to
++// ReadAndReleaseCaptureSlot(), below, which only runs once the GPU has
++// actually finished -- see IsCaptureSlotReady()). RequestSubmitSoon()/
++// RequestSubmitOnIdle() at the very end are the entire extent of this
++// function's involvement in getting the recording actually submitted:
++// both just nudge thresholds SubmitCommandBuffer() itself already checks
++// on Cemu's own normal rendering cadence (see their own definitions,
++// "submit within next 10 drawcalls" / "submit when GPU has no more
++// commands to process or when threshold is reached") -- never an
++// out-of-band submit this function forces itself, which is what made
++// the old synchronous path a guaranteed render-thread stall every call.
++bool VulkanRenderer::ScheduleCaptureSurfaceBGRA(LatteTextureView* texView, bool padView, uint32 slotIndex, int& outWidth, int& outHeight)
++{
++	if (slotIndex >= kDualDeckCaptureSlotCount)
++		return false;
++	auto& slot = m_dualDeckCaptureSlots[slotIndex];
++	if (slot.inUse || !texView)
++		return false;
++
++	auto texViewVk = (LatteTextureViewVk*)texView;
++	auto baseImageTex = texViewVk->GetBaseImage();
++
++	auto textureVk = baseImageTex->GetImageObj();
++	textureVk->flagForCurrentCommandBuffer();
++
++	auto dumpImage = textureVk->m_image;
++	auto baseImage = dumpImage;
++
++	int width, height;
++	baseImageTex->GetEffectiveSize(width, height, 0);
++	if (width <= 0 || height <= 0)
++		return false;
++
++	if (texViewVk->firstMip != 0)
++	{
++		cemuLog_log(LogType::Force, "DualDeck: failed to capture surface: capturing non-zero mip is not supported");
++		return false;
++	}
++
++	auto format = baseImageTex->GetFormat();
++	const bool srcUsesSRGB = format == VK_FORMAT_R8G8B8A8_SRGB || format == VK_FORMAT_R8G8B8_SRGB;
++	const bool isDirectlyReadable = format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_R8G8B8A8_SRGB ||
++		format == VK_FORMAT_R8G8B8_UNORM || format == VK_FORMAT_R8G8B8_SNORM;
++	if (!isDirectlyReadable)
++	{
++		VkFormatProperties formatProps;
++		vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &formatProps);
++		bool supportsBlit = (formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT) != 0;
++
++		constexpr VkFormat blitFormat = VK_FORMAT_R8G8B8A8_UNORM;
++		vkGetPhysicalDeviceFormatProperties(m_physicalDevice, blitFormat, &formatProps);
++		supportsBlit &= (formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT) != 0;
++
++		if (!supportsBlit)
++		{
++			cemuLog_log(LogType::Force, "DualDeck: capture failed: surface is not RGB(A)8 and blitting is unsupported");
++			return false;
++		}
++
++		// (Re)create this slot's own blit image only when it doesn't
++		// exist yet or this capture's size differs from what it was
++		// last sized for -- see DualDeckCaptureSlot's own comment for
++		// why each slot has its own rather than sharing the single
++		// scratch `image` CaptureSurfaceBGRA() above creates and
++		// destroys every single call.
++		if (slot.blitImage == VK_NULL_HANDLE || slot.blitImageWidth != width || slot.blitImageHeight != height)
++		{
++			if (slot.blitImage != VK_NULL_HANDLE)
++			{
++				vkDestroyImage(m_logicalDevice, slot.blitImage, nullptr);
++				slot.blitImage = VK_NULL_HANDLE;
++			}
++			if (slot.blitImageMemory != VK_NULL_HANDLE)
++			{
++				vkFreeMemory(m_logicalDevice, slot.blitImageMemory, nullptr);
++				slot.blitImageMemory = VK_NULL_HANDLE;
++			}
++
++			VkImageCreateInfo imageInfo{};
++			imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
++			imageInfo.format = blitFormat;
++			imageInfo.extent = {(uint32)width, (uint32)height, 1};
++			imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
++			imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
++			imageInfo.arrayLayers = 1;
++			imageInfo.mipLevels = 1;
++			imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
++			imageInfo.imageType = VK_IMAGE_TYPE_2D;
++			imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++			imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
++
++			if (vkCreateImage(m_logicalDevice, &imageInfo, nullptr, &slot.blitImage) != VK_SUCCESS)
++				return false;
++
++			VkMemoryRequirements memRequirements;
++			vkGetImageMemoryRequirements(m_logicalDevice, slot.blitImage, &memRequirements);
++
++			VkMemoryAllocateInfo allocInfo{};
++			allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
++			allocInfo.allocationSize = memRequirements.size;
++			uint32 memIndex;
++			bool foundMemory = memoryManager->FindMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, memIndex);
++			if (!foundMemory)
++			{
++				vkDestroyImage(m_logicalDevice, slot.blitImage, nullptr);
++				slot.blitImage = VK_NULL_HANDLE;
++				cemuLog_log(LogType::Force, "DualDeck: capture failed due to incompatible vulkan memory types.");
++				return false;
++			}
++			allocInfo.memoryTypeIndex = memIndex;
++
++			if (vkAllocateMemory(m_logicalDevice, &allocInfo, nullptr, &slot.blitImageMemory) != VK_SUCCESS)
++			{
++				vkDestroyImage(m_logicalDevice, slot.blitImage, nullptr);
++				slot.blitImage = VK_NULL_HANDLE;
++				cemuLog_log(LogType::Force, "DualDeck: capture failed due to failed memory allocation.");
++				return false;
++			}
++
++			vkBindImageMemory(m_logicalDevice, slot.blitImage, slot.blitImageMemory, 0);
++			slot.blitImageWidth = width;
++			slot.blitImageHeight = height;
++		}
++
++		{
++			// Always transitioned from UNDEFINED, even on a reused
++			// image -- see DualDeckCaptureSlot's own comment: this
++			// slot's previous capture (if any) has already been read
++			// and released by the time a new one is scheduled into it
++			// (ScheduleCaptureSurfaceBGRA() requires !slot.inUse), so
++			// there is never anything worth preserving in this image.
++			VkImageSubresourceRange range;
++			range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
++			range.baseMipLevel = 0;
++			range.levelCount = 1;
++			range.baseArrayLayer = 0;
++			range.layerCount = 1;
++			barrier_image<TRANSFER_READ, TRANSFER_WRITE>(slot.blitImage, range, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
++		}
++		{
++			VkImageSubresourceLayers range;
++			range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
++			range.mipLevel = 0;
++			range.baseArrayLayer = texViewVk->firstSlice;
++			range.layerCount = 1;
++			barrier_image<IMAGE_WRITE | TRANSFER_WRITE, SYNC_OP::TRANSFER_READ>(baseImageTex, range, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
++		}
++
++		VkOffset3D blitSize{width, height, 1};
++		VkImageBlit imageBlitRegion{};
++		imageBlitRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
++		imageBlitRegion.srcSubresource.mipLevel = 0;
++		imageBlitRegion.srcSubresource.baseArrayLayer = texViewVk->firstSlice;
++		imageBlitRegion.srcSubresource.layerCount = 1;
++		imageBlitRegion.srcOffsets[1] = blitSize;
++
++		imageBlitRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
++		imageBlitRegion.dstSubresource.mipLevel = 0;
++		imageBlitRegion.dstSubresource.baseArrayLayer = 0;
++		imageBlitRegion.dstSubresource.layerCount = 1;
++		imageBlitRegion.dstOffsets[1] = blitSize;
++
++		vkCmdBlitImage(m_state.currentCommandBuffer, dumpImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, slot.blitImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &imageBlitRegion, VK_FILTER_NEAREST);
++
++		{
++			VkImageSubresourceRange range;
++			range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
++			range.baseMipLevel = 0;
++			range.levelCount = 1;
++			range.baseArrayLayer = 0;
++			range.layerCount = 1;
++			barrier_image<TRANSFER_WRITE, TRANSFER_READ>(slot.blitImage, range, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
++		}
++		{
++			VkImageSubresourceLayers range;
++			range.aspectMask = baseImageTex->GetImageAspect();
++			range.mipLevel = 0;
++			range.baseArrayLayer = texViewVk->firstSlice;
++			range.layerCount = 1;
++			barrier_image<TRANSFER_READ, TRANSFER_WRITE | IMAGE_WRITE>(baseImageTex, range, VK_IMAGE_LAYOUT_GENERAL);
++		}
++
++		format = VK_FORMAT_R8G8B8A8_UNORM;
++		dumpImage = slot.blitImage;
++	}
++
++	uint32 size;
++	switch (format)
++	{
++	case VK_FORMAT_R8G8B8A8_UNORM:
++	case VK_FORMAT_R8G8B8A8_SRGB:
++		size = 4 * width * height;
++		break;
++	case VK_FORMAT_R8G8B8_UNORM:
++	case VK_FORMAT_R8G8B8_SRGB:
++		size = 3 * width * height;
++		break;
++	default:
++		size = 0;
++	}
++
++	if (size == 0)
++		return false;
++
++	VkBufferImageCopy region{};
++	region.bufferOffset = 0;
++	region.bufferRowLength = width;
++	region.bufferImageHeight = height;
++
++	region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
++	region.imageSubresource.baseArrayLayer = 0;
++	region.imageSubresource.layerCount = 1;
++	region.imageSubresource.mipLevel = 0;
++
++	region.imageOffset = { 0,0,0 };
++	region.imageExtent = { (uint32)width,(uint32)height,1 };
++
++	// (Re)allocate this slot's own persistent staging buffer only when
++	// it doesn't exist yet or is too small -- same on-demand-resize
++	// pattern as the single shared m_dualDeckCaptureStagingBuffer
++	// CaptureSurfaceBGRA() above uses, just per-slot.
++	if (slot.stagingBuffer == VK_NULL_HANDLE || slot.stagingBufferCapacity < size)
++	{
++		if (slot.stagingBuffer != VK_NULL_HANDLE)
++		{
++			vkUnmapMemory(m_logicalDevice, slot.stagingBufferMemory);
++			memoryManager->DeleteBuffer(slot.stagingBuffer, slot.stagingBufferMemory);
++			slot.stagingBufferCapacity = 0;
++		}
++		if (!memoryManager->CreateBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT, slot.stagingBuffer, slot.stagingBufferMemory))
++		{
++			cemuLog_log(LogType::Force, "DualDeck: capture failed: could not allocate staging buffer");
++			return false;
++		}
++		slot.stagingBufferCapacity = size;
++		vkMapMemory(m_logicalDevice, slot.stagingBufferMemory, 0, VK_WHOLE_SIZE, 0, &slot.stagingBufferPtr);
++	}
++
++	if (dumpImage == baseImage)
++	{
++		region.imageSubresource.baseArrayLayer = texViewVk->firstSlice;
++		barrier_image<IMAGE_WRITE | TRANSFER_WRITE, TRANSFER_READ>(baseImageTex, region.imageSubresource, VK_IMAGE_LAYOUT_GENERAL);
++	}
++
++	vkCmdCopyImageToBuffer(m_state.currentCommandBuffer, dumpImage, VK_IMAGE_LAYOUT_GENERAL, slot.stagingBuffer, 1, &region);
++	if (dumpImage == baseImage)
++	{
++		barrier_image<TRANSFER_READ, TRANSFER_WRITE | IMAGE_WRITE>(baseImageTex, region.imageSubresource, VK_IMAGE_LAYOUT_GENERAL);
++	}
++
++	// This capture's own recording is now complete -- record which
++	// command-buffer ID it belongs to *before* asking for a submission
++	// (see GetCurrentCommandBufferId()'s own comment: it returns
++	// m_numSubmittedCmdBuffers, i.e. the ID the CURRENTLY recording
++	// buffer will be assigned once *something* eventually submits it --
++	// exactly the id IsCaptureSlotReady()'s later HasCommandBufferFinished()
++	// check needs). This is the same "read the ID before, not after, the
++	// submit" fix CaptureSurfaceBGRA() above needed -- except here there
++	// is no submit call in this function at all to get the ordering
++	// wrong on.
++	slot.commandBufferId = GetCurrentCommandBufferId();
++	slot.width = width;
++	slot.height = height;
++	slot.capturedFormat = format;
++	const bool dstUsesSRGB = (!padView && LatteGPUState.tvBufferUsesSRGB) || (padView && LatteGPUState.drcBufferUsesSRGB);
++	slot.needsSRGBCorrection = srcUsesSRGB != dstUsesSRGB;
++	slot.toLinear = srcUsesSRGB && !dstUsesSRGB;
++	slot.inUse = true;
++
++	// Never an out-of-band SubmitCommandBuffer()/WaitCommandBufferFinished()
++	// here -- see this function's own top comment. Both calls below are
++	// the same cheap, non-blocking "nudge" every other Cemu draw call
++	// already relies on to eventually get its own commands submitted.
++	RequestSubmitSoon();
++	RequestSubmitOnIdle();
++
++	outWidth = width;
++	outHeight = height;
++	return true;
++}
++
++bool VulkanRenderer::IsCaptureSlotFree(uint32 slotIndex)
++{
++	if (slotIndex >= kDualDeckCaptureSlotCount)
++		return false;
++	auto& slot = m_dualDeckCaptureSlots[slotIndex];
++
++	// DualDeck: self-healing reclaim for an orphaned slot -- CemuAdapter
++	// is created/destroyed per game boot (RemoteServerBridge), but this
++	// VulkanRenderer, and therefore m_dualDeckCaptureSlots, is process-
++	// lifetime. If a CemuAdapter is destroyed (game exited, DualDeck
++	// itself deconfigured, etc.) with a capture still in flight, nobody
++	// is ever going to call ReadAndReleaseCaptureSlot() for it again --
++	// its owner is gone -- so without this, that one slot would stay
++	// "in use" forever, permanently shrinking the effective slot pool
++	// for the rest of this process's lifetime (including for a
++	// completely unrelated, later-launched title's own CemuAdapter).
++	// Safe to reclaim here specifically because a *live* CemuAdapter
++	// never lets this situation arise in the first place: its own
++	// pumpCaptures() (CemuAdapter.cpp) always runs before its own
++	// onSurfaceRendered() scheduling calls within the same
++	// LatteRenderTarget.cpp hook invocation, so a slot that's actually
++	// ready gets drained (freeing it the normal way, via
++	// ReadAndReleaseCaptureSlot()) before this function is ever asked
++	// about it again in the same frame. A slot found here that's both
++	// in-use and GPU-finished can therefore only be one whose owner
++	// stopped asking -- never a live, working adapter's own
++	// about-to-be-collected capture.
++	if (slot.inUse && HasCommandBufferFinished(slot.commandBufferId))
++		slot.inUse = false;
++
++	return !slot.inUse;
++}
++
++bool VulkanRenderer::IsCaptureSlotReady(uint32 slotIndex)
++{
++	if (slotIndex >= kDualDeckCaptureSlotCount)
++		return false;
++	auto& slot = m_dualDeckCaptureSlots[slotIndex];
++	return slot.inUse && HasCommandBufferFinished(slot.commandBufferId);
++}
++
++// See Renderer.h's comment: pure CPU work against an already-mapped,
++// HOST_COHERENT staging buffer -- no Vulkan calls, so this is safe to
++// call from CemuAdapter's "safe deferred path" without any new
++// synchronization (see CemuAdapter::pumpCaptures()'s own comment).
++bool VulkanRenderer::ReadAndReleaseCaptureSlot(uint32 slotIndex, std::vector<uint8>& outPixels)
++{
++	if (slotIndex >= kDualDeckCaptureSlotCount)
++		return false;
++	auto& slot = m_dualDeckCaptureSlots[slotIndex];
++	if (!slot.inUse)
++		return false;
++
++	// Always released, even if this function returns false below -- an
++	// unreadable slot must not stay permanently "in use" and starve
++	// CemuAdapter of a free slot forever.
++	struct ReleaseGuard
++	{
++		DualDeckCaptureSlot& slot;
++		~ReleaseGuard() { slot.inUse = false; }
++	} releaseGuard{slot};
++
++	if (slot.width <= 0 || slot.height <= 0 || !slot.stagingBufferPtr)
++		return false;
++
++	// Same conversion CaptureSurfaceBGRA() above always did, just
++	// reading this slot's own staging buffer instead of the shared one.
++	outPixels.resize(static_cast<size_t>(slot.width) * slot.height * 4);
++	uint8* dst = outPixels.data();
++	const uint8* srcBase = static_cast<const uint8*>(slot.stagingBufferPtr);
++	switch (slot.capturedFormat)
++	{
++	case VK_FORMAT_R8G8B8A8_UNORM:
++	case VK_FORMAT_R8G8B8A8_SRGB:
++	{
++		const uint8* srcEnd = srcBase + static_cast<size_t>(slot.width) * slot.height * 4;
++		for (auto src = srcBase; src < srcEnd; src += 4, dst += 4)
++		{
++			dst[0] = src[2]; // B
++			dst[1] = src[1]; // G
++			dst[2] = src[0]; // R
++			dst[3] = src[3]; // A
++		}
++		break;
++	}
++	case VK_FORMAT_R8G8B8_UNORM:
++	case VK_FORMAT_R8G8B8_SRGB:
++	{
++		const uint8* srcEnd = srcBase + static_cast<size_t>(slot.width) * slot.height * 3;
++		for (auto src = srcBase; src < srcEnd; src += 3, dst += 4)
++		{
++			dst[0] = src[2]; // B
++			dst[1] = src[1]; // G
++			dst[2] = src[0]; // R
++			dst[3] = 0xFF;   // A
++		}
++		break;
++	}
++	default:
++		return false;
++	}
++
++	if (slot.needsSRGBCorrection)
++	{
++		uint8* pixels = outPixels.data();
++		const size_t pixelCount = static_cast<size_t>(slot.width) * slot.height;
++		for (size_t i = 0; i < pixelCount; ++i)
++		{
++			uint8* p = pixels + i * 4; // B, G, R, A
++			if (slot.toLinear)
++			{
++				p[0] = SRGBComponentToRGB(p[0]);
++				p[1] = SRGBComponentToRGB(p[1]);
++				p[2] = SRGBComponentToRGB(p[2]);
++			}
++			else
++			{
++				p[0] = RGBComponentToSRGB(p[0]);
++				p[1] = RGBComponentToSRGB(p[1]);
++				p[2] = RGBComponentToSRGB(p[2]);
++			}
++		}
++	}
++
++	return true;
++}
++
  static const float kQueuePriority = 1.0f;
  
  std::vector<VkDeviceQueueCreateInfo> VulkanRenderer::CreateQueueCreateInfos(const std::set<sint32>& uniqueQueueFamilies) const
 diff --git a/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.h b/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.h
-index f145048..39f46d0 100644
+index f145048..bfded96 100644
 --- a/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.h
 +++ b/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.h
-@@ -189,6 +189,7 @@ public:
+@@ -1,5 +1,7 @@
+ #pragma once
+ 
++#include <array>
++
+ #include "Cafe/HW/Latte/Renderer/Renderer.h"
+ #include "Cafe/HW/Latte/Renderer/Vulkan/VulkanAPI.h"
+ #include "Cafe/HW/Latte/Renderer/Vulkan/RendererShaderVk.h"
+@@ -189,6 +191,18 @@ public:
  	bool IsPadWindowActive() override;
  
  	void HandleScreenshotRequest(LatteTextureView* texView, bool padView) override;
 +	bool CaptureSurfaceBGRA(LatteTextureView* texView, bool padView, std::vector<uint8>& outPixels, int& outWidth, int& outHeight) override;
++
++	// DualDeck (github.com/crimson3076/DualDeck): see Renderer.h's own
++	// comment on each of these for the contract; DualDeckCaptureSlot
++	// (private, below) and ScheduleCaptureSurfaceBGRA()'s implementation
++	// comment (VulkanRenderer.cpp) for how they're actually implemented.
++	bool SupportsAsyncCaptureSurfaceBGRA() override { return true; }
++	uint32 GetCaptureSlotCount() override { return kDualDeckCaptureSlotCount; }
++	bool IsCaptureSlotFree(uint32 slotIndex) override;
++	bool ScheduleCaptureSurfaceBGRA(LatteTextureView* texView, bool padView, uint32 slotIndex, int& outWidth, int& outHeight) override;
++	bool IsCaptureSlotReady(uint32 slotIndex) override;
++	bool ReadAndReleaseCaptureSlot(uint32 slotIndex, std::vector<uint8>& outPixels) override;
  
  	void QueryMemoryInfo();
  	void QueryAvailableFormats();
-@@ -610,6 +611,18 @@ private:
+@@ -610,6 +624,68 @@ private:
  	uint8* m_textureReadbackBufferPtr = nullptr;
  	uint32 m_textureReadbackBufferWriteIndex = 0;
  
@@ -677,6 +1249,56 @@ index f145048..39f46d0 100644
 +	VkDeviceMemory m_dualDeckCaptureStagingBufferMemory = VK_NULL_HANDLE;
 +	VkDeviceSize m_dualDeckCaptureStagingBufferSize = 0;
 +	void* m_dualDeckCaptureStagingBufferPtr = nullptr;
++
++	// DualDeck (github.com/crimson3076/DualDeck): the async capture
++	// slots backing ScheduleCaptureSurfaceBGRA()/IsCaptureSlotReady()/
++	// ReadAndReleaseCaptureSlot() (see Renderer.h's comments on each,
++	// and this file's .cpp for the implementation) -- the actual fix for
++	// Wind Waker HD running at ~14-20fps instead of 30 under the old,
++	// always-synchronous CaptureSurfaceBGRA() above. Each slot owns its
++	// own persistent staging buffer AND, unlike the single shared
++	// m_dualDeckCaptureStagingBuffer above, its own persistent blit
++	// image -- deliberately not shared across slots, since up to
++	// kDualDeckCaptureSlotCount captures can be genuinely in flight at
++	// once (TV and GamePad have different resolutions, and Cemu's own
++	// submission cadence -- see ScheduleCaptureSurfaceBGRA()'s
++	// RequestSubmitSoon()/RequestSubmitOnIdle() calls -- decides when
++	// each slot's recording actually reaches the GPU, not this code), so
++	// a single shared blit image could otherwise be reused by a second
++	// capture before the first's GPU work (which reads it) has even
++	// been submitted, let alone finished.
++	struct DualDeckCaptureSlot
++	{
++		bool inUse = false;
++		uint64 commandBufferId = 0;
++		int width = 0;
++		int height = 0;
++		VkFormat capturedFormat = VK_FORMAT_UNDEFINED; // post-blit-reassignment format; see ScheduleCaptureSurfaceBGRA()
++		bool needsSRGBCorrection = false;
++		bool toLinear = false; // only meaningful when needsSRGBCorrection
++
++		VkBuffer stagingBuffer = VK_NULL_HANDLE;
++		VkDeviceMemory stagingBufferMemory = VK_NULL_HANDLE;
++		VkDeviceSize stagingBufferCapacity = 0;
++		void* stagingBufferPtr = nullptr;
++
++		// Scratch blit target, only actually allocated/used for a
++		// surface format CaptureSurfaceBGRA() itself already couldn't
++		// read directly (see ScheduleCaptureSurfaceBGRA()'s identical
++		// isDirectlyReadable check). Reused across captures the same
++		// way the staging buffer above is -- resized (destroy+recreate)
++		// only when this slot's requested width/height actually
++		// changes, and always (re)transitioned from
++		// VK_IMAGE_LAYOUT_UNDEFINED on reuse (discarding whatever was
++		// in it from a previous capture, which is never needed) rather
++		// than tracking its layout across calls.
++		VkImage blitImage = VK_NULL_HANDLE;
++		VkDeviceMemory blitImageMemory = VK_NULL_HANDLE;
++		int blitImageWidth = 0;
++		int blitImageHeight = 0;
++	};
++	static constexpr uint32 kDualDeckCaptureSlotCount = 3;
++	std::array<DualDeckCaptureSlot, kDualDeckCaptureSlotCount> m_dualDeckCaptureSlots{};
 +
  	// placeholder objects to simulate NULL buffers and textures
  	struct NullTexture
@@ -898,14 +1520,15 @@ index 0000000..d7c39c0
 +)
 diff --git a/src/remote_server/CemuAdapter.cpp b/src/remote_server/CemuAdapter.cpp
 new file mode 100644
-index 0000000..bd8aea7
+index 0000000..63f64f4
 --- /dev/null
 +++ b/src/remote_server/CemuAdapter.cpp
-@@ -0,0 +1,420 @@
+@@ -0,0 +1,605 @@
 +#include "remote_server/CemuAdapter.h"
 +
 +#include <algorithm>
 +#include <cstdlib>
++#include <string_view>
 +
 +// Renderer.h is not a self-contained leaf header -- it uses
 +// Latte::E_DIM, LatteConst::ShaderType, and LatteAddrLib::
@@ -956,6 +1579,33 @@ index 0000000..bd8aea7
 +        }
 +    }
 +    return std::chrono::milliseconds(1000 / fps);
++}
++
++// Off by default. Real, measured waste, found while diagnosing the Wind
++// Waker HD 14-20fps regression (see this file's own onSurfaceRendered()
++// comment and docs/known-limitations.md): CemuAdapter::capabilities()
++// below reports the TV surface with remotelyDisplayed=false (its role is
++// the host's own local screen only -- see that method's own comment),
++// and NetServer's video loop (host/remote-server/src/net_server.cpp)
++// only ever streams a session's one remotelyDisplayed surface. So even
++// before today's async-capture fix, every TV-surface capture -- GPU
++// blit/copy, CPU BGRA conversion, mutex-guarded publish, then a Frame
++// message shipped across the local adapter IPC socket by
++// AdapterIpcClient::writeLoop() (it iterates every declared surface,
++// TV included) -- was work done for a frame nothing downstream ever
++// reads. CEMU_REMOTE_CAPTURE_TV=1 (or "true"/"on") re-enables it, for
++// the currently-hypothetical future case of a client wanting the TV
++// feed too.
++bool captureTvWanted() {
++    static const bool wanted = [] {
++        const char* env = std::getenv("CEMU_REMOTE_CAPTURE_TV");
++        if (!env) {
++            return false;
++        }
++        const std::string_view value = env;
++        return value == "1" || value == "true" || value == "on";
++    }();
++    return wanted;
 +}
 +
 +// Finds (or, on first use, causes InputManager to lazily construct) the
@@ -1296,38 +1946,195 @@ index 0000000..bd8aea7
 +}
 +
 +void CemuAdapter::onSurfaceRendered(LatteTextureView* texView, bool isPadView) {
-+    static const std::chrono::milliseconds kInterval = resolveCaptureInterval();
++    // Step 1 (per this feature's own design doc, docs/known-limitations.md):
++    // ignore the TV surface unless DualDeck explicitly needs it. See
++    // captureTvWanted()'s own comment -- this surface is never actually
++    // sent to any client today, so capturing it is 100% wasted work.
++    if (!isPadView && !captureTvWanted()) {
++        return;
++    }
 +
++    // Step 2: is a capture even wanted right now at all? Two conditions,
++    // both must hold:
++    //  - A real client is actually connected and watching (see
++    //    m_clientConnected's own comment) -- AdapterIpcClient merely
++    //    being connected to dualdeck-host-service is not that signal.
++    //  - This surface's own CEMU_REMOTE_CAPTURE_FPS throttle interval
++    //    has actually elapsed since its last real capture.
++    if (!m_clientConnected.load()) {
++        ++m_captureDiagnostics.skippedNoViewer;
++        return;
++    }
++
++    static const std::chrono::milliseconds kInterval = resolveCaptureInterval();
 +    auto& lastCapture = isPadView ? m_lastGamePadCapture : m_lastTvCapture;
 +    const auto now = std::chrono::steady_clock::now();
 +    if (now - lastCapture < kInterval) {
 +        return;
 +    }
 +
-+    std::vector<uint8_t> pixels;
++    if (!g_renderer) {
++        return;
++    }
++
++    if (!g_renderer->SupportsAsyncCaptureSurfaceBGRA()) {
++        // Fallback for a backend with no async implementation (currently:
++        // OpenGL) -- the original, still-synchronous path, completely
++        // unchanged. Real hardware testing for this fix was Vulkan-only
++        // (both machines in the bug report use it, and it's Cemu's
++        // default/recommended backend on Linux), so this is deliberately
++        // left as-is rather than risking an unverified change to a path
++        // this fix's own testing never exercised.
++        std::vector<uint8_t> pixels;
++        int width = 0;
++        int height = 0;
++        if (!g_renderer->CaptureSurfaceBGRA(texView, isPadView, pixels, width, height)) {
++            return;
++        }
++        lastCapture = now;
++        ++m_captureDiagnostics.completedSync;
++
++        CapturedSurface& surface = isPadView ? m_gamePadSurface : m_tvSurface;
++        std::lock_guard guard(surface.mutex);
++        surface.pixels = std::move(pixels);
++        surface.width = width;
++        surface.height = height;
++        ++surface.frameIndex;
++        surface.hasFrame = true;
++        return;
++    }
++
++    // Async (Vulkan) path from here on. Resolved once, lazily -- the
++    // renderer (and therefore its real slot count) doesn't exist yet the
++    // very first time this class is even constructed.
++    if (m_captureSlotCount == 0) {
++        m_captureSlotCount = std::min<uint32_t>(g_renderer->GetCaptureSlotCount(), kMaxCaptureSlots);
++    }
++
++    // Step 3: attempt to reserve a free capture slot.
++    uint32_t freeSlot = kMaxCaptureSlots;
++    for (uint32_t slot = 0; slot < m_captureSlotCount; ++slot) {
++        if (!m_pendingCaptures[slot].inFlight && g_renderer->IsCaptureSlotFree(slot)) {
++            freeSlot = slot;
++            break;
++        }
++    }
++    if (freeSlot == kMaxCaptureSlots) {
++        // No slot available -- every one is still waiting on the GPU
++        // from an earlier capture. Never block Cemu to get one: drop
++        // this DualDeck frame and try again next time
++        // onSurfaceRendered() is called for this surface.
++        ++m_captureDiagnostics.dropped;
++        return;
++    }
++
++    // Steps 4-6: record the capture into the currently-recording command
++    // buffer (VulkanRenderer::ScheduleCaptureSurfaceBGRA() does this,
++    // including saving the resulting command-buffer id internally, and
++    // nudging Cemu's own normal submission cadence via
++    // RequestSubmitSoon()/RequestSubmitOnIdle() -- see its own comment
++    // for why that's the whole extent of "requesting submission" this
++    // needs to do). Step 7 (return immediately) is just... returning;
++    // there is nothing else for this function to wait on.
 +    int width = 0;
 +    int height = 0;
-+    if (!g_renderer || !g_renderer->CaptureSurfaceBGRA(texView, isPadView, pixels, width, height)) {
++    if (!g_renderer->ScheduleCaptureSurfaceBGRA(texView, isPadView, freeSlot, width, height)) {
++        ++m_captureDiagnostics.failed;
 +        return;
 +    }
 +    lastCapture = now;
++    m_pendingCaptures[freeSlot] = PendingCapture{true, isPadView, width, height};
++    ++m_captureDiagnostics.scheduled;
++}
 +
-+    CapturedSurface& surface = isPadView ? m_gamePadSurface : m_tvSurface;
-+    std::lock_guard guard(surface.mutex);
-+    surface.pixels = std::move(pixels);
-+    surface.width = width;
-+    surface.height = height;
-+    ++surface.frameIndex;
-+    surface.hasFrame = true;
++void CemuAdapter::pumpCaptures() {
++    logCaptureDiagnosticsIfDue();
++
++    if (!g_renderer || !g_renderer->SupportsAsyncCaptureSurfaceBGRA()) {
++        return;
++    }
++
++    for (uint32_t slot = 0; slot < m_captureSlotCount; ++slot) {
++        PendingCapture& pending = m_pendingCaptures[slot];
++        if (!pending.inFlight) {
++            continue;
++        }
++        if (!g_renderer->IsCaptureSlotReady(slot)) {
++            continue; // still waiting on the GPU -- check again next frame
++        }
++
++        std::vector<uint8_t> pixels;
++        const bool ok = g_renderer->ReadAndReleaseCaptureSlot(slot, pixels);
++        // The slot itself is always freed by ReadAndReleaseCaptureSlot()
++        // regardless of `ok` (see its own comment) -- this adapter's
++        // *own* bookkeeping needs the same unconditional reset, or a
++        // failed readback would permanently strand this slot as
++        // "in flight" from CemuAdapter's point of view even though
++        // VulkanRenderer already considers it free again.
++        pending.inFlight = false;
++        if (!ok) {
++            ++m_captureDiagnostics.failed;
++            continue;
++        }
++
++        CapturedSurface& surface = pending.isPadView ? m_gamePadSurface : m_tvSurface;
++        {
++            // Just a std::vector move (a pointer/size/capacity swap, not
++            // a byte copy) under the lock -- same "swap a completed
++            // frame buffer in" shape latestFrame()'s own std::move-based
++            // publish already had; the mutex is held for that swap only,
++            // never for copying pixel data.
++            std::lock_guard guard(surface.mutex);
++            surface.pixels = std::move(pixels);
++            surface.width = pending.width;
++            surface.height = pending.height;
++            ++surface.frameIndex;
++            surface.hasFrame = true;
++        }
++        ++m_captureDiagnostics.completed;
++    }
++}
++
++void CemuAdapter::logCaptureDiagnosticsIfDue() {
++    // Once every 10s, and only if there's something worth a line about
++    // (skip an entirely idle interval -- e.g. no client connected at
++    // all -- to avoid spamming Cemu's log with repeated all-zero lines).
++    constexpr auto kLogInterval = std::chrono::seconds(10);
++    const auto now = std::chrono::steady_clock::now();
++    if (now - m_lastDiagnosticsLog < kLogInterval) {
++        return;
++    }
++    m_lastDiagnosticsLog = now;
++
++    const auto& d = m_captureDiagnostics;
++    if (d.scheduled == 0 && d.completedSync == 0 && d.dropped == 0 && d.failed == 0 &&
++        d.completed == 0 && d.skippedNoViewer == 0) {
++        return;
++    }
++
++    uint32_t pendingSlots = 0;
++    for (uint32_t slot = 0; slot < m_captureSlotCount; ++slot) {
++        if (m_pendingCaptures[slot].inFlight) {
++            ++pendingSlots;
++        }
++    }
++
++    cemuLog_log(LogType::Force,
++                 "DualDeck: capture diagnostics (last 10s) -- scheduled={} completed={} completedSync={} "
++                 "dropped={} failed={} skippedNoViewer={} pendingSlots={}/{}",
++                 d.scheduled, d.completed, d.completedSync, d.dropped, d.failed, d.skippedNoViewer,
++                 pendingSlots, m_captureSlotCount);
++
++    m_captureDiagnostics = CaptureDiagnostics{};
 +}
 +
 +} // namespace DualDeck::RemoteServer
 diff --git a/src/remote_server/CemuAdapter.h b/src/remote_server/CemuAdapter.h
 new file mode 100644
-index 0000000..09d6832
+index 0000000..fc708e0
 --- /dev/null
 +++ b/src/remote_server/CemuAdapter.h
-@@ -0,0 +1,204 @@
+@@ -0,0 +1,323 @@
 +#pragma once
 +
 +// DualDeck's IEmulatorAdapter implementation for Cemu (Nintendo Wii U).
@@ -1347,13 +2154,39 @@ index 0000000..09d6832
 +//     HandleScreenshotRequest(textureView, isPadView) call site, confirmed
 +//     by reading it, not assumed -- via a small parallel hook this patch
 +//     adds alongside that call (never reusing or interfering with Cemu's
-+//     own single-shot screenshot-to-file feature). Actual pixel readback
-+//     is backend-specific (OpenGL/Vulkan/Metal), so onSurfaceRendered()
-+//     delegates to a new Renderer::CaptureSurfaceBGRA() virtual this
-+//     patch adds (default no-op false, so an unimplemented backend like
-+//     Metal just never produces a frame for that surface rather than
-+//     failing to build) -- see CemuAdapter.cpp's throttling comment for
-+//     why this isn't called on literally every frame.
++//     own single-shot screenshot-to-file feature).
++//
++//     Real hardware regression, 2026-08-26: this used to call
++//     g_renderer->CaptureSurfaceBGRA() directly, which on Vulkan is a
++//     full record+submit+vkWaitForFences every call -- a guaranteed
++//     render-thread stall up to CEMU_REMOTE_CAPTURE_FPS times/sec per
++//     surface. Confirmed (two independent machines: Fedora/RTX 4070
++//     Laptop GPU, Bazzite/RX 7900 XTX) to run Wind Waker HD at ~14-20fps
++//     instead of its native 30, with CEMU_REMOTE_CAPTURE_FPS=1 (nearly
++//     eliminating the stalls) restoring full speed -- see
++//     docs/known-limitations.md's matching entry for the full
++//     before/after writeup. onSurfaceRendered() (below) now schedules a
++//     capture via Renderer::ScheduleCaptureSurfaceBGRA() (Vulkan only;
++//     see Renderer.h's own comment) into one of a small, fixed pool of
++//     reusable slots and returns immediately, never waiting on the GPU
++//     itself; pumpCaptures() (also below), called once per real frame
++//     from the same LatteRenderTarget.cpp hook, drains whatever slots
++//     the GPU has since actually finished (Renderer::IsCaptureSlotReady())
++//     and publishes their pixels. A backend without an async
++//     implementation (currently: OpenGL) falls back to the old,
++//     still-synchronous CaptureSurfaceBGRA() path unchanged.
++//
++//     Also as of 2026-08-26: the TV surface is only ever captured (by
++//     either path) if CEMU_REMOTE_CAPTURE_TV is set -- see
++//     captureTvWanted()'s own comment in CemuAdapter.cpp for why it's
++//     off by default (capabilities() below already reports
++//     remotelyDisplayed=false for it: no client has ever actually
++//     received a TV frame, so capturing it by default was 100% wasted
++//     GPU/CPU/IPC work). And onSurfaceRendered() no longer captures
++//     anything at all unless a NetServer client is actually connected
++//     (see m_clientConnected's own comment) -- AdapterIpcClient staying
++//     connected to dualdeck-host-service says nothing about whether a
++//     Deck is actually watching.
 +//  2. Input: registers a RemoteControllerProvider (see
 +//     RemoteControllerProvider.h) through InputManager's existing
 +//     create_provider<TProvider>() template and, once at construction,
@@ -1483,14 +2316,44 @@ index 0000000..09d6832
 +    // per surface, immediately after Cemu's own HandleScreenshotRequest()
 +    // call for that surface -- i.e. potentially 60-144 times/sec per
 +    // surface, far more often than this needs to actually do an expensive
-+    // GPU readback (Vulkan's in particular is a full blit+copy+
-+    // submit+wait, see CemuAdapter.cpp). Throttled internally to
-+    // CEMU_REMOTE_CAPTURE_FPS (default 30, same default and env-var-
-+    // override pattern as Azahar's AZAHAR_REMOTE_CAPTURE_FPS) before ever
-+    // calling into g_renderer->CaptureSurfaceBGRA() -- most calls to this
-+    // function are expected to no-op. Reads back `texView` into whichever
-+    // CapturedSurface (TV or GamePad) `isPadView` selects.
++    // GPU readback. Throttled internally to CEMU_REMOTE_CAPTURE_FPS
++    // (default 30, same default and env-var-override pattern as Azahar's
++    // AZAHAR_REMOTE_CAPTURE_FPS); also does nothing at all unless
++    // captureTvWanted() (for the TV surface) and m_clientConnected (for
++    // either) both say so -- see this file's top comment and each one's
++    // own comment in CemuAdapter.cpp. On the async (Vulkan) path this
++    // only ever *schedules* a capture (Renderer::ScheduleCaptureSurfaceBGRA())
++    // into a free slot and returns -- it never itself waits on or reads
++    // back anything; pumpCaptures() below is what actually publishes a
++    // completed one. On any backend without an async implementation,
++    // falls back to the old synchronous CaptureSurfaceBGRA() call,
++    // unchanged.
 +    void onSurfaceRendered(LatteTextureView* texView, bool isPadView);
++
++    // Called from the same LatteRenderTarget.cpp hook as
++    // onSurfaceRendered() above, once per real frame (not per surface,
++    // and not subject to onSurfaceRendered()'s own throttle) --
++    // deliberately BEFORE that call's own throttle/gating checks, so a
++    // capture scheduled a frame or two ago gets picked up and published
++    // promptly regardless of whether *this* frame ends up scheduling a
++    // new one. Drains every in-flight slot Renderer::IsCaptureSlotReady()
++    // now reports true for: reads it back via
++    // Renderer::ReadAndReleaseCaptureSlot() (pure CPU work against an
++    // already-mapped, host-coherent buffer -- no Vulkan calls), publishes
++    // it into the right CapturedSurface, and frees the slot. Doing this
++    // here, on the same render thread that owns all the relevant Vulkan/
++    // Cemu state, rather than on a dedicated worker thread, is
++    // deliberate -- see docs/known-limitations.md's design writeup for
++    // why a separate completion thread was considered and rejected (it
++    // would need its own synchronization around state this render thread
++    // already owns exclusively, for no real latency benefit given this
++    // hook already runs every real frame). No-op on a backend without an
++    // async implementation (SupportsAsyncCaptureSurfaceBGRA() false).
++    void pumpCaptures();
++
++    // Wired to AdapterIpcClient::setConnectionStateCallback() by
++    // RemoteServerBridge -- see m_clientConnected's own comment.
++    void setClientConnected(bool connected) { m_clientConnected.store(connected); }
 +
 +    std::shared_ptr<RemoteInputStatus> inputStatus() const { return m_inputStatus; }
 +
@@ -1527,6 +2390,69 @@ index 0000000..09d6832
 +    // method's declaration comment above.
 +    std::chrono::steady_clock::time_point m_lastTvCapture{};
 +    std::chrono::steady_clock::time_point m_lastGamePadCapture{};
++
++    // Set by setClientConnected(), called by RemoteServerBridge via
++    // AdapterIpcClient::setConnectionStateCallback() (ipc_protocol.h's
++    // ClientConnectionChanged message -- already existed, already
++    // reaches this process, just never previously wired to anything
++    // capture-related): true only while a NetServer client is actually
++    // connected and handshaked, as opposed to
++    // AdapterIpcClient::isConnected(), which only ever means "this Cemu
++    // process is connected to dualdeck-host-service" and says nothing
++    // about whether a Deck is on the other end watching. Gating capture
++    // on this (see onSurfaceRendered()) means an idle host service with
++    // no client -- the common case between play sessions on an
++    // always-running Bazzite HTPC -- costs Cemu nothing at all, not even
++    // a throttled/no-op check against the GPU.
++    std::atomic<bool> m_clientConnected{false};
++
++    // Bookkeeping for the async (Vulkan) capture path -- which slot
++    // index (if any) currently holds an outstanding, not-yet-published
++    // capture this adapter itself scheduled, and which surface it
++    // belongs to. Renderer/VulkanRenderer owns the actual GPU resources
++    // per slot (staging buffers, blit images); this is purely
++    // CemuAdapter's own view of "what did I ask for and not collect
++    // yet," used by onSurfaceRendered() to pick a free slot and by
++    // pumpCaptures() to know which CapturedSurface a completed slot's
++    // pixels belong to.
++    struct PendingCapture {
++        bool inFlight = false;
++        bool isPadView = false;
++        int width = 0;
++        int height = 0;
++    };
++    static constexpr uint32_t kMaxCaptureSlots = 4; // upper bound; real count is std::min(this, renderer's own GetCaptureSlotCount())
++    std::array<PendingCapture, kMaxCaptureSlots> m_pendingCaptures{};
++    uint32_t m_captureSlotCount = 0; // resolved lazily, once, on first async schedule attempt
++
++    // Diagnostics -- see CemuAdapter.cpp's logCaptureDiagnosticsIfDue()
++    // for how these actually surface (a throttled cemuLog_log() summary
++    // line, visible in Cemu's own log window/log.txt). Plain counters,
++    // not atomics: every increment happens on the render thread (the
++    // only thread that ever calls onSurfaceRendered()/pumpCaptures()),
++    // same single-writer assumption every other per-surface state in
++    // this class already relies on (m_lastTvCapture etc. above).
++    struct CaptureDiagnostics {
++        uint64_t scheduled = 0;      // ScheduleCaptureSurfaceBGRA() succeeded (async path)
++        uint64_t completedSync = 0;  // old synchronous CaptureSurfaceBGRA() path succeeded
++        uint64_t dropped = 0;        // wanted to capture, but no free slot -- frame skipped, Cemu never blocked
++        uint64_t failed = 0;         // Schedule/ReadAndRelease returned false
++        uint64_t completed = 0;      // ReadAndReleaseCaptureSlot() succeeded and was published
++        uint64_t skippedNoViewer = 0; // m_clientConnected was false
++    };
++    CaptureDiagnostics m_captureDiagnostics;
++    std::chrono::steady_clock::time_point m_lastDiagnosticsLog{};
++
++    // Prints a throttled (see its own definition) cemuLog_log() summary
++    // of m_captureDiagnostics -- acceptance criterion "diagnostics for
++    // capture scheduling, dropped frames, pending slots, and completed
++    // frames," surfaced through Cemu's existing log window/log.txt
++    // rather than a new IPC message or UI, matching how every other
++    // DualDeck-specific condition in this file already reports itself
++    // (cemuLog_log(LogType::Force, "DualDeck: ...")). Called from
++    // pumpCaptures() every time it runs (i.e. every real frame), but
++    // only actually logs occasionally.
++    void logCaptureDiagnosticsIfDue();
 +
 +    std::atomic<bool> m_running{true};
 +};
@@ -1884,10 +2810,10 @@ index 0000000..987a462
 +} // namespace DualDeck::RemoteServer
 diff --git a/src/remote_server/RemoteServerBridge.cpp b/src/remote_server/RemoteServerBridge.cpp
 new file mode 100644
-index 0000000..36f2a74
+index 0000000..e50c8e9
 --- /dev/null
 +++ b/src/remote_server/RemoteServerBridge.cpp
-@@ -0,0 +1,158 @@
+@@ -0,0 +1,177 @@
 +#include "remote_server/RemoteServerBridge.h"
 +
 +#include <algorithm>
@@ -1962,6 +2888,25 @@ index 0000000..36f2a74
 +
 +    ipcClient_ =
 +        std::make_unique<melonds_remote::adapter::ipc::AdapterIpcClient>(*adapter_, std::move(adapterSocketPath));
++
++    // DualDeck, 2026-08-26: wires ipc_protocol.h's ClientConnectionChanged
++    // message (already delivered here -- AdapterIpcClient::readLoop()
++    // already parsed it and already offered this exact callback hook,
++    // just never previously connected to anything) to
++    // CemuAdapter::setClientConnected(), which onSurfaceRendered() now
++    // gates all GPU capture work on. Set here, before start()/connect()
++    // is ever called (see setConnectionStateCallback()'s own comment for
++    // why that ordering matters), and captures `adapter_.get()` (a raw
++    // pointer, not `this`) rather than `adapter_` itself -- this callback
++    // outlives the exact moment adapter_ is later moved into stop()'s
++    // detached cleanup thread (see that function's own comment), and
++    // AdapterIpcClient guarantees this callback and CemuAdapter's own
++    // destruction (both driven through that same detached thread's
++    // ipcClient->disconnect() call, which joins readLoop() before
++    // returning) can never overlap.
++    CemuAdapter* const adapterPtr = adapter_.get();
++    ipcClient_->setConnectionStateCallback(
++        [adapterPtr](bool connected) { adapterPtr->setClientConnected(connected); });
 +}
 +
 +RemoteServerBridge::~RemoteServerBridge() {
