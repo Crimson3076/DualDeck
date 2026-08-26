@@ -9,6 +9,7 @@ add_executable(melonds_remote_host_tests
     test_capability_bridge.cpp
     test_kdialog_approval_prompt.cpp
     test_h264_encoder.cpp
+    test_h264_sps.cpp
 )
 
 target_include_directories(melonds_remote_host_tests PRIVATE
