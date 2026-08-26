@@ -30,6 +30,38 @@ set_target_properties(TurboJPEG::TurboJPEG PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${TURBOJPEG_INCLUDE_DIR}"
 )
 
+# libyuv (BSD-licensed, Google): SIMD-accelerated BGRA<->I420 conversion
+# for the H.264 path only (host/remote-server/src/h264_encoder.cpp's
+# bgraToI420()/client/src/h264_decoder.cpp's i420ToBgra() -- see each
+# one's own comment), itself only ever reachable when OpenH264 is also
+# available. Unlike TurboJPEG above, this is optional at configure time
+# (no FATAL_ERROR) -- a build without it just keeps the existing hand-
+# rolled scalar conversion, same graceful-degradation treatment as every
+# other optional dependency in this project (X11/Wayland/OpenH264
+# itself). No .pc file is shipped for it on any distro checked so far
+# (Debian/Ubuntu's libyuv-dev included), so find_path()/find_library()
+# rather than pkg_check_modules(), same reasoning TurboJPEG's own comment
+# gives. Found once here and exposed as an imported target, same pattern
+# as TurboJPEG::TurboJPEG -- each target that actually compiles
+# h264_encoder.cpp/h264_decoder.cpp (or links something that does) still
+# opts in and links it individually, matching how OpenH264 itself is
+# handled per-target in this project rather than centrally.
+find_path(LIBYUV_INCLUDE_DIR NAMES libyuv.h)
+find_library(LIBYUV_LIBRARY NAMES yuv)
+if(LIBYUV_INCLUDE_DIR AND LIBYUV_LIBRARY)
+    set(DUALDECK_LIBYUV_FOUND TRUE)
+    add_library(LibYuv::LibYuv UNKNOWN IMPORTED)
+    set_target_properties(LibYuv::LibYuv PROPERTIES
+        IMPORTED_LOCATION "${LIBYUV_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${LIBYUV_INCLUDE_DIR}"
+    )
+else()
+    set(DUALDECK_LIBYUV_FOUND FALSE)
+    message(STATUS "libyuv not found -- H.264 BGRA<->I420 conversion will use the existing scalar "
+                    "fallback (install libyuv-dev (Debian/Ubuntu), libyuv-devel (Fedora), or libyuv "
+                    "(Arch) for SIMD-accelerated conversion)")
+endif()
+
 add_subdirectory(protocol)
 add_subdirectory(adapter-sdk)
 

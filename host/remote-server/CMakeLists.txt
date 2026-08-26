@@ -115,6 +115,16 @@ else()
                     "as unavailable in this build (JPEG, protocol v8's existing codec, is unaffected)")
 endif()
 
+# SIMD BGRA->I420 conversion for h264_encoder.cpp's bgraToI420() -- see
+# top-level CMakeLists.txt's LibYuv::LibYuv detection and that function's
+# own comment. Only meaningful alongside OpenH264 itself -- gated on
+# OPENH264_FOUND too so a build with libyuv but not OpenH264 doesn't
+# define a macro nothing reads.
+if(OPENH264_FOUND AND DUALDECK_LIBYUV_FOUND)
+    target_compile_definitions(dualdeck_host PRIVATE DUALDECK_HAVE_LIBYUV)
+    target_link_libraries(dualdeck_host PRIVATE LibYuv::LibYuv)
+endif()
+
 target_include_directories(dualdeck_host PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )

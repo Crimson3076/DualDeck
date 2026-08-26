@@ -38,6 +38,19 @@ else()
     message(STATUS "dualdeck-codec-benchmark: openh264 not found -- H.264 side of the benchmark will be skipped")
 endif()
 
+# SIMD BGRA<->I420 conversion -- see top-level CMakeLists.txt's
+# LibYuv::LibYuv detection. This target both compiles h264_decoder.cpp
+# directly (needs the compile definition too, same as
+# client/CMakeLists.txt's dualdeck-client target) and links dualdeck_host,
+# whose own h264_encoder.cpp object code also calls into libyuv when
+# available (needs the link regardless, same reasoning as
+# host/remote-server/tests/CMakeLists.txt's melonds_remote_host_tests
+# target).
+if(OPENH264_FOUND AND DUALDECK_LIBYUV_FOUND)
+    target_compile_definitions(dualdeck-codec-benchmark PRIVATE DUALDECK_HAVE_LIBYUV)
+    target_link_libraries(dualdeck-codec-benchmark PRIVATE LibYuv::LibYuv)
+endif()
+
 target_compile_features(dualdeck-codec-benchmark PRIVATE cxx_std_20)
 
 if(DUALDECK_ENABLE_WARNINGS)

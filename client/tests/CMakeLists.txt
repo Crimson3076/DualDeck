@@ -74,6 +74,16 @@ if(OPENH264_FOUND)
     target_link_directories(melonds_remote_net_client_tests PRIVATE ${OPENH264_LIBRARY_DIRS})
 endif()
 
+# SIMD I420->BGRA conversion for h264_decoder.cpp's i420ToBgra() -- see
+# top-level CMakeLists.txt's LibYuv::LibYuv detection and that function's
+# own comment. This target compiles h264_decoder.cpp directly (see the
+# source list above), so it needs both the compile definition and the
+# link, same as client/CMakeLists.txt's dualdeck-client target.
+if(OPENH264_FOUND AND DUALDECK_LIBYUV_FOUND)
+    target_compile_definitions(melonds_remote_net_client_tests PRIVATE DUALDECK_HAVE_LIBYUV)
+    target_link_libraries(melonds_remote_net_client_tests PRIVATE LibYuv::LibYuv)
+endif()
+
 add_test(NAME net_client_tests COMMAND melonds_remote_net_client_tests)
 
 # Covers the melonDS-Remote -> DualDeck config-dir migration added to

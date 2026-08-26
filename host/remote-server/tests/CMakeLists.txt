@@ -41,6 +41,17 @@ if(OPENH264_FOUND)
     target_link_directories(melonds_remote_host_tests PRIVATE ${OPENH264_LIBRARY_DIRS})
 endif()
 
+# This target doesn't compile h264_encoder.cpp itself (it links
+# dualdeck_host, which does) -- but that object file's calls into libyuv
+# still need resolving at *this* executable's final link step, since a
+# static library doesn't carry its dependencies forward automatically
+# (same reasoning already applied to OPENH264_LIBRARIES above). No
+# compile definition needed here -- nothing in this target's own sources
+# reads DUALDECK_HAVE_LIBYUV.
+if(OPENH264_FOUND AND DUALDECK_LIBYUV_FOUND)
+    target_link_libraries(melonds_remote_host_tests PRIVATE LibYuv::LibYuv)
+endif()
+
 target_compile_features(melonds_remote_host_tests PRIVATE cxx_std_20)
 
 if(DUALDECK_ENABLE_WARNINGS)
