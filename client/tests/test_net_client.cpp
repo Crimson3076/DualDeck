@@ -314,6 +314,51 @@ MDR_TEST(net_client_clears_stale_frame_on_mode_change) {
     client.disconnect();
 }
 
+#ifdef DUALDECK_HAVE_OPENH264
+// Latency-audit follow-up: real end-to-end proof that videoReceiveLoop()'s
+// decoder-drain fix (see its own comment) actually works against this
+// project's real encoder/decoder pair over a real socket, not just in
+// isolation (test_h264_decoder.cpp already covers the decoder alone).
+// OpenH264's documented no-delay-decode semantics can defer a frame's
+// output to a follow-up call fed no new data -- a real, reproducible
+// behavior with this build's OpenH264, not hypothetical (see
+// test_h264_decoder.cpp's own tests, which already have to handle it
+// explicitly). SizedFrameSource below never changes its frame content or
+// index, and NetServer::videoLoop() deliberately skips re-sending an
+// unchanged frame index (see its own comment) -- so exactly one
+// VideoFrame packet is ever sent for this whole connection. Without the
+// drain fix, a deferred first frame would mean this test's waitUntil()
+// times out completely (there is no second packet coming to flush it via
+// fresh data), not just arrives late -- a strong, non-flaky regression
+// guard rather than a timing-dependent one.
+MDR_TEST(net_client_receives_an_h264_video_frame_without_needing_a_second_frame) {
+    ServerFixture fixture;
+    SizedFrameSource dsFrame(256, 192);
+    std::vector<uint8_t> realFrame(static_cast<size_t>(256) * 192 * 4, 0x5A);
+    dsFrame.setFrame(realFrame);
+    fixture.server.setTarget(fixture.sinkA, dsFrame, HostMode::Emulation, SystemIdentity{"nds", "Nintendo DS"},
+                              AdapterIdentity{"melonds", "melonDS", "1.0"});
+
+    NetClientConfig clientConfig = fixture.clientConfig();
+    clientConfig.preferH264 = true;
+    NetClient client(clientConfig);
+    MDR_CHECK(client.connect());
+    // Confirms the negotiation actually landed on H264 -- if it hadn't,
+    // the wait below would still pass (JPEG never defers output at all)
+    // without proving anything about the drain fix.
+    MDR_CHECK(client.negotiatedVideoCodec() == VideoCodec::H264);
+
+    std::vector<uint8_t> received;
+    MDR_CHECK(waitUntil([&] {
+        if (!client.getLatestFrame(received)) return false;
+        return received.size() == realFrame.size();
+    }));
+    MDR_CHECK(client.isConnected());
+
+    client.disconnect();
+}
+#endif // DUALDECK_HAVE_OPENH264
+
 MDR_TEST(net_client_detects_a_dead_server_connection) {
     ServerFixture fixture;
     NetClient client(fixture.clientConfig());

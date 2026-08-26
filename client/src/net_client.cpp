@@ -671,6 +671,25 @@ void NetClient::videoReceiveLoop() {
         if (negotiatedVideoCodec() == VideoCodec::H264) {
             decoded = h264Decoder.decodeFrame(videoFrame->jpeg.data(), videoFrame->jpeg.size(), decodedFrame,
                                                decodedWidth, decodedHeight, hasFrame);
+            if (decoded && !hasFrame) {
+                // Latency-audit follow-up: OpenH264's documented no-delay-
+                // decode semantics (codec_api.h's own decode-loop example)
+                // can defer a frame's output to a follow-up call fed no
+                // new data, rather than the call that actually fed the
+                // bitstream in -- the exact pattern
+                // test_h264_decoder.cpp already exercises against this
+                // same decoder (see its own comment). Production code
+                // used to just fall through to the `continue` below and
+                // wait for the *next* network packet to arrive instead --
+                // that usually still works (feeding fresh data also
+                // flushes a pending picture), but silently costs up to a
+                // full extra inter-frame interval on exactly the frame
+                // that matters most for perceived responsiveness: the
+                // first one after a (re)connect. Draining immediately
+                // here removes that dependency on timing instead of
+                // hoping the next packet arrives soon enough.
+                decoded = h264Decoder.decodeFrame(nullptr, 0, decodedFrame, decodedWidth, decodedHeight, hasFrame);
+            }
         } else {
             decoded = decompressJpegToBgra(jpegDecompressor, videoFrame->jpeg.data(), videoFrame->jpeg.size(),
                                             decodedFrame, decodedWidth, decodedHeight);
@@ -684,11 +703,13 @@ void NetClient::videoReceiveLoop() {
             break;
         }
         if (!hasFrame) {
-            // H264Decoder-only case (decompressJpegToBgra() always
-            // either fails or produces a frame) -- see its own comment:
-            // an SPS/PPS-only access unit, or the first frame's output
-            // legitimately deferred to the next call. Nothing to display
-            // yet, not an error -- wait for the next packet.
+            // H264Decoder-only case (decompressJpegToBgra() always either
+            // fails or produces a frame) -- reached only when the drain
+            // attempt above (or JPEG's own single decode call) still
+            // didn't produce a picture: a genuine SPS/PPS-only access
+            // unit with nothing to output at all, not a deferred frame
+            // that draining could have recovered. Nothing to display yet,
+            // not an error -- wait for the next packet.
             continue;
         }
         // Real bug this fixes: hostNativeWidth_/hostNativeHeight_ used to
