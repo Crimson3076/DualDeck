@@ -1523,7 +1523,7 @@ new file mode 100644
 index 0000000..63f64f4
 --- /dev/null
 +++ b/src/remote_server/CemuAdapter.cpp
-@@ -0,0 +1,605 @@
+@@ -0,0 +1,628 @@
 +#include "remote_server/CemuAdapter.h"
 +
 +#include <algorithm>
@@ -1558,24 +1558,47 @@ index 0000000..63f64f4
 +
 +namespace {
 +
-+// Defaults to 30fps: unlike Azahar's RequestScreenshot() (an async
-+// callback the emulator services whenever it gets around to it), this
-+// adapter's onSurfaceRendered() is invoked synchronously, inline, from
-+// the render thread itself, once per surface per real frame -- so on
-+// Vulkan (a full blit+copy-to-buffer+submit+wait every call, see
-+// VulkanRenderer::HandleScreenshotRequest for the equivalent one-shot
-+// cost this mirrors) calling the real capture on literally every frame
-+// at 60-144fps would add a GPU sync stall to every single frame Cemu
-+// renders, whether or not a client is even watching. 30fps matches this
-+// project's own established default for a small streamed display (see
-+// AzaharAdapter.cpp's identical reasoning) and is overridable via
-+// CEMU_REMOTE_CAPTURE_FPS for the same tuning reasons.
++// Backend-aware capture-tick ceiling, not a flat 30fps: unlike Azahar's
++// RequestScreenshot() (an async callback the emulator services whenever
++// it gets around to it), this adapter's onSurfaceRendered() is invoked
++// synchronously, inline, from the render thread itself, once per surface
++// per real frame. The original 30fps-always default existed because, on
++// Vulkan, the *old* capture path was a full blit+copy-to-buffer+submit+
++// wait every single call (see VulkanRenderer::HandleScreenshotRequest for
++// the equivalent one-shot cost this mirrored) -- running that at the
++// game's real 60-144fps rate would have stalled the render thread on
++// every frame, whether or not a client was even watching. See this file's
++// own onSurfaceRendered()/CemuAdapter.h header comment for the Wind Waker
++// HD regression that cost was first found from.
++//
++// That stall no longer exists on Vulkan: onSurfaceRendered()'s async path
++// (ScheduleCaptureSurfaceBGRA()/pumpCaptures(), added by that same fix)
++// only ever schedules a capture into a free slot and returns immediately,
++// never waiting on the GPU itself -- see this file's own top comment.
++// Recomputing the ceiling here per-backend reflects that: 60fps on the
++// backend that actually stopped paying the stall cost, so a title
++// rendering its GamePad surface at a real 60fps isn't structurally
++// capped at half that for a reason that no longer applies. OpenGL has no
++// async implementation (SupportsAsyncCaptureSurfaceBGRA() is false
++// there) and still falls back to the old, still-synchronous
++// CaptureSurfaceBGRA() path unchanged (see onSurfaceRendered()'s own
++// comment) -- it keeps the original, still-necessary 30fps ceiling.
++// g_renderer can in principle be null this early (see
++// m_captureSlotCount's own comment on construction-time ordering),
++// though in practice onSurfaceRendered() can only ever be reached from
++// inside real rendering, which itself requires a constructed renderer --
++// null is treated the same as "no async support" regardless, the
++// conservative choice either way. CEMU_REMOTE_CAPTURE_FPS still overrides
++// either default, now clamped to each backend's own real ceiling instead
++// of a single hardcoded 60.
 +std::chrono::milliseconds resolveCaptureInterval() {
-+    int fps = 30;
++    const bool asyncCapable = g_renderer && g_renderer->SupportsAsyncCaptureSurfaceBGRA();
++    const int maxFps = asyncCapable ? 60 : 30;
++    int fps = maxFps;
 +    if (const char* env = std::getenv("CEMU_REMOTE_CAPTURE_FPS")) {
 +        int parsed = std::atoi(env);
 +        if (parsed > 0) {
-+            fps = std::clamp(parsed, 1, 60);
++            fps = std::clamp(parsed, 1, maxFps);
 +        }
 +    }
 +    return std::chrono::milliseconds(1000 / fps);
@@ -2134,7 +2157,7 @@ new file mode 100644
 index 0000000..fc708e0
 --- /dev/null
 +++ b/src/remote_server/CemuAdapter.h
-@@ -0,0 +1,323 @@
+@@ -0,0 +1,326 @@
 +#pragma once
 +
 +// DualDeck's IEmulatorAdapter implementation for Cemu (Nintendo Wii U).
@@ -2316,9 +2339,12 @@ index 0000000..fc708e0
 +    // per surface, immediately after Cemu's own HandleScreenshotRequest()
 +    // call for that surface -- i.e. potentially 60-144 times/sec per
 +    // surface, far more often than this needs to actually do an expensive
-+    // GPU readback. Throttled internally to CEMU_REMOTE_CAPTURE_FPS
-+    // (default 30, same default and env-var-override pattern as Azahar's
-+    // AZAHAR_REMOTE_CAPTURE_FPS); also does nothing at all unless
++    // GPU readback. Throttled internally to CEMU_REMOTE_CAPTURE_FPS -- see
++    // resolveCaptureInterval()'s own comment in CemuAdapter.cpp for why
++    // the default is backend-aware (60 when the async/Vulkan capture path
++    // is active, 30 on the still-synchronous OpenGL fallback, same
++    // default-and-env-var-override pattern as Azahar's
++    // AZAHAR_REMOTE_CAPTURE_FPS either way); also does nothing at all unless
 +    // captureTvWanted() (for the TV surface) and m_clientConnected (for
 +    // either) both say so -- see this file's top comment and each one's
 +    // own comment in CemuAdapter.cpp. On the async (Vulkan) path this

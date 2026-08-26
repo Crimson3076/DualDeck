@@ -2118,6 +2118,31 @@ int main(int argc, char** argv) {
         // recreation of texture below also resizes this alongside it.
         std::vector<uint8_t> testPattern(static_cast<size_t>(textureWidth) * textureHeight * 4, 0x40);
 
+        // Latency-audit finding: this render loop used to call
+        // net.getLatestFrame() (a full-vector copy of the decoded frame)
+        // and SDL_UpdateTexture() (a GPU upload of that copy)
+        // unconditionally on every single iteration, whether or not a new
+        // frame had actually arrived since the last one -- with no vsync
+        // cap on this renderer (see SDL_CreateRenderer() above), that's
+        // real, wasted CPU/GPU work repeated far more often than
+        // NetClient::receivedFps() ever changes. These four track what the
+        // texture was last updated to reflect, so the block below
+        // (`videoTextureNeedsUpdate` and its uses) can skip the copy+
+        // upload entirely when nothing has changed -- see
+        // NetClient::latestFrameGeneration()'s own comment for why a
+        // generation counter is what actually answers "is there anything
+        // new," not receivedFrameCount() (that would also tick up for a
+        // frame this exact caller already saw). lastVideoTextureGeneration
+        // starts at 0, same as a fresh NetClient's own generation counter,
+        // so the very first iteration would otherwise look like "nothing
+        // changed" -- videoTextureNeverUpdated forces the first real check
+        // regardless.
+        bool videoTextureNeverUpdated = true;
+        uint64_t lastVideoTextureGeneration = 0;
+        bool lastVideoTextureConnected = false;
+        int lastVideoTextureWidth = textureWidth;
+        int lastVideoTextureHeight = textureHeight;
+
         // Recreates `texture` (and its matching testPattern filler) at
         // newWidth x newHeight if that differs from what's currently
         // allocated -- a no-op cheap enough to call every frame. Used both
@@ -3076,12 +3101,39 @@ int main(int argc, char** argv) {
                 resizeTextureIfNeeded(net.hostNativeWidth(), net.hostNativeHeight());
             }
 
-            const uint8_t* pixels = testPattern.data();
-            if (net.isConnected() && net.getLatestFrame(frame) &&
-                frame.size() == testPattern.size()) {
-                pixels = frame.data();
+            // Only touch the texture (copy the decoded frame out of
+            // NetClient and upload it to the GPU) when something that
+            // would actually change its pixels has happened since the
+            // last iteration: a new decoded frame, a connect/disconnect
+            // edge, or a resize -- see videoTextureNeverUpdated's own
+            // comment above. Every other iteration (the common case: this
+            // uncapped loop running far faster than new video frames
+            // arrive) reuses whatever the texture already holds.
+            // latestFrameGeneration() is a plain atomic load -- cheap
+            // enough to read unconditionally every iteration just to check
+            // it, unlike getLatestFrame()'s full-vector copy below, which
+            // is exactly the cost this whole block exists to avoid paying
+            // redundantly.
+            bool nowVideoTextureConnected = nowConnected;
+            uint64_t nowVideoTextureGeneration = net.latestFrameGeneration();
+            bool videoTextureNeedsUpdate =
+                videoTextureNeverUpdated || nowVideoTextureConnected != lastVideoTextureConnected ||
+                nowVideoTextureGeneration != lastVideoTextureGeneration ||
+                textureWidth != lastVideoTextureWidth || textureHeight != lastVideoTextureHeight;
+            if (videoTextureNeedsUpdate) {
+                videoTextureNeverUpdated = false;
+                lastVideoTextureConnected = nowVideoTextureConnected;
+                lastVideoTextureGeneration = nowVideoTextureGeneration;
+                lastVideoTextureWidth = textureWidth;
+                lastVideoTextureHeight = textureHeight;
+
+                const uint8_t* pixels = testPattern.data();
+                if (nowVideoTextureConnected && net.getLatestFrame(frame) &&
+                    frame.size() == testPattern.size()) {
+                    pixels = frame.data();
+                }
+                SDL_UpdateTexture(texture, nullptr, pixels, textureWidth * 4);
             }
-            SDL_UpdateTexture(texture, nullptr, pixels, textureWidth * 4);
 
             SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
             SDL_RenderClear(renderer);

@@ -104,6 +104,21 @@ public:
     // returns false if no frame has arrived yet. Never blocks.
     bool getLatestFrame(std::vector<uint8_t>& outFrame);
 
+    // Bumped every time latestFrame_'s content or validity actually
+    // changes -- a new frame swapped in by videoReceiveLoop(), or hasFrame_
+    // reset by controlReceiveLoop() on a mode change (see that call site's
+    // own comment). Lets a caller like main.cpp's render loop tell "is
+    // there anything new to show" apart from "is there still nothing new"
+    // without paying getLatestFrame()'s full-vector-copy cost just to find
+    // out -- real fix for the render loop redundantly copying+re-uploading
+    // the same unchanged frame to the GPU every single iteration
+    // regardless of whether a new one had actually arrived. Never
+    // decreases, never resets to 0 (including across a reconnect on the
+    // same NetClient instance) -- callers should only ever compare it for
+    // inequality against a previously-observed value, never for a specific
+    // number.
+    uint64_t latestFrameGeneration() const { return latestFrameGeneration_.load(); }
+
     // Session ID assigned by the host in HelloAck, or 0 if not connected.
     // Informational only (e.g. for logging); not currently used to
     // validate anything client-side.
@@ -290,6 +305,14 @@ private:
     std::mutex frameMutex_;
     std::vector<uint8_t> latestFrame_;
     bool hasFrame_ = false;
+    // See latestFrameGeneration()'s own comment. Written by both
+    // videoReceiveLoop() (new frame) and controlReceiveLoop() (hasFrame_
+    // reset on mode change) -- two threads, but each only ever increments,
+    // never reads-then-conditionally-writes, so a plain atomic fetch_add is
+    // sufficient; no separate lock needed beyond frameMutex_ already
+    // serializing the hasFrame_/latestFrame_ mutation each bump
+    // accompanies.
+    std::atomic<uint64_t> latestFrameGeneration_{0};
 
     // Guards logQueue_ -- filled by sendClientLog() (any thread), drained
     // by heartbeatLoop() (its own thread) every ~50ms. Capped at

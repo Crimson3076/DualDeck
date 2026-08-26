@@ -724,6 +724,7 @@ void NetClient::videoReceiveLoop() {
             latestFrame_.swap(decodedFrame);
             hasFrame_ = true;
         }
+        ++latestFrameGeneration_;
 
         if (nowWallUs - lastStatsLogUs >= kVideoStatsLogIntervalUs) {
             if (networkStats.sampleCount > 0) {
@@ -810,8 +811,11 @@ void NetClient::controlReceiveLoop() {
             // false -- the reason "exit and reopen the client" already
             // masked this).
             if (modeChanged->mode != hostMode_) {
-                std::lock_guard<std::mutex> lock(frameMutex_);
-                hasFrame_ = false;
+                {
+                    std::lock_guard<std::mutex> lock(frameMutex_);
+                    hasFrame_ = false;
+                }
+                ++latestFrameGeneration_;
             }
             hostMode_ = modeChanged->mode;
             {

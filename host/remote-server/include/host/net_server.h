@@ -257,11 +257,44 @@ struct NetServerStats {
     uint64_t latencyMinUs = UINT64_MAX;
     uint64_t latencyMaxUs = 0;
 
+    // Latency-audit follow-up: the client's own periodic log line
+    // (NetClient::videoReceiveLoop()) already reports one combined
+    // "network+encode+queue" figure derived from captureTimestampUs, which
+    // conflates several stages that only the host can actually tell apart
+    // (see docs' 2026-08-26 latency-audit entry). These two split out the
+    // two host-local stages videoLoop() can measure on its own steady_clock
+    // -- compress/encode time, and sendAll() time -- so the client-observed
+    // figure minus these two leaves a real "everything else" (mostly
+    // network transit) estimate instead of one opaque bucket.
+    uint64_t videoEncodeSampleCount = 0;
+    uint64_t videoEncodeSumUs = 0;
+    uint64_t videoEncodeMinUs = UINT64_MAX;
+    uint64_t videoEncodeMaxUs = 0;
+
+    uint64_t videoSendSampleCount = 0;
+    uint64_t videoSendSumUs = 0;
+    uint64_t videoSendMinUs = UINT64_MAX;
+    uint64_t videoSendMaxUs = 0;
+
     void recordLatency(uint64_t latencyUs) {
         ++latencySampleCount;
         latencySumUs += latencyUs;
         if (latencyUs < latencyMinUs) latencyMinUs = latencyUs;
         if (latencyUs > latencyMaxUs) latencyMaxUs = latencyUs;
+    }
+
+    void recordVideoEncode(uint64_t encodeUs) {
+        ++videoEncodeSampleCount;
+        videoEncodeSumUs += encodeUs;
+        if (encodeUs < videoEncodeMinUs) videoEncodeMinUs = encodeUs;
+        if (encodeUs > videoEncodeMaxUs) videoEncodeMaxUs = encodeUs;
+    }
+
+    void recordVideoSend(uint64_t sendUs) {
+        ++videoSendSampleCount;
+        videoSendSumUs += sendUs;
+        if (sendUs < videoSendMinUs) videoSendMinUs = sendUs;
+        if (sendUs > videoSendMaxUs) videoSendMaxUs = sendUs;
     }
 };
 

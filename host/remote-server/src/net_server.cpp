@@ -1083,6 +1083,28 @@ void NetServer::watchdogLoop() {
                                   static_cast<unsigned long long>(snapshot.micPacketsAccepted),
                                   static_cast<unsigned long long>(snapshot.micPacketsMalformed), micRate);
                 }
+
+                // Latency-audit follow-up: split-out host-local encode/send
+                // timing (see NetServerStats::recordVideoEncode's own
+                // comment) -- a separate line, printed only once real video
+                // frames were actually sent this window, rather than
+                // reworking the two format strings above (which fire even
+                // in mic/input-only windows with no video at all).
+                if (snapshot.videoEncodeSampleCount > 0) {
+                    std::fprintf(stderr,
+                                  "NetServer: video timing -- encode avg=%.2fms min=%.2fms max=%.2fms "
+                                  "(n=%llu) | send avg=%.2fms min=%.2fms max=%.2fms (n=%llu)\n",
+                                  static_cast<double>(snapshot.videoEncodeSumUs) /
+                                      static_cast<double>(snapshot.videoEncodeSampleCount) / 1000.0,
+                                  static_cast<double>(snapshot.videoEncodeMinUs) / 1000.0,
+                                  static_cast<double>(snapshot.videoEncodeMaxUs) / 1000.0,
+                                  static_cast<unsigned long long>(snapshot.videoEncodeSampleCount),
+                                  static_cast<double>(snapshot.videoSendSumUs) /
+                                      static_cast<double>(snapshot.videoSendSampleCount) / 1000.0,
+                                  static_cast<double>(snapshot.videoSendMinUs) / 1000.0,
+                                  static_cast<double>(snapshot.videoSendMaxUs) / 1000.0,
+                                  static_cast<unsigned long long>(snapshot.videoSendSampleCount));
+                }
             }
         }
     }
@@ -1275,6 +1297,19 @@ void NetServer::videoLoop() {
             // frame" read with no risk of drifting from what it's
             // actually meant to measure as the surrounding code changes.
             uint64_t captureTimestampUs = nowMicrosEpoch();
+            // Latency-audit follow-up (see NetServerStats::recordVideoEncode's
+            // own comment): steady_clock, not wall-clock, since this only
+            // ever gets compared against another steady_clock read taken a
+            // few lines below on this same thread -- immune to the same
+            // wall-clock-jump risk captureTimestampUs above is fine
+            // accepting only because *that* one is deliberately meant to
+            // cross to the client's own clock instead. Only meaningful when
+            // `gotFrame` was already true going in (an attempted encode/
+            // compress actually happens below); recorded into stats_ only
+            // on this tick's eventual successful send, matching
+            // framesSent's own existing "success only" convention.
+            const bool attemptingEncodeThisTick = gotFrame;
+            const auto encodeStart = std::chrono::steady_clock::now();
             if (gotFrame && useH264) {
                 if (currentFrameWidth != h264InitializedWidth || currentFrameHeight != h264InitializedHeight) {
                     // First frame of this connection (see the
@@ -1342,17 +1377,35 @@ void NetServer::videoLoop() {
                 // failure shouldn't be fatal.
                 gotFrame = false;
             }
+            const uint64_t encodeMicros = attemptingEncodeThisTick
+                ? static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                      std::chrono::steady_clock::now() - encodeStart)
+                                             .count())
+                : 0;
             if (gotFrame) {
                 VideoFramePayload videoPayload;
                 videoPayload.captureTimestampUs = captureTimestampUs;
                 videoPayload.jpeg = std::move(useH264 ? h264Frame : jpegFrame);
                 ByteBuffer packet = buildVideoFramePacket(videoPayload);
-                if (!sendAll(clientFd, packet.data(), packet.size())) {
+                // Same steady_clock reasoning as encodeStart above --
+                // isolates sendAll()'s own real cost (including any real
+                // blocking against SO_SNDBUF/SO_SNDTIMEO backpressure, see
+                // this connection's own setsockopt calls above) from
+                // whatever the client-observed "network+encode+queue"
+                // figure bundles together.
+                const auto sendStart = std::chrono::steady_clock::now();
+                const bool sendOk = sendAll(clientFd, packet.data(), packet.size());
+                const uint64_t sendMicros = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - sendStart)
+                        .count());
+                if (!sendOk) {
                     break;
                 }
 
                 std::lock_guard<std::mutex> lock(statsMutex_);
                 ++stats_.framesSent;
+                stats_.recordVideoEncode(encodeMicros);
+                stats_.recordVideoSend(sendMicros);
                 if (lastSentFrameIndex && frameIndex > *lastSentFrameIndex + 1) {
                     stats_.framesDropped += frameIndex - *lastSentFrameIndex - 1;
                 }
