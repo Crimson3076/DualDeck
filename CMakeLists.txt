@@ -39,6 +39,10 @@ endif()
 
 if(DUALDECK_BUILD_HOST)
     add_subdirectory(host/remote-server)
+    # Standalone dev tool, not shipped -- needs dualdeck_host (H264Encoder)
+    # so it's gated the same as the host build itself. See
+    # tools/codec-benchmark/main.cpp's own top comment.
+    add_subdirectory(tools/codec-benchmark)
 endif()
 
 if(DUALDECK_BUILD_CLIENT)
