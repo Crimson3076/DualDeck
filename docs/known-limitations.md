@@ -11820,6 +11820,39 @@ that doesn't mean every tick produces a distinct frame) or anything the
 render loop's own frame rate could skew (vsync-limited or uncapped,
 independent of how fast frames actually arrive).
 
+**LATENCY/DECODE shown in microseconds, not milliseconds (2026-08-26)**:
+first real-hardware use of the debug overlay above reported "latency
+says 0ms and decode is 1-2ms" on a still screen, which looked like the
+overlay itself might be broken. It wasn't -- but `%uMS` (integer
+division by 1000) was hiding the one number that would have proven it:
+`NetClient::lastLatencyMicros()` has always had a genuine "couldn't
+measure this frame" fallback that reports exactly 0 (when
+`nowWallUs < videoFrame->captureTimestampUs`, i.e. host/client wall
+clocks aren't synchronized closely enough for that frame's math to
+make sense -- see that getter's own comment), and a real, fast,
+sub-millisecond LAN latency (e.g. 400us) rounds down to that exact
+same "0MS" display. Both LATENCY and DECODE now render as raw
+microseconds (`"LATENCY: 412US"`) instead, so a genuine measurement
+and the clock-skew fallback are distinguishable on sight: an
+occasional 0US alongside real jitter is unremarkable, while a value
+that is *always* exactly 0US across many frames is the actual signal
+that latency can't be trusted this session, without needing a
+separate explicit N/A state. Also confirms two things the still-screen
+report couldn't: (1) latency on a *moving* screen was subsequently
+reported as up to ~15ms, well within LAN norms and consistent with the
+capture/encode/send pipeline actually working, not the flat 0 the
+still-screen test alone made it look like; (2) receive throughput
+(`receivedFps_`) was separately reported holding at ~21-23fps against
+this title's native 30fps cap (`CEMU_REMOTE_CAPTURE_FPS`'s own default,
+`host/cemu-patches/0001-remote-server-integration.patch`) -- not yet
+root-caused; the host's own "DualDeck: capture diagnostics" log line
+(`CemuAdapter::pumpCaptures()`'s `logCaptureDiagnosticsIfDue()`,
+logged every 10s while a client is connected) is the next place to
+look, since it would show directly whether the shortfall is capture-
+side (slots exhausted, `dropped` climbing) or downstream of capture
+(scheduled/completed staying healthy, pointing at encode or network
+send instead).
+
 `renderDebugOverlay()`'s text is deliberately restricted to
 `bitmap_font.h`'s supported glyph set (space/0-9/A-Z/./-/: -- anything
 else silently renders blank, per that header's own documented
