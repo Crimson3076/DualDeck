@@ -166,12 +166,58 @@ public:
     HostMode hostMode() const { return hostMode_.load(); }
 
     // Which VideoCodec the host actually selected for this session (see
-    // NetServer::selectVideoCodec()) -- always VideoCodec::Jpeg today,
-    // since videoReceiveLoop() only has a JPEG decode path so far. Set
-    // once at connect() time; unlike hostMode() there's no mid-session
-    // change to react to, since codec choice is fixed for a session's
-    // whole lifetime (same as HelloPayload::videoQuality).
+    // NetServer::selectVideoCodec()) -- JPEG unless both sides advertised
+    // and negotiated H264 (protocol v13; see HelloPayload::
+    // supportedVideoCodecs and h264_decoder.h). Set once at connect()
+    // time; unlike hostMode() there's no mid-session change to react to,
+    // since codec choice is fixed for a session's whole lifetime (same
+    // as HelloPayload::videoQuality).
     VideoCodec negotiatedVideoCodec() const { return negotiatedVideoCodec_.load(); }
+
+    // Debug-overlay stats (GitHub/real user request, 2026-08-26: "show
+    // the user what resolution is being streamed, what fps, codec, etc
+    // as a debug overlay"). All updated by videoReceiveLoop() after every
+    // successfully decoded frame, atomically, safe to poll from any
+    // thread (main.cpp's render loop) at any rate -- same convention as
+    // hostNativeWidth()/hostMode() above, not a snapshot taken once.
+    //
+    // Frames actually decoded and displayed since connect() -- not a
+    // rate on its own; callers wanting an FPS figure should sample this
+    // twice a known time apart and divide, same as receivedFps() below
+    // does internally (kept separate so a caller that wants raw frame
+    // count for something else, e.g. correlating with a log line, isn't
+    // forced to also care about timing).
+    uint64_t receivedFrameCount() const { return receivedFrameCount_.load(); }
+    // Frames/sec actually received+decoded, recomputed once/sec inside
+    // videoReceiveLoop() from its own wall-clock-timestamped window --
+    // this is real receive throughput, not a render-loop rate (which
+    // could differ if the render loop is vsync-limited or uncapped) and
+    // not NetServerConfig::videoSendFps (a host-side polling-tick-rate
+    // ceiling, not a guarantee every tick produces a distinct frame).
+    // 0 until the first full one-second window completes after connect.
+    uint32_t receivedFps() const { return receivedFps_.load(); }
+    // Compressed size of the most recently received frame's wire payload
+    // (VideoFramePayload::jpeg -- JPEG or H264 Annex-B bytes depending on
+    // negotiatedVideoCodec(), see that field's own comment in protocol.h)
+    // in bytes, before decode. A rough, single-frame bandwidth indicator,
+    // not an average -- deliberately not smoothed, so a debug overlay
+    // showing it live reflects real per-frame variance (an I-frame vs. a
+    // P-frame's very different size under H264, in particular) rather
+    // than hiding it behind an average that would make bitrate spikes
+    // invisible.
+    uint32_t lastFrameCompressedBytes() const { return lastFrameCompressedBytes_.load(); }
+    // Wall-clock micros this specific frame took to decode (JPEG:
+    // libjpeg-turbo; H264: H264Decoder) -- the same measurement
+    // decodeStats below already accumulates min/max/avg of for its own
+    // periodic log line, exposed here as the single latest sample for a
+    // live overlay instead of a periodically-reset accumulator.
+    uint32_t lastDecodeMicros() const { return lastDecodeMicros_.load(); }
+    // Network+encode+queue latency for this specific frame (captureTimestampUs
+    // to receipt) -- same source measurement as networkStats' own
+    // min/max/avg log line, again exposed as the latest single sample.
+    // 0 if this particular frame's latency couldn't be computed (see
+    // videoReceiveLoop()'s own kMaxPlausibleLatencyUs/clock-skew comment).
+    uint32_t lastLatencyMicros() const { return lastLatencyMicros_.load(); }
 
     // Enqueues `line` (already formatted -- see client_log.h) to be
     // forwarded to the host as a ClientLog packet on the control
@@ -217,6 +263,16 @@ private:
     // once per connect edge.
     std::atomic<uint16_t> hostNativeWidth_{256};
     std::atomic<uint16_t> hostNativeHeight_{192};
+
+    // Debug-overlay stats -- see the public getters' own comments above
+    // for what each one means. All written only by videoReceiveLoop(),
+    // same single-writer/many-reader atomic convention as
+    // hostNativeWidth_ above.
+    std::atomic<uint64_t> receivedFrameCount_{0};
+    std::atomic<uint32_t> receivedFps_{0};
+    std::atomic<uint32_t> lastFrameCompressedBytes_{0};
+    std::atomic<uint32_t> lastDecodeMicros_{0};
+    std::atomic<uint32_t> lastLatencyMicros_{0};
 
     // Serializes connect()/disconnect() against each other -- callers may
     // run reconnect-on-a-background-thread while the main thread can

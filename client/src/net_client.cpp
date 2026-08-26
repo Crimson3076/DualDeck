@@ -604,6 +604,14 @@ void NetClient::videoReceiveLoop() {
     MinMaxAvgUs decodeStats;
     uint64_t lastStatsLogUs = wallClockNowUs();
 
+    // Debug-overlay FPS window (receivedFps() above) -- a simple once/sec
+    // recompute against this loop's own wall-clock timestamps, not tied
+    // to lastStatsLogUs/kVideoStatsLogIntervalUs above (that interval is
+    // tuned for how often a human wants a log line, not for how often an
+    // on-screen counter should refresh).
+    uint64_t fpsWindowStartUs = wallClockNowUs();
+    uint32_t framesThisFpsWindow = 0;
+
     while (connected_.load()) {
         if (!recvExact(videoFd_, headerBuf.data(), headerBuf.size())) {
             break;
@@ -641,8 +649,16 @@ void NetClient::videoReceiveLoop() {
         }
 
         uint64_t nowWallUs = wallClockNowUs();
+        // Hoisted out of the `if` below (rather than left scoped to just
+        // the networkStats.record() call, as before) so it can also seed
+        // lastLatencyMicros_ once this frame is confirmed decoded -- 0
+        // stays the value if this frame's latency couldn't be computed at
+        // all (clock skew putting captureTimestampUs in the future), same
+        // "not counted" meaning lastLatencyMicros_'s own comment
+        // documents.
+        uint64_t latencyUs = 0;
         if (nowWallUs >= videoFrame->captureTimestampUs) {
-            uint64_t latencyUs = nowWallUs - videoFrame->captureTimestampUs;
+            latencyUs = nowWallUs - videoFrame->captureTimestampUs;
             if (latencyUs <= kMaxPlausibleLatencyUs) {
                 networkStats.record(latencyUs);
             }
@@ -659,9 +675,10 @@ void NetClient::videoReceiveLoop() {
             decoded = decompressJpegToBgra(jpegDecompressor, videoFrame->jpeg.data(), videoFrame->jpeg.size(),
                                             decodedFrame, decodedWidth, decodedHeight);
         }
-        decodeStats.record(static_cast<uint64_t>(
+        const uint64_t decodeMicros = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - decodeStart)
-                .count()));
+                .count());
+        decodeStats.record(decodeMicros);
         if (!decoded) {
             logLine("video: dropping undecodable frame, closing connection\n");
             break;
@@ -684,6 +701,23 @@ void NetClient::videoReceiveLoop() {
         // resizes its texture the moment they change.
         hostNativeWidth_ = static_cast<uint16_t>(decodedWidth);
         hostNativeHeight_ = static_cast<uint16_t>(decodedHeight);
+
+        // Debug-overlay stats (see each getter's own comment in
+        // net_client.h) -- updated for every genuinely displayed frame,
+        // i.e. exactly the frames that reach the swap into latestFrame_
+        // just below, not every packet this loop merely receives (an
+        // SPS/PPS-only H264 access unit above already `continue`d past
+        // this point without incrementing anything here).
+        ++receivedFrameCount_;
+        lastFrameCompressedBytes_ = static_cast<uint32_t>(videoFrame->jpeg.size());
+        lastDecodeMicros_ = static_cast<uint32_t>(decodeMicros);
+        lastLatencyMicros_ = static_cast<uint32_t>(latencyUs);
+        ++framesThisFpsWindow;
+        if (nowWallUs - fpsWindowStartUs >= 1'000'000) {
+            receivedFps_ = framesThisFpsWindow;
+            framesThisFpsWindow = 0;
+            fpsWindowStartUs = nowWallUs;
+        }
 
         {
             std::lock_guard<std::mutex> lock(frameMutex_);

@@ -277,6 +277,79 @@ void renderClientVersionStamp(SDL_Renderer* renderer, const std::string& clientV
                       SDL_Color{90, 90, 96, 255});
 }
 
+// Real user request, 2026-08-26: "some sort of way to show the user what
+// resolution is being streamed, what fps, codec, etc as a debug overlay
+// for the client." Top-left corner stack, one line per stat -- kept as a
+// free function taking exactly what it reads (mirrors renderConnecting()/
+// renderHostControlScreen() etc.'s own style) rather than a main()-local
+// lambda, since it needs nothing from the render loop's own local state
+// beyond `net` itself and the locally configured video quality (for the
+// QUALITY line, which reads back the client's own *requested* setting --
+// see ClientSettings::videoQuality's own comment -- not anything NetClient
+// tracks, since a session's actual negotiated quality byte isn't read back
+// from the wire anywhere on this side once Hello is sent).
+//
+// Only ever called while net.isConnected() (see its call site) -- every
+// NetClient getter used here already has its own documented default/last-
+// known-value behavior for "not connected yet," but showing a stale
+// RES/FPS/CODEC stack while reconnecting would be actively misleading
+// rather than merely uninformative.
+//
+// All-caps, ASCII-only content by construction (bitmap_font.h's glyph set
+// is space/0-9/A-Z/./-/: only -- anything else silently renders blank,
+// same graceful-degradation behavior settingsMenuItems()' own labels
+// already rely on elsewhere in this file, so this isn't a new risk, just
+// deliberately avoided here too).
+void renderDebugOverlay(SDL_Renderer* renderer, NetClient& net, int requestedVideoQuality) {
+    constexpr int kPixelSize = 2;
+    constexpr float kLineHeight = 16.0f;
+    constexpr float kX = 20.0f;
+    float y = 20.0f;
+    const SDL_Color color{140, 220, 140, 255};
+
+    auto line = [&](const std::string& text) {
+        renderBitmapText(renderer, text, kX, y, kPixelSize, color);
+        y += kLineHeight;
+    };
+
+    char buf[64];
+
+    std::snprintf(buf, sizeof(buf), "RES: %uX%u", static_cast<unsigned>(net.hostNativeWidth()),
+                  static_cast<unsigned>(net.hostNativeHeight()));
+    line(buf);
+
+    std::snprintf(buf, sizeof(buf), "FPS: %u", static_cast<unsigned>(net.receivedFps()));
+    line(buf);
+
+    line(std::string("CODEC: ") + (net.negotiatedVideoCodec() == VideoCodec::H264 ? "H264" : "JPEG"));
+
+    // Mirrors settingsMenuItems()' own videoQualityLabel() thresholds,
+    // but with only-supported-character labels (that one's "LOW (SLOWEST
+    // LINKS)" etc. include parens/lowercase, harmless there -- see this
+    // function's own top comment -- not worth reusing verbatim here).
+    std::string qualityLabel;
+    if (requestedVideoQuality == 0) {
+        qualityLabel = "AUTO";
+    } else {
+        std::snprintf(buf, sizeof(buf), "%d", requestedVideoQuality);
+        qualityLabel = buf;
+    }
+    line("QUALITY: " + qualityLabel);
+
+    std::snprintf(buf, sizeof(buf), "LATENCY: %uMS",
+                  static_cast<unsigned>(net.lastLatencyMicros() / 1000));
+    line(buf);
+
+    std::snprintf(buf, sizeof(buf), "DECODE: %uMS",
+                  static_cast<unsigned>(net.lastDecodeMicros() / 1000));
+    line(buf);
+
+    std::snprintf(buf, sizeof(buf), "FRAME: %u.%uKB",
+                  static_cast<unsigned>(net.lastFrameCompressedBytes() / 1024),
+                  static_cast<unsigned>((net.lastFrameCompressedBytes() % 1024) * 10 / 1024));
+    line(buf);
+}
+
 void renderDiscoverySearching(SDL_Renderer* renderer, const std::string& clientVersion) {
     SDL_SetRenderDrawColor(renderer, 20, 20, 24, 255);
     SDL_RenderClear(renderer);
@@ -1797,13 +1870,18 @@ int main(int argc, char** argv) {
     // host) would see the old quality/codec keep streaming indefinitely,
     // indistinguishable from the setting simply not having saved.
     // cycleVideoQuality()/toggleVideoCodec() below (settingsMenuItems())
-    // now set this to force that reconnection automatically -- unlike
-    // changeHostRequested, declared here (outside the loop, alongside
-    // netConfig itself) rather than freshly inside each outer iteration,
-    // since it must still be readable at the very top of the *next*
-    // iteration (see the discovery-picker check just inside this loop)
-    // to skip the picker and silently reconnect to the same host instead
-    // of asking the user to re-pick it.
+    // now set this flag -- but the actual reconnect only happens once the
+    // user leaves the Settings screen (every settingsActive -> false
+    // transition below checks it), not the instant either value changes,
+    // so cycling through VIDEO QUALITY's presets or flipping VIDEO CODEC
+    // a few times while still browsing Settings doesn't reconnect after
+    // every single tap; at most one reconnect happens, covering whatever
+    // was last picked when Settings is actually closed. Declared here
+    // (outside the loop, alongside netConfig itself) rather than freshly
+    // inside each outer iteration, since it must still be readable at the
+    // very top of the *next* iteration (see the discovery-picker check
+    // just inside this loop) to skip the picker and silently reconnect to
+    // the same host instead of asking the user to re-pick it.
     bool reconnectRequested = false;
     while (!quitApp) {
         if (runWizardNow) {
@@ -2174,6 +2252,7 @@ int main(int argc, char** argv) {
                     (clientSettings.mirrorHostScreen ? "ON" : "OFF"),
                 std::string("VIDEO CODEC (EXPERIMENTAL): ") +
                     (clientSettings.videoCodecH264Experimental ? "H264" : "JPEG"),
+                std::string("DEBUG OVERLAY: ") + (clientSettings.debugOverlayEnabled ? "ON" : "OFF"),
             };
             if (!hostExplicit) items.push_back("RUN SETUP WIZARD");
             if (net.hostMicSupported()) {
@@ -2191,12 +2270,12 @@ int main(int argc, char** argv) {
         // videoQuality's own comment above, near NetClient's
         // construction) -- there's no packet type for changing an
         // already-connected session's compression quality. Sets
-        // reconnectRequested so the caller (both settings-menu SELECT
-        // handlers below) tearing down the inner loop right after this
-        // call actually gets that next connection immediately, instead
-        // of silently keeping the old quality until some unrelated later
-        // reconnect -- see reconnectRequested's own comment, near the
-        // outer loop, for the real user report this fixes.
+        // reconnectRequested so leaving Settings afterward actually gets
+        // that next connection, instead of silently keeping the old
+        // quality until some unrelated later reconnect -- see
+        // reconnectRequested's own comment, near the outer loop, for the
+        // real user report this fixes and why the reconnect itself is
+        // deferred to Settings-exit rather than firing immediately here.
         auto cycleVideoQuality = [&]() {
             static constexpr int kPresets[] = {0, 40, 65, 85, 100};
             constexpr int kPresetCount = static_cast<int>(sizeof(kPresets) / sizeof(kPresets[0]));
@@ -2480,6 +2559,7 @@ int main(int argc, char** argv) {
                             if (settingsActive) {
                                 settingsActive = false;
                                 menuActive = true;
+                                if (reconnectRequested) runningInner = false;
                             } else {
                                 menuActive = !menuActive;
                                 menuSelectedIndex = 0;
@@ -2499,7 +2579,6 @@ int main(int argc, char** argv) {
                                 settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                             } else if (picked.rfind("VIDEO QUALITY:", 0) == 0) {
                                 cycleVideoQuality();
-                                runningInner = false;
                             } else if (picked.rfind("TRACKPAD AS NATIVE INPUT", 0) == 0) {
                                 toggleTrackpadExperiment();
                             } else if (picked.rfind("MIRROR HOST SCREEN", 0) == 0) {
@@ -2507,7 +2586,9 @@ int main(int argc, char** argv) {
                                 settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                             } else if (picked.rfind("VIDEO CODEC", 0) == 0) {
                                 toggleVideoCodec();
-                                runningInner = false;
+                            } else if (picked.rfind("DEBUG OVERLAY:", 0) == 0) {
+                                clientSettings.debugOverlayEnabled = !clientSettings.debugOverlayEnabled;
+                                settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                             } else if (picked == "RUN SETUP WIZARD") {
                                 setupWizardRequested = true;
                                 runningInner = false;
@@ -2519,6 +2600,7 @@ int main(int argc, char** argv) {
                             } else if (picked == "BACK") {
                                 settingsActive = false;
                                 menuActive = true;
+                                if (reconnectRequested) runningInner = false;
                             }
                         } else if (menuActive && exitEmulationConfirm) {
                             int subCount = static_cast<int>(exitEmulationItems().size());
@@ -2584,7 +2666,6 @@ int main(int argc, char** argv) {
                                     settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                                 } else if (picked.rfind("VIDEO QUALITY:", 0) == 0) {
                                     cycleVideoQuality();
-                                    runningInner = false;
                                 } else if (picked.rfind("TRACKPAD AS NATIVE INPUT", 0) == 0) {
                                     toggleTrackpadExperiment();
                                 } else if (picked.rfind("MIRROR HOST SCREEN", 0) == 0) {
@@ -2592,7 +2673,9 @@ int main(int argc, char** argv) {
                                     settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                                 } else if (picked.rfind("VIDEO CODEC", 0) == 0) {
                                     toggleVideoCodec();
-                                    runningInner = false;
+                                } else if (picked.rfind("DEBUG OVERLAY:", 0) == 0) {
+                                    clientSettings.debugOverlayEnabled = !clientSettings.debugOverlayEnabled;
+                                    settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                                 } else if (picked == "RUN SETUP WIZARD") {
                                     setupWizardRequested = true;
                                     runningInner = false;
@@ -2604,10 +2687,12 @@ int main(int argc, char** argv) {
                                 } else if (picked == "BACK") {
                                     settingsActive = false;
                                     menuActive = true;
+                                    if (reconnectRequested) runningInner = false;
                                 }
                             } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_EAST) {
                                 settingsActive = false;
                                 menuActive = true;
+                                if (reconnectRequested) runningInner = false;
                             }
                         } else if (menuActive && exitEmulationConfirm) {
                             int subCount = static_cast<int>(exitEmulationItems().size());
@@ -2682,6 +2767,7 @@ int main(int argc, char** argv) {
                     if (settingsActive) {
                         settingsActive = false;
                         menuActive = false;
+                        if (reconnectRequested) runningInner = false;
                     } else {
                         menuActive = !menuActive;
                         menuSelectedIndex = 0;
@@ -2989,6 +3075,14 @@ int main(int argc, char** argv) {
             SDL_FRect dst{static_cast<float>(dsRect.x), static_cast<float>(dsRect.y),
                           static_cast<float>(dsRect.width), static_cast<float>(dsRect.height)};
             SDL_RenderTexture(renderer, texture, nullptr, &dst);
+
+            // Only while genuinely connected -- see renderDebugOverlay()'s
+            // own top comment for why a stale stat stack during a
+            // reconnect would be actively misleading rather than just
+            // uninformative.
+            if (net.isConnected() && clientSettings.debugOverlayEnabled) {
+                renderDebugOverlay(renderer, net, clientSettings.videoQuality);
+            }
 
             // Otherwise a failed/retrying connection just looks like a stuck
             // dark test-pattern screen with no indication anything is even

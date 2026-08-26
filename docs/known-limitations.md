@@ -11761,6 +11761,82 @@ run against this commit is the first real compile attempt, same
 caveat as every other `main.cpp`-touching change in this project's
 history that couldn't be verified locally.
 
+## 2026-08-26: Settings-change reconnect deferred to Settings-exit; client debug overlay (resolution/fps/codec/latency)
+
+Two more follow-ups from the same round of real feedback as the entry
+above (v0.1.160's Cemu capture fix, plus the VIDEO QUALITY/CODEC
+auto-reconnect fix earlier the same day).
+
+**"It should only apply the setting once exiting the menu."** Real,
+valid critique of the earlier fix: `cycleVideoQuality()`/
+`toggleVideoCodec()` setting `reconnectRequested` and their call sites
+immediately setting `runningInner = false` meant *every single tap*
+while cycling through VIDEO QUALITY's five presets, or flipping VIDEO
+CODEC back and forth, triggered its own full disconnect+reconnect --
+never letting a user browse or adjust anything else in Settings without
+each change kicking them straight to a "CONNECTING..." screen.
+
+Fixed by separating "record that a reconnect is owed" from "actually do
+it": `cycleVideoQuality()`/`toggleVideoCodec()` still set
+`reconnectRequested`, but no longer force `runningInner = false`
+themselves. Instead, every place Settings is actually left --
+`settingsActive` transitioning back to `false` -- checks
+`reconnectRequested` and forces the reconnect *there*, once. That
+turned out to be five separate places, not the one "BACK" menu item:
+keyboard `SDLK_ESCAPE`, keyboard `RETURN` on "BACK", gamepad
+`BUTTON_SOUTH` on "BACK", gamepad `BUTTON_EAST` (the built-in
+back/cancel button), and the L3+R3 chord's own settings-aware branch --
+all five now carry the same `if (reconnectRequested) runningInner =
+false;` line right alongside their existing `settingsActive = false`.
+A user can now cycle VIDEO QUALITY five times, flip VIDEO CODEC twice,
+and toggle MIRROR HOST SCREEN in between, and exactly one reconnect
+happens, covering whatever was last picked, only once they actually
+leave Settings.
+
+**Debug overlay** (`client/src/main.cpp`'s new `renderDebugOverlay()`,
+toggled via a new "DEBUG OVERLAY: ON/OFF" Settings entry -- plain
+immediate toggle, no reconnect, since it's purely local rendering like
+MIRROR HOST SCREEN): a top-left corner stack showing RES (the most
+recently decoded frame's real dimensions, `NetClient::hostNativeWidth()/
+hostNativeHeight()`), FPS (genuine received+decoded throughput, not a
+render-loop or host-side polling rate -- see below), CODEC (JPEG/H264,
+`negotiatedVideoCodec()`), QUALITY (the client's own requested setting,
+not anything read back from the wire), LATENCY (network+encode+queue
+delay for the most recent frame), DECODE (this frame's local decode
+time), and FRAME (this frame's compressed wire size in KB).
+
+FPS/latency/decode-time/frame-size didn't previously exist as anything
+a caller outside `videoReceiveLoop()` could read -- `NetClient` gained
+five new atomic stat fields (`receivedFrameCount_`, `receivedFps_`,
+`lastFrameCompressedBytes_`, `lastDecodeMicros_`, `lastLatencyMicros_`),
+written once per genuinely displayed frame (not every packet -- an H264
+SPS/PPS-only access unit that `continue`s past the decode step doesn't
+touch any of them) and exposed via public getters, same single-writer/
+many-reader convention `hostNativeWidth_` already established.
+`receivedFps_` specifically is recomputed once/sec from
+`videoReceiveLoop()`'s own wall-clock window, not derived from
+`NetServerConfig::videoSendFps` (a host-side polling-tick-rate ceiling
+that doesn't mean every tick produces a distinct frame) or anything the
+render loop's own frame rate could skew (vsync-limited or uncapped,
+independent of how fast frames actually arrive).
+
+`renderDebugOverlay()`'s text is deliberately restricted to
+`bitmap_font.h`'s supported glyph set (space/0-9/A-Z/./-/: -- anything
+else silently renders blank, per that header's own documented
+graceful-degradation, already relied on elsewhere in this file's
+settingsMenuItems() labels) -- "RES: 854X480", "LATENCY: 42MS", etc.,
+no lowercase or punctuation the font can't draw.
+
+**Verified**: `net_client_tests`/`client_settings_tests` both pass with
+the new stat fields and the new `ClientSettings::debugOverlayEnabled`
+field (persisted, defaults off, round-trip tested same as every other
+boolean setting in this file). `main.cpp` itself still cannot be
+compiled in this project's own development sandbox (needs SDL3) --
+checked for brace/paren balance, cross-checked every new NetClient
+getter call against its actual declared name/return type, and reviewed
+by hand, but not built. `release.yml`'s next run against this commit is
+the first real compile attempt.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

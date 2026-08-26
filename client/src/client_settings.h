@@ -65,6 +65,17 @@ struct ClientSettings {
     // say (NetServer::selectVideoCodec()), e.g. if it wasn't built with
     // OpenH264 either.
     bool videoCodecH264Experimental = false;
+
+    // Real user request, 2026-08-26: "some sort of way to show the user
+    // what resolution is being streamed, what fps, codec, etc as a debug
+    // overlay for the client." Purely a local rendering choice, like
+    // mirrorHostScreen above -- no protocol/negotiation involved, so
+    // toggling it takes effect immediately, no reconnect needed (see
+    // NetClient's receivedFrameCount()/receivedFps()/hostNativeWidth()/
+    // negotiatedVideoCodec() etc., what main.cpp actually renders when
+    // this is on). Defaults off: it's screen-space a player may not want
+    // permanently spent during normal play.
+    bool debugOverlayEnabled = false;
 };
 
 // $HOME/.config/dualdeck-client/settings.conf, or empty if HOME is
