@@ -17,18 +17,30 @@
 # deliberately NOT a blanket CXXFLAGS="... -include cstdint" env var
 # covering scripts/build-release.sh's *entire* invocation (Cemu's ~500
 # own source files plus all ~108 other vcpkg dependencies), which is
-# what the original local workaround this replaces did. This narrower
-# fix hasn't been verified against a real Fedora build yet (this
-# project's own development sandbox cannot compile Cemu at all -- see
-# docs/known-limitations.md's 2026-08-26 Wind Waker HD entry) -- if a
-# real Fedora build still fails here, fall back to the broader env-var
-# form (CXXFLAGS="${CXXFLAGS:+${CXXFLAGS} }-include cstdint" before
-# calling build_cemu() in scripts/lib/build_emulator.sh) rather than
-# assuming this port is the only translation unit affected.
+# what the original local workaround this replaces did.
+#
+# Real CI failure, 2026-08-26 (this exact overlay's first actual build
+# attempt): vcpkg_cmake_configure()'s own precondition check --
+# `If VCPKG_CXX_FLAGS is set, then VCPKG_C_FLAGS must be set.` -- vcpkg
+# requires both to be defined together, even though this fix only needs
+# the C++ one (the actual missing include is in glslang's C++ headers;
+# nothing in this port's C sources, if any, hit the same issue). Setting
+# VCPKG_C_FLAGS to plain `-DDUALDECK_UNUSED=1` here rather than also
+# forcing `-include cstdint` onto C compilation: `<cstdint>` (no `.h`) is
+# a C++-only header name, not guaranteed to resolve for a C translation
+# unit at all, so reusing the C++ flag verbatim for C risked trading one
+# real build failure for a different one exactly like it -- this is a
+# harmless per-port command-line define that satisfies vcpkg's "both or
+# neither" precondition without asserting anything about C header
+# behavior this fix was never about.
 if(NOT DEFINED VCPKG_CXX_FLAGS)
     set(VCPKG_CXX_FLAGS "")
 endif()
 set(VCPKG_CXX_FLAGS "${VCPKG_CXX_FLAGS} -include cstdint")
+if(NOT DEFINED VCPKG_C_FLAGS)
+    set(VCPKG_C_FLAGS "")
+endif()
+set(VCPKG_C_FLAGS "${VCPKG_C_FLAGS} -DDUALDECK_UNUSED=1")
 
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
