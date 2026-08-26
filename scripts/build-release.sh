@@ -90,6 +90,24 @@ echo "== [0/6] Checking build dependencies =="
 # build (not necessarily a distro's own rebuild) -- so `dnf install
 # openh264-devel` may need Fedora's separate Cisco-hosted repo enabled,
 # not just the base repos this script otherwise assumes.
+# libyuv-dev/libyuv-devel/libyuv (2026-08-26 latency-audit follow-up):
+# SIMD-accelerated BGRA<->I420 conversion for the H.264 path (host/
+# remote-server/src/h264_encoder.cpp's bgraToI420()/client/src/
+# h264_decoder.cpp's i420ToBgra() -- see top-level CMakeLists.txt's
+# LibYuv::LibYuv detection and each function's own comment). Optional at
+# configure time like openh264-dev above -- a build without it keeps the
+# existing hand-rolled scalar conversion, just without libyuv's real
+# measured speedup (see tools/codec-benchmark). Unlike openh264-devel,
+# this isn't a patent-sensitive codec (a plain color-conversion library),
+# so all three package names are directly confirmed present in their
+# distro's standard repos (Fedora's packages.fedoraproject.org lists
+# libyuv-devel; Arch's `extra` repo carries libyuv) rather than best-
+# effort/unverified the way openh264-devel's Fedora name is above.
+# Without this, bundle_library_dependencies() (appimage_pack.sh) simply
+# never finds a libyuv.so to bundle -- ldd only reports what the binary
+# actually links, so a prebuilt release built before this package was
+# added here would silently ship the scalar fallback despite this
+# project's own code supporting the SIMD path.
 # perl-FindBin/perl-IPC-Cmd (dnf only): real Fedora build failure,
 # 2026-08-26 -- Cemu's vcpkg dependency graph builds OpenSSL from source,
 # whose own build tooling is Perl-based and needs FindBin.pm and
@@ -99,9 +117,9 @@ echo "== [0/6] Checking build dependencies =="
 # Ubuntu's `perl` (apt) and Arch's `perl` (pacman), both of which include
 # the full core module set already, so this is dnf-only.
 ensure_packages "build" \
-    "cmake extra-cmake-modules ninja-build build-essential git python3 libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev libarchive-dev libenet-dev libzstd-dev libfaad-dev qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-svg-dev qt6-wayland libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libdecor-0-dev libturbojpeg0-dev libdbus-1-dev libpipewire-0.3-dev libopenh264-dev" \
-    "cmake extra-cmake-modules ninja-build gcc-c++ git python3 libcurl-devel libpcap-devel SDL2-devel libarchive-devel enet-devel libzstd-devel faad2-devel qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtmultimedia-devel qt6-qtsvg-devel qt6-qtwayland libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel libXtst-devel wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel turbojpeg-devel dbus-devel pipewire-devel openh264-devel perl-FindBin perl-IPC-Cmd" \
-    "cmake extra-cmake-modules ninja base-devel git python curl libpcap sdl2 libarchive enet zstd faad2 qt6-base qt6-multimedia qt6-svg qt6-wayland libx11 libxext libxrandr libxcursor libxfixes libxi libxss libxtst wayland libxkbcommon libdrm mesa libdecor libjpeg-turbo dbus libpipewire openh264"
+    "cmake extra-cmake-modules ninja-build build-essential git python3 libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev libarchive-dev libenet-dev libzstd-dev libfaad-dev qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-svg-dev qt6-wayland libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libdecor-0-dev libturbojpeg0-dev libdbus-1-dev libpipewire-0.3-dev libopenh264-dev libyuv-dev" \
+    "cmake extra-cmake-modules ninja-build gcc-c++ git python3 libcurl-devel libpcap-devel SDL2-devel libarchive-devel enet-devel libzstd-devel faad2-devel qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtmultimedia-devel qt6-qtsvg-devel qt6-qtwayland libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel libXtst-devel wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel libdecor-devel turbojpeg-devel dbus-devel pipewire-devel openh264-devel libyuv-devel perl-FindBin perl-IPC-Cmd" \
+    "cmake extra-cmake-modules ninja base-devel git python curl libpcap sdl2 libarchive enet zstd faad2 qt6-base qt6-multimedia qt6-svg qt6-wayland libx11 libxext libxrandr libxcursor libxfixes libxi libxss libxtst wayland libxkbcommon libdrm mesa libdecor libjpeg-turbo dbus libpipewire openh264 libyuv"
 
 # Azahar (3DS) additionally needs a Vulkan SDK and Boost headers beyond
 # melonDS's own dependency list above -- see
@@ -632,10 +650,32 @@ fi
 # shellcheck source=scripts/lib/ensure-packages.sh
 source ./ensure-packages.sh
 
+# libopenh264-7/openh264/openh264 and libyuv0/libyuv/libyuv (2026-08-26
+# latency-audit follow-up): real, ship-blocking gap this closes -- unlike
+# every other optional-at-configure-time dependency in this project
+# (X11/Wayland/OpenH264/libyuv itself at *build* time), dualdeck-client
+# is never passed through bundle_library_dependencies() the way
+# dualdeck-host-service is (see this file's own bundle_library_dependencies
+# call and its "host/internal/lib ships its runtime deps" comment) -- only
+# SDL3 is bundled alongside it; everything else, this list included, is
+# expected to already be on the system or auto-installed here. Since the
+# "build" ensure_packages list above already includes libopenh264-dev
+# (H.264 protocol v13 support) and now libyuv-dev too (SIMD BGRA<->I420
+# conversion, see that list's own comment), any CI-built dualdeck-client
+# binary dynamically links against both .so files unconditionally --
+# optional-at-*configure*-time only means "may not be compiled in," not
+# "safe to be missing once it is." Without runtime packages for both here,
+# every dualdeck-client launch on a real Deck lacking them system-wide
+# would fail outright with a missing-shared-object error before even
+# reaching main() -- not just "H.264 doesn't work," the whole client,
+# JPEG included. Fedora's package names are best-effort/unverified the
+# same way openh264-devel's own dnf name already is above (same Cisco-
+# repo caveat); libyuv0/libyuv's names are directly confirmed present in
+# their distro's standard repos, same as libyuv-dev's own build-time entry.
 ensure_packages "client runtime" \
-    "libx11-6 libxext6 libxrandr2 libxcursor1 libxfixes3 libxi6 libxss1 libwayland-client0 libwayland-cursor0 libwayland-egl1 libxkbcommon0 libdrm2 libgbm1 libdecor-0-0 libturbojpeg0" \
-    "libX11 libXext libXrandr libXcursor libXfixes libXi libXScrnSaver libwayland-client libwayland-cursor libwayland-egl libxkbcommon libdrm mesa-libgbm libdecor turbojpeg" \
-    "libx11 libxext libxrandr libxcursor libxfixes libxi libxss wayland libxkbcommon libdrm mesa libdecor libjpeg-turbo" \
+    "libx11-6 libxext6 libxrandr2 libxcursor1 libxfixes3 libxi6 libxss1 libwayland-client0 libwayland-cursor0 libwayland-egl1 libxkbcommon0 libdrm2 libgbm1 libdecor-0-0 libturbojpeg0 libopenh264-7 libyuv0" \
+    "libX11 libXext libXrandr libXcursor libXfixes libXi libXScrnSaver libwayland-client libwayland-cursor libwayland-egl libxkbcommon libdrm mesa-libgbm libdecor turbojpeg openh264 libyuv" \
+    "libx11 libxext libxrandr libxcursor libxfixes libxi libxss wayland libxkbcommon libdrm mesa libdecor libjpeg-turbo openh264 libyuv" \
     || echo "warning: could not verify/install client runtime libraries automatically; continuing anyway in case they're already present" >&2
 
 # Read by main.cpp so the host can reject a connection from a client
