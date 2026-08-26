@@ -336,12 +336,26 @@ void renderDebugOverlay(SDL_Renderer* renderer, NetClient& net, int requestedVid
     }
     line("QUALITY: " + qualityLabel);
 
-    std::snprintf(buf, sizeof(buf), "LATENCY: %uMS",
-                  static_cast<unsigned>(net.lastLatencyMicros() / 1000));
+    // Real user report, 2026-08-26: "latency says 0ms and decode is
+    // 1-2ms" looked suspicious enough to doubt the whole overlay -- but
+    // dividing by 1000 to show whole milliseconds was throwing away the
+    // one piece of information that would have settled it: a real,
+    // sub-millisecond LAN latency (e.g. 400us) integer-divides to "0MS"
+    // identically to lastLatencyMicros()'s own genuine "couldn't measure
+    // this frame at all" fallback (nowWallUs < captureTimestampUs, host/
+    // client clocks not synchronized -- see that getter's own comment),
+    // which really is exactly 0, not just small. Showing raw
+    // microseconds instead makes the two cases visually distinct on
+    // their own: "LATENCY: 412US" is obviously a real measurement,
+    // while a value that's *always* exactly "LATENCY: 0US" across many
+    // frames (not just occasionally, which real jitter alone could
+    // explain) is the actual signal that this session's latency number
+    // specifically can't be trusted, without needing a separate N/A
+    // state to say so.
+    std::snprintf(buf, sizeof(buf), "LATENCY: %uUS", static_cast<unsigned>(net.lastLatencyMicros()));
     line(buf);
 
-    std::snprintf(buf, sizeof(buf), "DECODE: %uMS",
-                  static_cast<unsigned>(net.lastDecodeMicros() / 1000));
+    std::snprintf(buf, sizeof(buf), "DECODE: %uUS", static_cast<unsigned>(net.lastDecodeMicros()));
     line(buf);
 
     std::snprintf(buf, sizeof(buf), "FRAME: %u.%uKB",
