@@ -1523,7 +1523,7 @@ new file mode 100644
 index 0000000..63f64f4
 --- /dev/null
 +++ b/src/remote_server/CemuAdapter.cpp
-@@ -0,0 +1,657 @@
+@@ -0,0 +1,697 @@
 +#include "remote_server/CemuAdapter.h"
 +
 +#include <algorithm>
@@ -1978,12 +1978,37 @@ index 0000000..63f64f4
 +        return false;
 +    }
 +
-+    std::lock_guard guard(surface->mutex);
-+    if (!surface->hasFrame) {
-+        return false;
++    // 2026-08-26 real-hardware finding (see CapturedSurface::pixels' own
++    // comment): this used to copy the full pixel buffer -- multi-
++    // megabyte at a real 1280x720 GamePad surface -- while holding
++    // surface->mutex, and this method is polled at ~250Hz from
++    // AdapterIpcClient::writeLoop(), a *different* thread than the one
++    // that publishes into this struct (Cemu's own render thread, via
++    // onSurfaceRendered()/pumpCaptures()). A poll landing mid-copy could
++    // make the render thread itself block waiting for this lock before
++    // it could publish its own next frame -- confirmed as a real,
++    // measurable, intermittent stall (game FPS dipping well below even
++    // the CEMU_REMOTE_CAPTURE_FPS=30 steady-state cost, not a smooth
++    // reduction) distinct from that steady-state cost's own fix. Only a
++    // shared_ptr copy (pointer + refcount, O(1) regardless of frame size)
++    // happens under the lock now; the actual pixel-data copy into
++    // outFrame.pixels below happens after it's released.
++    std::shared_ptr<const std::vector<uint8_t>> pixelsSnapshot;
++    int width = 0;
++    int height = 0;
++    uint64_t frameIndex = 0;
++    {
++        std::lock_guard guard(surface->mutex);
++        if (!surface->hasFrame) {
++            return false;
++        }
++        pixelsSnapshot = surface->pixels;
++        width = surface->width;
++        height = surface->height;
++        frameIndex = surface->frameIndex;
 +    }
 +    outFrame.surfaceId = surfaceId;
-+    outFrame.frameIndex = surface->frameIndex;
++    outFrame.frameIndex = frameIndex;
 +    // Contract v2: this frame's own real captured size, not whatever
 +    // capabilities() declared -- the definitive fix for the same
 +    // real-usage bug capabilities()'s own hasFrame-gated fallback above
@@ -1991,9 +2016,15 @@ index 0000000..63f64f4
 +    // this one is correct for every single frame of the whole session,
 +    // including if a title's real GamePad/DRC resolution ever changes
 +    // after the first one). See adapter_contract.h's SurfaceFrame comment.
-+    outFrame.width = static_cast<uint16_t>(surface->width);
-+    outFrame.height = static_cast<uint16_t>(surface->height);
-+    outFrame.pixels = surface->pixels;
++    outFrame.width = static_cast<uint16_t>(width);
++    outFrame.height = static_cast<uint16_t>(height);
++    // pixelsSnapshot is guaranteed non-null here: it was copied from
++    // surface->pixels only after surface->hasFrame was confirmed true
++    // under the lock above, and every hasFrame=true publish site
++    // (onSurfaceRendered()'s sync path, pumpCaptures()'s async path)
++    // always sets pixels to a real make_shared result in the same
++    // critical section, never null.
++    outFrame.pixels = *pixelsSnapshot;
 +    return true;
 +}
 +
@@ -2047,8 +2078,12 @@ index 0000000..63f64f4
 +        ++m_captureDiagnostics.completedSync;
 +
 +        CapturedSurface& surface = isPadView ? m_gamePadSurface : m_tvSurface;
++        // make_shared with a moved-from vector move-constructs the
++        // pointee (no byte copy) -- see CapturedSurface::pixels' own
++        // comment for why this is a shared_ptr now, not a plain vector.
++        auto published = std::make_shared<const std::vector<uint8_t>>(std::move(pixels));
 +        std::lock_guard guard(surface.mutex);
-+        surface.pixels = std::move(pixels);
++        surface.pixels = std::move(published);
 +        surface.width = width;
 +        surface.height = height;
 +        ++surface.frameIndex;
@@ -2130,14 +2165,19 @@ index 0000000..63f64f4
 +        }
 +
 +        CapturedSurface& surface = pending.isPadView ? m_gamePadSurface : m_tvSurface;
++        // make_shared with a moved-from vector move-constructs the
++        // pointee (no byte copy), done before ever taking the lock below
++        // -- see CapturedSurface::pixels' own comment for why this is a
++        // shared_ptr now, not a plain vector.
++        auto published = std::make_shared<const std::vector<uint8_t>>(std::move(pixels));
 +        {
-+            // Just a std::vector move (a pointer/size/capacity swap, not
-+            // a byte copy) under the lock -- same "swap a completed
-+            // frame buffer in" shape latestFrame()'s own std::move-based
-+            // publish already had; the mutex is held for that swap only,
-+            // never for copying pixel data.
++            // Just a shared_ptr swap (a pointer/refcount operation, not a
++            // byte copy) under the lock -- same "swap a completed frame
++            // buffer in" shape latestFrame()'s own publish already had;
++            // the mutex is held for that swap only, never for copying
++            // pixel data.
 +            std::lock_guard guard(surface.mutex);
-+            surface.pixels = std::move(pixels);
++            surface.pixels = std::move(published);
 +            surface.width = pending.width;
 +            surface.height = pending.height;
 +            ++surface.frameIndex;
@@ -2186,7 +2226,7 @@ new file mode 100644
 index 0000000..fc708e0
 --- /dev/null
 +++ b/src/remote_server/CemuAdapter.h
-@@ -0,0 +1,328 @@
+@@ -0,0 +1,344 @@
 +#pragma once
 +
 +// DualDeck's IEmulatorAdapter implementation for Cemu (Nintendo Wii U).
@@ -2333,7 +2373,23 @@ index 0000000..fc708e0
 +    // this to read width/height/hasFrame -- the actual most-recently-
 +    // captured size, not just latestFrame()'s non-const pixel readout.
 +    mutable std::mutex mutex;
-+    std::vector<uint8_t> pixels;
++    // shared_ptr<const ...>, not a plain vector (2026-08-26 real-hardware
++    // finding -- see latestFrame()'s own comment): a plain vector here
++    // meant latestFrame() had to copy the full frame -- multi-megabyte at
++    // a real 1280x720 GamePad surface -- while holding this same mutex,
++    // and it's polled from a *different* thread (AdapterIpcClient::
++    // writeLoop(), ~250Hz) than the one that publishes into this struct
++    // (onSurfaceRendered()/pumpCaptures(), Cemu's own render thread) --
++    // so a poll landing mid-copy could make the render thread itself wait
++    // on that copy to finish before it could publish its own next frame,
++    // exactly the kind of intermittent stall real testing found
++    // (CEMU_REMOTE_CAPTURE_FPS=30 helped the *steady-state* cost but
++    // periodic dips to well below even that remained). A shared_ptr swap
++    // is a pointer-and-refcount operation regardless of frame size, so
++    // publishing (assigning a new one under this lock) and reading (copying
++    // the pointer under this lock, then copying the actual bytes *outside*
++    // it) are both now O(1) under contention, independent of resolution.
++    std::shared_ptr<const std::vector<uint8_t>> pixels;
 +    int width = 0;
 +    int height = 0;
 +    uint64_t frameIndex = 0;
