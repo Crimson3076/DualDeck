@@ -11680,6 +11680,87 @@ hardware verification (confirming Wind Waker HD actually holds 30fps
 now, on the same two machines that reported the regression) is still
 outstanding after that.
 
+## 2026-08-26: VIDEO QUALITY/VIDEO CODEC settings now reconnect automatically to actually apply; client's texture scale mode made explicit
+
+Two small client-side follow-ups from real feedback on the v0.1.160
+Cemu capture-fix release (Wind Waker HD "runs great now, actually
+playable"):
+
+**"I am not sure changing the video quality changes until restart."**
+Confirmed real, and not specific to VIDEO QUALITY -- the identical gap
+existed for the newer VIDEO CODEC (H264 experimental) toggle too. Root
+cause: both settings are wire-negotiated once, in `HelloPayload`, at
+connect time -- there is no packet type for changing an already-
+connected session's compression quality or codec mid-stream, by design
+(see `NetClientConfig::videoQuality`'s own comment). That part was
+already correctly documented. What was missing: nothing actually
+*triggered* a new connection when either setting changed. A user who
+opened Settings, picked a new VIDEO QUALITY, and just backed out without
+separately, manually choosing CHANGE HOST (which itself detours through
+the full LAN discovery picker, even to reconnect to the exact same host)
+would keep streaming at the *old* quality indefinitely -- indistinguishable
+from the setting not having saved at all, which is exactly what got
+reported.
+
+Fixed in `client/src/main.cpp`: `cycleVideoQuality()` and a newly
+extracted `toggleVideoCodec()` (previously inlined at both its call
+sites -- pulled out to match `cycleVideoQuality()`/`cycleMicDevice()`'s
+existing shared-helper shape now that it needs the same extra step) both
+set a new `reconnectRequested` flag; both settings-menu handlers
+(keyboard and gamepad) now also exit the pause-menu's inner loop
+immediately after calling either. A new branch at the top of the outer
+per-host loop (alongside the existing discovery-picker and
+`hostExplicit` branches) checks `reconnectRequested` first: if set, it
+skips the discovery picker entirely and reconnects straight to
+`netConfig.hostAddress` as already configured, the same way an explicit
+`--host` launch always does -- so picking a new video setting now
+transparently drops and re-establishes the connection with it applied,
+with no picker detour and no need to separately hunt for CHANGE HOST.
+
+**Resolution/scaling "hunch"**: investigated and it is *not* a
+regression, nor a bug this session introduced. Cemu's GamePad/DRC
+surface has always been captured at Cemu's own internal render
+resolution (854x480 for most titles including Wind Waker HD) --
+completely independent of the client's own display size -- and the
+client has always stretched that texture up to fill whatever window/
+display it's actually rendering into. Checked SDL3's own source
+(`src/render/SDL_render.c`) directly rather than assuming: `SDL_CreateTexture()`
+already defaults every new texture to `SDL_SCALEMODE_LINEAR`, not the
+blocky nearest-neighbor scaling that would have been the obvious bug to
+look for -- so there was nothing broken to fix here. Made the scale mode
+explicit anyway (`SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_LINEAR)`,
+both at the startup texture and every later `resizeTextureIfNeeded()`
+recreation, mirroring the blend-mode re-application already done at the
+same two sites) purely so this renderer's actual behavior doesn't
+silently depend on an SDL default that could change in some future
+release, and so it's not a mystery a future reader has to go check SDL's
+own source to answer. Purely a no-op today.
+
+The real lever for a genuinely sharper GamePad picture is upstream of
+anything the client controls: how much detail Cemu's own DRC render
+target actually captured. A linear (or any client-side) resize filter
+cannot add detail that was never in the source frame. If a title has a
+Cemu graphics pack that increases its internal GamePad/DRC render
+resolution, `VulkanRenderer::ScheduleCaptureSurfaceBGRA()`'s
+`baseImageTex->GetEffectiveSize()` call already reads the *real*, current
+render-target size on every capture (this is what the existing
+"Real-usage bug" fix in `CemuAdapter::capabilities()`'s own comment,
+predating this session, already established) -- so a resolution-enhancing
+graphics pack would already be picked up automatically, no DualDeck code
+change needed, if one exists for a given title. Not investigated further
+in this pass: whether such packs commonly target the GamePad/DRC output
+specifically (as opposed to only the TV output) is title- and
+pack-dependent, and genuinely unknown without checking a real one.
+
+**Verified**: `client_settings`/`net_client`/protocol/host test suites
+still pass (untouched by this pass -- only `main.cpp` changed, and it
+has no test target). `main.cpp` itself still cannot be compiled in this
+project's own development sandbox (needs SDL3) -- checked for brace/
+paren balance and reviewed by hand, but not built. `release.yml`'s next
+run against this commit is the first real compile attempt, same
+caveat as every other `main.cpp`-touching change in this project's
+history that couldn't be verified locally.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

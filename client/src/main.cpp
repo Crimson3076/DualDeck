@@ -1657,6 +1657,24 @@ int main(int argc, char** argv) {
         SDL_Quit();
         return 1;
     }
+    // Real user question, 2026-08-26: a Wii U title's captured GamePad
+    // frame (Cemu's own internal render resolution, commonly 854x480 --
+    // see host/cemu-patches/'s CemuAdapter.cpp, unrelated to the
+    // client's own display size) stretched up to fill a much larger
+    // Deck screen looked soft. Made explicit here rather than left as an
+    // implicit default: SDL3's SDL_CreateTexture() already defaults new
+    // textures to SDL_SCALEMODE_LINEAR (confirmed by reading SDL's own
+    // source, src/render/SDL_render.c), so this call is a no-op today,
+    // not a fix -- there was no accidental nearest-neighbor/blocky
+    // scaling bug here to begin with. Spelled out explicitly so this
+    // renderer's actual scaling behavior doesn't silently depend on a
+    // default that could change in a future SDL release, and so a
+    // reader doesn't have to go check SDL's source to know what this
+    // does. The real lever for a sharper picture is upstream of this
+    // texture entirely -- how much detail Cemu's own DRC render target
+    // actually captured -- not anything this client can conjure from a
+    // low-resolution source via a smarter resize filter.
+    SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_LINEAR);
     // Opaque video feed, not a translucent overlay -- SDL3 defaults a
     // texture's blend mode to SDL_BLENDMODE_BLEND whenever its pixel
     // format carries an alpha channel (SDL_PIXELFORMAT_BGRA32 does), so
@@ -1768,6 +1786,25 @@ int main(int argc, char** argv) {
     // positional address has nothing to fall back to, so that menu entry
     // is hidden in that case -- see menuItems below).
     bool quitApp = false;
+    // Real user report, 2026-08-26: "I am not sure changing the video
+    // quality changes until restart." Root cause: it never applied until
+    // the *next connection* (see netConfig.videoQuality's comment below
+    // -- there's no packet type for changing an already-connected
+    // session's compression quality), but nothing actually triggered a
+    // new connection when the setting changed -- a user who didn't
+    // separately, manually pick CHANGE HOST (which also detours through
+    // the full discovery picker, even to reconnect to the exact same
+    // host) would see the old quality/codec keep streaming indefinitely,
+    // indistinguishable from the setting simply not having saved.
+    // cycleVideoQuality()/toggleVideoCodec() below (settingsMenuItems())
+    // now set this to force that reconnection automatically -- unlike
+    // changeHostRequested, declared here (outside the loop, alongside
+    // netConfig itself) rather than freshly inside each outer iteration,
+    // since it must still be readable at the very top of the *next*
+    // iteration (see the discovery-picker check just inside this loop)
+    // to skip the picker and silently reconnect to the same host instead
+    // of asking the user to re-pick it.
+    bool reconnectRequested = false;
     while (!quitApp) {
         if (runWizardNow) {
             runWizardNow = false;
@@ -1789,7 +1826,19 @@ int main(int argc, char** argv) {
         // always runs -- even if only one host answers, or it's the same
         // one as last time -- rather than silently reconnecting, so a
         // different HTPC is always one screen away.
-        if (!hostExplicit) {
+        if (reconnectRequested) {
+            // A settings change (cycleVideoQuality()/toggleVideoCodec())
+            // asked for a fresh connection to actually apply -- reuse
+            // netConfig.hostAddress/ports exactly as the just-ended
+            // connection had them (they're never cleared between outer-
+            // loop iterations), same as the hostExplicit branch below,
+            // rather than sending the user through the discovery picker
+            // to re-pick a host they never asked to change.
+            reconnectRequested = false;
+            renderConnecting(renderer, netConfig.hostAddress);
+            logLine("[settings] reconnecting to \"%s\" to apply the changed setting\n",
+                        netConfig.hostAddress.c_str());
+        } else if (!hostExplicit) {
             std::string lastHost = loadLastHost(discoveryStorePath).value_or("");
             auto selected = discoverAndSelectHost(renderer, gamepad, discoveryPort, lastHost, netConfig.appVersion);
             if (!selected) {
@@ -2014,9 +2063,16 @@ int main(int argc, char** argv) {
             // Every fresh texture needs the same opaque blend mode as the
             // startup one (see its own comment) -- SDL3 resets blend mode
             // to its own per-format default on each new SDL_CreateTexture
-            // call, it isn't inherited from the destroyed texture.
+            // call, it isn't inherited from the destroyed texture. Same
+            // reasoning for scale mode (see the startup texture's own
+            // SDL_SetTextureScaleMode() comment) -- a fresh texture
+            // starts back at SDL_CreateTexture()'s own default rather
+            // than inheriting the destroyed texture's mode either.
             if (texture && !SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_NONE)) {
                 logLine("SDL_SetTextureBlendMode failed: %s\n", SDL_GetError());
+            }
+            if (texture) {
+                SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_LINEAR);
             }
         };
 
@@ -2134,7 +2190,13 @@ int main(int argc, char** argv) {
         // Only takes effect on the next connection (see netConfig.
         // videoQuality's own comment above, near NetClient's
         // construction) -- there's no packet type for changing an
-        // already-connected session's compression quality.
+        // already-connected session's compression quality. Sets
+        // reconnectRequested so the caller (both settings-menu SELECT
+        // handlers below) tearing down the inner loop right after this
+        // call actually gets that next connection immediately, instead
+        // of silently keeping the old quality until some unrelated later
+        // reconnect -- see reconnectRequested's own comment, near the
+        // outer loop, for the real user report this fixes.
         auto cycleVideoQuality = [&]() {
             static constexpr int kPresets[] = {0, 40, 65, 85, 100};
             constexpr int kPresetCount = static_cast<int>(sizeof(kPresets) / sizeof(kPresets[0]));
@@ -2147,6 +2209,17 @@ int main(int argc, char** argv) {
             }
             clientSettings.videoQuality = kPresets[(currentIndex + 1) % kPresetCount];
             settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
+            reconnectRequested = true;
+        };
+        // Toggles clientSettings.videoCodecH264Experimental. Same
+        // "only takes effect on the next connection" limitation and the
+        // same reconnectRequested fix as cycleVideoQuality() above --
+        // codec preference is negotiated once, in Hello, same as
+        // videoQuality.
+        auto toggleVideoCodec = [&]() {
+            clientSettings.videoCodecH264Experimental = !clientSettings.videoCodecH264Experimental;
+            settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
+            reconnectRequested = true;
         };
         // Cycles clientSettings.micDeviceName to the next enumerated
         // recording device (wrapping back to "SYSTEM DEFAULT"), saves,
@@ -2426,15 +2499,15 @@ int main(int argc, char** argv) {
                                 settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                             } else if (picked.rfind("VIDEO QUALITY:", 0) == 0) {
                                 cycleVideoQuality();
+                                runningInner = false;
                             } else if (picked.rfind("TRACKPAD AS NATIVE INPUT", 0) == 0) {
                                 toggleTrackpadExperiment();
                             } else if (picked.rfind("MIRROR HOST SCREEN", 0) == 0) {
                                 clientSettings.mirrorHostScreen = !clientSettings.mirrorHostScreen;
                                 settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                             } else if (picked.rfind("VIDEO CODEC", 0) == 0) {
-                                clientSettings.videoCodecH264Experimental =
-                                    !clientSettings.videoCodecH264Experimental;
-                                settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
+                                toggleVideoCodec();
+                                runningInner = false;
                             } else if (picked == "RUN SETUP WIZARD") {
                                 setupWizardRequested = true;
                                 runningInner = false;
@@ -2511,15 +2584,15 @@ int main(int argc, char** argv) {
                                     settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                                 } else if (picked.rfind("VIDEO QUALITY:", 0) == 0) {
                                     cycleVideoQuality();
+                                    runningInner = false;
                                 } else if (picked.rfind("TRACKPAD AS NATIVE INPUT", 0) == 0) {
                                     toggleTrackpadExperiment();
                                 } else if (picked.rfind("MIRROR HOST SCREEN", 0) == 0) {
                                     clientSettings.mirrorHostScreen = !clientSettings.mirrorHostScreen;
                                     settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
                                 } else if (picked.rfind("VIDEO CODEC", 0) == 0) {
-                                    clientSettings.videoCodecH264Experimental =
-                                        !clientSettings.videoCodecH264Experimental;
-                                    settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
+                                    toggleVideoCodec();
+                                    runningInner = false;
                                 } else if (picked == "RUN SETUP WIZARD") {
                                     setupWizardRequested = true;
                                     runningInner = false;
