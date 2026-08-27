@@ -11946,6 +11946,80 @@ gating, the actual Steam Input key landing in `localconfig.vdf`, and
 the uninstall cleanup) -- the next real-hardware update/reinstall is
 the first real test.
 
+## 2026-08-27: Cemu "no controls at all" on a fresh install -- Controller 1 was never configured as a Wii U GamePad in the first place
+
+Real user report, initially filed as a client-side "controls don't
+default to the DualDeck config" complaint but clarified afterward: "this
+is a cemu issue, controller 1 does not have any controls mapped when
+opening, and I need to manually add the controller and API." A different
+bug from the client-side Steam Input entry directly above -- this one is
+entirely host-side, specific to Cemu, and was already partially diagnosed
+in this same patch's history.
+
+`host/cemu-patches/README.md`'s own 2026-08-01 "Silent VPAD-registration
+failure now logged" entry had already root-caused the mechanism:
+`CemuAdapter`'s constructor only auto-wires DualDeck's remote controller
+onto VPAD player 1 if `InputManager::instance().get_vpad_controller(0)`
+returns non-null, which requires Cemu's own persisted controller profile
+for player 1 to already declare type "Wii U GamePad" -- normally only
+ever created by a user manually visiting Cemu's own Input Settings once.
+That entry only added a log line making the failure diagnosable; it
+explicitly left "checking Controller Settings -> Player 1 -> Wii U
+GamePad" as a manual step for the user. A fresh Cemu install (including
+DualDeck's own bundled one, which has never been through that GUI at
+all) has no such file, so remote input was silently inert on first boot
+with a completely normal-looking video stream -- exactly this report.
+
+**Investigated** by cloning real Cemu source at this project's exact
+pinned commit (`scripts/lib/pinned_commits.sh`'s `CEMU_COMMIT`, `v2.6`)
+rather than guessing at its on-disk config format:
+`src/input/InputManager.cpp`'s `load()`/`migrate_config()` show the
+profile lives at `controllerProfiles/controller<player_index>.xml`
+under Cemu's own config directory (`src/gui/CemuApp.cpp`'s
+`DeterminePaths()`, Linux branch: a `portable/` directory next to the
+`cemu` executable if present, otherwise `$XDG_CONFIG_HOME/Cemu` --
+DualDeck's packaging never sets up portable mode, so this is always the
+XDG path in practice), and `migrate_config()` itself shows the exact
+minimal shape a valid "no physical controller, just declare the type"
+profile needs: a bare `<emulated_controller><type>Wii U
+GamePad</type></emulated_controller>`, no `<controller>` child at all.
+That's sufficient on its own -- `CemuAdapter`'s existing runtime code
+does the actual button wiring (`add_controller()`/
+`forceRemoteControllerMapping()`) the moment it finds this slot exists;
+nothing else needed to change.
+
+**What shipped**: a new "Reconfigure Controls" choice in
+`dualdeck-host.sh`'s menu (confirm-gated, unlike the client-side auto-
+apply entry directly above -- this one is a deliberate host action, not
+silently applied on every update, since it's plausible for a real
+controller to be plugged into the host directly for local co-op and
+this should never risk looking like it needs re-running blind), backed
+by a new `internal/reconfigure-cemu-controls.sh`. It writes
+`controller0.xml` in exactly the shape above, but only when the
+existing file (if any) is missing or NOT already type "Wii U GamePad" --
+a profile that's already the right type is left completely untouched,
+`<controller>` mappings and all, since `add_controller()` only ever
+adds the remote controller alongside whatever's already there. An
+existing wrong-type file is backed up first (`.bak-<timestamp>`, same
+convention as `steam_shortcut.py`/`steam_input_config.py`). Scoped to
+Cemu only -- melonDS's remote server is in-process and never gated
+behind this kind of GUI-configured controller-profile concept at all
+(confirmed: no equivalent language anywhere in
+`host/melonds-patches/README.md`); Azahar hasn't been reported to have
+the same issue and wasn't investigated here.
+
+**Verified**: the generated script tested standalone against a fake
+`$HOME` for all three real paths -- fresh install (writes the file),
+already-correct (reports "nothing to do", writes nothing), and an
+existing wrong-type profile (backs up, then overwrites) -- and the
+resulting XML round-tripped through a plain XML parser to confirm the
+exact root tag (`emulated_controller`) and `type` value Cemu's own
+`load()` looks for. `bash -n` on the edited `build-release.sh`. Not yet
+tested against a real running Cemu on real hardware -- the next
+real-hardware run (open the host menu, pick "Reconfigure Controls",
+restart Cemu, confirm Controller 1 responds without ever opening Input
+Settings) is the actual verification this needs.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

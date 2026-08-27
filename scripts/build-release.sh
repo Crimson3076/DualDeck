@@ -2749,6 +2749,88 @@ fi
 WRAP
 chmod +x "${pkg_dir}/host/internal/launch-host.sh"
 
+# Real user report, 2026-08-27: "controller 1 does not have any controls
+# mapped when opening [Cemu], and I need to manually add the controller
+# and API." Root-caused by direct inspection of real Cemu v2.6 source
+# (scripts/lib/pinned_commits.sh's pinned CEMU_COMMIT, cloned fresh to
+# confirm rather than guessed) against host/cemu-patches/README.md's own
+# "Silent VPAD-registration failure" entry: CemuAdapter's constructor
+# (host/cemu-patches/0001-remote-server-integration.patch) only auto-
+# wires DualDeck's remote controller onto VPAD player 1 if
+# InputManager::instance().get_vpad_controller(0) returns non-null --
+# which requires Cemu's own persisted controller profile for player 1
+# (controllerProfiles/controller0.xml, src/input/InputManager.cpp) to
+# already declare type "Wii U GamePad". Normally only Cemu's own Input
+# Settings GUI ever creates that file; a fresh Cemu install (or
+# DualDeck's bundled one, which has never been through that GUI at all)
+# has none, so the auto-wiring silently has nothing to attach to.
+#
+# Writes that file directly, in exactly the minimal shape Cemu's own
+# InputManager::migrate_config() produces for a "just declare the type,
+# no physical controller" profile (confirmed against that real function's
+# source, not guessed): a bare <type>Wii U GamePad</type>, no
+# <controller> child at all. That's sufficient on its own -- CemuAdapter's
+# existing runtime code does the actual button wiring the moment it finds
+# this slot exists; this script's only job is making sure the slot
+# exists in the first place.
+#
+# Deliberately never touches a profile that's already type "Wii U
+# GamePad", even one with real <controller> mappings from an actual
+# controller plugged into this host directly (e.g. local co-op) --
+# CemuAdapter's add_controller() call only ever adds the remote
+# controller alongside whatever's already mapped there, it never needs
+# this script to have cleared anything out first.
+cat > "${pkg_dir}/host/internal/reconfigure-cemu-controls.sh" <<'WRAP'
+#!/usr/bin/env bash
+# See build-release.sh's own comment just above this heredoc for the
+# real bug this fixes and why this exact file/shape is correct. Normally
+# launched via ../dualdeck-host.sh's "Reconfigure Controls" menu choice,
+# not directly.
+set -euo pipefail
+
+# Mirrors real Cemu's own portable-vs-XDG config path resolution exactly
+# (a fresh clone of Cemu's actual src/gui/CemuApp.cpp, DeterminePaths(),
+# Linux branch): a "portable" directory next to the real cemu executable
+# wins if present, otherwise Cemu uses $XDG_CONFIG_HOME/Cemu (default
+# ~/.config/Cemu). DualDeck's own packaging never creates a portable/
+# directory today, so this always resolves to the XDG path in practice --
+# kept as a real check rather than hardcoded so this keeps working if
+# that ever changes.
+host_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -d "${host_root}/portable" ]]; then
+    cemu_config_dir="${host_root}/portable"
+else
+    cemu_config_dir="${XDG_CONFIG_HOME:-${HOME}/.config}/Cemu"
+fi
+
+profile_dir="${cemu_config_dir}/controllerProfiles"
+profile_path="${profile_dir}/controller0.xml"
+
+if [[ -f "${profile_path}" ]] && grep -q "<type>Wii U GamePad</type>" "${profile_path}" 2>/dev/null; then
+    echo "Controller 1 is already configured as a Wii U GamePad at ${profile_path} -- nothing to do."
+    exit 0
+fi
+
+mkdir -p "${profile_dir}"
+
+if [[ -f "${profile_path}" ]]; then
+    backup_path="${profile_path}.bak-$(date +%s)"
+    cp "${profile_path}" "${backup_path}"
+    echo "Backed up existing (non-GamePad-type) profile to ${backup_path}"
+fi
+
+cat > "${profile_path}" <<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<emulated_controller>
+	<type>Wii U GamePad</type>
+</emulated_controller>
+XML
+
+echo "Set Controller 1 to Wii U GamePad at ${profile_path}."
+echo "Restart Cemu for this to take effect -- DualDeck's remote input then auto-wires onto it the same way it always has once that slot exists."
+WRAP
+chmod +x "${pkg_dir}/host/internal/reconfigure-cemu-controls.sh"
+
 cat > "${pkg_dir}/host/dualdeck-host.sh" <<'WRAP'
 #!/usr/bin/env bash
 # The one thing to double-click to set up or run the DualDeck
@@ -2844,6 +2926,7 @@ choose_action() {
             hostcontrol-daemon "${daemon_label}" \
             steam-add "Add to Steam (Big Picture / Gaming Mode)" \
             steam-remove "Remove from Steam / uninstall" \
+            reconfigure-controls "Reconfigure Controls (fixes 'no controls' in Cemu)" \
             update "Check for updates / update" \
             emudeck "Patch my EmuDeck-installed emulators (experimental)" \
             2>/dev/null || echo "cancel"
@@ -2859,18 +2942,20 @@ choose_action() {
             echo "  2) ${daemon_label}"
             echo "  3) Add to Steam (Big Picture / Gaming Mode)"
             echo "  4) Remove from Steam / uninstall"
-            echo "  5) Check for updates / update"
-            echo "  6) Patch my EmuDeck-installed emulators (experimental)"
-            echo "  7) Exit"
+            echo "  5) Reconfigure Controls (fixes 'no controls' in Cemu)"
+            echo "  6) Check for updates / update"
+            echo "  7) Patch my EmuDeck-installed emulators (experimental)"
+            echo "  8) Exit"
         } >&2
-        read -rp "Choice [1-7]: " choice
+        read -rp "Choice [1-8]: " choice
         case "${choice}" in
             1) echo "launch" ;;
             2) echo "hostcontrol-daemon" ;;
             3) echo "steam-add" ;;
             4) echo "steam-remove" ;;
-            5) echo "update" ;;
-            6) echo "emudeck" ;;
+            5) echo "reconfigure-controls" ;;
+            6) echo "update" ;;
+            7) echo "emudeck" ;;
             *) echo "cancel" ;;
         esac
     fi
@@ -3089,6 +3174,17 @@ ${daemon_start_output}"
             ./internal/uninstall-host-control-daemon.sh 2>/dev/null || true
             if ./internal/uninstall-steam-shortcut.sh; then
                 info "Removed."
+            fi
+        fi
+        ;;
+    reconfigure-controls)
+        if confirm "This sets Cemu's own Controller 1 to type 'Wii U GamePad' if it isn't already, so DualDeck's remote input can auto-wire onto it -- fixes a fresh Cemu install showing no controls at all until this is set manually in Cemu's Input Settings. A real controller plugged into this host directly (e.g. for local co-op) stays mapped; only the controller *type* is touched, never existing bindings. Requires restarting Cemu (not just this menu) to take effect. Continue?"; then
+            if reconfigure_output="$(./internal/reconfigure-cemu-controls.sh 2>&1)"; then
+                info "${reconfigure_output}"
+            else
+                info "Could not reconfigure Cemu's controls:
+
+${reconfigure_output}"
             fi
         fi
         ;;
