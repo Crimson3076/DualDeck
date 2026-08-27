@@ -11870,6 +11870,82 @@ getter call against its actual declared name/return type, and reviewed
 by hand, but not built. `release.yml`'s next run against this commit is
 the first real compile attempt.
 
+## 2026-08-27: controller-only Deck usability -- a keyboard-only confirm prompt, and the DualDeck control scheme staying manual forever
+
+Two real user reports from the same real-hardware testing session, both
+about the same underlying theme: this project has several places that
+assumed a keyboard was within reach, which is not a safe assumption on
+a Steam Deck/HTPC used entirely with a controller.
+
+### `emudeck-replace-in-place.sh`'s confirmation prompts required typing "y"
+
+`scripts/emudeck-replace-in-place.sh` (replacing an EmuDeck-managed
+emulator AppImage in place with DualDeck's patched build) had two
+interactive confirmation prompts (`Install DualDeck's patched melonDS
+at ...?`, `Replace ... with DualDeck's patched build?`) implemented as
+a plain `read -r -p "... [y/N] "`, with no GUI fallback -- unlike
+`dualdeck-host.sh`'s own `confirm()` (kdialog when available) or
+`DualDeck-Installer.sh`'s `confirm()` (kdialog, then zenity, then a
+`/dev/tty` prompt), which this script never picked up because it
+predates both and was never revisited.
+
+**Fixed** by adding the same kdialog/zenity/`/dev/tty` `confirm()`
+pattern `DualDeck-Installer.sh` already established (the most complete
+of the project's existing copies -- see that script's own `confirm()`)
+and switching both prompts to call it, so a controller-only session
+answers via a GUI yes/no dialog (Deck trackpad-as-mouse, no keyboard)
+instead of needing to type a literal `y`. Falls back to the original
+terminal prompt unchanged when neither kdialog nor zenity nor a display
+server is available (e.g. actually running this by hand over SSH).
+
+**Verified**: `bash -n` on the edited script; both call sites read
+correctly against the new `confirm()` return-value convention (the
+`case "${reply}" in [yY]|...)` matching was replaced by a direct `if !
+confirm ...; then skip; fi`, preserving the exact same "default to no,
+skip on anything but an explicit yes" behavior). Not yet tested against
+a real kdialog/zenity dialog on real hardware.
+
+### The DualDeck control scheme (Steam Input disabled for the client) never applied itself
+
+Real user report: after connecting on real Bazzite hardware, "the
+controls do not automatically switch to the dualdeck config, and I
+check, and the config is not there, I do not want to need to manually
+create it." This is the same underlying setting the 2026-08-02
+"trackpad as native input" entry above added
+(`scripts/lib/steam_input_config.py`, wrapped by
+`configure-trackpad-experiment.sh`) -- Steam Input disabled for the
+DualDeck Client's own Steam shortcut, so SDL reads the Deck's
+controller natively instead of through Steam Input's action-set layer.
+It shipped deliberately opt-in (a menu/Settings toggle, confirm-gated,
+"not yet confirmed on real hardware") -- which is exactly why it was
+never applied unless someone happened to go find that toggle first.
+
+**Fixed** by auto-applying it once install-steam-shortcut.sh actually
+succeeds (both a fresh "Add to Steam" and every update, since
+`apply-update.sh` calls this same script with `--force` -- one hook
+point reaches both). Gated by a one-time marker,
+`~/.config/dualdeck-client/.steam-input-auto-configured`, written only
+after `configure-trackpad-experiment.sh --no-restart` actually
+succeeds (so a genuine failure retries on the next update instead of
+silently giving up forever) -- a marker rather than a live Steam Input
+status check because the live status alone can't distinguish "never
+touched" from "the user deliberately turned it back on later," and the
+whole point is applying exactly once, ever, then leaving a later manual
+choice alone for good. `--no-restart` (force-write, no Steam kill) is
+the same safe-under-a-running-Steam-launched-process mode the Settings
+screen already uses, and this runs completely silently (no dialog, log
+line only) per explicit request -- the existing menu/Settings toggle is
+unchanged and still there if anyone wants to turn it back off.
+`uninstall-steam-shortcut.sh` now also clears this marker on a full
+uninstall, so a later reinstall applies fresh again rather than staying
+hands-off forever because of a marker left over from a deleted install.
+
+**Verified**: `bash -n` on the edited `build-release.sh`. Not yet
+tested end-to-end against a real Steam installation (the marker
+gating, the actual Steam Input key landing in `localconfig.vdf`, and
+the uninstall cleanup) -- the next real-hardware update/reinstall is
+the first real test.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

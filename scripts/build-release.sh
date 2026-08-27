@@ -806,6 +806,39 @@ if [[ "${shortcut_exit}" -ne 0 ]]; then
     on_error "${shortcut_exit}" "${LINENO}" "steam_shortcut.py"
     exit "${shortcut_exit}"
 fi
+
+# Real user request: auto-apply the "DualDeck control scheme" (Steam
+# Input disabled for this shortcut -- see
+# configure-trackpad-experiment.sh's own header for what that actually
+# means and why it's the real fix, not a custom Steam Input layout) the
+# first time it's ever available, instead of leaving it undiscoverable
+# behind a menu/Settings toggle. This runs on both a fresh "Add to
+# Steam" AND every update (apply-update.sh calls this script with
+# --force), so it reaches existing installs too, not just new ones.
+#
+# Gated by a one-time marker rather than a live Steam Input status
+# check, which can't tell "never touched" apart from "the user
+# deliberately turned it back on later" -- so this applies at most
+# once, ever, per install, and never re-fights a later manual choice.
+# Only written once configure-trackpad-experiment.sh actually succeeds,
+# so a failed attempt (e.g. it's genuinely missing from this install)
+# retries on the next update instead of silently giving up forever.
+#
+# --no-restart: writes with --force (safe, it's just a text-file edit)
+# and never kills Steam out from under whatever launched this -- a
+# routine "check for updates" can run from inside a Steam-launched
+# client in Gaming Mode (see configure-trackpad-experiment.sh's own
+# comment on exactly this). The change lands next time Steam itself
+# restarts, same as every other setting this wrapper touches. Silent
+# by design (no dialog) -- best-effort and logged, not user-facing.
+control_scheme_marker="${HOME}/.config/dualdeck-client/.steam-input-auto-configured"
+trackpad_experiment_script="${central_install_dir}/internal/configure-trackpad-experiment.sh"
+if [[ "${dry_run}" -eq 0 && ! -f "${control_scheme_marker}" && -x "${trackpad_experiment_script}" ]]; then
+    if "${trackpad_experiment_script}" --no-restart >>"${error_log}" 2>&1; then
+        mkdir -p "$(dirname "${control_scheme_marker}")"
+        touch "${control_scheme_marker}"
+    fi
+fi
 WRAP
 chmod +x "${pkg_dir}/client/internal/install-steam-shortcut.sh"
 
@@ -944,6 +977,12 @@ if [[ "${dry_run}" -eq 0 ]]; then
     # directories just removed above.
     rm -f -- "$(dirname "${central_install_dir}")/check-for-updates.sh" \
              "$(dirname "${central_install_dir}")/VERSION"
+
+    # Also clear install-steam-shortcut.sh's one-time auto-configure
+    # marker, so a later reinstall applies the DualDeck control scheme
+    # fresh again instead of silently staying hands-off forever because
+    # of a marker left over from this now-deleted install.
+    rm -f -- "$(dirname "${central_install_dir}")/.steam-input-auto-configured"
 fi
 WRAP
 chmod +x "${pkg_dir}/client/internal/uninstall-steam-shortcut.sh"

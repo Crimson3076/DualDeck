@@ -107,6 +107,38 @@ fi
 log_dir="${HOME}/.config/dualdeck"
 log_file="${log_dir}/emudeck-replace.log"
 mkdir -p "${log_dir}"
+
+# Real user report: the plain `read -rp ... [y/N]` confirmation prompts
+# below are not intuitive on a controller-only setup (Steam Deck Gaming
+# Mode, or any HTPC with no keyboard within reach) -- typing a literal
+# "y" requires summoning a virtual keyboard for one keystroke. Same
+# kdialog/zenity-first, tty-fallback pattern DualDeck-Installer.sh's own
+# confirm() already uses (see that script for the precedent this
+# mirrors): a GUI yes/no dialog can be answered with the Deck's
+# trackpad-as-mouse or a controller-driven cursor, no keyboard needed,
+# and still falls back to a plain terminal prompt when neither kdialog
+# nor zenity nor a display server is available (e.g. a headless SSH
+# session actually running this by hand).
+have_kdialog() { command -v kdialog >/dev/null 2>&1 && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; }
+have_zenity() { command -v zenity >/dev/null 2>&1 && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; }
+confirm() {
+    if have_kdialog; then
+        kdialog --title "DualDeck EmuDeck Integration" --yesno "$1" 2>/dev/null
+    elif have_zenity; then
+        zenity --title "DualDeck EmuDeck Integration" --question --text "$1" 2>/dev/null
+    else
+        # < /dev/tty, not plain stdin -- same reasoning as
+        # DualDeck-Installer.sh's own confirm(): this script can be run
+        # from a Steam shortcut/pipeline with stdin not attached to a
+        # real terminal, and `local reply=""` (not just `local reply`)
+        # keeps `set -u` from aborting the script if /dev/tty can't be
+        # opened at all instead of just falling through to "no".
+        local reply=""
+        read -rp "$1 [y/N] " reply < /dev/tty || true
+        [[ "${reply}" =~ ^[Yy]$ ]]
+    fi
+}
+
 log() {
     echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") $*" >> "${log_file}"
 }
@@ -291,12 +323,10 @@ bootstrap_melonds_flatpak_launcher() {
         return 0
     fi
 
-    if [[ "${assume_yes}" -ne 1 ]]; then
-        read -r -p "Install DualDeck's patched melonDS at ${new_appimage_path} and redirect EmuDeck's launcher to use it instead of the Flatpak? [y/N] " reply
-        case "${reply}" in
-            [yY]|[yY][eE][sS]) ;;
-            *) echo "== melonds: skipped (not confirmed) =="; return 0 ;;
-        esac
+    if [[ "${assume_yes}" -ne 1 ]] && ! confirm \
+        "Install DualDeck's patched melonDS at ${new_appimage_path} and redirect EmuDeck's launcher to use it instead of the Flatpak?"; then
+        echo "== melonds: skipped (not confirmed) =="
+        return 0
     fi
 
     local downloaded_appimage
@@ -471,12 +501,9 @@ print(json.load(open('${appimage_path}.dualdeck.json'))['original_sha256'])
         return 0
     fi
 
-    if [[ "${assume_yes}" -ne 1 ]]; then
-        read -r -p "Replace ${appimage_path} with DualDeck's patched build? [y/N] " reply
-        case "${reply}" in
-            [yY]|[yY][eE][sS]) ;;
-            *) echo "== ${emulator}: skipped (not confirmed) =="; return 0 ;;
-        esac
+    if [[ "${assume_yes}" -ne 1 ]] && ! confirm "Replace ${appimage_path} with DualDeck's patched build?"; then
+        echo "== ${emulator}: skipped (not confirmed) =="
+        return 0
     fi
 
     local downloaded_appimage
