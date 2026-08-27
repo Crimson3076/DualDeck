@@ -22,6 +22,29 @@ namespace melonds_remote {
 
 // Bumped whenever the wire format changes incompatibly.
 //
+// v14: HelloAckPayload gained hostTimeUs -- the host's own wall-clock
+// time (nowMicrosEpoch(), same clock VideoFramePayload::captureTimestampUs
+// already uses) at the moment it composed this response. Real user
+// report: NetClient::lastLatencyMicros()'s debug-overlay reading showed
+// exactly 0US the entire session, not just occasionally -- the "clock
+// skew" fallback that field's own comment already documented, except
+// permanently on, not intermittent. Root cause: VideoFramePayload's
+// per-frame latency was always computed as two independent machines'
+// raw wall clocks subtracted directly, with no correction for however
+// far apart those clocks actually are -- fine when they happen to be
+// closely NTP-synced, silently wrong (and, past a threshold, always
+// exactly 0 via that same fallback) whenever they aren't. hostTimeUs
+// lets the client run a lightweight NTP-style offset estimate right at
+// connect time: it already knows its own send time for this Hello
+// (kept locally, no wire change needed for that half), and this new
+// field plus its own receipt time give host-clock-minus-client-clock,
+// assuming (standard NTP assumption, entirely reasonable for a same-
+// LAN request/response with no processing delay to speak of) the
+// request and response legs take about the same time. See
+// NetClient::connect()'s own comment for the actual estimate. A genuine
+// payload-shape change (HelloAckPayload gains 8 bytes after
+// selectedVideoCodec), so this needs the usual kProtocolVersion bump.
+//
 // v13: HelloPayload gained supportedVideoCodecs and HelloAckPayload gained
 // selectedVideoCodec -- codec capability negotiation (see VideoCodec's own
 // comment below), the groundwork for an optional H.264 video path
@@ -83,7 +106,7 @@ namespace melonds_remote {
 // negotiating an optional codec keeps both sides simple, matching how
 // every other incompatible wire-format change in this project has been
 // handled (see the mic-support v5 bump above).
-inline constexpr uint16_t kProtocolVersion = 13;
+inline constexpr uint16_t kProtocolVersion = 14;
 
 // Sentinel at the start of every packet so malformed/foreign traffic on the
 // same port can be rejected cheaply before any further parsing.
@@ -548,6 +571,17 @@ struct HelloAckPayload {
     // exists now so a future codec doesn't need its own version bump
     // just to tell the client which format is coming.
     VideoCodec selectedVideoCodec = VideoCodec::Jpeg;
+    // The host's own wall-clock time (nowMicrosEpoch(), protocol v14) at
+    // the moment it composed this response -- see kProtocolVersion's v14
+    // note above for why this exists and how the client uses it. Sent
+    // regardless of accepted/rejectReason, same convention as
+    // system/adapter/mode/selectedVideoCodec above: even a rejected
+    // handshake's timing is still real information, and a client that's
+    // about to retry might as well have it. A host predating this field
+    // is simply a different kProtocolVersion (see above) and gets
+    // rejected before either side's payload is parsed, so there is no
+    // separate "field absent" case to handle.
+    uint64_t hostTimeUs = 0;
 };
 
 // DiscoveryRequest (client -> host) has no payload: a bare packet header

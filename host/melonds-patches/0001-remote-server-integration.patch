@@ -4418,7 +4418,7 @@ new file mode 100644
 index 00000000..455acae4
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
-@@ -0,0 +1,1303 @@
+@@ -0,0 +1,1310 @@
 +#include "host/net_server.h"
 +
 +#include <arpa/inet.h>
@@ -5137,6 +5137,13 @@ index 00000000..455acae4
 +            currentVideoQuality_ =
 +                defaultVideoQualityForFrameSize(config_.videoJpegQuality, ack.nativeWidth, ack.nativeHeight);
 +        }
++        // Protocol v14: taken as close to the actual send below as
++        // possible (same nowMicrosEpoch() clock VideoFramePayload::
++        // captureTimestampUs already uses) -- see kProtocolVersion's v14
++        // comment in protocol.h and NetClient::connect()'s own comment
++        // for why this exists and how the client turns it into a clock-
++        // offset estimate.
++        ack.hostTimeUs = nowMicrosEpoch();
 +        ByteBuffer ackPacket = buildHelloAckPacket(ack);
 +        sendAll(clientFd, ackPacket.data(), ackPacket.size());
 +
@@ -6242,10 +6249,10 @@ index 00000000..48014b9b
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
 new file mode 100644
-index 00000000..3f8e2062
+index 0000000..0000000
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
-@@ -0,0 +1,863 @@
+@@ -0,0 +1,906 @@
 +#pragma once
 +
 +// DualDeck wire protocol definitions.
@@ -6269,6 +6276,29 @@ index 00000000..3f8e2062
 +namespace melonds_remote {
 +
 +// Bumped whenever the wire format changes incompatibly.
++//
++// v14: HelloAckPayload gained hostTimeUs -- the host's own wall-clock
++// time (nowMicrosEpoch(), same clock VideoFramePayload::captureTimestampUs
++// already uses) at the moment it composed this response. Real user
++// report: NetClient::lastLatencyMicros()'s debug-overlay reading showed
++// exactly 0US the entire session, not just occasionally -- the "clock
++// skew" fallback that field's own comment already documented, except
++// permanently on, not intermittent. Root cause: VideoFramePayload's
++// per-frame latency was always computed as two independent machines'
++// raw wall clocks subtracted directly, with no correction for however
++// far apart those clocks actually are -- fine when they happen to be
++// closely NTP-synced, silently wrong (and, past a threshold, always
++// exactly 0 via that same fallback) whenever they aren't. hostTimeUs
++// lets the client run a lightweight NTP-style offset estimate right at
++// connect time: it already knows its own send time for this Hello
++// (kept locally, no wire change needed for that half), and this new
++// field plus its own receipt time give host-clock-minus-client-clock,
++// assuming (standard NTP assumption, entirely reasonable for a same-
++// LAN request/response with no processing delay to speak of) the
++// request and response legs take about the same time. See
++// NetClient::connect()'s own comment for the actual estimate. A genuine
++// payload-shape change (HelloAckPayload gains 8 bytes after
++// selectedVideoCodec), so this needs the usual kProtocolVersion bump.
 +//
 +// v13: HelloPayload gained supportedVideoCodecs and HelloAckPayload gained
 +// selectedVideoCodec -- codec capability negotiation (see VideoCodec's own
@@ -6331,7 +6361,7 @@ index 00000000..3f8e2062
 +// negotiating an optional codec keeps both sides simple, matching how
 +// every other incompatible wire-format change in this project has been
 +// handled (see the mic-support v5 bump above).
-+inline constexpr uint16_t kProtocolVersion = 13;
++inline constexpr uint16_t kProtocolVersion = 14;
 +
 +// Sentinel at the start of every packet so malformed/foreign traffic on the
 +// same port can be rejected cheaply before any further parsing.
@@ -6796,6 +6826,17 @@ index 00000000..3f8e2062
 +    // exists now so a future codec doesn't need its own version bump
 +    // just to tell the client which format is coming.
 +    VideoCodec selectedVideoCodec = VideoCodec::Jpeg;
++    // The host's own wall-clock time (nowMicrosEpoch(), protocol v14) at
++    // the moment it composed this response -- see kProtocolVersion's v14
++    // note above for why this exists and how the client uses it. Sent
++    // regardless of accepted/rejectReason, same convention as
++    // system/adapter/mode/selectedVideoCodec above: even a rejected
++    // handshake's timing is still real information, and a client that's
++    // about to retry might as well have it. A host predating this field
++    // is simply a different kProtocolVersion (see above) and gets
++    // rejected before either side's payload is parsed, so there is no
++    // separate "field absent" case to handle.
++    uint64_t hostTimeUs = 0;
 +};
 +
 +// DiscoveryRequest (client -> host) has no payload: a bare packet header
@@ -6904,6 +6945,15 @@ index 00000000..3f8e2062
 +// it, nothing about the JPEG encoding itself changed.
 +struct VideoFramePayload {
 +    uint64_t captureTimestampUs = 0;
++    // Despite the field's name (unchanged since v8 to avoid an
++    // otherwise-mechanical rename across every call site for a field
++    // whose wire meaning never actually depended on its name), this
++    // holds whatever bytes HelloAckPayload::selectedVideoCodec (v13)
++    // negotiated for the session -- JPEG bytes today, or H.264 Annex-B
++    // NAL units once a session actually selects VideoCodec::H264 (see
++    // NetServer::videoLoop()'s own codec branch). The receiver already
++    // knows which from the handshake, so no extra framing is needed
++    // here to distinguish them.
 +    std::vector<uint8_t> jpeg;
 +};
 +
@@ -7264,10 +7314,10 @@ index 00000000..a1aff532
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
 new file mode 100644
-index 00000000..add207a1
+index 0000000..0000000
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
-@@ -0,0 +1,573 @@
+@@ -0,0 +1,595 @@
 +#include "melonds_remote/protocol.h"
 +
 +#include <cstring>
@@ -7520,6 +7570,7 @@ index 00000000..add207a1
 +    appendString(out, hello.authToken);
 +    appendString(out, hello.appVersion);
 +    out.push_back(hello.videoQuality);
++    out.push_back(hello.supportedVideoCodecs);
 +}
 +
 +std::optional<HelloPayload> parseHelloPayload(const uint8_t* data, size_t size) {
@@ -7553,6 +7604,9 @@ index 00000000..add207a1
 +    if (offset + 1 > size) return std::nullopt;
 +    hello.videoQuality = data[offset]; offset += 1;
 +
++    if (offset + 1 > size) return std::nullopt;
++    hello.supportedVideoCodecs = data[offset]; offset += 1;
++
 +    if (offset != size) {
 +        // trailing garbage: reject rather than silently ignore
 +        return std::nullopt;
@@ -7578,6 +7632,8 @@ index 00000000..add207a1
 +    appendSystemIdentity(out, ack.system);
 +    appendAdapterIdentity(out, ack.adapter);
 +    out.push_back(static_cast<uint8_t>(ack.mode));
++    out.push_back(static_cast<uint8_t>(ack.selectedVideoCodec));
++    appendU64(out, ack.hostTimeUs);
 +}
 +
 +std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t size) {
@@ -7636,6 +7692,22 @@ index 00000000..add207a1
 +        return std::nullopt;
 +    }
 +    ack.mode = static_cast<HostMode>(mode);
++
++    if (offset + 1 > size) {
++        // selectedVideoCodec missing entirely: reject rather than silently ignore
++        return std::nullopt;
++    }
++    uint8_t selectedVideoCodec = data[offset]; offset += 1;
++    if (selectedVideoCodec > static_cast<uint8_t>(VideoCodec::H264)) {
++        return std::nullopt;
++    }
++    ack.selectedVideoCodec = static_cast<VideoCodec>(selectedVideoCodec);
++
++    if (offset + 8 > size) {
++        // hostTimeUs missing entirely: reject rather than silently ignore
++        return std::nullopt;
++    }
++    ack.hostTimeUs = readU64(data, offset); offset += 8;
 +
 +    if (offset != size) {
 +        // trailing garbage: reject rather than silently ignore

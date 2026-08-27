@@ -101,6 +101,7 @@ MDR_TEST(hello_ack_payload_round_trip_accepted) {
     ack.adapter = {"melonds", "melonDS", "1.0"};
     ack.mode = HostMode::HostControl;
     ack.selectedVideoCodec = VideoCodec::H264;
+    ack.hostTimeUs = 1755000000123456ULL;
 
     ByteBuffer buf;
     serializeHelloAckPayload(buf, ack);
@@ -120,6 +121,7 @@ MDR_TEST(hello_ack_payload_round_trip_accepted) {
     MDR_CHECK(parsed->adapter.adapterVersion == "1.0");
     MDR_CHECK(parsed->mode == HostMode::HostControl);
     MDR_CHECK(parsed->selectedVideoCodec == VideoCodec::H264);
+    MDR_CHECK(parsed->hostTimeUs == ack.hostTimeUs);
 }
 
 MDR_TEST(hello_ack_payload_mode_defaults_to_emulation) {
@@ -138,9 +140,10 @@ MDR_TEST(hello_ack_payload_rejects_invalid_mode) {
     ack.accepted = 1;
     ByteBuffer buf;
     serializeHelloAckPayload(buf, ack);
-    // mode is the second-to-last byte now that selectedVideoCodec (v13)
-    // follows it.
-    buf[buf.size() - 2] = 200;
+    // mode is followed by selectedVideoCodec (1 byte, v13) and hostTimeUs
+    // (8 bytes, v14) -- 9 trailing bytes after it, not just 1, so it now
+    // sits 10 bytes from the end rather than 2.
+    buf[buf.size() - 10] = 200;
 
     MDR_CHECK(!parseHelloAckPayload(buf.data(), buf.size()).has_value());
 }
@@ -161,7 +164,9 @@ MDR_TEST(hello_ack_payload_rejects_invalid_selected_video_codec) {
     ack.accepted = 1;
     ByteBuffer buf;
     serializeHelloAckPayload(buf, ack);
-    buf.back() = 200; // selectedVideoCodec is always the last byte
+    // selectedVideoCodec is followed by hostTimeUs (8 bytes, v14) now --
+    // no longer the last byte.
+    buf[buf.size() - 9] = 200;
 
     MDR_CHECK(!parseHelloAckPayload(buf.data(), buf.size()).has_value());
 }
@@ -189,7 +194,17 @@ MDR_TEST(hello_ack_payload_rejects_truncated_identity) {
 
     ByteBuffer buf;
     serializeHelloAckPayload(buf, ack);
-    buf.resize(buf.size() - 1); // chop off the trailing selectedVideoCodec byte
+    buf.resize(buf.size() - 1); // chop off one byte of the trailing hostTimeUs (v14)
+    MDR_CHECK(!parseHelloAckPayload(buf.data(), buf.size()).has_value());
+}
+
+MDR_TEST(hello_ack_payload_rejects_missing_host_time) {
+    HelloAckPayload ack;
+    ack.accepted = 1;
+
+    ByteBuffer buf;
+    serializeHelloAckPayload(buf, ack);
+    buf.resize(buf.size() - 8); // chop off all of hostTimeUs (v14)
     MDR_CHECK(!parseHelloAckPayload(buf.data(), buf.size()).has_value());
 }
 

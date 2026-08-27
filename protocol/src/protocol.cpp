@@ -313,6 +313,7 @@ void serializeHelloAckPayload(ByteBuffer& out, const HelloAckPayload& ack) {
     appendAdapterIdentity(out, ack.adapter);
     out.push_back(static_cast<uint8_t>(ack.mode));
     out.push_back(static_cast<uint8_t>(ack.selectedVideoCodec));
+    appendU64(out, ack.hostTimeUs);
 }
 
 std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t size) {
@@ -381,6 +382,12 @@ std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t 
         return std::nullopt;
     }
     ack.selectedVideoCodec = static_cast<VideoCodec>(selectedVideoCodec);
+
+    if (offset + 8 > size) {
+        // hostTimeUs missing entirely: reject rather than silently ignore
+        return std::nullopt;
+    }
+    ack.hostTimeUs = readU64(data, offset); offset += 8;
 
     if (offset != size) {
         // trailing garbage: reject rather than silently ignore

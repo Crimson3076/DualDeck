@@ -278,6 +278,10 @@ bool NetClient::connect() {
     helloPayload.supportedVideoCodecs =
         kVideoCodecBit_Jpeg | (config_.preferH264 ? kVideoCodecBit_H264 : 0);
     ByteBuffer hello = buildHelloPacket(helloPayload);
+    // Protocol v14: the client's own half of the clock-offset estimate
+    // below -- captured as close to the actual send as possible, same
+    // reasoning as net_server.cpp's own ack.hostTimeUs assignment.
+    uint64_t helloSendTimeUs = wallClockNowUs();
     if (!sendAll(controlFd_, hello.data(), hello.size())) {
         logLine("failed to send Hello\n");
         closePartialConnection();
@@ -309,6 +313,29 @@ bool NetClient::connect() {
         closePartialConnection();
         return false;
     }
+    // Protocol v14 NTP-style one-shot clock offset estimate -- see
+    // kProtocolVersion's v14 comment in protocol.h for the full story of
+    // why this exists (real user report: LATENCY read exactly 0US for a
+    // whole session, not just occasionally). Standard NTP assumption:
+    // the Hello->HelloAck round trip splits roughly evenly between the
+    // request and response legs (entirely reasonable for a same-LAN
+    // request/response with no real processing delay in between), so
+    // ack->hostTimeUs -- the host's own clock reading right as it
+    // composed the response -- should sit at roughly the midpoint of
+    // [helloSendTimeUs, now] if both clocks agreed. The gap between
+    // where it actually sits and that midpoint is (host clock) - (this
+    // client's clock); videoReceiveLoop() below adds it back to every
+    // frame's raw (uncorrected) latency figure. Computed unconditionally
+    // (even on a rejected handshake, since ack->hostTimeUs is always
+    // populated) rather than only on success, so a retry after a
+    // transient rejection still benefits from it.
+    uint64_t helloAckRecvTimeUs = wallClockNowUs();
+    int64_t roundTripUs = static_cast<int64_t>(helloAckRecvTimeUs) - static_cast<int64_t>(helloSendTimeUs);
+    if (roundTripUs < 0) {
+        roundTripUs = 0; // clock oddity mid-handshake -- treat as instantaneous rather than propagate a negative RTT
+    }
+    int64_t midpointUs = static_cast<int64_t>(helloSendTimeUs) + roundTripUs / 2;
+    clockOffsetUs_ = static_cast<int64_t>(ack->hostTimeUs) - midpointUs;
     {
         std::lock_guard<std::mutex> resultLock(handshakeResultMutex_);
         lastRejectReason_ = ack->rejectReason;
@@ -677,19 +704,24 @@ void NetClient::videoReceiveLoop() {
         }
 
         uint64_t nowWallUs = wallClockNowUs();
-        // Hoisted out of the `if` below (rather than left scoped to just
-        // the networkStats.record() call, as before) so it can also seed
-        // lastLatencyMicros_ once this frame is confirmed decoded -- 0
-        // stays the value if this frame's latency couldn't be computed at
-        // all (clock skew putting captureTimestampUs in the future), same
-        // "not counted" meaning lastLatencyMicros_'s own comment
-        // documents.
-        uint64_t latencyUs = 0;
-        if (nowWallUs >= videoFrame->captureTimestampUs) {
-            latencyUs = nowWallUs - videoFrame->captureTimestampUs;
-            if (latencyUs <= kMaxPlausibleLatencyUs) {
-                networkStats.record(latencyUs);
-            }
+        // Protocol v14: clockOffsetUs_ (estimated once in connect(), see
+        // its own comment there) corrects for however far apart the
+        // host's and this client's independent wall clocks actually are
+        // before comparing them -- real user report: without this,
+        // LATENCY read exactly 0US for an entire session (not just
+        // occasionally, the genuine "can't measure this" case
+        // lastLatencyMicros_'s own comment documents), because this
+        // machine's clock was consistently enough behind the host's that
+        // nowWallUs < captureTimestampUs held on literally every frame.
+        // Negative results after correction are real (measurement noise
+        // straddling zero on a fast LAN, not a sign the whole thing
+        // failed) and clamped to 0 rather than discarded, unlike the old
+        // uncorrected version's "negative means unmeasurable" reasoning.
+        int64_t correctedLatencyUs = static_cast<int64_t>(nowWallUs) -
+                                      static_cast<int64_t>(videoFrame->captureTimestampUs) + clockOffsetUs_.load();
+        uint64_t latencyUs = correctedLatencyUs > 0 ? static_cast<uint64_t>(correctedLatencyUs) : 0;
+        if (latencyUs <= kMaxPlausibleLatencyUs) {
+            networkStats.record(latencyUs);
         }
 
         auto decodeStart = std::chrono::steady_clock::now();

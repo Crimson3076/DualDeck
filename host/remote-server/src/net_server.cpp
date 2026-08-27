@@ -766,6 +766,13 @@ void NetServer::controlLoop() {
             currentVideoQuality_ =
                 defaultVideoQualityForFrameSize(config_.videoJpegQuality, ack.nativeWidth, ack.nativeHeight);
         }
+        // Protocol v14: taken as close to the actual send below as
+        // possible (same nowMicrosEpoch() clock VideoFramePayload::
+        // captureTimestampUs already uses) -- see kProtocolVersion's v14
+        // comment in protocol.h and NetClient::connect()'s own comment
+        // for why this exists and how the client turns it into a clock-
+        // offset estimate.
+        ack.hostTimeUs = nowMicrosEpoch();
         ByteBuffer ackPacket = buildHelloAckPacket(ack);
         sendAll(clientFd, ackPacket.data(), ackPacket.size());
 

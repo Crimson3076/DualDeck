@@ -281,6 +281,39 @@ MDR_TEST(net_client_receives_a_non_ds_sized_video_frame) {
     client.disconnect();
 }
 
+// Protocol v14: real user report, LATENCY read exactly 0US for a whole
+// session (see protocol.h's kProtocolVersion v14 comment and
+// NetClient::connect()'s own comment for the full clock-skew story).
+// ServerFixture runs host and client in the same process on the same
+// machine, so the real clock-offset estimate connect() computes should
+// land near zero here -- this doesn't exercise actual cross-machine
+// skew (there is none to exercise on loopback), but it does prove the
+// new HelloAckPayload::hostTimeUs plumbing and offset arithmetic run
+// end-to-end without crashing, rejecting the handshake, or producing a
+// wildly wrong (e.g. multi-second) corrected latency for a frame that
+// really did arrive within this test's own runtime.
+MDR_TEST(net_client_reports_a_plausible_latency_on_loopback) {
+    ServerFixture fixture;
+    SizedFrameSource dsFrame(256, 192);
+    std::vector<uint8_t> realFrame(static_cast<size_t>(256) * 192 * 4, 0x33);
+    dsFrame.setFrame(realFrame);
+    fixture.server.setTarget(fixture.sinkA, dsFrame, HostMode::Emulation, SystemIdentity{"nds", "Nintendo DS"},
+                              AdapterIdentity{"melonds", "melonDS", "1.1"});
+
+    NetClient client(fixture.clientConfig());
+    MDR_CHECK(client.connect());
+
+    std::vector<uint8_t> received;
+    MDR_CHECK(waitUntil([&] { return client.getLatestFrame(received); }));
+    // Generous upper bound (1 second) -- this is a same-process loopback
+    // connection, real latency should be microseconds to low
+    // milliseconds; a value anywhere near this ceiling would mean the
+    // offset estimate itself is badly wrong, not just noisy.
+    MDR_CHECK(client.lastLatencyMicros() < 1'000'000);
+
+    client.disconnect();
+}
+
 // Real user report, 2026-08-03: "when exiting an emulator...the last
 // frame that was sent to the client persists on screen until I change
 // client and reinitialize the connection." Root cause: NetClient's

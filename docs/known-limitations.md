@@ -12020,6 +12020,126 @@ real-hardware run (open the host menu, pick "Reconfigure Controls",
 restart Cemu, confirm Controller 1 responds without ever opening Input
 Settings) is the actual verification this needs.
 
+## 2026-08-27: LATENCY reads exactly 0US for a whole session -- host/client clock skew, not a measurement bug
+
+Real user report, once the earlier capture-side fixes got Cemu GamePad
+streaming to a steady 30fps: "latency is at 0, decode is at 6-7k or so.
+wifi should not be an issue here." DECODE (a pure local `steady_clock`
+measurement, no cross-machine comparison involved) was a normal 6-7ms
+for software H.264 -- LATENCY was the actual problem, and it wasn't
+occasionally 0 the way the 2026-08-26 debug-overlay entry's own "genuine
+can't-measure-this" fallback describes; it was *always* 0.
+
+Root cause: `NetClient`'s video latency was always computed as
+`clientWallClock - VideoFramePayload::captureTimestampUs` -- two
+independent machines' own wall clocks subtracted directly, with no
+correction for however far apart those two clocks actually are. Fine
+when they happen to be closely NTP-synced; on this user's real host/
+client pair they weren't closely enough synced for the host's clock to
+ever read *behind* the client's by the time a frame arrived, so the
+existing "can't measure this" fallback (`nowWallUs < captureTimestampUs`
+-> report 0) fired on literally every single frame.
+
+**Fixed** with a protocol v14 wire change and a lightweight, one-shot
+NTP-style clock-offset estimate, entirely at connect time:
+
+- `HelloAckPayload` gains `hostTimeUs` -- the host's own wall-clock
+  reading (`nowMicrosEpoch()`, the same clock `captureTimestampUs`
+  already uses), taken as close to the actual `HelloAck` send as
+  possible.
+- `NetClient::connect()` already knows its own send time for the
+  `Hello` that provoked this response (kept as a local variable, no
+  wire change needed for that half) and records its own receipt time
+  the instant `HelloAck` arrives. Standard NTP assumption -- the round
+  trip splits roughly evenly between the request and response legs,
+  entirely reasonable for a same-LAN handshake with no real processing
+  delay in either direction -- puts `hostTimeUs` at roughly the
+  midpoint of `[helloSendTimeUs, helloAckRecvTimeUs]` if both clocks
+  agreed; the gap between where it actually sits and that midpoint is
+  the clock offset (signed -- either machine's clock can be ahead).
+  Computed once per connection and applied to every subsequent
+  `VideoFrame`'s latency figure in `videoReceiveLoop()`.
+- A negative corrected result (measurement noise straddling zero on a
+  fast LAN) is now clamped to 0 rather than treated as "unmeasurable" --
+  a real behavioral difference from before, where *any* negative raw
+  difference (skew-induced or not) hit the same fallback.
+
+**A second, real bug found and fixed as a direct byproduct of this
+work**: regenerating `protocol.h`/`protocol.cpp` for all three hand-
+maintained emulator patches (melonDS, Azahar, Cemu -- see below for why
+that was necessary at all) turned up that all three patches' embedded
+copies were missing protocol v13's actual serialization code entirely
+(`HelloPayload.supportedVideoCodecs` / `HelloAckPayload.
+selectedVideoCodec` -- the struct fields existed, `kProtocolVersion` was
+already 13, but `serializeHelloPayload()`/`parseHelloPayload()` never
+read or wrote the extra byte). Inert dead code for Cemu/Azahar (their
+patches only ever use this shared header for `AdapterHelloAckPayload`,
+a completely separate adapter-ipc struct -- the real client-facing
+`Hello`/`HelloAck` handshake for both of them runs entirely inside the
+real, un-patched `dualdeck-host-service` binary this repo builds
+directly). **Live and broken for melonDS specifically**, which runs its
+own `NetServer` in-process: since every real client (this project's own
+`net_client.cpp`) has sent the v13-shaped `HelloPayload` since v13
+shipped, and melonDS's own `parseHelloPayload()` copy still rejected
+any trailing bytes past its v12-shaped expectations, **every real
+client's handshake against a melonDS host built from the previously-
+shipped patch would have failed outright** ("trailing garbage") -- the
+`protocolVersion` header field matched (both said 13), so the mismatch
+only ever surfaced during payload parsing, not the cheaper up-front
+version check. Fixed the same way as the v14 field itself (see below).
+
+**How the patches were updated**: `protocol.h`/`protocol.cpp` are
+pure-addition hunks in all three patches (brand-new files from each
+emulator's own upstream perspective -- melonDS/Azahar/Cemu don't have
+`remote_server/` directories at all before patching), so each hunk was
+regenerated wholesale directly from this repo's own current, tested
+`protocol/include/melonds_remote/protocol.h` and `protocol/src/
+protocol.cpp` rather than hand-computing a diff against the existing
+(now confirmed stale) embedded copies -- avoids the hunk-arithmetic
+mistakes this project's own patch history has already run into by hand.
+melonDS's `host/net_server.cpp` -- also a pure-addition hunk, but a much
+larger, separately-stale one (see below) -- was instead edited
+surgically: one `ack.hostTimeUs = nowMicrosEpoch();` line inserted right
+before its existing `buildHelloAckPacket(ack)` call, matching the real
+`net_server.cpp`'s own edit exactly, with the hunk's line count bumped
+by exactly the 7 lines added.
+
+**A separate, larger, deliberately NOT backported gap found along the
+way**: melonDS's embedded `net_server.cpp` copy is missing this
+project's entire H.264 encode path (`selectVideoCodec()`,
+`h264TargetBitrateBps()`, the `H264Encoder` usage in `videoLoop()`, and
+the video-timing diagnostics line) -- roughly 150 lines of drift,
+apparently never hand-synced into melonDS's patch when H.264 support
+was added elsewhere in this project. Left alone deliberately: unlike
+the small, self-contained, already-tested v13 codec-negotiation
+serialization above, backporting the full H.264 pipeline is a much
+larger, functionally significant change this session hasn't verified
+compiles or works inside melonDS's own build (its own include paths,
+whether its build actually links OpenH264, etc.). The negotiation now
+at least round-trips correctly (thanks to the v13 serialization fix
+above), so a melonDS host simply always negotiates back down to JPEG
+regardless of what a client offers -- correct, safe fallback behavior,
+not a half-broken state -- rather than silently mis-negotiating. Tracked
+here as a real, known gap for whoever next touches melonDS's patch, not
+attempted in this pass.
+
+**Verified**: `dualdeck_protocol_tests`, `melonds_remote_net_client_tests`
+(including a new `net_client_reports_a_plausible_latency_on_loopback`,
+plus updated/added `HelloAckPayload` round-trip and truncation tests for
+the new trailing 8 bytes), and `melonds_remote_host_tests` all pass --
+108/17/109 assertions respectively -- both under a normal build and
+under `-Wall -Wextra -Wpedantic -Wconversion -Wshadow` with zero
+warnings. All three regenerated patches confirmed with `git apply
+--check` (and a real `git apply` followed by inspecting the result)
+against fresh shallow clones of melonDS/Azahar/Cemu at their exact
+pinned commits (`scripts/lib/pinned_commits.sh`) -- not just checked
+against the previously-committed patch context. **Not yet verified**:
+against real host/client hardware with genuinely unsynchronized clocks
+(the exact scenario that motivated this) -- the next real-hardware test
+(mismatched host/client clocks, or simply the reporting user's own
+already-mismatched pair) confirming LATENCY now reads a real,
+non-zero, plausible value is the actual test this needs.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

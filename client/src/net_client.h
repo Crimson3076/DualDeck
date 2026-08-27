@@ -228,10 +228,15 @@ public:
     // live overlay instead of a periodically-reset accumulator.
     uint32_t lastDecodeMicros() const { return lastDecodeMicros_.load(); }
     // Network+encode+queue latency for this specific frame (captureTimestampUs
-    // to receipt) -- same source measurement as networkStats' own
-    // min/max/avg log line, again exposed as the latest single sample.
-    // 0 if this particular frame's latency couldn't be computed (see
-    // videoReceiveLoop()'s own kMaxPlausibleLatencyUs/clock-skew comment).
+    // to receipt, corrected for host/client clock offset -- protocol v14,
+    // see connect()'s own comment) -- same source measurement as
+    // networkStats' own min/max/avg log line, again exposed as the
+    // latest single sample. 0 if this particular frame's corrected
+    // latency came out at or below zero (measurement noise, clamped --
+    // see videoReceiveLoop()'s own comment); not filtered by
+    // kMaxPlausibleLatencyUs, unlike networkStats -- an implausibly
+    // large value still shows here, since that's itself a useful signal
+    // something is wrong rather than something to hide.
     uint32_t lastLatencyMicros() const { return lastLatencyMicros_.load(); }
 
     // Enqueues `line` (already formatted -- see client_log.h) to be
@@ -278,6 +283,13 @@ private:
     // once per connect edge.
     std::atomic<uint16_t> hostNativeWidth_{256};
     std::atomic<uint16_t> hostNativeHeight_{192};
+    // Protocol v14 clock-offset estimate (host clock minus this client's
+    // own clock, in microseconds -- may be negative), computed once per
+    // connect() and applied to every video frame's latency calculation
+    // in videoReceiveLoop() -- see connect()'s own comment for how it's
+    // derived and why it exists. Signed (unlike hostNativeWidth_ above)
+    // since either clock can legitimately be ahead of the other.
+    std::atomic<int64_t> clockOffsetUs_{0};
 
     // Debug-overlay stats -- see the public getters' own comments above
     // for what each one means. All written only by videoReceiveLoop(),
