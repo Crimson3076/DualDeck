@@ -29,6 +29,19 @@
 # the copy works unmodified in both locations). Either way, run it on the
 # same machine EmuDeck is installed on.
 #
+# Also works with no EmuDeck installed at all (real user request,
+# 2026-08-28: "override the retrodeck builds of the emulators"). When no
+# existing EmuDeck AppImage is found, install_fresh_standalone_appimage()
+# installs one fresh at the same ~/Applications/*.AppImage path anyway --
+# not because EmuDeck needs it there, but because that's also exactly
+# where RetroDECK's own ES-DE fork (and EmuDeck's upstream ES-DE) checks
+# *before* falling back to RetroDECK's own bundled, unpatched copy (see
+# that function's own comment, and docs/known-limitations.md's 2026-08-28
+# "RetroDECK" entry, for how this was actually confirmed against
+# RetroDECK's own source rather than assumed). This is a strict addition:
+# an existing EmuDeck install behaves exactly as before, nothing here
+# changes for it.
+#
 # Usage:
 #   ./scripts/emudeck-replace-in-place.sh [--emulator melonds|azahar|cemu]... [--yes] [--dry-run]
 #   ./scripts/emudeck-replace-in-place.sh [--emulator ...] --status
@@ -426,6 +439,83 @@ bootstrap_melonds_flatpak_launcher() {
     installed_count=$((installed_count + 1))
 }
 
+# install_fresh_standalone_appimage <emulator> <appimage_filename>
+#
+# Real user request, 2026-08-28: "override the retrodeck builds of the
+# emulators" -- RetroDECK (a separate, self-contained Flatpak that bundles
+# its own unpatched copies of melonDS/Cemu/Azahar) is not EmuDeck and
+# doesn't require it to be installed at all, so replace_in_place_one()'s
+# other branches (which only ever act on an *existing* EmuDeck AppImage)
+# do nothing for a RetroDECK-only machine. Investigated RetroDECK's own
+# source (github.com/RetroDECK/{retrodeck,es-de}) directly rather than
+# guessing: it bundles melonDS/Cemu/Azahar by extracting the *stock*
+# upstream Flatpak of each into its own Flatpak's read-only /app layer at
+# build time (net.kuribo64.melonDS, info.cemu.Cemu, its Azahar Flatpak --
+# never patched, never rebuilt from source) -- not something a host-side
+# file can override directly. But RetroDECK's actual game-launcher (its
+# own ES-DE fork) already checks several *host* paths before falling back
+# to its own bundled copy, per its own es_find_rules.xml -- for all three
+# emulators, `~/Applications/<Name>*.AppImage` is checked first, exactly
+# the same directory/glob emudeck_applications_dir() already uses. So
+# installing DualDeck's patched AppImage there also gets picked up
+# automatically by RetroDECK (and by EmuDeck's own upstream ES-DE, or any
+# other ES-DE-based frontend), with no RetroDECK-specific code at all --
+# this only needed to stop requiring an EmuDeck install to already exist
+# first.
+#
+# Same download+verify+install steps as bootstrap_melonds_flatpak_
+# launcher() above, minus the EmuDeck-launcher-rewrite part -- there is no
+# existing launcher to redirect here, since nothing was found installed at
+# all. Manifest gets the same honest "no original AppImage" sentinel for
+# the same reason: the real original state (nothing) was never touched by
+# this function, so there is nothing real to hash.
+install_fresh_standalone_appimage() {
+    local emulator="$1" appimage_filename="$2"
+    local apps_dir new_appimage_path
+    apps_dir="$(emudeck_applications_dir)"
+    new_appimage_path="${apps_dir}/${appimage_filename}"
+
+    echo "== ${emulator}: no EmuDeck install found under ${apps_dir} -- installing a" >&2
+    echo "   fresh standalone AppImage there instead, picked up automatically by" >&2
+    echo "   RetroDECK/any ES-DE-based frontend (its own bundled copy is never patched). ==" >&2
+
+    if [[ "${dry_run}" -eq 1 ]]; then
+        echo "== ${emulator}: --dry-run, stopping here (would install ${new_appimage_path}) ==" >&2
+        return 0
+    fi
+
+    if [[ "${assume_yes}" -ne 1 ]] && ! confirm \
+        "No EmuDeck install found for ${emulator}. Install DualDeck's patched build fresh at ${new_appimage_path} instead (picked up automatically by RetroDECK/ES-DE)?"; then
+        echo "== ${emulator}: skipped (not confirmed) =="
+        return 0
+    fi
+
+    local downloaded_appimage
+    downloaded_appimage="$(download_patched_appimage "${emulator}")"
+
+    mkdir -p "${apps_dir}"
+    cp "${downloaded_appimage}" "${new_appimage_path}"
+    chmod +x "${new_appimage_path}"
+
+    if [[ ! -f "${new_appimage_path}.dualdeck-original" ]]; then
+        echo "DualDeck note: nothing was installed here before -- there is no original" \
+             "AppImage to preserve." > "${new_appimage_path}.dualdeck-original"
+    fi
+
+    python3 "${manifest_py}" write "${new_appimage_path}" \
+        --dualdeck-version "${dualdeck_version}" \
+        --original-sha256 "none (fresh standalone install, nothing pre-existing)"
+
+    echo "== ${emulator}: installed DualDeck's patched build at ${new_appimage_path} =="
+    if [[ "${emulator}" == "melonds" ]]; then
+        echo "   RetroDECK's own \"nds\" system defaults to a RetroArch libretro core, not" >&2
+        echo "   standalone melonDS -- switch its emulator to \"melonDS (Standalone)\" in" >&2
+        echo "   RetroDECK's per-system settings for this to actually get used." >&2
+    fi
+    log "${emulator}: installed fresh standalone AppImage, dualdeck_version=${dualdeck_version}"
+    installed_count=$((installed_count + 1))
+}
+
 # ---- per-emulator orchestration ----
 replace_in_place_one() {
     local emulator="$1"
@@ -439,14 +529,14 @@ replace_in_place_one() {
                     bootstrap_melonds_flatpak_launcher "${flatpak_launcher}"
                     return $?
                 fi
-                echo "== melonds: no EmuDeck install found under $(emudeck_applications_dir), skipping =="
-                return 0
+                install_fresh_standalone_appimage "melonds" "melonDS.AppImage"
+                return $?
             fi
             ;;
         azahar)
             appimage_path="$(find_emudeck_azahar_appimage)" || {
-                echo "== azahar: no EmuDeck install found under $(emudeck_applications_dir), skipping =="
-                return 0
+                install_fresh_standalone_appimage "azahar" "azahar.AppImage"
+                return $?
             }
             ;;
         cemu)
@@ -456,10 +546,10 @@ replace_in_place_one() {
                     echo "== cemu: found a Flatpak install (${flatpak_id}) -- replace-in-place doesn't" >&2
                     echo "   support Flatpak yet (a different, sandboxed install shape -- see" >&2
                     echo "   docs/known-limitations.md's Phase A entry). Skipping cemu. ==" >&2
-                else
-                    echo "== cemu: no EmuDeck install found under $(emudeck_applications_dir), skipping =="
+                    return 0
                 fi
-                return 0
+                install_fresh_standalone_appimage "cemu" "Cemu.AppImage"
+                return $?
             fi
             ;;
     esac
@@ -718,15 +808,42 @@ restore_one() {
         return 0
     fi
 
+    # bootstrap_melonds_flatpak_launcher()/install_fresh_standalone_appimage()
+    # both write a plain-text placeholder here (never a real AppImage --
+    # see their own comments) when there was no real original AppImage to
+    # preserve, tagged with a "none (...)" original_sha256 in the manifest
+    # for exactly this check. Restoring that placeholder verbatim over
+    # ${appimage_path} would leave a text file sitting at a path
+    # RetroDECK/ES-DE (or EmuDeck's own launcher, in the Flatpak-bootstrap
+    # case) would still try to execute as the emulator -- remove the
+    # installed AppImage outright instead, which is the actually-correct
+    # "put it back the way it was" for "there was nothing here before."
+    local original_sha256=""
+    if [[ -f "${appimage_path}.dualdeck.json" ]]; then
+        original_sha256="$(python3 -c "
+import json
+print(json.load(open('${appimage_path}.dualdeck.json')).get('original_sha256', ''))
+")"
+    fi
+
     if [[ "${dry_run}" -eq 1 ]]; then
-        echo "${emulator}: [dry run] would restore ${backup_path} -> ${appimage_path}"
+        if [[ "${original_sha256}" == none\ \(* ]]; then
+            echo "${emulator}: [dry run] would remove ${appimage_path} (no real original to restore)"
+        else
+            echo "${emulator}: [dry run] would restore ${backup_path} -> ${appimage_path}"
+        fi
         return 0
     fi
 
-    echo "== ${emulator}: restoring the original from ${backup_path} =="
-    # cp, not mv: the backup stays put so this is repeatable, and so a
-    # half-finished restore can't leave the install with neither file.
-    cp -a "${backup_path}" "${appimage_path}"
+    if [[ "${original_sha256}" == none\ \(* ]]; then
+        echo "== ${emulator}: no real original AppImage existed here -- removing ${appimage_path} =="
+        rm -f "${appimage_path}" "${backup_path}"
+    else
+        echo "== ${emulator}: restoring the original from ${backup_path} =="
+        # cp, not mv: the backup stays put so this is repeatable, and so a
+        # half-finished restore can't leave the install with neither file.
+        cp -a "${backup_path}" "${appimage_path}"
+    fi
 
     # melonDS's EmuDeck install is launched through a launcher script that
     # the patcher also rewrites (see bootstrap_melonds_flatpak_launcher).
