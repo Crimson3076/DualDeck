@@ -1296,6 +1296,17 @@ cat > "${pkg_dir}/host/internal/run-host.sh" <<'WRAP'
 # device-approval authentication instead of a static shared secret.
 # Normally launched via ../../dualdeck-host.sh's "Launch now" menu
 # choice, not directly.
+#
+# Real user report, 2026-08-28: on a fresh install (no melonDS.ini yet
+# with a saved window size) melonDS opens small and windowed, title bar
+# and all -- neither matches the Deck's display, and every other emulator
+# DualDeck patches (Cemu, Azahar) already goes fullscreen on launch. Pass
+# melonDS's own -f/--fullscreen (CLI.cpp: `win->toggleFullscreen()`,
+# which uses Qt's real fullscreen mode against the current screen, so it
+# always matches the host's actual resolution -- no title bar, no
+# stretching/letterboxing to guess at) by default here, unless the
+# caller already asked for a specific fullscreen state, or opted out with
+# DUALDECK_MELONDS_WINDOWED=1 (e.g. for setup/debugging on a desktop).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 host_root="$(cd .. && pwd)"
@@ -1436,7 +1447,20 @@ if is_adapter_socket_live "${default_socket}"; then
     export MELONDS_REMOTE_OUT_OF_PROCESS=1
     export MELONDS_REMOTE_ADAPTER_SOCKET="${default_socket}"
 fi
-exec "${host_root}/melonDS" "$@"
+
+melonds_args=("$@")
+if [[ "${DUALDECK_MELONDS_WINDOWED:-0}" != "1" ]]; then
+    fullscreen_requested=0
+    for melonds_arg in ${melonds_args[@]+"${melonds_args[@]}"}; do
+        case "${melonds_arg}" in
+            -f|--fullscreen) fullscreen_requested=1 ;;
+        esac
+    done
+    if [[ "${fullscreen_requested}" -eq 0 ]]; then
+        melonds_args+=(--fullscreen)
+    fi
+fi
+exec "${host_root}/melonDS" ${melonds_args[@]+"${melonds_args[@]}"}
 WRAP
 chmod +x "${pkg_dir}/host/internal/run-host.sh"
 
@@ -1897,7 +1921,13 @@ cat > "${pkg_dir}/host/internal/launch-emudeck-melonds.sh" <<'WRAP'
 #      container, same as the host menu's own DS path.
 #   2. Translate Steam ROM Manager's argument form. SRM invokes the
 #      launcher as `"/path/game.nds" -f`; the patched melonDS wants
-#      `--boot always "/path/game.nds"`, and chokes on the bare -f.
+#      `--boot always "/path/game.nds"` for the ROM. -f/--fullscreen is a
+#      real melonDS option (CLI.cpp) and is passed straight through below
+#      like any other extra arg -- it doesn't need translating -- but
+#      run-host.sh now adds it by default anyway (real user report,
+#      2026-08-28: melonDS otherwise opens small and windowed, matching
+#      neither the Deck's display nor every other patched emulator), so
+#      omitting it here changes nothing either way.
 #   3. Preserve exit status, so Steam sees the emulator's result rather
 #      than the wrapper's.
 #
@@ -1939,7 +1969,8 @@ for argument in "$@"; do
         argument="${argument:1:${#argument}-2}"
     fi
     case "${argument}" in
-        -f|--fullscreen|-F|--FULLSCREEN) ;; # SRM adds this; melonDS rejects it
+        -f|--fullscreen) extra_args+=("${argument}") ;; # real melonDS option (CLI.cpp) -- pass through
+        -F|--FULLSCREEN) ;; # not a real melonDS option; melonDS's QCommandLineParser rejects unknown flags
         *.nds|*.NDS|*.srl|*.SRL) rom="${argument}" ;;
         *) extra_args+=("${argument}") ;;
     esac
@@ -2456,9 +2487,26 @@ if is_adapter_socket_live "${default_socket}"; then
                          "MELONDS_REMOTE_ADAPTER_SOCKET=${default_socket}")
 fi
 
+# Same default-fullscreen fix as run-host.sh (see that script's own
+# comment on the real user report this addresses) -- this is the
+# separate launch path the main Steam Big Picture shortcut takes on
+# immutable (rpm-ostree) hosts, so it needs it too.
+melonds_args=("$@")
+if [[ "${DUALDECK_MELONDS_WINDOWED:-0}" != "1" ]]; then
+    fullscreen_requested=0
+    for melonds_arg in ${melonds_args[@]+"${melonds_args[@]}"}; do
+        case "${melonds_arg}" in
+            -f|--fullscreen) fullscreen_requested=1 ;;
+        esac
+    done
+    if [[ "${fullscreen_requested}" -eq 0 ]]; then
+        melonds_args+=(--fullscreen)
+    fi
+fi
+
 exec distrobox enter "${container_name}" -- env MELONDS_REMOTE_ENABLE=1 \
     "MELONDS_REMOTE_VERSION=${host_app_version}" "${melonds_adapter_env[@]}" \
-    "${central_install_dir}/melonDS" "$@"
+    "${central_install_dir}/melonDS" ${melonds_args[@]+"${melonds_args[@]}"}
 WRAP
 chmod +x "${pkg_dir}/host/internal/install-host-distrobox.sh"
 

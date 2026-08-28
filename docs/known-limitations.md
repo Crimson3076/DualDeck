@@ -12140,6 +12140,66 @@ against real host/client hardware with genuinely unsynchronized clocks
 already-mismatched pair) confirming LATENCY now reads a real,
 non-zero, plausible value is the actual test this needs.
 
+## 2026-08-28: melonDS launches windowed with a title bar at a small default size instead of matching the host's display
+
+Real user report: "DualDeck has an error with fullscreen configuration
+for MelonDS by default, it shows the title bar, it is a low resolution
+by default and it should match the host's resolution if possible."
+melonDS is the one patched emulator this project launches directly
+(Azahar/Cemu both route through the separate `dualdeck-host-service`
+adapter process instead) -- both of its launch paths, `run-host.sh`
+(the normal, non-immutable-system launch `launch-host.sh` and
+`launch-emudeck-melonds.sh` both eventually exec) and
+`install-host-distrobox.sh` (the separate Distrobox-container path
+immutable/rpm-ostree hosts like Bazzite take instead), simply
+`exec`'d melonDS with whatever arguments were passed straight through
+and nothing added -- no arguments at all on a plain Steam Big Picture
+shortcut launch. With no saved `melonDS.ini` window geometry yet (a
+fresh install, or one where melonDS has never been closed normally),
+that's melonDS's own small windowed default -- title bar included -- not
+anything sized to or matching the Deck's actual display.
+
+melonDS's own Qt frontend already has exactly the option needed:
+`-f`/`--fullscreen` (`CLI.cpp`), which `main.cpp` turns into a real
+`win->toggleFullscreen()` call -- genuine Qt fullscreen against the
+display melonDS is actually running on, not a fixed size, so it matches
+the host's resolution by construction rather than needing this project
+to ever ask what that resolution is. **Fixed** by having both
+`run-host.sh` and `install-host-distrobox.sh` append `--fullscreen` to
+the arguments they hand melonDS by default, unless the caller already
+requested a specific fullscreen state or set `DUALDECK_MELONDS_WINDOWED=1`
+(for manual setup/debugging on a desktop, where a fixed window is more
+convenient than a fullscreen one).
+
+**A second, smaller bug found and fixed alongside this**:
+`launch-emudeck-melonds.sh` (the shim EmuDeck's own `melonds.sh` and
+Steam ROM Manager shortcuts launch through) was unconditionally
+stripping `-f`/`--fullscreen` out of its arguments before forwarding
+them, on the stated assumption that "melonDS rejects it." Direct
+inspection of melonDS's own `CLI.cpp` shows that's a real, registered
+option there (added well before this project's pinned melonDS commit)
+that melonDS accepts and acts on just fine -- it isn't the thing that
+needed stripping. `-F`/`--FULLSCREEN` (uppercase), also stripped by the
+same line, genuinely are unrecognized options that melonDS's
+`QCommandLineParser` would reject outright, so stripping those stays;
+`-f`/`--fullscreen` is now passed through like any other argument
+instead. This was already harmless in practice once `run-host.sh`
+(which this shim's `wrapper` variable always points at) started adding
+`--fullscreen` by default regardless, but the shim's own comment was
+simply wrong and is corrected alongside the behavior.
+
+**Verified**: read melonDS's actual `CLI.cpp`/`main.cpp` (cloned at
+HEAD from `github.com/melonDS-emu/melonDS`, confirming `-f`/
+`--fullscreen` has existed since the "CLI 2.0" rewrite in 2022, long
+before this project's pinned commit) to confirm the option is real and
+does what's needed, rather than assuming from the pre-existing (now
+proven wrong) launcher comment. **Not yet verified**: against real
+hardware -- the next real launch (any of a plain Steam Big Picture
+shortcut, an EmuDeck/SRM ROM shortcut, or a manual `./run-host.sh`) is
+the actual test that melonDS now opens fullscreen at the host's native
+resolution with no title bar, on both a normal and a Distrobox-routed
+(Bazzite/rpm-ostree) host.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
