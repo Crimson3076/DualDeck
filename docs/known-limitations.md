@@ -12240,6 +12240,94 @@ same as CI's "no SDL3, no melonDS" job) and ran `ctest` (6/6 passing),
 directly against it -- all pass, including the specific `HelloAck`
 handshake case that previously raised the trailing-bytes assertion.
 
+## 2026-08-28: bottom-screen 3D content stayed native 256x192 no matter melonDS's own upscale setting, plus an investigated melonDS exit hang
+
+Real user report: with the fullscreen fix above working ("top screen
+now looks great"), the bottom screen streamed to the client was "still
+only rendered 256/192 for DS games" and asked to "upscale it for any 3D
+rendering." Root cause: `GLBottomScreenCapture` (the OpenGL/OpenGLCompute
+3D renderer's bottom-screen readback path, used whenever melonDS's 3D
+renderer isn't Software -- see `docs/melonds-integration-analysis.md`
+section 1.2) unconditionally downscaled back to native DS resolution via
+a `glBlitFramebuffer` before the frame ever left the host, regardless of
+how high the user had raised melonDS's own "3D Renderer -> Resolution"
+setting (`3D.GL.ScaleFactor`, Config-range 1-16 -- up to 4096x3072 for
+this one screen). The rest of the pipeline was already fully
+resolution-agnostic per-frame and needed no changes at all:
+`host/frame_source.h`'s `IFrameSource::getLatestFrame()` already returns
+per-call `outWidth`/`outHeight` (built for `AzaharAdapter`'s 320x240 and
+a real Cemu capture-resolution gap -- see that header's own comment),
+`net_server.cpp`'s `videoLoop()` already reads `currentFrameWidth`/
+`currentFrameHeight` from it every call and re-initializes the H.264
+encoder if they change mid-session, and the client's `hostNativeWidth()`/
+`hostNativeHeight()` are already updated from each frame's own *decoded*
+dimensions (`net_client.cpp`), with `main.cpp`'s `resizeTextureIfNeeded()`
+already built to resize the SDL texture on exactly that kind of runtime
+change (originally for a Cemu capture-resolution gap, equally applicable
+here). Only melonDS's own capture code assumed a fixed native size.
+
+**Fixed**: `GLBottomScreenCapture::captureBottomScreen()` now reads back
+at the texture's actual resolution (computed as an integer multiple of
+native DS resolution, since melonDS scales both dimensions by the same
+factor) instead of always downscaling to 256x192, and reports the real
+captured width/height via new out-parameters. Still caps at 4x/1024x768
+(`kMaxCaptureScale`) via the same downscale-blit path this class already
+had -- forwarding the full 16x/4096x3072 texture uncapped would cost far
+more to read back, JPEG/H264-encode, and transmit than a real-time
+stream can absorb, and is already well past what a Steam Deck's own
+1280x800 display could show any sharper for; most "upscale my 3D"
+settings (2x-4x) are read back directly, no downscale needed.
+`MelonDSFrameSource::pushFrame()`/`getLatestFrame()`, `MelonDSAdapter::
+pushFrame()`/`latestFrame()`, and `RemoteServerBridge::pushBottomFrame()`
+all gained width/height parameters end to end (previously hardcoded to
+`kFrameWidth`/`kFrameHeight` at every layer) so the actually-captured
+size reaches `NetServer` instead of being discarded the moment it left
+`GLBottomScreenCapture`. The software-renderer path (`GPU::
+GetFramebuffers()` returning real RAM pointers) is unaffected --
+melonDS's software 3D rasterizer has no upscale setting and always
+renders at native resolution.
+
+**Also investigated** (same session, unprompted): "melonDS hangs on
+exiting." Not reproduced directly (no Qt/GL GUI environment available
+here to actually exit a running melonDS), but a real, plausible
+contributor was found and fixed by inspection: the entire per-frame
+remote-server frame-push block in `EmuThread.cpp` -- including the GL
+capture/readback fallback, whose cost scales with the resolution this
+same change just stopped capping to 256x192 -- ran inside one
+`remoteServerMutex` acquisition. `EmuInstance`'s destructor takes that
+same mutex (via `stopRemoteServer()`) to tear the server down, called
+from the main/GUI thread *before* the emulation thread is told to stop
+(`deleteAllWindows()`/`stopRemoteServer()` both precede `emuThread->
+emuExit()`, confirmed by reading the actual upstream destructor at this
+project's pinned commit) -- so a slow-enough GPU readback landing at
+exactly the wrong moment could make shutdown wait on this thread's next
+GL sync point. Restructured so `remoteServerMutex` is only held for the
+two operations that actually touch `remoteServer` (a brief existence
+check, and the final `pushBottomFrame()` call) -- `GPU::GetFramebuffers()`
+and the GL capture itself now run unlocked, since neither touches
+`remoteServer` or anything else `stopRemoteServer()` could be tearing
+down. This is a real, defensible fix for a genuine lock-hold hazard this
+same change would otherwise have made more likely to matter (bigger
+captures take longer), not a confirmed root-cause fix for the reported
+hang specifically -- if it recurs after this, the next report should say
+whether it happens with the software or OpenGL 3D renderer, and whether
+force-killing melonDS and inspecting a thread dump (`gdb -p <pid> -ex
+"thread apply all bt"`) shows which thread is actually stuck.
+
+**Verified**: cloned melonDS at this project's exact pinned commit
+(`10a173b5536fc75cd93f8a3868349dad963542ef`), applied the existing patch,
+made all of the above edits directly, and did a full from-scratch CMake/
+Qt6 build (`cmake --build`) -- compiles clean, zero warnings from any of
+the changed files. Regenerated the patch from a diff against the pristine
+pinned commit and confirmed it `git apply --check`s (and a real `git
+apply`) cleanly against a second, completely fresh clone, with the
+resulting files byte-identical to the ones actually compiled. **Not yet
+verified**: against real hardware -- the next real session (any DS game
+using 3D rendering, with melonDS's 3D renderer set to OpenGL/
+OpenGLCompute and its resolution raised above 1x) is the actual test that
+the bottom screen now streams sharper, and the next clean exit is the
+actual test of whether the hang recurs.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

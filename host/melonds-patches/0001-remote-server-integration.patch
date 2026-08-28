@@ -1,5 +1,5 @@
 diff --git a/src/frontend/qt_sdl/CMakeLists.txt b/src/frontend/qt_sdl/CMakeLists.txt
-index 31207f86..41a6a1d3 100644
+index 31207f8..41a6a1d 100644
 --- a/src/frontend/qt_sdl/CMakeLists.txt
 +++ b/src/frontend/qt_sdl/CMakeLists.txt
 @@ -60,6 +60,25 @@ set(SOURCES_QT_SDL
@@ -63,7 +63,7 @@ index 31207f86..41a6a1d3 100644
      target_include_directories(melonDS PUBLIC ${Qt6Gui_PRIVATE_INCLUDE_DIRS})
  else()
 diff --git a/src/frontend/qt_sdl/Config.cpp b/src/frontend/qt_sdl/Config.cpp
-index 0d48ee16..cfd686ea 100644
+index 0d48ee1..cfd686e 100644
 --- a/src/frontend/qt_sdl/Config.cpp
 +++ b/src/frontend/qt_sdl/Config.cpp
 @@ -72,6 +72,21 @@ DefaultList<int> DefaultInts =
@@ -148,7 +148,7 @@ index 0d48ee16..cfd686ea 100644
  
  DefaultList<double> DefaultDoubles =
 diff --git a/src/frontend/qt_sdl/EmuInstance.cpp b/src/frontend/qt_sdl/EmuInstance.cpp
-index a8b10218..e5771ece 100755
+index a8b1021..e5771ec 100755
 --- a/src/frontend/qt_sdl/EmuInstance.cpp
 +++ b/src/frontend/qt_sdl/EmuInstance.cpp
 @@ -20,15 +20,24 @@
@@ -473,7 +473,7 @@ index a8b10218..e5771ece 100755
  std::string EmuInstance::instanceFileSuffix()
  {
 diff --git a/src/frontend/qt_sdl/EmuInstance.h b/src/frontend/qt_sdl/EmuInstance.h
-index a1eab0ef..2c306171 100755
+index a1eab0e..2c30617 100755
 --- a/src/frontend/qt_sdl/EmuInstance.h
 +++ b/src/frontend/qt_sdl/EmuInstance.h
 @@ -21,6 +21,9 @@
@@ -578,7 +578,7 @@ index a1eab0ef..2c306171 100755
      friend class MainWindow;
  };
 diff --git a/src/frontend/qt_sdl/EmuInstanceAudio.cpp b/src/frontend/qt_sdl/EmuInstanceAudio.cpp
-index 7df4d9f4..d27911fa 100644
+index 7df4d9f..d27911f 100644
 --- a/src/frontend/qt_sdl/EmuInstanceAudio.cpp
 +++ b/src/frontend/qt_sdl/EmuInstanceAudio.cpp
 @@ -16,6 +16,9 @@
@@ -717,7 +717,7 @@ index 7df4d9f4..d27911fa 100644
  {
      float f_len_out = (inlen * 47743.4659091 * (curFPS/60.0)) / (float)micFreq;
 diff --git a/src/frontend/qt_sdl/EmuInstanceInput.cpp b/src/frontend/qt_sdl/EmuInstanceInput.cpp
-index a0bc6231..0373ce71 100644
+index a0bc623..0373ce7 100644
 --- a/src/frontend/qt_sdl/EmuInstanceInput.cpp
 +++ b/src/frontend/qt_sdl/EmuInstanceInput.cpp
 @@ -25,8 +25,37 @@
@@ -886,7 +886,7 @@ index a0bc6231..0373ce71 100644
      hotkeyRelease = lastHotkeyMask & ~hotkeyMask;
      lastHotkeyMask = hotkeyMask;
 diff --git a/src/frontend/qt_sdl/EmuSettingsDialog.cpp b/src/frontend/qt_sdl/EmuSettingsDialog.cpp
-index 3df2ddf1..fa5c3150 100644
+index 3df2ddf..fa5c315 100644
 --- a/src/frontend/qt_sdl/EmuSettingsDialog.cpp
 +++ b/src/frontend/qt_sdl/EmuSettingsDialog.cpp
 @@ -78,6 +78,14 @@ EmuSettingsDialog::EmuSettingsDialog(QWidget* parent) : QDialog(parent), ui(new
@@ -913,7 +913,7 @@ index 3df2ddf1..fa5c3150 100644
              Config::Save();
  
 diff --git a/src/frontend/qt_sdl/EmuSettingsDialog.ui b/src/frontend/qt_sdl/EmuSettingsDialog.ui
-index b0787891..df363d86 100644
+index b078789..df363d8 100644
 --- a/src/frontend/qt_sdl/EmuSettingsDialog.ui
 +++ b/src/frontend/qt_sdl/EmuSettingsDialog.ui
 @@ -56,7 +56,17 @@
@@ -944,7 +944,7 @@ index b0787891..df363d86 100644
    <tabstop>txtBIOS9Path</tabstop>
    <tabstop>btnBIOS9Browse</tabstop>
 diff --git a/src/frontend/qt_sdl/EmuThread.cpp b/src/frontend/qt_sdl/EmuThread.cpp
-index c3fbdfe6..dd088af1 100755
+index c3fbdfe..88d5ccc 100755
 --- a/src/frontend/qt_sdl/EmuThread.cpp
 +++ b/src/frontend/qt_sdl/EmuThread.cpp
 @@ -55,6 +55,9 @@
@@ -957,7 +957,7 @@ index c3fbdfe6..dd088af1 100755
  using namespace melonDS;
  
  
-@@ -322,6 +325,87 @@ void EmuThread::run()
+@@ -322,6 +325,117 @@ void EmuThread::run()
  
              emuInstance->drawScreen();
  
@@ -977,66 +977,96 @@ index c3fbdfe6..dd088af1 100755
 +            // (true => RAM framebuffer pointers; false => renderer-specific
 +            // value such as a GL texture handle, when the *3D renderer*
 +            // specifically is GL-based -- see analysis doc section 1.2).
-+            // Scoped block, not just an if-statement: remoteServer can be
-+            // started/stopped live from another thread (see
-+            // ManagementServer.h), not just once at process startup, so
-+            // every dereference of it needs to hold remoteServerMutex --
-+            // but only for as long as it's actually being used, not for
-+            // the rest of this loop iteration (frame limiting/audio sync
-+            // below can sleep for a while, which would otherwise block
-+            // an in-flight toggle for no reason).
++            // remoteServer can be started/stopped live from another thread
++            // (see ManagementServer.h), not just once at process startup,
++            // so every dereference of it needs to hold remoteServerMutex.
++            // Real user report, 2026-08-28 ("melonDS hangs on exiting"):
++            // the GL readback fallback's cost scales with melonDS's own 3D
++            // resolution setting (see GLBottomScreenCapture's own upscale-
++            // forwarding comment) and used to run entirely inside one
++            // remoteServerMutex acquisition covering this whole block --
++            // ~EmuInstance()'s stopRemoteServer() (main/GUI thread) takes
++            // that same mutex to tear the server down, so a slow-enough
++            // GPU readback landing at exactly the wrong moment could make
++            // shutdown wait on this thread's *next* GL sync point, not
++            // just the current one. Restructured so the mutex is only
++            // held for the two cheap, bounded operations that actually
++            // touch remoteServer (an existence check, and the final
++            // pushBottomFrame() call) -- GPU::GetFramebuffers() and the GL
++            // capture/readback itself now run unlocked, since neither
++            // touches remoteServer or anything else stopRemoteServer()
++            // could be tearing down; both only ever touch this thread's
++            // own long-lived GPU/GL state. Not a total guarantee against
++            // every conceivable exit-time stall (a GPU driver can still
++            // block this thread for other reasons), but it removes the
++            // one concrete, newly-more-likely lock-hold hazard this
++            // change could otherwise have made worse.
++            bool wantRemoteFrame;
 +            {
 +                std::lock_guard<std::mutex> remoteServerLock(emuInstance->remoteServerMutex);
-+                if (emuInstance->remoteServer)
++                wantRemoteFrame = static_cast<bool>(emuInstance->remoteServer);
++            }
++            if (wantRemoteFrame)
++            {
++                void* topBuf = nullptr;
++                void* botBuf = nullptr;
++                if (emuInstance->nds->GPU.GetFramebuffers(&topBuf, &botBuf) && botBuf)
 +                {
-+                    void* topBuf = nullptr;
-+                    void* botBuf = nullptr;
-+                    if (emuInstance->nds->GPU.GetFramebuffers(&topBuf, &botBuf) && botBuf)
++                    std::lock_guard<std::mutex> remoteServerLock(emuInstance->remoteServerMutex);
++                    if (emuInstance->remoteServer)
 +                    {
 +                        emuInstance->remoteServer->pushBottomFrame(
-+                            botBuf, melonds_remote::host::kFrameSizeBytes);
++                            botBuf, melonds_remote::host::kFrameSizeBytes,
++                            static_cast<uint16_t>(melonds_remote::host::kFrameWidth),
++                            static_cast<uint16_t>(melonds_remote::host::kFrameHeight));
 +                    }
-+                    else
++                }
++                else
++                {
++                    // GetFramebuffers() returning false means the 3D
++                    // renderer is OpenGL/OpenGLCompute rather than
++                    // Software, and `topBuf` (when useOpenGL) points at
++                    // the GLuint name of GLRenderer's FPOutputTex array
++                    // texture (see GLBottomScreenCapture.h for the layer
++                    // layout this relies on) -- read the bottom screen
++                    // back from it directly rather than leaving the
++                    // remote client with nothing.
++                    static melonds_remote_bridge::GLBottomScreenCapture glCapture;
++                    static std::vector<uint8_t> glFrame;
++                    bool captured = false;
++                    if (useOpenGL && topBuf)
 +                    {
-+                        // GetFramebuffers() returning false means the 3D
-+                        // renderer is OpenGL/OpenGLCompute rather than
-+                        // Software, and `topBuf` (when useOpenGL) points at
-+                        // the GLuint name of GLRenderer's FPOutputTex array
-+                        // texture (see GLBottomScreenCapture.h for the layer
-+                        // layout this relies on) -- read the bottom screen
-+                        // back from it directly rather than leaving the
-+                        // remote client with nothing.
-+                        static melonds_remote_bridge::GLBottomScreenCapture glCapture;
-+                        static std::vector<uint8_t> glFrame;
-+                        bool captured = false;
-+                        if (useOpenGL && topBuf)
++                        GLuint texArray = *reinterpret_cast<GLuint*>(topBuf);
++                        uint16_t capturedWidth = 0, capturedHeight = 0;
++                        captured = glCapture.captureBottomScreen(texArray, glFrame, capturedWidth,
++                                                                  capturedHeight);
++                        if (captured)
 +                        {
-+                            GLuint texArray = *reinterpret_cast<GLuint*>(topBuf);
-+                            captured = glCapture.captureBottomScreen(texArray, glFrame);
-+                            if (captured)
++                            std::lock_guard<std::mutex> remoteServerLock(emuInstance->remoteServerMutex);
++                            if (emuInstance->remoteServer)
 +                            {
 +                                emuInstance->remoteServer->pushBottomFrame(
-+                                    glFrame.data(), melonds_remote::host::kFrameSizeBytes);
++                                    glFrame.data(), glFrame.size(), capturedWidth, capturedHeight);
 +                            }
 +                        }
++                    }
 +
-+                        if (!captured)
++                    if (!captured)
++                    {
++                        // Either not actually the OpenGL path, or the GL
++                        // readback itself failed for some other reason --
++                        // printed once (not every frame) so it's visible
++                        // without flooding the log.
++                        static bool warnedNoRemoteFramebuffer = false;
++                        if (!warnedNoRemoteFramebuffer)
 +                        {
-+                            // Either not actually the OpenGL path, or the GL
-+                            // readback itself failed for some other reason --
-+                            // printed once (not every frame) so it's visible
-+                            // without flooding the log.
-+                            static bool warnedNoRemoteFramebuffer = false;
-+                            if (!warnedNoRemoteFramebuffer)
-+                            {
-+                                warnedNoRemoteFramebuffer = true;
-+                                fprintf(stderr,
-+                                    "melonds-remote: could not capture a bottom-screen frame for the "
-+                                    "remote client (GPU::GetFramebuffers() returned no RAM pointer, and "
-+                                    "the OpenGL readback fallback also didn't produce one) -- the "
-+                                    "client will show a blank/test-pattern screen instead of real "
-+                                    "video.\n");
-+                            }
++                            warnedNoRemoteFramebuffer = true;
++                            fprintf(stderr,
++                                "melonds-remote: could not capture a bottom-screen frame for the "
++                                "remote client (GPU::GetFramebuffers() returned no RAM pointer, and "
++                                "the OpenGL readback fallback also didn't produce one) -- the "
++                                "client will show a blank/test-pattern screen instead of real "
++                                "video.\n");
 +                        }
 +                    }
 +                }
@@ -1046,7 +1076,7 @@ index c3fbdfe6..dd088af1 100755
              MelonCap::Update();
  #endif // MELONCAP
 diff --git a/src/frontend/qt_sdl/Window.cpp b/src/frontend/qt_sdl/Window.cpp
-index 92189a56..9e89ffa4 100755
+index 92189a5..9e89ffa 100755
 --- a/src/frontend/qt_sdl/Window.cpp
 +++ b/src/frontend/qt_sdl/Window.cpp
 @@ -33,6 +33,7 @@
@@ -1086,10 +1116,10 @@ index 92189a56..9e89ffa4 100755
  
 diff --git a/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.cpp b/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.cpp
 new file mode 100644
-index 00000000..1f2ef4ef
+index 0000000..a4f3c01
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.cpp
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,115 @@
 +#include "GLBottomScreenCapture.h"
 +
 +#include "host/frame_source.h"
@@ -1097,8 +1127,18 @@ index 00000000..1f2ef4ef
 +namespace melonds_remote_bridge {
 +
 +namespace {
-+constexpr GLsizei kOutW = melonds_remote::host::kFrameWidth;
-+constexpr GLsizei kOutH = melonds_remote::host::kFrameHeight;
++constexpr GLsizei kNativeW = melonds_remote::host::kFrameWidth;
++constexpr GLsizei kNativeH = melonds_remote::host::kFrameHeight;
++
++// Upper bound on how much of melonDS's own internal 3D upscale (up to
++// 16x, Config's "3D.GL.ScaleFactor" range) actually gets forwarded to a
++// remote client -- see GLBottomScreenCapture.h's own comment on why the
++// full range isn't streamed uncapped. 4x (1024x768) is already above a
++// Steam Deck's own 1280x800 display's height, so it's the point past
++// which more resolution stops being visibly sharper on the device this
++// project targets, while staying cheap enough to JPEG/H264-encode and
++// transmit in real time.
++constexpr GLsizei kMaxCaptureScale = 4;
 +}
 +
 +GLBottomScreenCapture::~GLBottomScreenCapture() {
@@ -1107,7 +1147,8 @@ index 00000000..1f2ef4ef
 +    if (readFB_) glDeleteFramebuffers(1, &readFB_);
 +}
 +
-+bool GLBottomScreenCapture::captureBottomScreen(GLuint texArray, std::vector<uint8_t>& outBgra) {
++bool GLBottomScreenCapture::captureBottomScreen(GLuint texArray, std::vector<uint8_t>& outBgra,
++                                                 uint16_t& outWidth, uint16_t& outHeight) {
 +    GLint prevRead = 0, prevDraw = 0;
 +    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
 +    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDraw);
@@ -1118,7 +1159,19 @@ index 00000000..1f2ef4ef
 +    glGetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, 0, GL_TEXTURE_HEIGHT, &texH);
 +
 +    bool ok = false;
-+    if (texW >= kOutW && texH >= kOutH) {
++    if (texW >= kNativeW && texH >= kNativeH) {
++        // texW/texH are always an integer multiple of native DS
++        // resolution (both dimensions scaled by the same ScaleFactor --
++        // see GPU_OpenGL.cpp's glTexImage3D(..., 256*ScaleFactor,
++        // 256*ScaleFactor, ...) sizing this class's own header describes),
++        // so capping via that one integer ratio keeps the 4:3 aspect
++        // ratio intact rather than risking a non-uniform cap on width vs.
++        // height independently.
++        GLsizei scale = texW / kNativeW;
++        GLsizei cappedScale = scale < kMaxCaptureScale ? scale : kMaxCaptureScale;
++        GLsizei targetW = kNativeW * cappedScale;
++        GLsizei targetH = kNativeH * cappedScale;
++
 +        if (!readFB_) glGenFramebuffers(1, &readFB_);
 +        glBindFramebuffer(GL_READ_FRAMEBUFFER, readFB_);
 +        // Layer 1 = bottom screen; see this class's header comment for
@@ -1127,25 +1180,31 @@ index 00000000..1f2ef4ef
 +        glReadBuffer(GL_COLOR_ATTACHMENT0);
 +
 +        if (glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
-+            outBgra.resize(melonds_remote::host::kFrameSizeBytes);
++            outBgra.resize(static_cast<size_t>(targetW) * static_cast<size_t>(targetH) * 4);
 +
-+            if (texW == kOutW && texH == kOutH) {
-+                // Common case (default 1x internal 3D resolution): read
++            if (targetW == texW && targetH == texH) {
++                // Texture is already at or below the cap (the common
++                // case -- melonDS's default is 1x, and most "upscale my
++                // 3D" settings stay under kMaxCaptureScale): read
 +                // directly, no downscale needed.
-+                glReadPixels(0, 0, kOutW, kOutH, GL_BGRA, GL_UNSIGNED_BYTE, outBgra.data());
++                glReadPixels(0, 0, targetW, targetH, GL_BGRA, GL_UNSIGNED_BYTE, outBgra.data());
 +                ok = true;
 +            } else {
-+                // User raised melonDS's internal 3D render resolution
-+                // above 1x -- downscale to native DS resolution via a GPU
-+                // blit, since the wire protocol/client are both fixed at
-+                // 256x192 in this version.
-+                if (!downscaleTex_) {
-+                    glGenTextures(1, &downscaleTex_);
++                // Above the cap -- downscale via a GPU blit rather than
++                // forwarding the full texture uncapped (see this class's
++                // header comment and kMaxCaptureScale's above for why).
++                // Reallocate downscaleTex_ if the target size has
++                // changed since the last call (melonDS's 3D resolution
++                // setting can change live while a client is connected).
++                if (!downscaleTex_ || downscaleTexW_ != targetW || downscaleTexH_ != targetH) {
++                    if (!downscaleTex_) glGenTextures(1, &downscaleTex_);
 +                    glBindTexture(GL_TEXTURE_2D, downscaleTex_);
-+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, kOutW, kOutH, 0, GL_RGBA,
++                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, targetW, targetH, 0, GL_RGBA,
 +                                 GL_UNSIGNED_BYTE, nullptr);
 +                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 +                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++                    downscaleTexW_ = targetW;
++                    downscaleTexH_ = targetH;
 +                }
 +                if (!downscaleFB_) glGenFramebuffers(1, &downscaleFB_);
 +                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, downscaleFB_);
@@ -1153,14 +1212,19 @@ index 00000000..1f2ef4ef
 +                                       downscaleTex_, 0);
 +
 +                if (glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
-+                    glBlitFramebuffer(0, 0, texW, texH, 0, 0, kOutW, kOutH, GL_COLOR_BUFFER_BIT,
++                    glBlitFramebuffer(0, 0, texW, texH, 0, 0, targetW, targetH, GL_COLOR_BUFFER_BIT,
 +                                       GL_LINEAR);
 +
 +                    glBindFramebuffer(GL_READ_FRAMEBUFFER, downscaleFB_);
 +                    glReadBuffer(GL_COLOR_ATTACHMENT0);
-+                    glReadPixels(0, 0, kOutW, kOutH, GL_BGRA, GL_UNSIGNED_BYTE, outBgra.data());
++                    glReadPixels(0, 0, targetW, targetH, GL_BGRA, GL_UNSIGNED_BYTE, outBgra.data());
 +                    ok = true;
 +                }
++            }
++
++            if (ok) {
++                outWidth = static_cast<uint16_t>(targetW);
++                outHeight = static_cast<uint16_t>(targetH);
 +            }
 +        }
 +    }
@@ -1173,10 +1237,10 @@ index 00000000..1f2ef4ef
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.h b/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.h
 new file mode 100644
-index 00000000..963efac7
+index 0000000..3e0cf18
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.h
-@@ -0,0 +1,63 @@
+@@ -0,0 +1,92 @@
 +#pragma once
 +
 +// Reads the bottom-screen layer back from melonDS's OpenGL/OpenGLCompute
@@ -1220,29 +1284,58 @@ index 00000000..963efac7
 +
 +    // `texArray` is the GL_TEXTURE_2D_ARRAY handle GetFramebuffers()
 +    // pointed at (dereferenced by the caller -- see EmuThread.cpp).
-+    // Reads layer 1 (bottom screen) into `outBgra`, downscaling to
-+    // 256x192 first via a GPU blit if the texture is larger (i.e. the
-+    // user raised melonDS's internal 3D resolution above 1x -- the wire
-+    // protocol and client are both fixed at native DS resolution, so
-+    // higher internal resolution doesn't reach the remote client in this
-+    // version). Resizes `outBgra` to exactly
-+    // melonds_remote::host::kFrameSizeBytes on success. Returns false
-+    // (leaving `outBgra` unchanged) if the texture isn't at least
-+    // 256x192 or the readback otherwise couldn't be completed -- callers
-+    // should fall back to their own diagnostic in that case, since it
-+    // means this renderer isn't laid out the way this class assumes.
-+    bool captureBottomScreen(GLuint texArray, std::vector<uint8_t>& outBgra);
++    // Reads layer 1 (bottom screen) into `outBgra` at the texture's own
++    // resolution -- melonDS's "3D Renderer -> Resolution" setting
++    // (Config's "3D.GL.ScaleFactor", 1-16, i.e. up to 4096x3072 for this
++    // one screen) genuinely changes the sharpness of any 3D content
++    // rendered to it, and the wire protocol/host/client are all already
++    // resolution-agnostic per-frame (see host/frame_source.h's
++    // IFrameSource::getLatestFrame() and net_client.cpp's
++    // hostNativeWidth()/hostNativeHeight(), both already built for a
++    // capture source whose real size isn't known until a frame actually
++    // arrives -- originally for CemuAdapter, equally applicable here).
++    //
++    // Real user report: the bottom screen stayed native 256x192 (soft,
++    // blocky 3D) no matter how high the user raised melonDS's own
++    // internal resolution, because this class used to unconditionally
++    // downscale back to 256x192 before the frame ever left the host.
++    //
++    // Still caps at kMaxCaptureScale (see .cpp) via the same downscale-
++    // blit path this class already had, rather than forwarding the full
++    // 16x/4096x3072 texture uncapped: that many raw BGRA bytes per frame
++    // (~50MB) would cost far more to read back, JPEG/H264-encode, and
++    // transmit than any real-time stream can absorb, and it's already
++    // well past what a Steam Deck's own 1280x800 display could show
++    // sharper for. Downscaling only kicks in above that cap -- most
++    // "upscale my 3D" settings (2x-4x) are read back directly, uncapped.
++    //
++    // Resizes `outBgra` to outWidth*outHeight*4 bytes (BGRA8888) and sets
++    // outWidth/outHeight to the actual captured resolution on success.
++    // Returns false (leaving `outBgra`/outWidth/outHeight unchanged) if
++    // the texture isn't at least native DS resolution or the readback
++    // otherwise couldn't be completed -- callers should fall back to
++    // their own diagnostic in that case, since it means this renderer
++    // isn't laid out the way this class assumes.
++    bool captureBottomScreen(GLuint texArray, std::vector<uint8_t>& outBgra, uint16_t& outWidth,
++                              uint16_t& outHeight);
 +
 +private:
 +    GLuint readFB_ = 0;
 +    GLuint downscaleFB_ = 0;
 +    GLuint downscaleTex_ = 0;
++    // Size downscaleTex_ was last allocated at (0 until first use) --
++    // melonDS's 3D resolution setting can change live while connected
++    // (VideoSettingsDialog applies immediately), so the target downscale
++    // size isn't fixed the way it was when this was always 256x192;
++    // reallocate downscaleTex_ if it no longer matches.
++    GLsizei downscaleTexW_ = 0;
++    GLsizei downscaleTexH_ = 0;
 +};
 +
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/ManagementServer.cpp b/src/frontend/qt_sdl/remote_server/ManagementServer.cpp
 new file mode 100644
-index 00000000..4ec55e22
+index 0000000..4ec55e2
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/ManagementServer.cpp
 @@ -0,0 +1,148 @@
@@ -1396,7 +1489,7 @@ index 00000000..4ec55e22
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/ManagementServer.h b/src/frontend/qt_sdl/remote_server/ManagementServer.h
 new file mode 100644
-index 00000000..2aece359
+index 0000000..2aece35
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/ManagementServer.h
 @@ -0,0 +1,68 @@
@@ -1470,10 +1563,10 @@ index 00000000..2aece359
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSAdapter.cpp b/src/frontend/qt_sdl/remote_server/MelonDSAdapter.cpp
 new file mode 100644
-index 00000000..2fee09ed
+index 0000000..cecf7b6
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/MelonDSAdapter.cpp
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,138 @@
 +#include "MelonDSAdapter.h"
 +
 +// For MELONDS_VERSION, reported as this adapter's own version -- see
@@ -1589,18 +1682,22 @@ index 00000000..2fee09ed
 +    if (!frameSource_.getLatestFrame(frame, frameIndex, frameWidth, frameHeight)) return false;
 +    outFrame.surfaceId = kBottomSurfaceId;
 +    outFrame.frameIndex = frameIndex;
-+    // Contract v2: DS has one genuinely fixed native resolution, matching
-+    // capabilities()'s own bottom.width/height above -- no dynamic-capture
-+    // concept here, unlike e.g. Cemu's (see adapter_contract.h's
-+    // SurfaceFrame comment).
-+    outFrame.width = 256;
-+    outFrame.height = 192;
++    // The software renderer always pushes native 256x192 (matching
++    // capabilities()'s own bottom.width/height above), but the OpenGL
++    // renderer's capture can be any resolution melonDS's own 3D upscale
++    // setting produces (see GLBottomScreenCapture) -- this frame's actual
++    // dimensions, not a fixed assumption, same dynamic-capture treatment
++    // adapter_contract.h's SurfaceFrame comment already describes for
++    // e.g. Cemu.
++    outFrame.width = frameWidth;
++    outFrame.height = frameHeight;
 +    outFrame.pixels = std::move(frame);
 +    return true;
 +}
 +
-+void MelonDSAdapter::pushFrame(const void* bgraData, size_t sizeBytes) {
-+    frameSource_.pushFrame(bgraData, sizeBytes);
++void MelonDSAdapter::pushFrame(const void* bgraData, size_t sizeBytes, uint16_t width,
++                                uint16_t height) {
++    frameSource_.pushFrame(bgraData, sizeBytes, width, height);
 +}
 +
 +melonds_remote::ControllerState MelonDSAdapter::latestControllerState() const {
@@ -1610,7 +1707,7 @@ index 00000000..2fee09ed
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSAdapter.h b/src/frontend/qt_sdl/remote_server/MelonDSAdapter.h
 new file mode 100644
-index 00000000..184a2ee9
+index 0000000..8a646ae
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/MelonDSAdapter.h
 @@ -0,0 +1,47 @@
@@ -1652,7 +1749,7 @@ index 00000000..184a2ee9
 +    // merged controller state back out" method -- those stay exactly
 +    // the same shape they were before this class existed, see
 +    // MelonDSFrameSource::pushFrame()/MelonDSInputSink::latestState()).
-+    void pushFrame(const void* bgraData, size_t sizeBytes);
++    void pushFrame(const void* bgraData, size_t sizeBytes, uint16_t width, uint16_t height);
 +    melonds_remote::ControllerState latestControllerState() const;
 +
 +private:
@@ -1663,24 +1760,28 @@ index 00000000..184a2ee9
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.cpp b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.cpp
 new file mode 100644
-index 00000000..01c2fc06
+index 0000000..0806357
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.cpp
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,36 @@
 +#include "MelonDSFrameSource.h"
 +
 +#include <cstring>
 +
 +namespace melonds_remote_bridge {
 +
-+void MelonDSFrameSource::pushFrame(const void* bgraData, size_t sizeBytes) {
-+    if (bgraData == nullptr || sizeBytes != melonds_remote::host::kFrameSizeBytes) {
++void MelonDSFrameSource::pushFrame(const void* bgraData, size_t sizeBytes, uint16_t width,
++                                    uint16_t height) {
++    if (bgraData == nullptr ||
++        sizeBytes != static_cast<size_t>(width) * static_cast<size_t>(height) * 4) {
 +        return;
 +    }
 +
 +    std::lock_guard<std::mutex> lock(mutex_);
 +    latestFrame_.resize(sizeBytes);
 +    std::memcpy(latestFrame_.data(), bgraData, sizeBytes);
++    width_ = width;
++    height_ = height;
 +    ++frameIndex_;
 +    hasFrame_ = true;
 +}
@@ -1693,27 +1794,28 @@ index 00000000..01c2fc06
 +    }
 +    outFrame = latestFrame_;
 +    outFrameIndex = frameIndex_;
-+    outWidth = static_cast<uint16_t>(melonds_remote::host::kFrameWidth);
-+    outHeight = static_cast<uint16_t>(melonds_remote::host::kFrameHeight);
++    outWidth = width_;
++    outHeight = height_;
 +    return true;
 +}
 +
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.h b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.h
 new file mode 100644
-index 00000000..3b30cbb2
+index 0000000..d43e29a
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.h
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,46 @@
 +#pragma once
 +
 +// Push-driven IFrameSource: EmuThread calls pushFrame() once per emulated
-+// frame (software renderer only) right after GPU::GetFramebuffers(), and
-+// NetServer's video thread calls getLatestFrame() to pull the newest one.
-+// Same single-slot, mutex-guarded, latest-wins shape as the standalone
-+// prototype's SyntheticFrameSource (see melonds-remote's host/remote-server),
-+// but produced by the real emulation thread instead of a self-timed
-+// generator thread.
++// frame (software renderer directly, or GLBottomScreenCapture's readback
++// for the OpenGL/OpenGLCompute 3D renderer) right after
++// GPU::GetFramebuffers(), and NetServer's video thread calls
++// getLatestFrame() to pull the newest one. Same single-slot, mutex-guarded,
++// latest-wins shape as the standalone prototype's SyntheticFrameSource
++// (see melonds-remote's host/remote-server), but produced by the real
++// emulation thread instead of a self-timed generator thread.
 +
 +#include <cstddef>
 +#include <cstdint>
@@ -1726,10 +1828,16 @@ index 00000000..3b30cbb2
 +
 +class MelonDSFrameSource : public melonds_remote::host::IFrameSource {
 +public:
-+    // Copies `sizeBytes` bytes from `bgraData` into the single-slot buffer.
-+    // Silently ignored if sizeBytes doesn't match
-+    // melonds_remote::host::kFrameSizeBytes.
-+    void pushFrame(const void* bgraData, size_t sizeBytes);
++    // Copies `sizeBytes` bytes from `bgraData` into the single-slot
++    // buffer, tagged with this frame's actual width/height. Silently
++    // ignored if sizeBytes doesn't equal width*height*4 (BGRA8888) --
++    // the software renderer always pushes native DS resolution, but the
++    // OpenGL renderer's capture can be any resolution melonDS's own 3D
++    // upscale setting produces (see GLBottomScreenCapture), so this
++    // checks the actual claimed size rather than assuming
++    // melonds_remote::host::kFrameSizeBytes the way it used to when
++    // every pushed frame was native resolution.
++    void pushFrame(const void* bgraData, size_t sizeBytes, uint16_t width, uint16_t height);
 +
 +    bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
 +                         uint16_t& outWidth, uint16_t& outHeight) override;
@@ -1737,6 +1845,8 @@ index 00000000..3b30cbb2
 +private:
 +    std::mutex mutex_;
 +    std::vector<uint8_t> latestFrame_;
++    uint16_t width_ = static_cast<uint16_t>(melonds_remote::host::kFrameWidth);
++    uint16_t height_ = static_cast<uint16_t>(melonds_remote::host::kFrameHeight);
 +    uint64_t frameIndex_ = 0;
 +    bool hasFrame_ = false;
 +};
@@ -1744,7 +1854,7 @@ index 00000000..3b30cbb2
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSInputSink.cpp b/src/frontend/qt_sdl/remote_server/MelonDSInputSink.cpp
 new file mode 100644
-index 00000000..998c1e01
+index 0000000..998c1e0
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/MelonDSInputSink.cpp
 @@ -0,0 +1,22 @@
@@ -1772,7 +1882,7 @@ index 00000000..998c1e01
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSInputSink.h b/src/frontend/qt_sdl/remote_server/MelonDSInputSink.h
 new file mode 100644
-index 00000000..05308c9b
+index 0000000..05308c9
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/MelonDSInputSink.h
 @@ -0,0 +1,27 @@
@@ -1805,7 +1915,7 @@ index 00000000..05308c9b
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.cpp b/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.cpp
 new file mode 100644
-index 00000000..b5d8d9be
+index 0000000..b5d8d9b
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.cpp
 @@ -0,0 +1,44 @@
@@ -1855,7 +1965,7 @@ index 00000000..b5d8d9be
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.h b/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.h
 new file mode 100644
-index 00000000..a00f345a
+index 0000000..a00f345
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.h
 @@ -0,0 +1,57 @@
@@ -1918,10 +2028,10 @@ index 00000000..a00f345a
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
 new file mode 100644
-index 00000000..85c62328
+index 0000000..79c4660
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
-@@ -0,0 +1,152 @@
+@@ -0,0 +1,153 @@
 +#include "RemoteServerBridge.h"
 +
 +#include <algorithm>
@@ -2044,8 +2154,9 @@ index 00000000..85c62328
 +    }
 +}
 +
-+void RemoteServerBridge::pushBottomFrame(const void* bgraData, size_t sizeBytes) {
-+    adapter_.pushFrame(bgraData, sizeBytes);
++void RemoteServerBridge::pushBottomFrame(const void* bgraData, size_t sizeBytes, uint16_t width,
++                                          uint16_t height) {
++    adapter_.pushFrame(bgraData, sizeBytes, width, height);
 +}
 +
 +melonds_remote::ControllerState RemoteServerBridge::latestControllerState() const {
@@ -2076,10 +2187,10 @@ index 00000000..85c62328
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
 new file mode 100644
-index 00000000..1f1dc6d1
+index 0000000..31f3fc1
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,170 @@
 +#pragma once
 +
 +// Ties the standalone melonds-remote protocol/host networking code
@@ -2187,9 +2298,12 @@ index 00000000..1f1dc6d1
 +    bool start();
 +    void stop();
 +
-+    // Called by EmuThread once per emulated frame (software renderer path
-+    // only) right after GPU::GetFramebuffers().
-+    void pushBottomFrame(const void* bgraData, size_t sizeBytes);
++    // Called by EmuThread once per emulated frame -- either the software
++    // renderer path directly after GPU::GetFramebuffers() (always native
++    // DS resolution), or GLBottomScreenCapture's readback for the
++    // OpenGL/OpenGLCompute 3D renderer (whatever resolution melonDS's own
++    // 3D upscale setting produced, up to GLBottomScreenCapture's own cap).
++    void pushBottomFrame(const void* bgraData, size_t sizeBytes, uint16_t width, uint16_t height);
 +
 +    // Called by EmuInstance::inputProcess() once per frame to read the
 +    // latest remote controller/touch/action state to merge in.
@@ -2249,7 +2363,7 @@ index 00000000..1f1dc6d1
 +} // namespace melonds_remote_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/adapter_contract.h b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/adapter_contract.h
 new file mode 100644
-index 00000000..73a9402a
+index 0000000..73a9402
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/adapter_contract.h
 @@ -0,0 +1,138 @@
@@ -2393,7 +2507,7 @@ index 00000000..73a9402a
 +} // namespace melonds_remote::adapter
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/generic_input.h b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/generic_input.h
 new file mode 100644
-index 00000000..1945b0b5
+index 0000000..1945b0b
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/generic_input.h
 @@ -0,0 +1,105 @@
@@ -2504,7 +2618,7 @@ index 00000000..1945b0b5
 +} // namespace melonds_remote::adapter
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/adapter_ipc_client.h b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/adapter_ipc_client.h
 new file mode 100644
-index 00000000..5afcaceb
+index 0000000..5afcace
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/adapter_ipc_client.h
 @@ -0,0 +1,77 @@
@@ -2587,7 +2701,7 @@ index 00000000..5afcaceb
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/ipc_protocol.h b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/ipc_protocol.h
 new file mode 100644
-index 00000000..095af9c7
+index 0000000..095af9c
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/ipc_protocol.h
 @@ -0,0 +1,159 @@
@@ -2752,7 +2866,7 @@ index 00000000..095af9c7
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/socket_path.h b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/socket_path.h
 new file mode 100644
-index 00000000..6f99edf1
+index 0000000..6f99edf
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/socket_path.h
 @@ -0,0 +1,30 @@
@@ -2788,7 +2902,7 @@ index 00000000..6f99edf1
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/session_state.h b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/session_state.h
 new file mode 100644
-index 00000000..a5981817
+index 0000000..a598181
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/session_state.h
 @@ -0,0 +1,35 @@
@@ -2829,7 +2943,7 @@ index 00000000..a5981817
 +} // namespace melonds_remote::adapter
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/video_surface.h b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/video_surface.h
 new file mode 100644
-index 00000000..a4412965
+index 0000000..a441296
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/video_surface.h
 @@ -0,0 +1,76 @@
@@ -2911,7 +3025,7 @@ index 00000000..a4412965
 +} // namespace melonds_remote::adapter
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/src/adapter_ipc_client.cpp b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/adapter_ipc_client.cpp
 new file mode 100644
-index 00000000..2db237ef
+index 0000000..2db237e
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/adapter_ipc_client.cpp
 @@ -0,0 +1,301 @@
@@ -3218,7 +3332,7 @@ index 00000000..2db237ef
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/src/ipc_protocol.cpp b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/ipc_protocol.cpp
 new file mode 100644
-index 00000000..4cac76e0
+index 0000000..4cac76e
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/ipc_protocol.cpp
 @@ -0,0 +1,337 @@
@@ -3561,7 +3675,7 @@ index 00000000..4cac76e0
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/src/session_state.cpp b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/session_state.cpp
 new file mode 100644
-index 00000000..dc101d2c
+index 0000000..dc101d2
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/session_state.cpp
 @@ -0,0 +1,41 @@
@@ -3608,7 +3722,7 @@ index 00000000..dc101d2c
 +} // namespace melonds_remote::adapter
 diff --git a/src/frontend/qt_sdl/remote_server/adapter_sdk/src/socket_path.cpp b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/socket_path.cpp
 new file mode 100644
-index 00000000..42214503
+index 0000000..4221450
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/adapter_sdk/src/socket_path.cpp
 @@ -0,0 +1,55 @@
@@ -3669,7 +3783,7 @@ index 00000000..42214503
 +} // namespace melonds_remote::adapter::ipc
 diff --git a/src/frontend/qt_sdl/remote_server/host/adapter_bridge.cpp b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.cpp
 new file mode 100644
-index 00000000..7d359cd1
+index 0000000..7d359cd
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.cpp
 @@ -0,0 +1,145 @@
@@ -3820,7 +3934,7 @@ index 00000000..7d359cd1
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/adapter_bridge.h b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.h
 new file mode 100644
-index 00000000..44733239
+index 0000000..4473323
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/adapter_bridge.h
 @@ -0,0 +1,92 @@
@@ -3918,7 +4032,7 @@ index 00000000..44733239
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/device_approval_manager.cpp b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.cpp
 new file mode 100644
-index 00000000..3af7c901
+index 0000000..3af7c90
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.cpp
 @@ -0,0 +1,168 @@
@@ -4092,7 +4206,7 @@ index 00000000..3af7c901
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/device_approval_manager.h b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.h
 new file mode 100644
-index 00000000..42660f50
+index 0000000..42660f5
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/device_approval_manager.h
 @@ -0,0 +1,150 @@
@@ -4248,7 +4362,7 @@ index 00000000..42660f50
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/emulator_input_sink.h b/src/frontend/qt_sdl/remote_server/host/emulator_input_sink.h
 new file mode 100644
-index 00000000..b6f99b86
+index 0000000..b6f99b8
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/emulator_input_sink.h
 @@ -0,0 +1,34 @@
@@ -4288,7 +4402,7 @@ index 00000000..b6f99b86
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/frame_source.h b/src/frontend/qt_sdl/remote_server/host/frame_source.h
 new file mode 100644
-index 00000000..391f9d87
+index 0000000..391f9d8
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/frame_source.h
 @@ -0,0 +1,80 @@
@@ -4374,7 +4488,7 @@ index 00000000..391f9d87
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/mic_audio_sink.h b/src/frontend/qt_sdl/remote_server/host/mic_audio_sink.h
 new file mode 100644
-index 00000000..34cb8a58
+index 0000000..34cb8a5
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/mic_audio_sink.h
 @@ -0,0 +1,35 @@
@@ -4415,7 +4529,7 @@ index 00000000..34cb8a58
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.cpp b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
 new file mode 100644
-index 00000000..455acae4
+index 0000000..2abf61f
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
 @@ -0,0 +1,1310 @@
@@ -5731,7 +5845,7 @@ index 00000000..455acae4
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.h b/src/frontend/qt_sdl/remote_server/host/net_server.h
 new file mode 100644
-index 00000000..632e3d24
+index 0000000..632e3d2
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/host/net_server.h
 @@ -0,0 +1,442 @@
@@ -6179,7 +6293,7 @@ index 00000000..632e3d24
 +} // namespace melonds_remote::host
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/input_state_tracker.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/input_state_tracker.h
 new file mode 100644
-index 00000000..48014b9b
+index 0000000..48014b9
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/input_state_tracker.h
 @@ -0,0 +1,64 @@
@@ -6249,7 +6363,7 @@ index 00000000..48014b9b
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
 new file mode 100644
-index 0000000..0000000
+index 0000000..b6282fa
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
 @@ -0,0 +1,906 @@
@@ -7161,7 +7275,7 @@ index 0000000..0000000
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/rate_limiter.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/rate_limiter.h
 new file mode 100644
-index 00000000..f1dc7418
+index 0000000..f1dc741
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/rate_limiter.h
 @@ -0,0 +1,43 @@
@@ -7210,7 +7324,7 @@ index 00000000..f1dc7418
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/touch_mapping.h b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/touch_mapping.h
 new file mode 100644
-index 00000000..18fd6fb6
+index 0000000..18fd6fb
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/touch_mapping.h
 @@ -0,0 +1,43 @@
@@ -7259,7 +7373,7 @@ index 00000000..18fd6fb6
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/input_state_tracker.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/input_state_tracker.cpp
 new file mode 100644
-index 00000000..a1aff532
+index 0000000..a1aff53
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/input_state_tracker.cpp
 @@ -0,0 +1,49 @@
@@ -7314,7 +7428,7 @@ index 00000000..a1aff532
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
 new file mode 100644
-index 0000000..0000000
+index 0000000..c9d2e0b
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
 @@ -0,0 +1,595 @@
@@ -7915,7 +8029,7 @@ index 0000000..0000000
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/rate_limiter.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/rate_limiter.cpp
 new file mode 100644
-index 00000000..1c0700bf
+index 0000000..1c0700b
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/rate_limiter.cpp
 @@ -0,0 +1,38 @@
@@ -7959,7 +8073,7 @@ index 00000000..1c0700bf
 +} // namespace melonds_remote
 diff --git a/src/frontend/qt_sdl/remote_server/protocol/src/touch_mapping.cpp b/src/frontend/qt_sdl/remote_server/protocol/src/touch_mapping.cpp
 new file mode 100644
-index 00000000..e1679638
+index 0000000..e167963
 --- /dev/null
 +++ b/src/frontend/qt_sdl/remote_server/protocol/src/touch_mapping.cpp
 @@ -0,0 +1,55 @@

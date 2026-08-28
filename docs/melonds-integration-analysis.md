@@ -92,10 +92,14 @@ bool GLRenderer::GetFramebuffers(void** top, void** bottom)
   `GLBottomScreenCapture` (`src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.{h,cpp}`
   in the patch) reads `FPOutputTex[frontbuf]` layer 1 (bottom screen)
   back with a synchronous `glReadPixels(..., GL_BGRA, GL_UNSIGNED_BYTE, ...)`
-  each frame, downscaling via `glBlitFramebuffer` first if
-  `3D.GL.ScaleFactor` is above 1x. This is the simple synchronous
-  version, not the async double-buffered PBO readback originally
-  envisioned here -- see `docs/known-limitations.md`'s
+  each frame, at `3D.GL.ScaleFactor`'s actual resolution (the wire
+  protocol/host/client are all resolution-agnostic per-frame -- see
+  `docs/known-limitations.md`'s 2026-08-28 "bottom screen upscale" entry)
+  -- downscaling via `glBlitFramebuffer` only once the scale factor
+  exceeds `GLBottomScreenCapture`'s own capture cap (4x/1024x768, well
+  past melonDS's full 16x range but still real-time-streamable). This is
+  the simple synchronous version, not the async double-buffered PBO
+  readback originally envisioned here -- see `docs/known-limitations.md`'s
   "OpenGL/OpenGLCompute 3D renderer" section for exactly what was
   verified (sustained ~58fps in this project's sandbox using Mesa
   software GL rendering) and what wasn't (a PBO-based async version
