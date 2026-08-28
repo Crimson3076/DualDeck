@@ -12200,6 +12200,46 @@ the actual test that melonDS now opens fullscreen at the host's native
 resolution with no title bar, on both a normal and a Distrobox-routed
 (Bazzite/rpm-ostree) host.
 
+## 2026-08-28: CI red on main -- tests/smoke_test.py and tests/device_approval_smoke_test.py still hardcoded protocol v13 after the v14 bump
+
+Found while checking main was actually releasable after merging the
+melonDS fullscreen fix above: both `CI` and `Release (versioned build)`
+had already gone red on `466d45d` (the LATENCY/protocol-v14 commit,
+merged the day before) and stayed red on the merge commit after it --
+`check-patch-protocol-sync.sh`'s "Check host patches embed the current
+protocol version" job failed outright (`tests/smoke_test.py embeds
+VERSION=13, live header is 14`), and the integration smoke test failed
+separately with `AssertionError: trailing bytes left unparsed in
+HelloAck payload`. Both hand-maintained test scripts still had
+`VERSION = 13` (protocol.h had moved to `kProtocolVersion = 14` for
+`HelloAckPayload::hostTimeUs`, per that commit's own entry above), and
+`smoke_test.py`'s `do_handshake()` field-by-field parse of `HelloAck`
+didn't consume the 8 new trailing bytes that field adds -- exactly the
+two failure modes `check-patch-protocol-sync.sh`'s own comments already
+document as having happened before (2026-08-01, 2026-08-03).
+
+Important distinction: this was a test-harness bug, not a shipped-product
+one. `check-patch-protocol-sync.sh`'s patch-embedding check (the part
+that would catch a real melonDS/Azahar/Cemu regression) reported all
+three patches correctly `in sync` at `kProtocolVersion=14` throughout --
+only the two *test* scripts' own hardcoded copies had drifted, so
+`Release (versioned build)` succeeding anyway on `466d45d` wasn't a gap
+in that workflow, it genuinely never runs `ctest`/the smoke tests at all
+(`build-release.sh` builds and packages only); CI is the only workflow
+that exercises this path, and it was correctly red.
+
+**Fixed**: `VERSION = 13` -> `14` in both scripts, and `do_handshake()`
+now reads the new `hostTimeUs` (`uint64` little-endian, matching
+`protocol.cpp`'s `appendU64`/`readU64`) after `selected_video_codec`
+before its existing "trailing bytes unparsed" assertion.
+
+**Verified**: `./scripts/check-patch-protocol-sync.sh` now reports both
+scripts `in sync`; built `dualdeck-host-service` locally (JPEG-only,
+same as CI's "no SDL3, no melonDS" job) and ran `ctest` (6/6 passing),
+`tests/smoke_test.py`, and `tests/device_approval_smoke_test.py`
+directly against it -- all pass, including the specific `HelloAck`
+handshake case that previously raised the trailing-bytes assertion.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

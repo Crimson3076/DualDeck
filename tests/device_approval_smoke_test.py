@@ -49,10 +49,12 @@ MAGIC = 0x444D5231
 # protocol-version mismatch instead of exercising whatever this script
 # actually means to test). Real 2026-08-03 CI failure: this drifted to 11
 # while the live header had moved to 12, same class of bug as
-# smoke_test.py's own VERSION constant (fixed the same day) -- this file
-# just wasn't caught by that same pass since check-patch-protocol-sync.sh
-# only checks the three patch files, not tests/*.py.
-VERSION = 13
+# smoke_test.py's own VERSION constant (fixed the same day). Also drifted
+# to 13 while the live header moved to 14 (2026-08-28); check-patch-
+# protocol-sync.sh now checks this file's VERSION constant directly (it
+# didn't yet, the first time this drifted), so this one should be the
+# last time it goes unnoticed until CI.
+VERSION = 14
 
 PT_HELLO = 1
 PT_HELLO_ACK = 2
