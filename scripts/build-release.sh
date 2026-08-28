@@ -2074,12 +2074,20 @@ chmod +x "${pkg_dir}/host/internal/launch-emudeck-azahar.sh"
 
 cat > "${pkg_dir}/host/internal/launch-emudeck-integration.sh" <<'WRAP'
 #!/usr/bin/env bash
-# Entry point for ../../dualdeck-host.sh's "Patch my EmuDeck-installed
-# emulators" menu choice -- runs the bundled
+# Entry point for ../../dualdeck-host.sh's "Patch my EmuDeck/RetroDECK-
+# installed emulators" menu choice -- runs the bundled
 # emudeck-integration/scripts/emudeck-replace-in-place.sh (see
 # scripts/build-release.sh's "Bundling EmuDeck integration tool" step in
-# the DualDeck repository, and docs/known-limitations.md's Phase A
-# entry there for the full design).
+# the DualDeck repository, and docs/known-limitations.md's Phase A and
+# 2026-08-28 "RetroDECK" entries there for the full design).
+#
+# Despite the directory/tool name (kept as-is to avoid churning every
+# path this integration already relies on), this also installs a fresh
+# standalone AppImage with no EmuDeck present at all -- RetroDECK's own
+# ES-DE fork (and any other ES-DE-based frontend) checks the exact same
+# ~/Applications/*.AppImage path before falling back to its own bundled,
+# unpatched copy. See emudeck-replace-in-place.sh's own header and
+# install_fresh_standalone_appimage()'s comment.
 #
 # Unlike every other dualdeck-host.sh menu choice, this one downloads and
 # installs over files EmuDeck itself manages, with its own per-emulator
@@ -2976,7 +2984,7 @@ choose_action() {
             steam-remove "Remove from Steam / uninstall" \
             reconfigure-controls "Reconfigure Controls (fixes 'no controls' in Cemu)" \
             update "Check for updates / update" \
-            emudeck "Patch my EmuDeck-installed emulators (experimental)" \
+            emudeck "Patch my EmuDeck/RetroDECK-installed emulators (experimental)" \
             2>/dev/null || echo "cancel"
     else
         # All of this goes to stderr, not stdout -- the caller captures
@@ -2992,7 +3000,7 @@ choose_action() {
             echo "  4) Remove from Steam / uninstall"
             echo "  5) Reconfigure Controls (fixes 'no controls' in Cemu)"
             echo "  6) Check for updates / update"
-            echo "  7) Patch my EmuDeck-installed emulators (experimental)"
+            echo "  7) Patch my EmuDeck/RetroDECK-installed emulators (experimental)"
             echo "  8) Exit"
         } >&2
         read -rp "Choice [1-8]: " choice
@@ -3850,13 +3858,28 @@ chmod +x "${emudeck_bundle_dir}/scripts/emudeck-replace-in-place.sh" \
 echo "${version_tag}" > "${emudeck_bundle_dir}/VERSION"
 
 cat > "${emudeck_bundle_dir}/README.md" <<EMUDECK_README
-# EmuDeck integration (experimental)
+# EmuDeck / RetroDECK integration (experimental)
 
 Installs DualDeck's patched melonDS/Azahar/Cemu directly at the same
 path your existing EmuDeck installation's Steam shortcuts and launcher
 scripts already point to (\`~/Applications/*.AppImage\`), so they keep
 working unedited -- no need to change any EmuDeck shortcut, no separate
 DualDeck-managed install directory for these emulators.
+
+Also works with no EmuDeck installed at all, for **RetroDECK**: when no
+existing EmuDeck AppImage is found, this installs one fresh at the same
+\`~/Applications/*.AppImage\` path anyway. RetroDECK bundles its own
+unpatched copy of each emulator inside its own Flatpak sandbox, but its
+ES-DE-based game launcher already checks that exact host path first and
+only falls back to its own bundled copy if nothing is there (confirmed
+directly against RetroDECK's own source, not assumed -- see
+\`docs/known-limitations.md\`'s 2026-08-28 "RetroDECK" entry) -- so
+installing here is picked up automatically, no RetroDECK-specific setup
+needed. One real caveat: RetroDECK's Nintendo DS system defaults to a
+RetroArch core, not standalone melonDS, so you'll need to switch it to
+"melonDS (Standalone)" in RetroDECK's own per-system emulator settings
+for this to actually get used there (Cemu and Azahar are already
+standalone-only/default, so those need no such change).
 
 This downloads already-built, already-patched AppImages from this same
 GitHub release (built once in CI, not compiled on your machine) and
@@ -3866,22 +3889,26 @@ anything -- no build toolchain, no Distrobox, nothing to compile.
 Confirmed working end to end on real hardware (all three emulators
 launching via their existing EmuDeck/Steam shortcuts) -- see
 \`docs/known-limitations.md\`'s 2026-08-01 entries for the full
-verification history and what's still outstanding.
+verification history and what's still outstanding. The RetroDECK/fresh-
+install path is new and not yet confirmed against a real RetroDECK
+install (see that same 2026-08-28 entry).
 
 ## Usage
 
     cd emudeck-integration/scripts
     ./emudeck-replace-in-place.sh --dry-run
 
-Start with \`--dry-run\` -- it only detects your EmuDeck installs and
-reports what it would do, with zero side effects (it won't even
-download anything). Once you're happy with the plan:
+Start with \`--dry-run\` -- it only detects your EmuDeck installs (or, for
+an emulator with no EmuDeck install found, reports it would do a fresh
+RetroDECK-compatible install instead) and reports what it would do, with
+zero side effects (it won't even download anything). Once you're happy
+with the plan:
 
     ./emudeck-replace-in-place.sh
 
 Add \`--emulator melonds\` / \`--emulator azahar\` / \`--emulator cemu\`
-(repeatable) to target specific emulators instead of every one EmuDeck
-has installed. Add \`--yes\` to skip the confirmation prompt.
+(repeatable) to target specific emulators instead of every one found.
+Add \`--yes\` to skip the confirmation prompt.
 
 This also opens this host's firewall for DualDeck's ports (via
 \`firewall-cmd\`/\`ufw\`, whichever is present -- may prompt for your

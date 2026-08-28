@@ -12328,6 +12328,102 @@ OpenGLCompute and its resolution raised above 1x) is the actual test that
 the bottom screen now streams sharper, and the next clean exit is the
 actual test of whether the hang recurs.
 
+## 2026-08-28: RetroDECK support -- "override the retrodeck builds of the emulators"
+
+Real user request. RetroDECK is a separate, self-contained Flatpak
+(`net.retrodeck.retrodeck`) that bundles its own copies of melonDS/Cemu/
+Azahar -- entirely independent of EmuDeck, so `scripts/emudeck-replace-
+in-place.sh`'s existing "find an EmuDeck AppImage and overwrite it in
+place" flow did nothing for a RetroDECK-only machine (nothing for it to
+find). Investigated RetroDECK's own source directly rather than guessing
+(cloned `github.com/RetroDECK/{retrodeck,components,ES-DE}` read-only):
+
+- `net.retrodeck.retrodeck.yml`'s own modules never build melonDS/Cemu/
+  Azahar at all -- `install_components.sh` extracts pre-built
+  "component" tarballs into `/app/retrodeck/components/<name>/` at
+  Flatpak-build time instead. `RetroDECK/components`' own recipes
+  (`melonds/component_recipe.json`, `cemu/component_recipe.json`) show
+  those tarballs are themselves built by extracting the **stock, upstream
+  Flatpak** of each emulator (`net.kuribo64.melonDS`, `info.cemu.Cemu`,
+  Azahar's own Flatpak) -- never patched, never rebuilt from source.
+  `component_launcher.sh` for each is a two-line `exec
+  "$component_path/bin/<binary>" "$@"`, baked into RetroDECK's own
+  read-only Flatpak `/app` layer -- not something a host-side file can
+  overwrite directly, `--filesystem=host` or not.
+- RetroDECK's actual game-launcher, though, is its own fork of ES-DE
+  (`RetroDECK/ES-DE`), and ES-DE's `es_find_rules.xml` (confirmed in that
+  fork's own `resources/systems/linux/es_find_rules.xml`) checks several
+  **host** paths for each standalone emulator *before* falling back to
+  RetroDECK's own bundled `component_launcher.sh` -- for all three
+  emulators, `~/Applications/<Name>*.AppImage` is checked first, the
+  exact same directory/glob `emudeck_applications_dir()` already uses.
+  This is the same upstream ES-DE convention EmuDeck's own (non-fork)
+  ES-DE already relies on, so a fix here benefits any ES-DE-based
+  frontend, not just RetroDECK specifically.
+- Checked `es_systems.xml` for what command each system actually runs:
+  Wii U (`wiiu`) and 3DS (`n3ds`) both default to/only offer "Cemu
+  (Standalone)" / "Azahar (Standalone)" (`%EMULATOR_CEMU% -g %ROM%` /
+  `%EMULATOR_AZAHAR% %ROM%`) -- already exactly DualDeck's own patch
+  target, so a fix here "just works" with no RetroDECK-side
+  reconfiguration. DS (`nds`) is different: several RetroArch libretro
+  cores are listed *before* "melonDS (Standalone)"
+  (`%EMULATOR_MELONDS% %ROM%`) and one of those is very likely
+  RetroDECK's actual default -- a real gap this can't close on its own,
+  since a libretro core is a different build target melonDS's own
+  remote-server patch doesn't touch at all.
+
+**Fixed**: `scripts/emudeck-replace-in-place.sh` gained
+`install_fresh_standalone_appimage()`, called from `replace_in_place_one()`
+whenever no existing EmuDeck install is found for an emulator (previously:
+just prints "no EmuDeck install found... skipping" and does nothing).
+Downloads and installs the same already-built, already-verified patched
+AppImage `download_patched_appimage()` already fetches, straight to
+`~/Applications/<Name>.AppImage` -- landing exactly where RetroDECK's
+(and EmuDeck's own) ES-DE checks first. Strictly additive: an existing
+EmuDeck install's behavior is completely unchanged; this only replaces a
+prior no-op. Prints an explicit note for melonDS specifically about
+needing to switch RetroDECK's "nds" system to "melonDS (Standalone)" in
+its own per-system settings, since RetroDECK's default there isn't
+standalone melonDS at all.
+
+**A real, if narrow, bug found and fixed alongside this** (pre-existing,
+not introduced by this change): `restore_one()`'s `--restore` path
+unconditionally `cp -a`'d `.dualdeck-original` back over the installed
+AppImage. For the one pre-existing case that already had no real
+original to preserve (`bootstrap_melonds_flatpak_launcher()`, EmuDeck's
+melonDS-via-Flatpak case) that backup is deliberately plain explanatory
+text, not a real AppImage -- restoring it verbatim would leave a text
+file sitting at `~/Applications/melonDS.AppImage`, cosmetically odd but
+harmless there only because EmuDeck's launcher gets pointed back at the
+Flatpak in the same restore. This new fresh-install case has no such
+launcher to fall back to, so the same unconditional restore would leave
+RetroDECK/ES-DE trying to *execute* that text file as the emulator.
+`restore_one()` now reads the manifest's `original_sha256` field first;
+when it carries either function's `"none (...)"` sentinel, it removes
+the installed AppImage (and its placeholder backup) outright instead of
+restoring the placeholder over it -- correct for both cases, not just
+the new one.
+
+**Verified**: read RetroDECK's/ES-DE's actual source as described above
+rather than assuming; `bash -n` on both changed scripts; ran
+`emudeck-replace-in-place.sh` end to end against fake `$HOME`s with a
+local `DUALDECK_REPLACE_DOWNLOAD_BASE` (no real network calls) covering
+every path this touches -- `--dry-run` with nothing installed (reports
+the fresh-install plan, no side effects), a real fresh install for all
+three emulators (files land executable at the right paths, correct
+`--status` output afterward), a second run against an already-fresh-
+installed file (correctly falls through to the normal "found an
+existing install" re-patch path, unchanged), `--restore` on a fresh
+install (removes the file, backup, and manifest -- directory ends up
+empty again), and `--restore` on a genuine pre-existing AppImage (real
+original content comes back byte-for-byte, backup preserved for
+repeatability) -- confirming the restore fix doesn't regress the
+already-working case. **Not yet verified**: against a real RetroDECK
+install on real hardware -- the next real test is confirming a patched
+melonDS/Cemu/Azahar AppImage installed this way is actually what
+RetroDECK's ES-DE launches (with melonDS's system switched to
+"Standalone" first) rather than its own bundled copy.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
