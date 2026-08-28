@@ -33,12 +33,15 @@ MAGIC = 0x444D5231
 # its own: every Hello this script sends gets rejected as
 # REJECT_VERSION_MISMATCH instead of whatever that specific test case
 # actually meant to exercise. Real CI failures from exactly this drift:
-# 2026-08-01 (drifted to 10 while the live header had moved to 11) and
+# 2026-08-01 (drifted to 10 while the live header had moved to 11),
 # 2026-08-03 (drifted to 11 while the live header moved to 12, in the
 # same commit that bumped kProtocolVersion for Host Control's
 # leftTrigger/rightTrigger/hostControlButtons fields but didn't touch
-# this file).
-VERSION = 13
+# this file), and 2026-08-28 (drifted to 13 while the live header moved
+# to 14, in the same commit that added HelloAckPayload::hostTimeUs but
+# didn't touch this file -- see do_handshake()'s own comment on the
+# matching payload-parsing fix that needed alongside it).
+VERSION = 14
 
 PT_HELLO = 1
 PT_HELLO_ACK = 2
@@ -130,8 +133,10 @@ def do_handshake(control_port: int, token: str, app_version: str = "", video_cod
     (GitHub issue #28's identity fields, appended to HelloAckPayload after
     micSupported -- see docs/protocol.md's "Emulator identity model"),
     mode (GitHub issue #4 Phase E's HostMode field, appended after adapter
-    identity -- 0=Emulation, 1=HostControl), and selected_video_codec
-    (protocol v13 -- 0=JPEG, 1=H.264, appended after mode)."""
+    identity -- 0=Emulation, 1=HostControl), selected_video_codec
+    (protocol v13 -- 0=JPEG, 1=H.264, appended after mode), and
+    host_time_us (protocol v14 -- the host's wall-clock reading at
+    HelloAck-composition time, appended after selected_video_codec)."""
     ctrl = socket.create_connection(("127.0.0.1", control_port), timeout=3)
     payload = hello_payload("smoke-test-client", "linux", 1280, 800, token, app_version, video_codecs)
     ctrl.sendall(header(PT_HELLO, len(payload)) + payload)
@@ -158,6 +163,14 @@ def do_handshake(control_port: int, token: str, app_version: str = "", video_cod
     # project's own hosts today, since no other encoder exists yet.
     (selected_video_codec,) = struct.unpack_from("<B", ack_payload, offset)
     offset += 1
+    # HelloAckPayload::hostTimeUs (protocol v14) -- the host's own
+    # wall-clock reading at HelloAck-composition time, used by a real
+    # client (NetClient::connect()) to estimate host/client clock skew.
+    # Unused by this smoke test beyond parsing it correctly (nothing here
+    # depends on wall-clock skew), but it's still on the wire and must be
+    # consumed or every handshake trips the trailing-bytes check below.
+    (host_time_us,) = struct.unpack_from("<Q", ack_payload, offset)
+    offset += 8
     assert offset == len(ack_payload), "trailing bytes left unparsed in HelloAck payload"
     return {
         "ctrl": ctrl,
@@ -172,6 +185,7 @@ def do_handshake(control_port: int, token: str, app_version: str = "", video_cod
         "adapter_version": adapter_version,
         "mode": mode,
         "selected_video_codec": selected_video_codec,
+        "host_time_us": host_time_us,
     }
 
 
