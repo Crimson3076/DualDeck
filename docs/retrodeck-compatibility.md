@@ -263,6 +263,47 @@ mystery above):
 flatpak run net.retrodeck.retrodeck -e ~/Applications/Cemu.AppImage "<path to .rpx/.wud/etc.>"
 ```
 
+#### Convenient launch until the ES-DE bug is fixed: a Steam shortcut per game
+
+Since RetroDECK's own game list doesn't pick up the AppImage yet, the
+`-e` override above needs a one-click way to run from Steam Big Picture
+rather than a terminal. A small wrapper script plus this project's
+existing `steam_shortcut.py` (already installed alongside
+`dualdeck-host-service` in any real DualDeck install, at
+`<install-root>/internal/steam_shortcut.py`) covers this without any new
+tooling:
+
+1. Create a generic wrapper (takes the ROM path as its one argument, so
+   it isn't tied to one specific game):
+   ```
+   cat > ~/Applications/retrodeck-launch-cemu.sh <<'EOF'
+   #!/usr/bin/env bash
+   exec flatpak run net.retrodeck.retrodeck -e ~/Applications/Cemu.AppImage "$1"
+   EOF
+   chmod +x ~/Applications/retrodeck-launch-cemu.sh
+   ```
+2. Close Steam completely first (`steam_shortcut.py` caches-and-clobbers
+   `shortcuts.vdf` while Steam is running -- see its own docstring).
+3. Add the shortcut, one per game, pointing `--launch-options` at that
+   game's real ROM path (quote it -- ROM paths commonly contain spaces
+   and brackets):
+   ```
+   python3 <install-root>/internal/steam_shortcut.py \
+       --exe ~/Applications/retrodeck-launch-cemu.sh \
+       --name "<Game Name> (RetroDECK)" \
+       --launch-options '"<full path to the .rpx/.wud/etc.>"'
+   ```
+4. Restart Steam, find the new shortcut in your Library, and set its
+   Controller Layout to Gamepad the same way `docs/steam-deck-setup.md`
+   already describes for the client shortcut -- `steam_shortcut.py`
+   doesn't touch Steam Input layout assignments.
+
+This only *adds* a new shortcut; it never touches any existing
+EmuDeck/RetroDECK Steam entry (`steam_shortcut.py` matches and updates
+by `--exe`/`--name`, so an unrelated shortcut is never found or
+altered). Remove it later with
+`python3 <install-root>/internal/steam_shortcut.py --remove --name "<Game Name> (RetroDECK)"`.
+
 ### Advanced path: local RetroDECK Flatpak rebuild with the component tarball
 
 This is for someone building their own local RetroDECK Flatpak (e.g. to
