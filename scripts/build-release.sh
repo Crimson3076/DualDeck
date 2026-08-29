@@ -4420,8 +4420,18 @@ cp "${repo_root}/scripts/lib/appimage_manifest.py" "${emudeck_bundle_dir}/script
 # (see that script's own comment) -- needs this bundled too, the same
 # reason emudeck_paths.sh/appimage_manifest.py are.
 cp "${repo_root}/scripts/lib/host_firewall.sh" "${emudeck_bundle_dir}/scripts/lib/"
+# RetroDECK's own emulator-resolution (both its ES-DE GUI and its
+# separate run_game.sh CLI/API path, which is what Tender also calls
+# into) needs three extra local Flatpak permission grants plus a PATH
+# symlink beyond just installing the AppImage above -- confirmed on real
+# hardware, see docs/retrodeck-compatibility.md's "Real, confirmed
+# blockers" section and this script's own header comment for why each
+# one is needed. Bundled alongside emudeck-replace-in-place.sh since
+# it's the natural next step for a RetroDECK-only install.
+cp "${repo_root}/scripts/retrodeck-setup.sh" "${emudeck_bundle_dir}/scripts/"
 chmod +x "${emudeck_bundle_dir}/scripts/emudeck-replace-in-place.sh" \
-         "${emudeck_bundle_dir}/scripts/emudeck-check-drift.sh"
+         "${emudeck_bundle_dir}/scripts/emudeck-check-drift.sh" \
+         "${emudeck_bundle_dir}/scripts/retrodeck-setup.sh"
 
 # Read by emudeck-replace-in-place.sh's own version-detection fallback
 # (no .git directory exists inside a packaged release) -- same
@@ -4497,6 +4507,31 @@ installed AppImage (losing DualDeck's patch), and re-patch it if so:
 Re-patching after drift like this just re-downloads and re-verifies the
 same prebuilt AppImage from this release -- no rebuild, ever. Applies to
 all three emulators.
+
+## RetroDECK: extra setup for Cemu (Nintendo Wii U)
+
+Installing the AppImage above is necessary but not sufficient for
+RetroDECK specifically -- confirmed on real hardware, RetroDECK's
+sandbox is also missing the Flatpak permissions needed to actually run
+an AppImage and reach DualDeck's Host Service, and both of RetroDECK's
+own emulator-resolution mechanisms (its ES-DE GUI, and the separate
+\`run_game.sh\` script Tender also calls into) have real bugs that skip
+a valid host AppImage entirely. \`retrodeck-setup.sh\` applies the three
+local, \`--user\`-scoped Flatpak overrides (plus a \`~/.local/bin/cemu\`
+symlink) confirmed to fix all of that -- see
+\`docs/retrodeck-compatibility.md\`'s "Real, confirmed blockers" section
+for the full investigation, and that script's own \`--help\` for exactly
+what each grant does and why.
+
+    ./retrodeck-setup.sh --dry-run
+    ./retrodeck-setup.sh
+    ./retrodeck-setup.sh --status
+    ./retrodeck-setup.sh --restore
+
+Confirmed working end to end on real hardware: RetroDECK's own game
+list, its CLI, and a game installed and launched through Tender (a Decky
+plugin) all correctly launch the DualDeck-patched Cemu with this applied
+-- zero Tender-specific code needed anywhere. Cemu only, for now.
 EMUDECK_README
 
 echo "Bundled EmuDeck integration tool at host/emudeck-integration/"

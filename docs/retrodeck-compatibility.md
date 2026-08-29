@@ -285,7 +285,11 @@ with **no separate RetroDECK-side uninstall step**.
 are required for the AppImage to run, connect, and actually be the build
 RetroDECK launches** (confirmed necessary and sufficient on real
 hardware, 2026-08-29 -- see "Real, confirmed blockers" above for why
-each is needed):
+each is needed). `scripts/retrodeck-setup.sh` (bundled in every release
+alongside `emudeck-replace-in-place.sh` under `host/emudeck-integration/
+scripts/`) applies all of this in one step --
+`./retrodeck-setup.sh --dry-run` to preview, then `./retrodeck-setup.sh`
+to apply, `--status` to check, `--restore` to undo. Equivalent by hand:
 
 ```
 flatpak override --user --filesystem=xdg-run/dualdeck:create net.retrodeck.retrodeck

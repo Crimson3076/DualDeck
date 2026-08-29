@@ -62,6 +62,9 @@ jobs:
       - name: Run RetroDECK component packaging test
         run: python3 tests/retrodeck_component_pack_test.py
 
+      - name: Run RetroDECK setup script test
+        run: python3 tests/retrodeck_setup_test.py
+
   net-client-compiles:
     name: Compile client net_client.cpp/device_identity.cpp standalone (no SDL3 available)
     runs-on: ubuntu-latest
