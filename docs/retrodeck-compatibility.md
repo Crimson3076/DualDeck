@@ -135,20 +135,24 @@ design intended.
 | Display | `--socket=wayland`, `--socket=x11` | Yes |
 | Audio (PipeWire) | `--socket=pulseaudio`, `--filesystem=xdg-run/pipewire-0` | Yes |
 | Controller input | `--device=all`, `--filesystem=/run/udev:ro`, `--allow=bluetooth` | Yes |
-| DualDeck IPC (local Unix socket under `$XDG_RUNTIME_DIR`) | `--filesystem=xdg-run/dualdeck:create` | **No -- confirmed missing, see above.** `--filesystem=host` does not cover it despite being present. |
-| Running a raw `.AppImage` at all (RetroDECK's sandbox has no `fusermount` binary) | `--env=APPIMAGE_EXTRACT_AND_RUN=1` (or an upstream fix bundling `fuse3`) | **No -- confirmed missing, see "Real, confirmed blockers" below.** |
+| DualDeck IPC (local Unix socket under `$XDG_RUNTIME_DIR`) | `--filesystem=xdg-run/dualdeck:create` | **No -- confirmed missing.** `--filesystem=host` does not cover it despite being present. |
+| Running a raw `.AppImage` at all (RetroDECK's sandbox has no `fusermount` binary) | `--env=APPIMAGE_EXTRACT_AND_RUN=1` (or an upstream fix bundling `fuse3`) | **No -- confirmed missing.** |
+| RetroDECK's own emulator-resolution finding a host-side patched build at all | `--env=PATH=<home>/.local/bin:/app/bin:/usr/bin` (widening RetroDECK's own restricted default) + a `cemu`/`Cemu` symlink under `~/.local/bin/` pointing at the patched AppImage | **No -- confirmed missing, see below. This is the fix that made RetroDECK's own game list *and* Tender both work.** |
 | Client<->host network protocol | `--share=network` | Yes |
 
-Both missing grants are narrow, `--user`-scoped, reversible local
+All three missing grants are narrow, `--user`-scoped, reversible local
 overrides (`flatpak override --user --reset net.retrodeck.retrodeck`
-undoes both) -- confirmed on real hardware to be the only two gaps.
+undoes all of them) -- confirmed on real hardware to be the complete set
+needed.
 
-## Real, confirmed blockers found on real hardware (2026-08-29)
+## Real, confirmed blockers found on real hardware (2026-08-29), and the complete fix
 
-Two genuine, independently-confirmed issues, found by installing
+Three genuine, independently-confirmed issues, found by installing
 RetroDECK on an isolated test setup and tracing failures with the
-Flatpak sandbox's own debug shell and ES-DE's own debug log -- not
-guessed from source reading alone:
+Flatpak sandbox's own debug shell, ES-DE's own debug log, and finally
+RetroDECK's own bash source directly -- not guessed from public source
+reading alone (which turned out, more than once, to not match what's
+actually shipped/actually happens at runtime):
 
 1. **RetroDECK's sandbox has no `fusermount`/`fusermount3` binary.**
    AppImages self-mount via FUSE by default; without it, running one
@@ -156,36 +160,75 @@ guessed from source reading alone:
    $PATH... Cannot mount AppImage"). Confirmed fix: setting
    `APPIMAGE_EXTRACT_AND_RUN=1` in the process environment makes the
    AppImage runtime skip FUSE entirely and extract-and-run instead --
-   applied here via `flatpak override --user --env=...`, since RetroDECK's
-   own `es_systems.xml` command template (`%EMULATOR_CEMU% -g %ROM%`)
-   can't be edited to add a CLI flag instead. This isn't RetroDECK- or
+   applied via `flatpak override --user --env=...`, since RetroDECK's own
+   `es_systems.xml` command template (`%EMULATOR_CEMU% -g %ROM%`) can't be
+   edited to add a CLI flag instead. This isn't RetroDECK- or
    Cemu-specific -- **any** raw AppImage launched inside RetroDECK's
-   sandbox (or any similarly-built Flatpak) hits this same wall, worth
-   raising with RetroDECK independent of DualDeck.
-2. **RetroDECK's own point-and-click game list does not pick up
-   `~/Applications/Cemu.AppImage`, even though it should.** Traced all
-   the way into RetroDECK's actual shipped `es_find_rules.xml` and
-   ES-DE's own `FileData::findEmulator()`/`getMatchingFiles()` C++
-   source (`gitlab.com/es-de/emulationstation-de`): the `staticpath` rule
-   does list `~/Applications/Cemu*.AppImage` first, `getHomePath()` uses
-   plain `getenv("HOME")` (matching the shell), and a manual `ls -la
-   ~/Applications/Cemu*.AppImage` inside the exact same sandbox
-   session correctly finds the file. ES-DE's own debug log
-   (`FileData::findEmulator(): Emulator found via staticpath rule`)
-   confirms it evaluates the *rule type* correctly but still resolves to
-   the bundled `/app/retrodeck/components/cemu/component_launcher.sh`
-   entry -- the last one in the list -- instead. Ruled out: a duplicate/
-   conflicting `<emulator name="CEMU">` block (only one exists), a stale
-   per-game cached override in `gamelist.xml` (none present), and a
-   `Cemu-wrapper`/`cemu` binary on the sandbox's `$PATH` beating it via
-   the `systempath` rule (none exists). **Root cause not yet found** --
-   this looks like a genuine RetroDECK/ES-DE bug worth its own upstream
-   report, separate from the component-architecture proposal.
-   **Confirmed workaround**: RetroDECK's own CLI supports an explicit
-   override, `flatpak run net.retrodeck.retrodeck -e
-   ~/Applications/Cemu.AppImage <rom path>`, which correctly launches the
-   patched build. Not yet solved: a normal, no-workaround, point-and-click
-   launch from RetroDECK's own game list.
+   sandbox (or any similarly-built Flatpak) hits this same wall.
+2. **`--filesystem=host` doesn't cover `/run`** -- see the IPC section
+   above. Fixed with `--filesystem=xdg-run/dualdeck:create`.
+3. **RetroDECK's own emulator resolution never finds a host AppImage,
+   through either of its two independent code paths, for two different
+   root causes -- fully identified, both fixed with one combined
+   workaround.** RetroDECK actually has *two* separate implementations of
+   "resolve `%EMULATOR_CEMU%` to a real path," and both were investigated
+   directly, not assumed to be the same:
+   - **ES-DE's own GUI** (`gitlab.com/es-de/emulationstation-de`,
+     `FileData::findEmulator()`/`getMatchingFiles()`, real C++ source
+     read directly): its `staticpath` rule does list
+     `~/Applications/Cemu*.AppImage` first, `getHomePath()` uses plain
+     `getenv("HOME")`, and the file is genuinely glob-matchable in the
+     live sandbox -- yet it still resolved to the bundled component.
+     Never fully root-caused at the C++ level (worth an upstream ES-DE
+     bug report on its own), but made moot by the fix below, since
+     `systempath` is checked *before* `staticpath` and now succeeds
+     first.
+   - **RetroDECK's own separate CLI/API path** (`/app/libexec/run_game.sh`,
+     which is what both the `-e` CLI override *and* Tender's own launch
+     calls go through -- confirmed by reading Tender's exact invocation,
+     `flatpak run net.retrodeck.retrodeck -e "%EMULATOR_CEMU% -g %ROM%"
+     <rom>`): this is a **from-scratch bash reimplementation** of the
+     same rule format, with a **real, confirmed bug** --
+     `find_emulator()`'s `staticpath` loop does `[ -x "$command_path" ]`
+     directly on the raw XML text (e.g. literally
+     `~/Applications/Cemu*.AppImage`, tilde and asterisk included) with
+     **no tilde or wildcard expansion at all**. A bash `[ ... ]` test
+     never expands the contents of a variable, so this can never match
+     any wildcarded entry -- for *any* emulator, not just Cemu -- and
+     always falls through to the one fully-qualified literal path in the
+     list (the bundled component). Also confirmed: this script hardcodes
+     `es_find_rules="/app/retrodeck/components/es-de/share/es-de/resources/systems/linux/es_find_rules.xml"`
+     (`component_functions.sh`) -- it never reads ES-DE's own
+     `custom_systems` override convention at all, so a custom
+     `es_find_rules.xml` (which *does* fix the ES-DE GUI path, see below)
+     has no effect here.
+
+   **The actual fix, confirmed working for both paths and for Tender**:
+   `systempath` entries (`cemu`, `Cemu`, `Cemu-wrapper`) are checked via
+   a real, correct `command -v`/PATH lookup in *both* implementations --
+   no expansion bug applies there. But RetroDECK's real launch scripts
+   run with a deliberately narrow `PATH=/app/bin:/usr/bin` (confirmed via
+   `env` dumped from inside an actual `run_game.sh` invocation) that
+   excludes `~/.local/bin` even though an interactive debug shell's PATH
+   does include it -- so a plain `~/.local/bin/cemu` symlink alone isn't
+   enough. Combining a widened `PATH` (via `flatpak override --user
+   --env=PATH=...`) with that symlink makes `systempath` succeed
+   immediately, for every launch mechanism, before either buggy
+   `staticpath` implementation is ever reached:
+   ```
+   mkdir -p ~/.local/bin
+   ln -sf ~/Applications/Cemu.AppImage ~/.local/bin/cemu
+   flatpak override --user --env=PATH=/home/<user>/.local/bin:/app/bin:/usr/bin net.retrodeck.retrodeck
+   ```
+   **Confirmed on real hardware**: RetroDECK's own point-and-click game
+   list, the `-e` CLI override, and a real Tender-installed-and-launched
+   game (via Tender's own auto-generated Steam shortcut, no
+   Tender-specific code or configuration touched at all) all launch the
+   DualDeck-patched Cemu correctly with this fix in place. The earlier
+   `~/retrodeck/ES-DE/custom_systems/es_find_rules.xml` override and the
+   Steam-shortcut-with-explicit-`-e`-override workaround are both
+   superseded by this -- kept documented below as fallbacks/alternate
+   paths, but no longer necessary for normal use.
 
 ## Building the component artifact
 
@@ -238,39 +281,53 @@ deletes rather than restoring a placeholder). RetroDECK's ES-DE then
 falls back to its own bundled, unpatched Cemu component automatically,
 with **no separate RetroDECK-side uninstall step**.
 
-**Two additional, RetroDECK-specific local permission grants are
-required for the AppImage to actually run and connect under RetroDECK**
-(confirmed necessary on real hardware, 2026-08-29 -- see "Real, confirmed
-blockers" above for why each is needed):
+**Three RetroDECK-specific local permission grants, plus one symlink,
+are required for the AppImage to run, connect, and actually be the build
+RetroDECK launches** (confirmed necessary and sufficient on real
+hardware, 2026-08-29 -- see "Real, confirmed blockers" above for why
+each is needed):
 
 ```
 flatpak override --user --filesystem=xdg-run/dualdeck:create net.retrodeck.retrodeck
 flatpak override --user --env=APPIMAGE_EXTRACT_AND_RUN=1 net.retrodeck.retrodeck
+flatpak override --user --env=PATH=/home/<user>/.local/bin:/app/bin:/usr/bin net.retrodeck.retrodeck
+mkdir -p ~/.local/bin
+ln -sf ~/Applications/Cemu.AppImage ~/.local/bin/cemu
 ```
 
-Both are `--user`-scoped (this account only) and fully reversible:
+(replace `<user>` with the real username -- Flatpak env overrides don't
+expand `~`). All three overrides are `--user`-scoped (this account only)
+and fully reversible:
 
 ```
 flatpak override --user --reset net.retrodeck.retrodeck
+rm ~/.local/bin/cemu
 ```
 
-With those two grants applied, launching is currently only confirmed
-working via an explicit override (RetroDECK's own normal game list does
-not yet pick up the AppImage on its own -- see the still-open ES-DE
-mystery above):
+**With all three applied, this is now confirmed working with no
+per-launch override needed at all** -- RetroDECK's own point-and-click
+game list, the `-e` CLI override, and Tender (installing and launching a
+game through its own normal flow, no Tender-specific configuration
+touched) all correctly launch the DualDeck-patched Cemu. This supersedes
+the explicit-`-e`-override and Steam-shortcut-wrapper approaches
+documented in earlier revisions of this file -- kept below as a fallback
+in case only some of the three overrides can be applied in a given
+environment.
+
+#### Fallback: explicit override + a Steam shortcut per game
+
+If the `PATH`/symlink fix above isn't available or applicable, the
+explicit CLI override still works on its own (needs only the first two
+`flatpak override` commands above):
 
 ```
 flatpak run net.retrodeck.retrodeck -e ~/Applications/Cemu.AppImage "<path to .rpx/.wud/etc.>"
 ```
 
-#### Convenient launch until the ES-DE bug is fixed: a Steam shortcut per game
-
-Since RetroDECK's own game list doesn't pick up the AppImage yet, the
-`-e` override above needs a one-click way to run from Steam Big Picture
-rather than a terminal. A small wrapper script plus this project's
-existing `steam_shortcut.py` (already installed alongside
+For a one-click Big Picture launch of that, a small wrapper script plus
+this project's existing `steam_shortcut.py` (already installed alongside
 `dualdeck-host-service` in any real DualDeck install, at
-`<install-root>/internal/steam_shortcut.py`) covers this without any new
+`<install-root>/internal/steam_shortcut.py`) covers it without any new
 tooling:
 
 1. Create a generic wrapper (takes the ROM path as its one argument, so
@@ -329,17 +386,25 @@ RetroDECK install is completely untouched by any of this, since it never
 shares a Flatpak installation prefix with a locally built one unless one
 is deliberately made to.
 
-### Isolated RetroDECK test environment
+### Test environment
 
-Do not install RetroDECK on the production HTPC that already runs
-EmuDeck. Recommended: a separate user account, a spare/loaner machine, or
-a VM with GPU passthrough. **These commands are for review, not yet
-run** -- confirm with the user before executing any of them for real:
+The original recommendation here was a separate user account, spare
+machine, or VM, to avoid installing RetroDECK on the same HTPC as an
+existing EmuDeck setup. In practice (2026-08-29), RetroDECK was installed
+directly on the production HTPC, alongside the existing EmuDeck
+install, with the user's explicit go-ahead -- RetroDECK is a fully
+separate Flatpak with its own ROM library/saves under
+`~/retrodeck/...`, so it never touches EmuDeck's own `~/Emulation/...`
+tree or shares a save directory, and this held up fine in testing
+(commands actually run):
 
 ```
 flatpak install --user flathub net.retrodeck.retrodeck
 flatpak run net.retrodeck.retrodeck
 ```
+
+A small, separate test ROM library (not the production library) was used
+for verification either way.
 
 A small test library (1-2 Wii U titles already owned, legally dumped) is
 enough for the milestone verification below -- do not commit ROMs,
@@ -348,14 +413,12 @@ firmware, keys, or save files to this repository at any point.
 ## Milestones
 
 1. **RetroDECK -> patched Cemu -> game launches normally, DualDeck
-   disabled.** ✅ **Achieved on real hardware, 2026-08-29** -- via
-   `flatpak run net.retrodeck.retrodeck -e ~/Applications/Cemu.AppImage
-   <rom>` with the two `flatpak override` grants above applied. Cemu's
-   window opened with title "Cemu 2.6 - DualDeck" and the game (Wii U
-   Twilight Princess HD) booted normally. **Not yet achieved without the
-   explicit `-e` override** -- RetroDECK's own game list still launches
-   its bundled, unpatched Cemu by default (see "Real, confirmed
-   blockers" above).
+   disabled.** ✅ **Achieved on real hardware, 2026-08-29** -- with all
+   three `flatpak override` grants and the `~/.local/bin/cemu` symlink in
+   place, RetroDECK's own point-and-click game list launches Cemu's
+   window with title "Cemu 2.6 - DualDeck" and the game (Wii U Twilight
+   Princess HD, and separately Pokemon Rumble U) boots normally. No
+   per-launch override needed.
 2. **RetroDECK -> patched Cemu -> DualDeck connects and streams the
    GamePad screen.** ✅ **Achieved on real hardware, 2026-08-29** --
    with `--filesystem=xdg-run/dualdeck:create` applied, the
@@ -365,8 +428,15 @@ firmware, keys, or save files to this repository at any point.
    DualDeck client connected and streamed the GamePad screen
    successfully.
 3. **Tender discovers and launches the component through RetroDECK
-   normally**, with no Tender-specific DualDeck code required. Not yet
-   attempted.
+   normally**, with no Tender-specific DualDeck code required. ✅
+   **Achieved on real hardware, 2026-08-29** -- a game installed via
+   Tender and launched through its own auto-generated Steam shortcut
+   (which calls `flatpak run net.retrodeck.retrodeck -e "%EMULATOR_CEMU%
+   -g %ROM%" <rom>`, RetroDECK's own normal command form, unmodified)
+   correctly opened the DualDeck-patched Cemu. Zero Tender-specific code
+   or configuration was touched -- the fix lives entirely at the
+   RetroDECK/Flatpak level (the three overrides + symlink above), which
+   is why it applies uniformly to Tender, the CLI, and the GUI alike.
 
 ## Verification plan (compare against the known-good AppImage/EmuDeck setup, same hardware, same game)
 
@@ -419,24 +489,38 @@ tested against fake `$HOME`s); `pack_retrodeck_component_tarball()`'s
 packaging shape (`tests/retrodeck_component_pack_test.py`); `bash -n` on
 all new/changed scripts.
 
+All three milestones (game launches normally, DualDeck streams, and
+Tender launches it through RetroDECK's own normal flow) are now
+confirmed working, with all three permission overrides and the symlink
+applied.
+
 **Not verified**: the RetroDECK-component-tarball artifact
 (`scripts/build-retrodeck-cemu-component.sh`'s output) has never been
 built end-to-end (Cemu's own vcpkg-based dependency graph needs
 unrestricted network access this project's own sandbox doesn't have --
 same constraint documented throughout `host/cemu-patches/README.md`) or
 tried in a real RetroDECK Flatpak rebuild -- only the already-shipped
-AppImage was tested on real hardware. RetroDECK's *normal,
-point-and-click* game-list launch still uses its own bundled Cemu, not
-DualDeck's patched build -- getting there needs either solving the
-ES-DE resolution mystery above or an upstream fix. The full
-performance/robustness verification matrix (previous section) is still
-open. Tender compatibility is entirely unverified.
+AppImage was tested on real hardware (which is the actual production
+path -- the component tarball remains a "nice to have" for a possible
+future upstream contribution, not something in active use). ES-DE's own
+C++ `findEmulator()` bug (item 3's first bullet above) was never fully
+root-caused at the source level -- only made irrelevant by the
+`systempath`-wins-first fix. The full performance/robustness
+verification matrix (previous section) is still open -- everything
+confirmed so far is functional correctness, not parity with the
+AppImage/EmuDeck setup on the same hardware.
 
-## Upstream proposal
+## Upstream proposal: not pursued
 
-A draft message for the RetroDECK maintainers (proposing either a
-build-from-source option in `components/cemu/component_recipe.json`, or
-a real component extension point) will be written up separately and
-shown before anything is posted to `RetroDECK/RetroDECK` or
-`RetroDECK/components` -- no issue or PR will be opened without explicit
-approval first.
+A full draft (two bug reports -- the missing `fusermount` binary and the
+`run_game.sh` staticpath-expansion bug -- plus a lighter-weight
+component-architecture question) was written and reviewed, but the
+decision was made not to post anything to RetroDECK. Everything needed
+for DualDeck to work under RetroDECK, including Tender, is achieved
+entirely through local, `--user`-scoped configuration (three `flatpak
+override` grants plus one symlink, all documented above) -- no RetroDECK
+involvement, code change, or response is required for any of this to
+keep working. The two bugs found are real and would help other RetroDECK
+users if reported, but that tradeoff (public visibility, ongoing
+maintenance overhead) was deliberately declined for now. Revisit this
+section if that calculus changes.
