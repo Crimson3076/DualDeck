@@ -482,6 +482,10 @@ cp "${repo_root}/scripts/lib/steam_restart_helper.sh" "${pkg_dir}/host/internal/
 cp "${repo_root}/scripts/lib/host_firewall.sh" "${pkg_dir}/host/internal/host_firewall.sh"
 cp "${repo_root}/scripts/lib/adapter_socket_probe.sh" "${pkg_dir}/host/internal/adapter_socket_probe.sh"
 cp "${repo_root}/scripts/lib/pipewire_env.sh" "${pkg_dir}/host/internal/pipewire_env.sh"
+# Advanced -> Installation branch (shared discovery/cache/resolve logic
+# with client/internal/dualdeck_branch.sh below -- identical file, one
+# implementation, see that copy's own comment).
+cp "${repo_root}/scripts/lib/dualdeck_branch.sh" "${pkg_dir}/host/internal/dualdeck_branch.sh"
 
 cp "${repo_build}/client/dualdeck-client" "${pkg_dir}/client/dualdeck-client"
 chmod +x "${pkg_dir}/client/dualdeck-client"
@@ -516,6 +520,10 @@ cp -a "${sdl3_install}"/lib/libSDL3.so* "${pkg_dir}/client/lib/"
 cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/client/internal/ensure-packages.sh"
 cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/client/internal/steam_shortcut.py"
 cp "${repo_root}/scripts/lib/steam_restart_helper.sh" "${pkg_dir}/client/internal/steam_restart_helper.sh"
+# Advanced -> Installation branch -- same file as host/internal/
+# dualdeck_branch.sh above, one shared implementation for both sides
+# (see that file's own header comment for why).
+cp "${repo_root}/scripts/lib/dualdeck_branch.sh" "${pkg_dir}/client/internal/dualdeck_branch.sh"
 # Opt-in touchpad-as-native-input experiment (client-only -- this is
 # about the Deck's own trackpads, not anything host-side) -- see
 # steam_input_config.py's own module docstring for the real research
@@ -1067,6 +1075,136 @@ echo "Installing..."
 WRAP
 chmod +x "${pkg_dir}/client/internal/apply-update.sh"
 
+cat > "${pkg_dir}/client/internal/install-branch.sh" <<'WRAP'
+#!/usr/bin/env bash
+# Advanced -> Installation branch -> "Install selected branch". Resolves
+# the currently-selected branch (dualdeck_branch_get_selected) to the
+# newest published release built exactly at that branch's current tip
+# commit, downloads and checksum-verifies *that specific release* (not
+# "latest" -- see download_url below), and only then hands off to the
+# same already-atomic client/internal/install-steam-shortcut.sh --force
+# every other install/update path uses (stage in a .new sibling, swap
+# into place only once staging succeeds, one generation kept as
+# .previous). Nothing is recorded as installed (dualdeck_branch_
+# record_installed) unless that whole sequence actually completes --
+# a failure at any earlier step leaves the previous install running
+# untouched and reports exactly what went wrong, never a fabricated
+# fallback to another branch.
+#
+# Host and client are separate machines: each side runs this
+# independently against its own selected branch. What guarantees "same
+# branch, same resolved commit" for both is that they each resolve the
+# identical branch name against the same GitHub repository and download
+# from the identical release archive that name resolves to -- not a
+# live cross-machine transaction (see dualdeck_branch.sh's own header
+# comment).
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+error_log="${HOME}/.config/dualdeck-client/install.log"
+on_error() {
+    local exit_code="$1" line_no="$2" failing_cmd="$3"
+    mkdir -p "$(dirname "${error_log}")"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") install-branch.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "DualDeck" --error "Installing the selected branch failed: ${failing_cmd}
+(exit code ${exit_code})
+
+Details logged to:
+${error_log}" 2>/dev/null || true
+    fi
+}
+trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
+
+if ! command -v curl >/dev/null 2>&1; then
+    echo "error: curl is required -- install it and try again." >&2
+    exit 1
+fi
+if ! command -v sha256sum >/dev/null 2>&1; then
+    echo "error: sha256sum is required to verify the download -- install coreutils and try again." >&2
+    exit 1
+fi
+
+export DUALDECK_BRANCH_CONFIG_DIR="${HOME}/.config/dualdeck-client"
+# shellcheck source=scripts/lib/dualdeck_branch.sh
+source ./dualdeck_branch.sh
+
+branch="$(dualdeck_branch_get_selected)"
+if [[ -z "${branch}" ]]; then
+    echo "No branch selected -- open Advanced -> Installation branch and pick one first." >&2
+    exit 1
+fi
+
+resolve_rc=0
+resolved="$(dualdeck_branch_resolve "${branch}")" || resolve_rc=$?
+case "${resolve_rc}" in
+    0) : ;;
+    2)
+        echo "error: GitHub API rate limit hit while resolving '${branch}' -- try again later. Nothing installed." >&2
+        exit 1
+        ;;
+    3)
+        echo "error: branch '${branch}' no longer exists on GitHub (deleted or renamed?). Nothing installed." >&2
+        exit 1
+        ;;
+    4)
+        echo "error: no DualDeck release has been published from branch '${branch}''s current commit yet -- nothing to install. Nothing changed." >&2
+        exit 1
+        ;;
+    5)
+        echo "error: '${branch}' is not a valid branch name. Nothing installed." >&2
+        exit 1
+        ;;
+    *)
+        echo "error: couldn't reach GitHub to resolve branch '${branch}' (offline?). Nothing installed." >&2
+        exit 1
+        ;;
+esac
+resolved_sha="$(printf '%s' "${resolved}" | cut -f1)"
+resolved_tag="$(printf '%s' "${resolved}" | cut -f2)"
+
+repo="Crimson3076/DualDeck"
+download_base="https://github.com/${repo}/releases/download/${resolved_tag}"
+
+work_dir="$(mktemp -d)"
+trap 'rm -rf "${work_dir}"' EXIT
+
+echo "Downloading ${resolved_tag} (branch ${branch}, commit ${resolved_sha:0:7})..."
+# Saved under the archive's real basename, not an arbitrary local name --
+# sha256sum -c matches SHA256SUMS entries by exact filename, and
+# SHA256SUMS (see build-release.sh's own SHA256SUMS-generation comment)
+# lists this exact name.
+archive_name="melonds-remote-linux-x86_64.tar.gz"
+curl -fsSL --max-time 180 -o "${work_dir}/${archive_name}" "${download_base}/${archive_name}"
+curl -fsSL --max-time 30 -o "${work_dir}/SHA256SUMS" "${download_base}/SHA256SUMS"
+
+echo "Verifying download integrity..."
+if ! (cd "${work_dir}" && sha256sum -c --ignore-missing SHA256SUMS) >/dev/null 2>&1; then
+    echo "error: checksum verification failed for ${resolved_tag} -- refusing to install an unverified download. Nothing changed." >&2
+    exit 1
+fi
+
+echo "Extracting..."
+tar xzf "${work_dir}/${archive_name}" -C "${work_dir}"
+
+extracted_dir=""
+for candidate in "${work_dir}"/melonds-remote-*; do
+    [[ -d "${candidate}" ]] && extracted_dir="${candidate}" && break
+done
+if [[ -z "${extracted_dir}" ]]; then
+    echo "error: couldn't find the extracted release directory -- nothing installed." >&2
+    exit 1
+fi
+
+echo "Installing..."
+"${extracted_dir}/client/internal/install-steam-shortcut.sh" --force
+
+# Only recorded once the staged swap above has actually completed.
+dualdeck_branch_record_installed "${branch}" "${resolved_sha}" "${resolved_tag}"
+echo "Installed ${resolved_tag} (branch ${branch}, commit ${resolved_sha:0:7})."
+WRAP
+chmod +x "${pkg_dir}/client/internal/install-branch.sh"
+
 cat > "${pkg_dir}/client/dualdeck-client.sh" <<'WRAP'
 #!/usr/bin/env bash
 # The one thing to double-click to set up or run the DualDeck
@@ -1104,6 +1242,14 @@ trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
 # doesn't go through configure-trackpad-experiment.sh).
 client_shortcut_exe="${HOME}/.config/dualdeck-client/install/internal/run-client.sh"
 client_shortcut_name="DualDeck"
+
+# Advanced -> Installation branch. Own config dir, own cache, own
+# selection -- see internal/dualdeck_branch.sh's own header comment for
+# why this is the *same logic* as the host's copy without being the same
+# physical file/state (host and client are always separate machines).
+export DUALDECK_BRANCH_CONFIG_DIR="${HOME}/.config/dualdeck-client"
+# shellcheck source=scripts/lib/dualdeck_branch.sh
+source ./internal/dualdeck_branch.sh
 
 have_kdialog() { command -v kdialog >/dev/null 2>&1; }
 
@@ -1150,6 +1296,78 @@ trackpad_experiment_label() {
     fi
 }
 
+# Real requirement: "Discover branches through GitHub with pagination.
+# ... Never silently fall back to main." choose_branch_from_list()
+# builds its menu straight from dualdeck_branch_list() (cached, paginated
+# already inside that function) -- an empty/failed list here means "no
+# branches to show," not "assume main."
+choose_branch_from_list() {
+    local branches stale_note=""
+    branches="$(dualdeck_branch_list 2>/dev/null || true)"
+    if [[ -z "${branches}" ]]; then
+        info "Couldn't load the branch list from GitHub (offline, rate-limited, or unreachable) and there's no cached list yet. Try Refresh again once you're back online."
+        return 0
+    fi
+    if dualdeck_branch_cache_is_stale; then
+        stale_note=" (cached list, may be out of date -- use Refresh to update)"
+    fi
+    if have_kdialog; then
+        local -a kd_args=()
+        while IFS= read -r b; do
+            [[ -z "${b}" ]] && continue
+            kd_args+=("${b}" "${b}")
+        done <<< "${branches}"
+        kdialog --title "DualDeck" --menu "Choose an installation branch${stale_note}" \
+            "${kd_args[@]}" 2>/dev/null || true
+    else
+        echo "Choose an installation branch${stale_note}:" >&2
+        local -a arr=()
+        while IFS= read -r b; do
+            [[ -z "${b}" ]] && continue
+            arr+=("${b}")
+        done <<< "${branches}"
+        local i=1
+        for b in "${arr[@]}"; do
+            echo "  ${i}) ${b}" >&2
+            i=$((i + 1))
+        done
+        echo "  0) Cancel" >&2
+        local choice=""
+        read -rp "Choice: " choice
+        if [[ "${choice}" =~ ^[0-9]+$ ]] && [[ "${choice}" -ge 1 ]] && [[ "${choice}" -le "${#arr[@]}" ]]; then
+            echo "${arr[$((choice - 1))]}"
+        fi
+    fi
+}
+
+choose_advanced_action() {
+    local status_line
+    status_line="$(dualdeck_branch_status_line 2>/dev/null || echo "Installation branch: unknown")"
+    if have_kdialog; then
+        kdialog --title "DualDeck -- Advanced" --menu "${status_line}" \
+            change-branch "Change installation branch..." \
+            refresh-branches "Refresh branch list" \
+            install-branch "Install selected branch" \
+            2>/dev/null || echo "cancel"
+    else
+        {
+            echo "Advanced"
+            echo "${status_line}"
+            echo "  1) Change installation branch..."
+            echo "  2) Refresh branch list"
+            echo "  3) Install selected branch"
+            echo "  4) Back"
+        } >&2
+        read -rp "Choice [1-4]: " choice
+        case "${choice}" in
+            1) echo "change-branch" ;;
+            2) echo "refresh-branches" ;;
+            3) echo "install-branch" ;;
+            *) echo "cancel" ;;
+        esac
+    fi
+}
+
 choose_action() {
     if have_kdialog; then
         kdialog --title "DualDeck" --menu "What would you like to do?" \
@@ -1158,6 +1376,7 @@ choose_action() {
             steam-remove "Remove from Steam / uninstall" \
             trackpad-experiment "$(trackpad_experiment_label)" \
             update "Check for updates / update" \
+            advanced "Advanced..." \
             2>/dev/null || echo "cancel"
     else
         # All of this goes to stderr, not stdout -- the caller captures
@@ -1172,20 +1391,36 @@ choose_action() {
             echo "  3) Remove from Steam / uninstall"
             echo "  4) $(trackpad_experiment_label)"
             echo "  5) Check for updates / update"
-            echo "  6) Exit"
+            echo "  6) Advanced..."
+            echo "  7) Exit"
         } >&2
-        read -rp "Choice [1-6]: " choice
+        read -rp "Choice [1-7]: " choice
         case "${choice}" in
             1) echo "launch" ;;
             2) echo "steam-add" ;;
             3) echo "steam-remove" ;;
             4) echo "trackpad-experiment" ;;
             5) echo "update" ;;
+            6) echo "advanced" ;;
             *) echo "cancel" ;;
         esac
     fi
 }
 
+# GitHub issue (real user report, 2026-08-27): "Check for updates /
+# changing settings / saving settings all close DualDeck instead of
+# returning to the menu." Root cause: this action="$(choose_action)" +
+# case dispatch used to run exactly once and then fall off the end of
+# the script -- no loop back to choose_action, so every branch except
+# launch (which deliberately exec's, replacing this process) and the
+# explicit cancel/exit branch silently ended the client menu. Wrapped in
+# a loop now: only the top-level Cancel/Exit (the `*` branch below)
+# breaks out -- a completed action or a failed one (each internal/
+# script shows its own error dialog and returns non-zero rather than
+# propagating a set -e exit -- see on_error's ERR trap above, which only
+# fires for a genuinely unexpected failure) falls through to the bottom
+# of the loop and redisplays this same menu.
+while true; do
 action="$(choose_action)"
 
 case "${action}" in
@@ -1271,10 +1506,55 @@ Install ${latest_version} now? This downloads it from GitHub and also adds/updat
             info "${update_report}"
         fi
         ;;
+    advanced)
+        while true; do
+            adv_action="$(choose_advanced_action)"
+            case "${adv_action}" in
+                change-branch)
+                    new_branch="$(choose_branch_from_list)"
+                    if [[ -n "${new_branch}" ]]; then
+                        if dualdeck_branch_set_selected "${new_branch}"; then
+                            # Selecting only updates local state -- real
+                            # requirement: "changing the selection should
+                            # not immediately reinstall."
+                            info "Selected branch: ${new_branch}. Nothing has been installed yet -- use \"Install selected branch\" when you're ready."
+                        else
+                            info "'${new_branch}' isn't a valid branch name -- not saved."
+                        fi
+                    fi
+                    ;;
+                refresh-branches)
+                    if dualdeck_branch_refresh >/dev/null 2>&1; then
+                        info "Branch list refreshed."
+                    else
+                        info "Couldn't refresh the branch list from GitHub (offline or rate-limited?). The previous list, if any, is still available."
+                    fi
+                    ;;
+                install-branch)
+                    selected_branch="$(dualdeck_branch_get_selected 2>/dev/null || true)"
+                    if [[ -z "${selected_branch}" ]]; then
+                        info "No branch selected yet -- use \"Change installation branch...\" first."
+                    elif confirm "Install DualDeck Client from branch '${selected_branch}'? This resolves it to a specific published commit, downloads and verifies that build, and only replaces the current install if that fully succeeds."; then
+                        if install_output="$(./internal/install-branch.sh 2>&1)"; then
+                            info "${install_output}"
+                        else
+                            info "Could not install branch '${selected_branch}':
+
+${install_output}"
+                        fi
+                    fi
+                    ;;
+                *)
+                    break
+                    ;;
+            esac
+        done
+        ;;
     *)
-        exit 0
+        break
         ;;
 esac
+done
 WRAP
 chmod +x "${pkg_dir}/client/dualdeck-client.sh"
 
@@ -2941,6 +3221,15 @@ ${error_log}" 2>/dev/null || true
 }
 trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
 
+# Advanced -> Installation branch. Own config dir, own cache, own
+# selection -- see internal/dualdeck_branch.sh's own header comment for
+# why this is the *same logic* as the client's copy without being the
+# same physical file/state (host and client are always separate
+# machines).
+export DUALDECK_BRANCH_CONFIG_DIR="${HOME}/.config/dualdeck"
+# shellcheck source=scripts/lib/dualdeck_branch.sh
+source ./internal/dualdeck_branch.sh
+
 have_kdialog() { command -v kdialog >/dev/null 2>&1; }
 
 info() {
@@ -2959,6 +3248,78 @@ confirm() {
     else
         read -rp "$1 [y/N] " reply
         [[ "${reply}" =~ ^[Yy]$ ]]
+    fi
+}
+
+# Real requirement: "Discover branches through GitHub with pagination.
+# ... Never silently fall back to main." choose_branch_from_list() builds
+# its menu straight from dualdeck_branch_list() (cached, paginated
+# already inside that function) -- an empty/failed list here means "no
+# branches to show," not "assume main."
+choose_branch_from_list() {
+    local branches stale_note=""
+    branches="$(dualdeck_branch_list 2>/dev/null || true)"
+    if [[ -z "${branches}" ]]; then
+        info "Couldn't load the branch list from GitHub (offline, rate-limited, or unreachable) and there's no cached list yet. Try Refresh again once you're back online."
+        return 0
+    fi
+    if dualdeck_branch_cache_is_stale; then
+        stale_note=" (cached list, may be out of date -- use Refresh to update)"
+    fi
+    if have_kdialog; then
+        local -a kd_args=()
+        while IFS= read -r b; do
+            [[ -z "${b}" ]] && continue
+            kd_args+=("${b}" "${b}")
+        done <<< "${branches}"
+        kdialog --title "DualDeck Host" --menu "Choose an installation branch${stale_note}" \
+            "${kd_args[@]}" 2>/dev/null || true
+    else
+        echo "Choose an installation branch${stale_note}:" >&2
+        local -a arr=()
+        while IFS= read -r b; do
+            [[ -z "${b}" ]] && continue
+            arr+=("${b}")
+        done <<< "${branches}"
+        local i=1
+        for b in "${arr[@]}"; do
+            echo "  ${i}) ${b}" >&2
+            i=$((i + 1))
+        done
+        echo "  0) Cancel" >&2
+        local choice=""
+        read -rp "Choice: " choice
+        if [[ "${choice}" =~ ^[0-9]+$ ]] && [[ "${choice}" -ge 1 ]] && [[ "${choice}" -le "${#arr[@]}" ]]; then
+            echo "${arr[$((choice - 1))]}"
+        fi
+    fi
+}
+
+choose_advanced_action() {
+    local status_line
+    status_line="$(dualdeck_branch_status_line 2>/dev/null || echo "Installation branch: unknown")"
+    if have_kdialog; then
+        kdialog --title "DualDeck Host -- Advanced" --menu "${status_line}" \
+            change-branch "Change installation branch..." \
+            refresh-branches "Refresh branch list" \
+            install-branch "Install selected branch" \
+            2>/dev/null || echo "cancel"
+    else
+        {
+            echo "Advanced"
+            echo "${status_line}"
+            echo "  1) Change installation branch..."
+            echo "  2) Refresh branch list"
+            echo "  3) Install selected branch"
+            echo "  4) Back"
+        } >&2
+        read -rp "Choice [1-4]: " choice
+        case "${choice}" in
+            1) echo "change-branch" ;;
+            2) echo "refresh-branches" ;;
+            3) echo "install-branch" ;;
+            *) echo "cancel" ;;
+        esac
     fi
 }
 
@@ -2985,6 +3346,7 @@ choose_action() {
             reconfigure-controls "Reconfigure Controls (fixes 'no controls' in Cemu)" \
             update "Check for updates / update" \
             emudeck "Patch my EmuDeck/RetroDECK-installed emulators (experimental)" \
+            advanced "Advanced..." \
             2>/dev/null || echo "cancel"
     else
         # All of this goes to stderr, not stdout -- the caller captures
@@ -3001,9 +3363,10 @@ choose_action() {
             echo "  5) Reconfigure Controls (fixes 'no controls' in Cemu)"
             echo "  6) Check for updates / update"
             echo "  7) Patch my EmuDeck/RetroDECK-installed emulators (experimental)"
-            echo "  8) Exit"
+            echo "  8) Advanced..."
+            echo "  9) Exit"
         } >&2
-        read -rp "Choice [1-8]: " choice
+        read -rp "Choice [1-9]: " choice
         case "${choice}" in
             1) echo "launch" ;;
             2) echo "hostcontrol-daemon" ;;
@@ -3012,6 +3375,7 @@ choose_action() {
             5) echo "reconfigure-controls" ;;
             6) echo "update" ;;
             7) echo "emudeck" ;;
+            8) echo "advanced" ;;
             *) echo "cancel" ;;
         esac
     fi
@@ -3109,6 +3473,21 @@ choose_emulator() {
     fi
 }
 
+# GitHub issue (real user report, 2026-08-27): "Check for updates /
+# changing settings / saving settings all close DualDeck Host instead of
+# returning to the menu." Root cause was that this whole action="$(choose_
+# action)" + case dispatch used to run exactly once and then fall off the
+# end of the script -- there was no loop back to choose_action, so every
+# branch except launch/emudeck (which deliberately exec, replacing this
+# process) and the explicit cancel/exit branch silently ended the host.
+# Wrapped in a loop now: only an explicit top-level Cancel/Exit (the `*`
+# branch below) breaks out: everything else -- a completed action, a
+# failed one (each internal/ script already shows its own error dialog
+# and returns non-zero rather than propagating a set -e exit -- see
+# on_error's ERR trap above, which only fires for a genuinely unexpected
+# failure, not a handled one), or backing out of a submenu -- falls
+# through to the bottom of the loop and redisplays this same menu.
+while true; do
 action="$(choose_action)"
 
 case "${action}" in
@@ -3160,7 +3539,9 @@ case "${action}" in
                 exec ./internal/launch-custom-emulator.sh
                 ;;
             *)
-                exit 0 # cancelled/back
+                # Cancelled/backed out of "Which system?" -- return to
+                # the main menu, don't exit the host (see this loop's own
+                # header comment).
                 ;;
         esac
         ;;
@@ -3209,7 +3590,8 @@ ${daemon_start_output}"
                 fi
                 ;;
             *)
-                exit 0 # cancelled/back
+                # Cancelled/backed out -- return to the main menu, don't
+                # exit the host (see the outer loop's own header comment).
                 ;;
         esac
         ;;
@@ -3277,10 +3659,55 @@ Install ${latest_version} now? This downloads it from GitHub and also adds/updat
     emudeck)
         exec ./internal/launch-emudeck-integration.sh
         ;;
+    advanced)
+        while true; do
+            adv_action="$(choose_advanced_action)"
+            case "${adv_action}" in
+                change-branch)
+                    new_branch="$(choose_branch_from_list)"
+                    if [[ -n "${new_branch}" ]]; then
+                        if dualdeck_branch_set_selected "${new_branch}"; then
+                            # Selecting only updates local state -- real
+                            # requirement: "changing the selection should
+                            # not immediately reinstall."
+                            info "Selected branch: ${new_branch}. Nothing has been installed yet -- use \"Install selected branch\" when you're ready."
+                        else
+                            info "'${new_branch}' isn't a valid branch name -- not saved."
+                        fi
+                    fi
+                    ;;
+                refresh-branches)
+                    if dualdeck_branch_refresh >/dev/null 2>&1; then
+                        info "Branch list refreshed."
+                    else
+                        info "Couldn't refresh the branch list from GitHub (offline or rate-limited?). The previous list, if any, is still available."
+                    fi
+                    ;;
+                install-branch)
+                    selected_branch="$(dualdeck_branch_get_selected 2>/dev/null || true)"
+                    if [[ -z "${selected_branch}" ]]; then
+                        info "No branch selected yet -- use \"Change installation branch...\" first."
+                    elif confirm "Install DualDeck Host from branch '${selected_branch}'? This resolves it to a specific published commit, downloads and verifies that build, and only replaces the current install if that fully succeeds. Remember to install the same branch on the client too."; then
+                        if install_output="$(./internal/install-branch.sh 2>&1)"; then
+                            info "${install_output}"
+                        else
+                            info "Could not install branch '${selected_branch}':
+
+${install_output}"
+                        fi
+                    fi
+                    ;;
+                *)
+                    break
+                    ;;
+            esac
+        done
+        ;;
     *)
-        exit 0
+        break
         ;;
 esac
+done
 WRAP
 chmod +x "${pkg_dir}/host/dualdeck-host.sh"
 
@@ -3391,6 +3818,150 @@ if [[ "${daemon_was_active}" -eq 1 ]]; then
 fi
 WRAP
 chmod +x "${pkg_dir}/host/internal/apply-update.sh"
+
+cat > "${pkg_dir}/host/internal/install-branch.sh" <<'WRAP'
+#!/usr/bin/env bash
+# Advanced -> Installation branch -> "Install selected branch". Resolves
+# the currently-selected branch (dualdeck_branch_get_selected) to the
+# newest published release built exactly at that branch's current tip
+# commit, downloads and checksum-verifies *that specific release* (not
+# "latest" -- see download_base below), and only then hands off to the
+# same already-atomic host/internal/install-steam-shortcut.sh --force
+# every other install/update path uses (stage in a .new sibling, swap
+# into place only once staging succeeds, one generation kept as
+# .previous). Nothing is recorded as installed (dualdeck_branch_
+# record_installed) unless that whole sequence actually completes -- a
+# failure at any earlier step leaves the previous install running
+# untouched and reports exactly what went wrong, never a fabricated
+# fallback to another branch. See client/internal/install-branch.sh for
+# the client equivalent (same design) and dualdeck_branch.sh's own
+# header comment for why resolving the identical branch name
+# independently on both machines is what makes "same commit on both"
+# hold, rather than a live cross-machine transaction.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+error_log="${HOME}/.config/dualdeck/install.log"
+on_error() {
+    local exit_code="$1" line_no="$2" failing_cmd="$3"
+    mkdir -p "$(dirname "${error_log}")"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") install-branch.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "DualDeck Host" --error "Installing the selected branch failed: ${failing_cmd}
+(exit code ${exit_code})
+
+Details logged to:
+${error_log}" 2>/dev/null || true
+    fi
+}
+trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
+
+if ! command -v curl >/dev/null 2>&1; then
+    echo "error: curl is required -- install it and try again." >&2
+    exit 1
+fi
+if ! command -v sha256sum >/dev/null 2>&1; then
+    echo "error: sha256sum is required to verify the download -- install coreutils and try again." >&2
+    exit 1
+fi
+
+export DUALDECK_BRANCH_CONFIG_DIR="${HOME}/.config/dualdeck"
+# shellcheck source=scripts/lib/dualdeck_branch.sh
+source ./dualdeck_branch.sh
+
+branch="$(dualdeck_branch_get_selected)"
+if [[ -z "${branch}" ]]; then
+    echo "No branch selected -- open Advanced -> Installation branch and pick one first." >&2
+    exit 1
+fi
+
+resolve_rc=0
+resolved="$(dualdeck_branch_resolve "${branch}")" || resolve_rc=$?
+case "${resolve_rc}" in
+    0) : ;;
+    2)
+        echo "error: GitHub API rate limit hit while resolving '${branch}' -- try again later. Nothing installed." >&2
+        exit 1
+        ;;
+    3)
+        echo "error: branch '${branch}' no longer exists on GitHub (deleted or renamed?). Nothing installed." >&2
+        exit 1
+        ;;
+    4)
+        echo "error: no DualDeck release has been published from branch '${branch}''s current commit yet -- nothing to install. Nothing changed." >&2
+        exit 1
+        ;;
+    5)
+        echo "error: '${branch}' is not a valid branch name. Nothing installed." >&2
+        exit 1
+        ;;
+    *)
+        echo "error: couldn't reach GitHub to resolve branch '${branch}' (offline?). Nothing installed." >&2
+        exit 1
+        ;;
+esac
+resolved_sha="$(printf '%s' "${resolved}" | cut -f1)"
+resolved_tag="$(printf '%s' "${resolved}" | cut -f2)"
+
+repo="Crimson3076/DualDeck"
+download_base="https://github.com/${repo}/releases/download/${resolved_tag}"
+
+work_dir="$(mktemp -d)"
+trap 'rm -rf "${work_dir}"' EXIT
+
+echo "Downloading ${resolved_tag} (branch ${branch}, commit ${resolved_sha:0:7})..."
+# Saved under the archive's real basename, not an arbitrary local name --
+# sha256sum -c matches SHA256SUMS entries by exact filename, and
+# SHA256SUMS (see build-release.sh's own SHA256SUMS-generation comment)
+# lists this exact name.
+archive_name="melonds-remote-linux-x86_64.tar.gz"
+curl -fsSL --max-time 180 -o "${work_dir}/${archive_name}" "${download_base}/${archive_name}"
+curl -fsSL --max-time 30 -o "${work_dir}/SHA256SUMS" "${download_base}/SHA256SUMS"
+
+echo "Verifying download integrity..."
+if ! (cd "${work_dir}" && sha256sum -c --ignore-missing SHA256SUMS) >/dev/null 2>&1; then
+    echo "error: checksum verification failed for ${resolved_tag} -- refusing to install an unverified download. Nothing changed." >&2
+    exit 1
+fi
+
+echo "Extracting..."
+tar xzf "${work_dir}/${archive_name}" -C "${work_dir}"
+
+extracted_dir=""
+for candidate in "${work_dir}"/melonds-remote-*; do
+    [[ -d "${candidate}" ]] && extracted_dir="${candidate}" && break
+done
+if [[ -z "${extracted_dir}" ]]; then
+    echo "error: couldn't find the extracted release directory -- nothing installed." >&2
+    exit 1
+fi
+
+# Same "toggle off and back on" reasoning as apply-update.sh's own
+# identical block -- checked before the install step below, since that
+# step only replaces files on disk, not whatever copy the persistent
+# daemon (if running) already has open.
+daemon_was_active=0
+if command -v systemctl >/dev/null 2>&1 && \
+   systemctl --user is-active --quiet dualdeck-host-control.service 2>/dev/null; then
+    daemon_was_active=1
+fi
+
+echo "Installing..."
+"${extracted_dir}/host/internal/install-steam-shortcut.sh" --force
+
+# Only recorded once the staged swap above has actually completed.
+dualdeck_branch_record_installed "${branch}" "${resolved_sha}" "${resolved_tag}"
+echo "Installed ${resolved_tag} (branch ${branch}, commit ${resolved_sha:0:7})."
+
+if [[ "${daemon_was_active}" -eq 1 ]]; then
+    echo "Restarting the Host Control daemon to pick up the update..."
+    if ! systemctl --user restart dualdeck-host-control.service 2>/dev/null; then
+        echo "warning: could not restart dualdeck-host-control.service -- restart it manually" >&2
+        echo "(systemctl --user restart dualdeck-host-control.service)" >&2
+    fi
+fi
+WRAP
+chmod +x "${pkg_dir}/host/internal/install-branch.sh"
 
 cat > "${pkg_dir}/host/internal/install-steam-shortcut.sh" <<'WRAP'
 #!/usr/bin/env bash

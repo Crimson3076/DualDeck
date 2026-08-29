@@ -42,6 +42,23 @@ jobs:
       - name: Run device-approval smoke test
         run: python3 tests/device_approval_smoke_test.py build/host/remote-server/dualdeck-host-service
 
+  host-client-menu-and-branch-selector:
+    name: Host/client menu lifecycle + Installation branch selector tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pure bash/python3 -- no build, no SDL3/melonDS. Both tests extract
+      # the dualdeck-host.sh/dualdeck-client.sh heredocs straight out of
+      # scripts/build-release.sh and run them against stub internal/
+      # scripts and a fake curl fixture (no real network access), so they
+      # don't need this repo's normal build dependencies either.
+      - name: Run host/client menu lifecycle test
+        run: python3 tests/host_client_menu_lifecycle_test.py
+
+      - name: Run installation branch selector test
+        run: python3 tests/dualdeck_branch_selector_test.py
+
   net-client-compiles:
     name: Compile client net_client.cpp/device_identity.cpp standalone (no SDL3 available)
     runs-on: ubuntu-latest

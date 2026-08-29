@@ -60,7 +60,16 @@ Yes/No popup on the host's own desktop the first time an unrecognized
 device connects, no shared secret to type or copy anywhere. Add to Steam
 (Big Picture/Gaming Mode), Remove from Steam, and Check for updates
 (which offers to install one automatically if it finds one) round out
-the rest of the menu, so there's nothing else in either `host/` or
+the rest of the menu; an "Advanced..." entry on both host and client
+menus additionally offers an Installation branch selector -- pick a
+branch (paginated, live from GitHub, cached with a Refresh), then a
+separate "Install selected branch" resolves it to the exact commit the
+newest release for that branch was built from and installs from that
+verified build on both sides, so host and client always end up on the
+same commit; see `docs/known-limitations.md`'s entry on this for the one
+real constraint (a branch is only installable once someone has actually
+published a release from its current tip). So there's nothing else in
+either `host/` or
 `client/` you need to open directly; the rest of what's in there (under
 each directory's `internal/` subfolder) is what the menu calls on your
 behalf. The client additionally checks for and installs updates
