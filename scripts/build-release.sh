@@ -3346,6 +3346,7 @@ choose_action() {
             reconfigure-controls "Reconfigure Controls (fixes 'no controls' in Cemu)" \
             update "Check for updates / update" \
             emudeck "Patch my EmuDeck/RetroDECK-installed emulators (experimental)" \
+            retrodeck-setup "RetroDECK: Cemu compatibility setup (experimental)" \
             advanced "Advanced..." \
             2>/dev/null || echo "cancel"
     else
@@ -3363,10 +3364,11 @@ choose_action() {
             echo "  5) Reconfigure Controls (fixes 'no controls' in Cemu)"
             echo "  6) Check for updates / update"
             echo "  7) Patch my EmuDeck/RetroDECK-installed emulators (experimental)"
-            echo "  8) Advanced..."
-            echo "  9) Exit"
+            echo "  8) RetroDECK: Cemu compatibility setup (experimental)"
+            echo "  9) Advanced..."
+            echo "  10) Exit"
         } >&2
-        read -rp "Choice [1-9]: " choice
+        read -rp "Choice [1-10]: " choice
         case "${choice}" in
             1) echo "launch" ;;
             2) echo "hostcontrol-daemon" ;;
@@ -3375,7 +3377,44 @@ choose_action() {
             5) echo "reconfigure-controls" ;;
             6) echo "update" ;;
             7) echo "emudeck" ;;
-            8) echo "advanced" ;;
+            8) echo "retrodeck-setup" ;;
+            9) echo "advanced" ;;
+            *) echo "cancel" ;;
+        esac
+    fi
+}
+
+# RetroDECK's own emulator resolution (both its ES-DE GUI and the
+# separate run_game.sh path apps like Tender call into) needs three
+# local Flatpak permission grants plus a ~/.local/bin/cemu symlink to
+# actually use DualDeck's patched Cemu instead of RetroDECK's own
+# bundled copy -- confirmed on real hardware, see
+# docs/retrodeck-compatibility.md's "Real, confirmed blockers" section
+# and scripts/retrodeck-setup.sh's own header comment for the full
+# story. This submenu is the zero-typing, controller-friendly front end
+# for that script, mirroring choose_host_control_daemon_action()'s own
+# shape (a small kdialog --menu, each choice calling the underlying
+# script and showing its output in a plain info() dialog).
+choose_retrodeck_action() {
+    if have_kdialog; then
+        kdialog --title "DualDeck Host -- RetroDECK" --menu "RetroDECK: Cemu compatibility setup" \
+            apply "Apply (recommended)" \
+            status "Status" \
+            restore "Restore / undo" \
+            2>/dev/null || echo "cancel"
+    else
+        {
+            echo "RetroDECK: Cemu compatibility setup"
+            echo "  1) Apply (recommended)"
+            echo "  2) Status"
+            echo "  3) Restore / undo"
+            echo "  4) Back"
+        } >&2
+        read -rp "Choice [1-4]: " choice
+        case "${choice}" in
+            1) echo "apply" ;;
+            2) echo "status" ;;
+            3) echo "restore" ;;
             *) echo "cancel" ;;
         esac
     fi
@@ -3658,6 +3697,50 @@ Install ${latest_version} now? This downloads it from GitHub and also adds/updat
         ;;
     emudeck)
         exec ./internal/launch-emudeck-integration.sh
+        ;;
+    retrodeck-setup)
+        rd_tool="./emudeck-integration/scripts/retrodeck-setup.sh"
+        if [[ ! -x "${rd_tool}" ]]; then
+            info "The RetroDECK setup tool is missing from this install (host/emudeck-integration/scripts/retrodeck-setup.sh) -- re-download the release archive."
+        else
+            while true; do
+                rd_action="$(choose_retrodeck_action)"
+                case "${rd_action}" in
+                    apply)
+                        if confirm "This grants RetroDECK's own Flatpak sandbox three local permissions (its own IPC socket directory, an AppImage FUSE workaround, and a widened PATH) plus a ~/.local/bin/cemu symlink, so RetroDECK's game list -- and anything that launches through it, like Tender -- use DualDeck's patched Cemu instead of RetroDECK's own bundled copy. Only affects RetroDECK, only for this user account, and is fully reversible from this same menu. Requires RetroDECK to already be installed, and the patched Cemu AppImage to already be installed (see 'Patch my EmuDeck/RetroDECK-installed emulators' above). Continue?"; then
+                            if rd_output="$("${rd_tool}" 2>&1)"; then
+                                info "${rd_output}"
+                            else
+                                info "Could not apply the RetroDECK setup:
+
+${rd_output}"
+                            fi
+                        fi
+                        ;;
+                    status)
+                        rd_output="$("${rd_tool}" --status 2>&1)"
+                        info "${rd_output}"
+                        ;;
+                    restore)
+                        if confirm "This removes ALL Flatpak permission overrides for RetroDECK (a full reset -- real-hardware testing found removing just DualDeck's own three could leave RetroDECK unable to launch at all, so this is the one approach confirmed safe) and removes the ~/.local/bin/cemu symlink. RetroDECK goes back to launching its own bundled Cemu. Continue?"; then
+                            if rd_output="$("${rd_tool}" --restore 2>&1)"; then
+                                info "${rd_output}"
+                            else
+                                info "Could not restore:
+
+${rd_output}"
+                            fi
+                        fi
+                        ;;
+                    *)
+                        # Cancelled/backed out -- return to the main menu,
+                        # don't exit the host (see the outer loop's own
+                        # header comment).
+                        break
+                        ;;
+                esac
+            done
+        fi
         ;;
     advanced)
         while true; do
