@@ -12514,6 +12514,91 @@ simulated failed action, backing out of both submenus, and a full
 Advanced install both succeeding and failing on a bad checksum) before
 either automated test was written.
 
+## 2026-08-29: RetroDECK component compatibility research + packaging (Cemu only)
+
+Real user request: add RetroDECK Flatpak compatibility for Cemu without
+regressing the working AppImage/EmuDeck path, without any launcher
+detection, and without installing RetroDECK or touching Flatpak
+permissions before showing the exact commands first. Builds directly on
+the prior RetroDECK investigation above ("RetroDECK support -- 'override
+the retrodeck builds of the emulators'", commit `f48094c`) rather than
+redoing it -- that entry's findings (RetroDECK extracts Cemu from the
+stock Flathub Flatpak into a read-only `/app` component with no
+extension point; its ES-DE fork checks `~/Applications/<Name>*.AppImage`
+first) were re-confirmed via a second, independent research pass before
+building anything further on top of them, and still hold.
+
+**What's new in this pass** (see `docs/retrodeck-compatibility.md` for
+the full design writeup): a second, standalone artifact --
+`scripts/build-retrodeck-cemu-component.sh` -- that builds the identical
+pinned Cemu commit (`CEMU_COMMIT` in `scripts/lib/pinned_commits.sh`,
+currently `a6fb0a48eb437a8a41c13b782ac8ae0433bf8f98` = tag `v2.6`) and
+the same DualDeck patch into a RetroDECK-component-*shaped* tarball
+(`component_launcher.sh` + `bin/`/`lib/`), for local RetroDECK Flatpak
+rebuilds and as a concrete artifact for an upstream proposal -- not a
+drop-in replacement for a stock install, since there's nowhere writable
+in a stock RetroDECK Flatpak to place it (confirmed: `/app` is
+immutable, no extension point exists). The already-working AppImage path
+remains the production recommendation and was not modified.
+
+`scripts/lib/appimage_pack.sh`'s `pack_appimage()` was refactored (not
+behaviorally changed) to extract its AppDir-payload-building steps
+(bundle the binary, its resolved shared-library dependencies, extra
+binaries, extra dirs -- glibc itself deliberately excluded, see that
+file's own `bundle_library_dependencies()` comment) into a new
+`_stage_bundle_payload()` helper, so the new
+`pack_retrodeck_component_tarball()` reuses the exact same bundling
+logic rather than a second, independently-written copy that could
+silently drift from what the AppImage build actually bundles.
+`pack_retrodeck_component_tarball()` also reuses
+`apprun_templates.sh`'s existing `generate_apprun_out_of_process()`
+output as `component_launcher.sh` verbatim -- the same "probe the shared
+`$XDG_RUNTIME_DIR/dualdeck/adapter.sock` daemon socket first, else spawn
+a private `dualdeck-host-service`" logic the AppImage path already uses,
+already fully package-neutral with zero EmuDeck/RetroDECK/Steam/ES-DE/
+Tender detection anywhere in it.
+
+**IPC needs no changes.** `AdapterIpcClient`'s default socket path
+(`$XDG_RUNTIME_DIR/dualdeck/adapter.sock`, `adapter_sdk/src/socket_path.cpp`)
+was already exactly the kind of package-neutral, `flatpak-spawn`-free
+design this task called for -- confirmed by reading the existing patch
+rather than assumed. RetroDECK's own Flatpak manifest
+(`net.retrodeck.retrodeck.yml`, read directly, not from docs --
+readthedocs.io is unreachable from this environment's network policy)
+already grants `--filesystem=host`, which should make that same host
+path visible inside its sandbox with no new permission needed --
+**reasoned from the manifest, not yet confirmed against a real running
+RetroDECK sandbox.**
+
+**Verified**: RetroDECK's real component/launcher/manifest architecture,
+read directly from `RetroDECK/RetroDECK` and `RetroDECK/components`
+source (two independent passes, cross-checked against each other);
+`bash -n` on both new/changed scripts
+(`scripts/build-retrodeck-cemu-component.sh`,
+`scripts/lib/appimage_pack.sh`); a new
+`tests/retrodeck_component_pack_test.py` (added to CI) exercises
+`pack_retrodeck_component_tarball()`'s and the refactored
+`_stage_bundle_payload()`'s real output shape (tarball layout,
+executable bits, exact-content preservation) against small real ELF
+fixtures (`/bin/true`), without needing a real Cemu build or network
+access -- matching this project's existing convention that
+`appimage_pack.sh`'s AppImage-building path itself has no unit test,
+verified instead via `build-release.sh`'s real CI builds.
+
+**Not yet verified, same constraint as every Cemu patch entry above**:
+this project's own sandbox cannot reach the hosts Cemu's vcpkg-based
+dependency graph needs, so `scripts/build-retrodeck-cemu-component.sh`
+has never actually been run end-to-end here. Nothing in this pass has
+run inside a real RetroDECK Flatpak install -- the milestones in
+`docs/retrodeck-compatibility.md` (game launches with DualDeck disabled,
+then with DualDeck streaming, then Tender compatibility) are all still
+open, and require real hardware and a real (isolated, non-production)
+RetroDECK install this development environment does not have. No
+RetroDECK install command, `flatpak override`, or upstream issue/PR has
+been run or posted as part of this pass -- per the user's explicit
+requirement, the exact commands are documented in
+`docs/retrodeck-compatibility.md` for review first.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,
