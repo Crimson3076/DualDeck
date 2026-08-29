@@ -10,7 +10,9 @@
 # investigation and root-cause writeup this script is a direct
 # distillation of -- read those first if any of this needs adjusting.
 #
-# What each grant is for (all reversible with --restore):
+# What each grant is for (--restore reverts all of them at once via a
+# full `flatpak override --user --reset` -- see that function's own
+# comment for why a full reset, not a per-grant undo):
 #   1. --filesystem=xdg-run/dualdeck:create
 #      RetroDECK's Flatpak sandbox does NOT see $XDG_RUNTIME_DIR/dualdeck/
 #      (where the Host Service's adapter socket lives) despite its broad
@@ -146,12 +148,19 @@ apply() {
 restore() {
     require_flatpak_and_retrodeck
     echo "Removing RetroDECK Cemu compatibility overrides for ${app_id}..."
-    # Targeted unset/no- flags rather than `flatpak override --user
-    # --reset`, so any unrelated override the user set independently for
-    # this app is left untouched.
-    run flatpak override --user --unset-env=PATH "${app_id}"
-    run flatpak override --user --unset-env=APPIMAGE_EXTRACT_AND_RUN "${app_id}"
-    run flatpak override --user --nofilesystem=xdg-run/dualdeck "${app_id}"
+    # A full `flatpak override --user --reset` rather than targeted
+    # `--unset-env=X`/`--nofilesystem=X` flags. An earlier version of this
+    # script used the targeted approach specifically to avoid clearing any
+    # unrelated override the user might have set independently -- real
+    # hardware testing (2026-08-29) found that combination of
+    # `--unset-env=PATH` and `--nofilesystem=xdg-run/dualdeck` left
+    # RetroDECK unable to launch at all, rather than cleanly reverting to
+    # its shipped defaults (Flatpak's own override-removal semantics
+    # here are apparently not as simple as "undo the earlier --env/
+    # --filesystem call"). A full reset is blunter -- it clears every
+    # override for this app, not just these three -- but is the one
+    # approach actually confirmed to leave RetroDECK working afterward.
+    run flatpak override --user --reset "${app_id}"
     if [[ -L "${local_bin_cemu}" ]]; then
         run rm -f "${local_bin_cemu}"
     fi

@@ -301,12 +301,21 @@ ln -sf ~/Applications/Cemu.AppImage ~/.local/bin/cemu
 
 (replace `<user>` with the real username -- Flatpak env overrides don't
 expand `~`). All three overrides are `--user`-scoped (this account only)
-and fully reversible:
+and reversible with a full reset:
 
 ```
 flatpak override --user --reset net.retrodeck.retrodeck
 rm ~/.local/bin/cemu
 ```
+
+**Use the full `--reset` above, not targeted `--unset-env=PATH`/
+`--nofilesystem=xdg-run/dualdeck` flags.** Confirmed on real hardware
+(2026-08-29): removing the three grants individually that way left
+RetroDECK unable to launch at all, rather than cleanly reverting to its
+shipped defaults -- Flatpak's override-removal semantics here aren't a
+simple "undo the earlier --env/--filesystem call." A full reset is
+blunter (it clears every override for this app, not just these three)
+but is the one approach actually confirmed safe.
 
 **With all three applied, this is now confirmed working with no
 per-launch override needed at all** -- RetroDECK's own point-and-click

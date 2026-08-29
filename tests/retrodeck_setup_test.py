@@ -24,9 +24,10 @@ Covers:
     override calls
   - --status: reports the symlink and AppImage state without changing
     anything
-  - --restore: removes the symlink and issues the three matching
-    targeted unset/no- flags (never a blanket --reset, which would also
-    wipe any unrelated override the user set independently)
+  - --restore: removes the symlink and issues a full `flatpak override
+    --user --reset` -- not targeted --unset-env/--nofilesystem flags,
+    which real-hardware testing (2026-08-29) found could leave RetroDECK
+    unable to launch at all instead of cleanly reverting to defaults
 
 Usage:
     python3 tests/retrodeck_setup_test.py
@@ -172,7 +173,16 @@ def test_status_reports_without_changing_anything():
         check(not fx.cemu_symlink().exists(), "--status does not create the symlink")
 
 
-def test_restore_removes_symlink_with_targeted_unsets():
+def test_restore_removes_symlink_via_full_reset():
+    # Real hardware finding, 2026-08-29: targeted `--unset-env=PATH` +
+    # `--nofilesystem=xdg-run/dualdeck` left RetroDECK unable to launch
+    # at all, rather than cleanly reverting to its shipped defaults --
+    # Flatpak's own override-removal semantics don't behave like a
+    # simple "undo the earlier --env/--filesystem call" here. --restore
+    # was switched to a full `flatpak override --user --reset` instead,
+    # confirmed on real hardware to actually leave RetroDECK working
+    # afterward -- blunter (clears every override for this app, not just
+    # these three) but the one approach that's actually safe.
     with tempfile.TemporaryDirectory() as tmp:
         fx = Fixture(Path(tmp))
         fx.install_cemu_appimage()
@@ -185,10 +195,8 @@ def test_restore_removes_symlink_with_targeted_unsets():
         check(not fx.cemu_symlink().exists(), "--restore removes the ~/.local/bin/cemu symlink")
 
         calls = fx.log_lines()
-        check(any("--unset-env=PATH" in c for c in calls), "--restore unsets the PATH override")
-        check(any("--unset-env=APPIMAGE_EXTRACT_AND_RUN" in c for c in calls), "--restore unsets APPIMAGE_EXTRACT_AND_RUN")
-        check(any("--nofilesystem=xdg-run/dualdeck" in c for c in calls), "--restore removes the xdg-run/dualdeck filesystem grant")
-        check(not any("--reset" in c for c in calls), "--restore never uses a blanket --reset that could wipe unrelated overrides")
+        check(any("--reset" in c for c in calls), "--restore uses a full flatpak override --reset (confirmed safe on real hardware; targeted --unset-env broke RetroDECK entirely)")
+        check(not any("--unset-env" in c for c in calls), "--restore no longer uses --unset-env, which was found to leave RetroDECK unable to launch")
 
 
 if __name__ == "__main__":
@@ -197,7 +205,7 @@ if __name__ == "__main__":
     test_apply_creates_symlink_and_three_overrides()
     test_dry_run_makes_no_changes()
     test_status_reports_without_changing_anything()
-    test_restore_removes_symlink_with_targeted_unsets()
+    test_restore_removes_symlink_via_full_reset()
 
     if failures:
         print(f"\n{len(failures)} failure(s)")
