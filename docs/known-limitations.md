@@ -12812,6 +12812,97 @@ full performance/robustness comparison matrix against the known-good
 AppImage/EmuDeck setup is still open -- everything confirmed is
 functional correctness on real hardware, not measured parity.
 
+## 2026-08-29 (continued): extended the RetroDECK fix to melonDS and Azahar; added a controller-friendly host menu entry
+
+Direct continuation of the two entries above. Two further real user
+requests: (1) "make this a menu button, easy for controller users" and
+(2) "do the same for the DS and 3DS."
+
+**Host menu entry**: `scripts/retrodeck-setup.sh` (from the previous
+entry) was already a standalone CLI tool; it wasn't wired into
+`dualdeck-host.sh`'s own menu. Added "RetroDECK: emulator compatibility
+setup (experimental)" as a new top-level choice, right after "Patch my
+EmuDeck/RetroDECK-installed emulators," with its own Apply/Status/
+Restore submenu -- same `kdialog --menu` + `info()`/`confirm()` pattern
+already used for the Host Control daemon submenu, so it's fully
+controller-navigable in Gaming Mode with no terminal or typing. Apply
+and Restore each show a plain-language `confirm()` describing exactly
+what will change first. This shifted the main menu's numbering
+(Advanced 8->9, Exit 9->10) -- updated the two existing test suites that
+drive the real generated menu with hardcoded stdin choices
+(`host_client_menu_lifecycle_test.py`, `dualdeck_branch_selector_test.py`)
+to match, and added two new lifecycle-test cases covering the new
+submenu itself (tool missing, and a full Status round-trip back to the
+main menu).
+
+**A real regression found and fixed the same day, from the user actually
+using `--restore` on real hardware**: the previous entry's `--restore`
+used targeted `flatpak override --user --unset-env=PATH` /
+`--nofilesystem=xdg-run/dualdeck` specifically to avoid clearing any
+override the user might have set independently for RetroDECK. Real
+result: **RetroDECK stopped launching entirely** afterward, not just
+reverted to defaults -- Flatpak's own override-removal semantics here
+apparently aren't a simple "undo the matching --env/--filesystem call."
+Immediate fix confirmed on real hardware: `flatpak override --user
+--reset net.retrodeck.retrodeck` (full reset) does correctly restore a
+working RetroDECK. `retrodeck-setup.sh --restore` was switched to that
+full reset -- blunter (clears every override for the app, not just
+DualDeck's three) but the one approach actually confirmed safe. Both the
+script and the bundled release copy carry this fix; the corresponding
+test (`retrodeck_setup_test.py`) was updated to assert `--restore` uses
+`--reset` and never `--unset-env`.
+
+**Extending to melonDS/Azahar**: rather than assume the Cemu mechanism
+just carries over, checked a fresh, newly-installed RetroDECK's real
+`es_find_rules.xml`/`es_systems.xml` directly (a different machine than
+the original HTPC investigation, to also confirm this isn't
+machine-specific config). Confirmed:
+
+- **Azahar (3DS)**: `systempath` entry `azahar` (lowercase, only one
+  listed -- unlike Cemu's three). `n3ds` system's first/default command
+  is "Azahar (Standalone)" -- identical shape to Wii U. Expected to work
+  the same way, not yet given the same real-hardware launch-and-stream
+  pass Cemu had.
+- **melonDS (DS)**: `systempath` entries `melonds`, `melonDS`,
+  `net.kuribo64.melonDS` in that order. Real, unavoidable gap confirmed
+  directly in `es_systems.xml`: the `nds` system lists four RetroArch
+  libretro cores (DeSmuME, DeSmuME 2015, melonDS DS, melonDS) *before*
+  "melonDS (Standalone)" -- RetroDECK's real default for DS is a
+  libretro core, not standalone melonDS, and no Flatpak permission or
+  PATH trick can change which `<command>` RetroDECK's `nds` system
+  actually uses. This needs a one-time manual switch in RetroDECK's own
+  Configurator (or ES-DE's per-system/per-game "Select alternative
+  emulator" screen) to "melonDS (Standalone)" before any of this fix has
+  any effect at all -- confirms and makes concrete what the original
+  2026-08-28 RetroDECK research pass had already flagged as a gap it
+  couldn't close on its own. Also noted: melonDS's own AppImage wrapper
+  (`generate_apprun_melonds()`) handles the remote connection
+  in-process, unlike Cemu/Azahar's probe-shared-socket-else-spawn-daemon
+  wrapper -- the `xdg-run/dualdeck:create` grant is likely not
+  load-bearing for melonDS specifically, though harmless to keep applying
+  sandbox-wide.
+
+`scripts/retrodeck-setup.sh` was generalized from a single hardcoded
+Cemu path to a data-driven loop over all three emulators: `--emulator`
+(repeatable) restricts to a subset, defaulting to every emulator with a
+patched AppImage already installed (skipping, not failing on, one that
+isn't -- only erroring if *none* are installed); the three Flatpak
+overrides are still applied exactly once regardless of how many
+emulators are covered; `apply`/`--status` print the DS manual-step
+reminder whenever melonDS is in scope. `retrodeck_setup_test.py` was
+rewritten to cover the generalized interface (subset selection, an
+unknown `--emulator` name rejected up front, the shared overrides
+applied once not per-emulator, the DS reminder appearing only when
+relevant) against the same fake-`flatpak` fixture as before.
+
+**Not yet verified**: melonDS and Azahar have not had a real-hardware
+launch-and-DualDeck-stream test the way Cemu did (title-bar check,
+client connection, Tender launch) -- only the config-file-level
+confirmation above, and the generalized script's own local (fake-
+flatpak) test coverage. The new host menu entry has been exercised via
+the same harness technique as the pre-existing menu lifecycle test, not
+yet clicked through with a real controller on real hardware.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

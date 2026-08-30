@@ -1,11 +1,20 @@
-# RetroDECK compatibility (Cemu only)
+# RetroDECK compatibility (Cemu, melonDS, Azahar)
 
 DualDeck must stay launcher-agnostic: it never detects or special-cases
 EmuDeck, RetroDECK, Tender, Steam, or ES-DE. This document covers what
 was actually verified about RetroDECK's own architecture, what DualDeck
 already does that works under RetroDECK unmodified, what this pass adds,
-and what's still genuinely unverified. Cemu (Nintendo Wii U) only, per
-the current scope -- melonDS/Azahar are not covered here.
+and what's still genuinely unverified.
+
+Cemu (Nintendo Wii U) is fully confirmed on real hardware (all three
+milestones, including Tender). melonDS (Nintendo DS) and Azahar
+(Nintendo 3DS) were added to `scripts/retrodeck-setup.sh` using the
+identical, already-proven mechanism -- confirmed against a real
+installed RetroDECK's actual `es_find_rules.xml`/`es_systems.xml`
+(2026-08-29), not assumed to just carry over -- but haven't yet had the
+same full real-hardware launch-and-stream pass Cemu had. See "Extending
+to melonDS and Azahar" below for what's confirmed vs. still open for
+each.
 
 ## RetroDECK's architecture, as verified against its real source
 
@@ -36,8 +45,9 @@ below is instead sourced from `github.com/RetroDECK/RetroDECK` and
   bundled `component_launcher.sh`, for all three emulators -- the same
   convention EmuDeck's own (non-fork) ES-DE already relies on. `wiiu`
   and `n3ds` both default to "Cemu (Standalone)"/"Azahar (Standalone)"
-  already; `nds` defaults to a libretro core, not standalone melonDS
-  (out of scope here -- Cemu only).
+  already; `nds` defaults to a libretro core, not standalone melonDS --
+  see "Extending to melonDS and Azahar" below for what this means in
+  practice and the one manual RetroDECK-side step it requires.
 - RetroDECK's Flatpak finish-args already grant, among others:
   `--filesystem=host`, `--device=all`, `--share=network`,
   `--socket=pulseaudio` + `--filesystem=xdg-run/pipewire-0`,
@@ -229,6 +239,64 @@ actually shipped/actually happens at runtime):
    Steam-shortcut-with-explicit-`-e`-override workaround are both
    superseded by this -- kept documented below as fallbacks/alternate
    paths, but no longer necessary for normal use.
+
+## Extending to melonDS and Azahar
+
+`scripts/retrodeck-setup.sh` covers all three patched emulators
+DualDeck ships (Cemu, melonDS, Azahar) using the identical mechanism
+confirmed for Cemu above: a `~/.local/bin/<name>` symlink per emulator
+(winning RetroDECK's `systempath` rule before either of its buggy
+`staticpath` implementations run) plus the same three sandbox-wide
+Flatpak overrides, applied once regardless of how many emulators are in
+use.
+
+**Confirmed against a real installed RetroDECK's actual
+`es_find_rules.xml`/`es_systems.xml`** (2026-08-29, not assumed to carry
+over from Cemu):
+
+- **Azahar (Nintendo 3DS)** -- `systempath` entry is `azahar` (lowercase
+  only). The `n3ds` system's *first* (default) command is "Azahar
+  (Standalone)" (`%EMULATOR_AZAHAR% %ROM%`) -- identical shape to Wii U.
+  **Expected to work the same way Cemu does, with no RetroDECK-side
+  setting change needed** -- not yet given the same full real-hardware
+  launch-and-stream pass Cemu had.
+- **melonDS (Nintendo DS)** -- `systempath` entries are `melonds`,
+  `melonDS`, `net.kuribo64.melonDS`, in that order (the script's symlink
+  uses lowercase `melonds`, the first checked). Structurally different
+  from Cemu/Azahar in one way: melonDS's own AppImage wrapper
+  (`generate_apprun_melonds()` in `scripts/lib/apprun_templates.sh`)
+  handles the remote connection **in-process** -- it doesn't do the
+  probe-shared-socket-else-spawn-private-daemon dance Cemu/Azahar's
+  wrapper does, so the `xdg-run/dualdeck:create` grant likely isn't
+  load-bearing for melonDS specifically (harmless to still apply, since
+  it's shared sandbox-wide with the other two).
+  **Real, unavoidable extra requirement, independent of anything fixed
+  here**: RetroDECK's `nds` system lists four RetroArch libretro cores
+  (DeSmuME, DeSmuME 2015, melonDS DS, melonDS) *before* "melonDS
+  (Standalone)" (`%EMULATOR_MELONDS% %ROM%`) -- RetroDECK's own default
+  is a libretro core, not standalone melonDS. No Flatpak permission or
+  symlink can change which `<command>` RetroDECK's `nds` system uses;
+  the user must manually switch it to "melonDS (Standalone)" in
+  RetroDECK's own Configurator (or ES-DE's per-system/per-game "Select
+  alternative emulator" screen) before any of this has any effect at
+  all. `retrodeck-setup.sh` prints this as an explicit reminder whenever
+  melonDS is covered by `apply`/`--status`.
+
+**Usage** (unchanged shape from the Cemu-only version, just now covers
+more by default):
+```
+./retrodeck-setup.sh --dry-run            # everything installed
+./retrodeck-setup.sh                      # everything installed
+./retrodeck-setup.sh --emulator azahar    # just one (repeatable)
+./retrodeck-setup.sh --status
+./retrodeck-setup.sh --restore
+```
+
+**Not yet verified**: melonDS and Azahar have not had a real-hardware
+launch-and-DualDeck-stream test the way Cemu did (title-bar check,
+client connection, Tender launch) -- only the config-file-level
+confirmation above. Treat both as "should work by the same proven
+mechanism" rather than "confirmed" until that's done.
 
 ## Building the component artifact
 
