@@ -1,0 +1,6 @@
+build/
+ps5-payload-sdk.zip
+ps5-payload-sdk/
+*.elf
+*.o
+*.d
