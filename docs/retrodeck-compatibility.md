@@ -519,6 +519,34 @@ firmware, keys, or save files to this repository at any point.
    RetroDECK/Flatpak level (the three overrides + symlink above), which
    is why it applies uniformly to Tender, the CLI, and the GUI alike.
 
+## Known gap: Tender's folder-boot direct-launch path skips this fix
+
+Tender (`danielcopper/romm-tender`) added a second launch path after this
+project's `nightly` branch diverged (diffed directly against Tender's own
+source, commit `50dc17a` -> `33dbe3b`, 2026-09-10): for ROMs that install
+as an entire **directory** rather than a single file (its own docs
+reference "ADR-0019" -- some RPCS3 dumps are the motivating case), RetroDECK's
+`run_game.sh` misinterprets the directory as an ES-DE library folder, so
+Tender bypasses `run_game.sh` entirely for those ROMs. Instead, its new
+`EsFindRulesAdapter.resolve_sandbox_launcher()`
+(`py_modules/adapters/es_find_rules.py`) execs
+`flatpak run --command=<sandbox component launcher path>
+net.retrodeck.retrodeck <args>` directly -- and that resolver explicitly
+**skips** host-native `~/Applications/*.AppImage` entries by design (its own
+comment: "Host-native entries... are skipped -- they are not reachable as a
+sandbox `--command`").
+
+**Practical effect**: for a folder-dump ROM specifically, Tender launches
+RetroDECK's bundled, unpatched emulator regardless of `retrodeck-setup.sh`
+being applied -- the `systempath`/`PATH`-widening fix above only affects the
+`run_game.sh`-mediated path. Every ROM tested so far (single-file `.rpx`s)
+goes through `run_game.sh` and is unaffected. No Wii U/DS/3DS ROM format in
+normal use is a directory dump, so this is expected to be rare in practice
+for the three systems this project patches, but it is a real, confirmed gap
+in Tender's newer code, not a hypothetical -- worth rechecking if a future
+Tender release changes `resolve_sandbox_launcher()`'s host-native skip, or
+if any Wii U/DS/3DS ROM is ever packaged as a directory dump.
+
 ## Verification plan (compare against the known-good AppImage/EmuDeck setup, same hardware, same game)
 
 Not "does it launch" -- side-by-side comparison on:
