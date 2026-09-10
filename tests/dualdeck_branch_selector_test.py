@@ -351,8 +351,8 @@ dualdeck_branch_status_line
                                      release_sums=fixture_dir / "SHA256SUMS")
         host_dir, bin_dir = build_host_dir(tmp / "pkg", fixtures)
         home_dir = tmp / "home"
-        # 8=Advanced, 1=change branch, 2=select "main" (alphabetical: feature-x, main, no-release-branch), 3=install, y=confirm, 4=back, 9=exit
-        proc = run_menu(host_dir, bin_dir, home_dir, ["8", "1", "2", "3", "y", "4", "9"])
+        # 9=Advanced, 1=change branch, 2=select "main" (alphabetical: feature-x, main, no-release-branch), 3=install, y=confirm, 4=back, 9=exit
+        proc = run_menu(host_dir, bin_dir, home_dir, ["9", "1", "2", "3", "y", "4", "10"])
         check(proc.returncode == 0, "menu install: host stayed alive through the whole flow, clean exit")
         combined = proc.stdout + proc.stderr
         check("Installed v0.1.50" in combined, "menu install: reported success only after the real work completed")
@@ -374,7 +374,7 @@ dualdeck_branch_status_line
                                      release_sums=fixture_dir / "SHA256SUMS")
         host_dir, bin_dir = build_host_dir(tmp / "pkg", fixtures)
         home_dir = tmp / "home"
-        proc = run_menu(host_dir, bin_dir, home_dir, ["8", "1", "2", "3", "y", "4", "9"])
+        proc = run_menu(host_dir, bin_dir, home_dir, ["9", "1", "2", "3", "y", "4", "10"])
         check(proc.returncode == 0, "menu install (bad checksum): host stayed alive, clean exit")
         combined = proc.stdout + proc.stderr
         check("Could not install" in combined and "checksum" in combined.lower(),
@@ -389,7 +389,7 @@ dualdeck_branch_status_line
         host_dir, bin_dir = build_host_dir(tmp / "pkg", fixtures)
         home_dir = tmp / "home"
         # select "no-release-branch" (3rd in the alphabetical list: feature-x, main, no-release-branch)
-        proc = run_menu(host_dir, bin_dir, home_dir, ["8", "1", "3", "3", "y", "4", "9"])
+        proc = run_menu(host_dir, bin_dir, home_dir, ["9", "1", "3", "3", "y", "4", "10"])
         check(proc.returncode == 0, "menu install (no release yet): host stayed alive, clean exit")
         combined = proc.stdout + proc.stderr
         check("Could not install" in combined, "menu install (no release yet): reported failure")

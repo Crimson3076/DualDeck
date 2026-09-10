@@ -154,8 +154,8 @@ def run() -> int:
     # --- Host: a successful action (Check for updates) returns to the menu ---
     with tempfile.TemporaryDirectory() as tmp:
         host_dir = build_host_harness(Path(tmp), src)
-        # 6=Check for updates, 8=Advanced (just to touch it), 4=Back, 9=Exit
-        proc = run_menu(host_dir, "dualdeck-host.sh", ["6", "9"])
+        # 6=Check for updates, 9=Advanced (just to touch it), 4=Back, 10=Exit
+        proc = run_menu(host_dir, "dualdeck-host.sh", ["6", "10"])
         check(proc.returncode == 0, "host: clean exit code after Check for updates then Exit")
         check(count_menu_appearances(proc, "DualDeck Host") == 2,
               "host: main menu redisplayed after Check for updates (not exited)")
@@ -163,7 +163,7 @@ def run() -> int:
     # --- Host: a failing action still returns to the menu, not a crash ---
     with tempfile.TemporaryDirectory() as tmp:
         host_dir = build_host_harness(Path(tmp), src, failing={"install-steam-shortcut.sh"})
-        proc = run_menu(host_dir, "dualdeck-host.sh", ["3", "9"])
+        proc = run_menu(host_dir, "dualdeck-host.sh", ["3", "10"])
         check(proc.returncode == 0, "host: clean exit code after a failed action then Exit")
         check(count_menu_appearances(proc, "DualDeck Host") == 2,
               "host: main menu redisplayed after a failed Add-to-Steam (not exited/crashed)")
@@ -171,8 +171,8 @@ def run() -> int:
     # --- Host: backing out of the Launch submenu returns to the main menu ---
     with tempfile.TemporaryDirectory() as tmp:
         host_dir = build_host_harness(Path(tmp), src)
-        # 1=Launch..., 6=Back (choose_emulator's terminal fallback), 9=Exit
-        proc = run_menu(host_dir, "dualdeck-host.sh", ["1", "6", "9"])
+        # 1=Launch..., 6=Back (choose_emulator's terminal fallback), 10=Exit
+        proc = run_menu(host_dir, "dualdeck-host.sh", ["1", "6", "10"])
         check(proc.returncode == 0, "host: clean exit after cancelling the Launch submenu then Exit")
         check(count_menu_appearances(proc, "DualDeck Host") == 2,
               "host: main menu redisplayed after backing out of 'Which system?' (not exited)")
@@ -181,17 +181,47 @@ def run() -> int:
     # --- Host: backing out of the Host Control daemon submenu returns to the main menu ---
     with tempfile.TemporaryDirectory() as tmp:
         host_dir = build_host_harness(Path(tmp), src)
-        # 2=Host Control daemon submenu, 3=Back, 9=Exit
-        proc = run_menu(host_dir, "dualdeck-host.sh", ["2", "3", "9"])
+        # 2=Host Control daemon submenu, 3=Back, 10=Exit
+        proc = run_menu(host_dir, "dualdeck-host.sh", ["2", "3", "10"])
         check(proc.returncode == 0, "host: clean exit after cancelling the daemon submenu then Exit")
         check(count_menu_appearances(proc, "DualDeck Host") == 2,
               "host: main menu redisplayed after backing out of the daemon submenu (not exited)")
+
+    # --- Host: RetroDECK setup tool missing reports clearly, returns to the main menu ---
+    with tempfile.TemporaryDirectory() as tmp:
+        host_dir = build_host_harness(Path(tmp), src)
+        # 8=RetroDECK: Cemu compatibility setup (tool not present in this
+        # harness at all -- emudeck-integration/scripts/ is never
+        # created), 10=Exit
+        proc = run_menu(host_dir, "dualdeck-host.sh", ["8", "10"])
+        check(proc.returncode == 0, "host: clean exit after the RetroDECK tool-missing message then Exit")
+        check(count_menu_appearances(proc, "DualDeck Host") == 2,
+              "host: main menu redisplayed after the RetroDECK setup tool is reported missing")
+        check("retrodeck-setup.sh" in (proc.stdout + proc.stderr),
+              "host: the missing-tool message names retrodeck-setup.sh")
+
+    # --- Host: RetroDECK setup submenu (Status), then backing out, returns to the main menu ---
+    with tempfile.TemporaryDirectory() as tmp:
+        host_dir = build_host_harness(Path(tmp), src)
+        retrodeck_tool_dir = host_dir / "emudeck-integration" / "scripts"
+        retrodeck_tool_dir.mkdir(parents=True)
+        write_exec(retrodeck_tool_dir / "retrodeck-setup.sh",
+                   "#!/usr/bin/env bash\n"
+                   "echo \"stub: retrodeck-setup.sh called with: $*\"\n")
+        # 8=RetroDECK submenu, 2=Status (no confirm() needed), 4=Back,
+        # 10=Exit
+        proc = run_menu(host_dir, "dualdeck-host.sh", ["8", "2", "4", "10"])
+        check(proc.returncode == 0, "host: clean exit after using the RetroDECK Status action then Exit")
+        check(count_menu_appearances(proc, "DualDeck Host") == 2,
+              "host: main menu redisplayed after backing out of the RetroDECK submenu")
+        check("retrodeck-setup.sh called with: --status" in proc.stdout,
+              "host: the RetroDECK submenu's Status choice calls retrodeck-setup.sh --status")
 
     # --- Host: only the explicit Exit choice terminates it ---
     with tempfile.TemporaryDirectory() as tmp:
         host_dir = build_host_harness(Path(tmp), src)
         # 6, 3, 5 (three real actions in a row), then Exit
-        proc = run_menu(host_dir, "dualdeck-host.sh", ["6", "3", "5", "9"])
+        proc = run_menu(host_dir, "dualdeck-host.sh", ["6", "3", "5", "10"])
         check(proc.returncode == 0, "host: clean exit after a run of several actions then Exit")
         check(count_menu_appearances(proc, "DualDeck Host") == 4,
               "host: menu redisplayed after every one of several consecutive actions")

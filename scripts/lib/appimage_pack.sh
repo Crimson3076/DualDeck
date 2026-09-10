@@ -278,6 +278,79 @@ bundle_library_dependencies() {
 # docs/known-limitations.md's entry on this for the real-hardware
 # repro). melonDS/Azahar need no extra directories.
 #
+# _stage_bundle_payload <payload_dir> <binary_path> [extra_binaries] [extra_dirs]
+#
+# Builds a payload_dir/usr/{bin,lib} tree containing <binary_path>, its
+# resolved shared-library dependencies, and any extra binaries/dirs --
+# the exact same self-contained "bundle everything the binary actually
+# needs, glibc excluded" logic pack_appimage() used to do inline before
+# a second caller (pack_retrodeck_component_tarball(), see below) needed
+# the identical bundling step but a tarball instead of a squashed
+# AppImage as its final output. Factored out rather than duplicated so
+# the two packaging formats can never silently drift apart on which
+# libraries/plugins get bundled -- see bundle_library_dependencies()'s
+# own header for why glibc itself is excluded, and the extra_dirs loop
+# below for why Qt platform plugins need their own separate dependency
+# scan.
+#
+# Caller owns creating/cleaning up <payload_dir> (both current callers
+# already need their own mktemp+trap for their own final-output step,
+# so this doesn't create a second one).
+_stage_bundle_payload() {
+    local payload_dir="$1" binary_path="$2"
+    local extra_binaries="${3:-}"
+    local extra_dirs="${4:-}"
+
+    mkdir -p "${payload_dir}/usr/bin" "${payload_dir}/usr/lib"
+    cp "${binary_path}" "${payload_dir}/usr/bin/$(basename "${binary_path}")"
+    chmod +x "${payload_dir}/usr/bin/$(basename "${binary_path}")"
+    bundle_library_dependencies "${binary_path}" "${payload_dir}/usr/lib"
+
+    if [[ -n "${extra_binaries}" ]]; then
+        local IFS=":"
+        local extra
+        for extra in ${extra_binaries}; do
+            [[ -f "${extra}" ]] || { echo "_stage_bundle_payload: no such extra binary: ${extra}" >&2; return 1; }
+            cp "${extra}" "${payload_dir}/usr/bin/$(basename "${extra}")"
+            chmod +x "${payload_dir}/usr/bin/$(basename "${extra}")"
+            bundle_library_dependencies "${extra}" "${payload_dir}/usr/lib"
+        done
+    fi
+
+    if [[ -n "${extra_dirs}" ]]; then
+        local IFS=":"
+        local dir
+        for dir in ${extra_dirs}; do
+            [[ -d "${dir}" ]] || { echo "_stage_bundle_payload: no such extra directory: ${dir}" >&2; return 1; }
+            cp -a "${dir}" "${payload_dir}/usr/bin/$(basename "${dir}")"
+
+            # Real user report, 2026-08-01: melonDS/Azahar got past
+            # "Could not find the Qt platform plugin" (the extra_dirs
+            # bundling fix that added Qt's platforms/ directory here)
+            # only to hit "Could not LOAD the Qt platform plugin ...
+            # even though it was found" -- libqxcb.so/libqwayland-*.so
+            # are themselves real ELF shared objects with their own large
+            # dependency chains (libQt6XcbQpa.so.6, a dozen libxcb-*.so,
+            # libxkbcommon.so, libEGL.so, libfontconfig.so, ...) that
+            # bundle_library_dependencies() never saw, because it only
+            # ever ran against the *main binary* above -- a dlopen()'d
+            # plugin's own dependencies are invisible to `ldd
+            # <main binary>` no matter how thorough that pass is, since
+            # the plugin is a separate ELF file loaded later, not part of
+            # the main binary's own dynamic dependency graph at all.
+            # Scans every extra_dir for actual shared-library files
+            # (*.so, *.so.N) and bundles each one's own dependencies too
+            # -- a no-op for Cemu's resources/gameProfiles (plain data,
+            # no .so files in there), but load-bearing for melonDS/
+            # Azahar's bundled Qt platform plugins.
+            local plugin_so
+            while IFS= read -r -d '' plugin_so; do
+                bundle_library_dependencies "${plugin_so}" "${payload_dir}/usr/lib"
+            done < <(find "${dir}" -type f \( -name '*.so' -o -name '*.so.*' \) -print0)
+        done
+    fi
+}
+
 # Uses a placeholder 1x1 PNG icon (appimagetool requires SOME icon file to
 # exist and be referenced by the .desktop file, and this project has no
 # real icon asset yet -- cosmetic only, doesn't affect functionality, but
@@ -306,54 +379,7 @@ pack_appimage() {
     # only ever fires once, for this function's own return.
     trap 'rm -rf "${appdir}"; trap - RETURN' RETURN
 
-    mkdir -p "${appdir}/usr/bin" "${appdir}/usr/lib"
-    cp "${binary_path}" "${appdir}/usr/bin/$(basename "${binary_path}")"
-    chmod +x "${appdir}/usr/bin/$(basename "${binary_path}")"
-    bundle_library_dependencies "${binary_path}" "${appdir}/usr/lib"
-
-    if [[ -n "${extra_binaries}" ]]; then
-        local IFS=":"
-        local extra
-        for extra in ${extra_binaries}; do
-            [[ -f "${extra}" ]] || { echo "pack_appimage: no such extra binary: ${extra}" >&2; return 1; }
-            cp "${extra}" "${appdir}/usr/bin/$(basename "${extra}")"
-            chmod +x "${appdir}/usr/bin/$(basename "${extra}")"
-            bundle_library_dependencies "${extra}" "${appdir}/usr/lib"
-        done
-    fi
-
-    if [[ -n "${extra_dirs}" ]]; then
-        local IFS=":"
-        local dir
-        for dir in ${extra_dirs}; do
-            [[ -d "${dir}" ]] || { echo "pack_appimage: no such extra directory: ${dir}" >&2; return 1; }
-            cp -a "${dir}" "${appdir}/usr/bin/$(basename "${dir}")"
-
-            # Real user report, 2026-08-01: melonDS/Azahar got past
-            # "Could not find the Qt platform plugin" (the extra_dirs
-            # bundling fix that added Qt's platforms/ directory here)
-            # only to hit "Could not LOAD the Qt platform plugin ...
-            # even though it was found" -- libqxcb.so/libqwayland-*.so
-            # are themselves real ELF shared objects with their own large
-            # dependency chains (libQt6XcbQpa.so.6, a dozen libxcb-*.so,
-            # libxkbcommon.so, libEGL.so, libfontconfig.so, ...) that
-            # bundle_library_dependencies() never saw, because it only
-            # ever ran against the *main binary* above -- a dlopen()'d
-            # plugin's own dependencies are invisible to `ldd
-            # <main binary>` no matter how thorough that pass is, since
-            # the plugin is a separate ELF file loaded later, not part of
-            # the main binary's own dynamic dependency graph at all.
-            # Scans every extra_dir for actual shared-library files
-            # (*.so, *.so.N) and bundles each one's own dependencies too
-            # -- a no-op for Cemu's resources/gameProfiles (plain data,
-            # no .so files in there), but load-bearing for melonDS/
-            # Azahar's bundled Qt platform plugins.
-            local plugin_so
-            while IFS= read -r -d '' plugin_so; do
-                bundle_library_dependencies "${plugin_so}" "${appdir}/usr/lib"
-            done < <(find "${dir}" -type f \( -name '*.so' -o -name '*.so.*' \) -print0)
-        done
-    fi
+    _stage_bundle_payload "${appdir}" "${binary_path}" "${extra_binaries}" "${extra_dirs}"
 
     cp "${apprun_script_path}" "${appdir}/AppRun"
     chmod +x "${appdir}/AppRun"
@@ -382,4 +408,67 @@ PNG
     # build-release.sh-style CI environments as often as on a real desktop.
     ARCH=x86_64 "${appimagetool}" --appimage-extract-and-run "${appdir}" "${output_path}"
     chmod +x "${output_path}"
+}
+
+# pack_retrodeck_component_tarball <binary_path> <output_tar_path> <component_name> <launcher_script_path> [extra_binaries] [extra_dirs]
+#
+# RetroDECK (github.com/RetroDECK/components) ships each emulator
+# "component" as a plain tarball -- bin/ + shared libs + a top-level
+# component_launcher.sh that RetroDECK's own read-only /app layer execs
+# directly, no AppImage/SquashFS/appimagetool involved at all (confirmed
+# by reading RetroDECK/components' own cemu/component_recipe.json and
+# component_launcher.sh directly, not assumed -- see
+# docs/retrodeck-compatibility.md). This produces that same shape from
+# the identical bundling step pack_appimage() uses (_stage_bundle_payload()
+# above), so the RetroDECK component and the AppImage are built from
+# provably the same patched binary + the same dependency-bundling logic,
+# never two independently-written packaging paths that could silently
+# drift apart.
+#
+# <launcher_script_path> is reused as-is from the caller's own
+# generate_apprun_out_of_process() output (see apprun_templates.sh) --
+# that script already does exactly what a component_launcher.sh needs
+# (probe the shared $XDG_RUNTIME_DIR/dualdeck/adapter.sock daemon socket
+# first, else spawn a private dualdeck-host-service, set the emulator's
+# *_REMOTE_ENABLE/*_REMOTE_ADAPTER_SOCKET env vars, then run the real
+# binary) and is already fully package-neutral (no EmuDeck/RetroDECK/
+# launcher detection anywhere in it) -- reusing it here rather than
+# writing a second, RetroDECK-specific launcher keeps both packages
+# behaviorally identical, not just source-identical.
+#
+# Produces <output_tar_path> containing a single top-level
+# <component_name>/ directory (component_launcher.sh, bin/, lib/) --
+# NOT RetroDECK's own exact internal component tarball layout (this
+# project builds Cemu from source with DualDeck's patch; RetroDECK's own
+# pipeline today extracts prebuilt binaries from the stock Flathub Cemu
+# Flatpak instead -- see docs/retrodeck-compatibility.md for why a
+# byte-for-byte-identical layout isn't the actual goal yet, pending the
+# upstream proposal that document also drafts). This is a standalone,
+# documented artifact for local RetroDECK Flatpak rebuilds and for
+# handing to RetroDECK maintainers as a concrete build-from-source
+# candidate, not something RetroDECK's existing automation consumes
+# unmodified today.
+pack_retrodeck_component_tarball() {
+    local binary_path="$1" output_tar_path="$2" component_name="$3" launcher_script_path="$4"
+    local extra_binaries="${5:-}"
+    local extra_dirs="${6:-}"
+
+    [[ -f "${binary_path}" ]] || { echo "pack_retrodeck_component_tarball: no such binary: ${binary_path}" >&2; return 1; }
+    [[ -f "${launcher_script_path}" ]] || { echo "pack_retrodeck_component_tarball: no such launcher script: ${launcher_script_path}" >&2; return 1; }
+
+    local staging_root component_dir
+    staging_root="$(mktemp -d)"
+    # Same self-clearing-RETURN-trap reasoning as pack_appimage()'s own
+    # `appdir` cleanup above.
+    trap 'rm -rf "${staging_root}"; trap - RETURN' RETURN
+
+    component_dir="${staging_root}/${component_name}"
+    _stage_bundle_payload "${component_dir}" "${binary_path}" "${extra_binaries}" "${extra_dirs}"
+
+    cp "${launcher_script_path}" "${component_dir}/component_launcher.sh"
+    chmod +x "${component_dir}/component_launcher.sh"
+
+    mkdir -p "$(dirname "${output_tar_path}")"
+    rm -f "${output_tar_path}"
+    tar czf "${output_tar_path}" -C "${staging_root}" "${component_name}"
 }

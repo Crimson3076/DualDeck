@@ -3346,6 +3346,7 @@ choose_action() {
             reconfigure-controls "Reconfigure Controls (fixes 'no controls' in Cemu)" \
             update "Check for updates / update" \
             emudeck "Patch my EmuDeck/RetroDECK-installed emulators (experimental)" \
+            retrodeck-setup "RetroDECK: emulator compatibility setup (experimental)" \
             advanced "Advanced..." \
             2>/dev/null || echo "cancel"
     else
@@ -3363,10 +3364,11 @@ choose_action() {
             echo "  5) Reconfigure Controls (fixes 'no controls' in Cemu)"
             echo "  6) Check for updates / update"
             echo "  7) Patch my EmuDeck/RetroDECK-installed emulators (experimental)"
-            echo "  8) Advanced..."
-            echo "  9) Exit"
+            echo "  8) RetroDECK: emulator compatibility setup (experimental)"
+            echo "  9) Advanced..."
+            echo "  10) Exit"
         } >&2
-        read -rp "Choice [1-9]: " choice
+        read -rp "Choice [1-10]: " choice
         case "${choice}" in
             1) echo "launch" ;;
             2) echo "hostcontrol-daemon" ;;
@@ -3375,7 +3377,45 @@ choose_action() {
             5) echo "reconfigure-controls" ;;
             6) echo "update" ;;
             7) echo "emudeck" ;;
-            8) echo "advanced" ;;
+            8) echo "retrodeck-setup" ;;
+            9) echo "advanced" ;;
+            *) echo "cancel" ;;
+        esac
+    fi
+}
+
+# RetroDECK's own emulator resolution (both its ES-DE GUI and the
+# separate run_game.sh path apps like Tender call into) needs three
+# local Flatpak permission grants plus a ~/.local/bin symlink per
+# emulator to actually use DualDeck's patched Cemu/melonDS/Azahar
+# instead of RetroDECK's own bundled copies -- confirmed on real
+# hardware, see
+# docs/retrodeck-compatibility.md's "Real, confirmed blockers" section
+# and scripts/retrodeck-setup.sh's own header comment for the full
+# story. This submenu is the zero-typing, controller-friendly front end
+# for that script, mirroring choose_host_control_daemon_action()'s own
+# shape (a small kdialog --menu, each choice calling the underlying
+# script and showing its output in a plain info() dialog).
+choose_retrodeck_action() {
+    if have_kdialog; then
+        kdialog --title "DualDeck Host -- RetroDECK" --menu "RetroDECK: emulator compatibility setup" \
+            apply "Apply (recommended)" \
+            status "Status" \
+            restore "Restore / undo" \
+            2>/dev/null || echo "cancel"
+    else
+        {
+            echo "RetroDECK: emulator compatibility setup"
+            echo "  1) Apply (recommended)"
+            echo "  2) Status"
+            echo "  3) Restore / undo"
+            echo "  4) Back"
+        } >&2
+        read -rp "Choice [1-4]: " choice
+        case "${choice}" in
+            1) echo "apply" ;;
+            2) echo "status" ;;
+            3) echo "restore" ;;
             *) echo "cancel" ;;
         esac
     fi
@@ -3658,6 +3698,50 @@ Install ${latest_version} now? This downloads it from GitHub and also adds/updat
         ;;
     emudeck)
         exec ./internal/launch-emudeck-integration.sh
+        ;;
+    retrodeck-setup)
+        rd_tool="./emudeck-integration/scripts/retrodeck-setup.sh"
+        if [[ ! -x "${rd_tool}" ]]; then
+            info "The RetroDECK setup tool is missing from this install (host/emudeck-integration/scripts/retrodeck-setup.sh) -- re-download the release archive."
+        else
+            while true; do
+                rd_action="$(choose_retrodeck_action)"
+                case "${rd_action}" in
+                    apply)
+                        if confirm "This grants RetroDECK's own Flatpak sandbox three local permissions (its own IPC socket directory, an AppImage FUSE workaround, and a widened PATH) plus a ~/.local/bin symlink for each patched emulator you already have installed (Cemu/melonDS/Azahar), so RetroDECK's game list -- and anything that launches through it, like Tender -- use DualDeck's patched builds instead of RetroDECK's own bundled copies. Only covers emulators you've already installed via 'Patch my EmuDeck/RetroDECK-installed emulators' above; any not yet installed are skipped, not an error. Nintendo DS also needs one extra manual step in RetroDECK itself afterward (switching its active emulator to \"melonDS (Standalone)\") -- this tool will remind you if melonDS is covered. Only affects RetroDECK, only for this user account, and is fully reversible from this same menu. Continue?"; then
+                            if rd_output="$("${rd_tool}" 2>&1)"; then
+                                info "${rd_output}"
+                            else
+                                info "Could not apply the RetroDECK setup:
+
+${rd_output}"
+                            fi
+                        fi
+                        ;;
+                    status)
+                        rd_output="$("${rd_tool}" --status 2>&1)"
+                        info "${rd_output}"
+                        ;;
+                    restore)
+                        if confirm "This removes ALL Flatpak permission overrides for RetroDECK (a full reset -- real-hardware testing found removing just DualDeck's own three could leave RetroDECK unable to launch at all, so this is the one approach confirmed safe) and removes every emulator's ~/.local/bin symlink. RetroDECK goes back to launching its own bundled Cemu/melonDS/Azahar. Continue?"; then
+                            if rd_output="$("${rd_tool}" --restore 2>&1)"; then
+                                info "${rd_output}"
+                            else
+                                info "Could not restore:
+
+${rd_output}"
+                            fi
+                        fi
+                        ;;
+                    *)
+                        # Cancelled/backed out -- return to the main menu,
+                        # don't exit the host (see the outer loop's own
+                        # header comment).
+                        break
+                        ;;
+                esac
+            done
+        fi
         ;;
     advanced)
         while true; do
@@ -4420,8 +4504,18 @@ cp "${repo_root}/scripts/lib/appimage_manifest.py" "${emudeck_bundle_dir}/script
 # (see that script's own comment) -- needs this bundled too, the same
 # reason emudeck_paths.sh/appimage_manifest.py are.
 cp "${repo_root}/scripts/lib/host_firewall.sh" "${emudeck_bundle_dir}/scripts/lib/"
+# RetroDECK's own emulator-resolution (both its ES-DE GUI and its
+# separate run_game.sh CLI/API path, which is what Tender also calls
+# into) needs three extra local Flatpak permission grants plus a PATH
+# symlink beyond just installing the AppImage above -- confirmed on real
+# hardware, see docs/retrodeck-compatibility.md's "Real, confirmed
+# blockers" section and this script's own header comment for why each
+# one is needed. Bundled alongside emudeck-replace-in-place.sh since
+# it's the natural next step for a RetroDECK-only install.
+cp "${repo_root}/scripts/retrodeck-setup.sh" "${emudeck_bundle_dir}/scripts/"
 chmod +x "${emudeck_bundle_dir}/scripts/emudeck-replace-in-place.sh" \
-         "${emudeck_bundle_dir}/scripts/emudeck-check-drift.sh"
+         "${emudeck_bundle_dir}/scripts/emudeck-check-drift.sh" \
+         "${emudeck_bundle_dir}/scripts/retrodeck-setup.sh"
 
 # Read by emudeck-replace-in-place.sh's own version-detection fallback
 # (no .git directory exists inside a packaged release) -- same
@@ -4497,6 +4591,46 @@ installed AppImage (losing DualDeck's patch), and re-patch it if so:
 Re-patching after drift like this just re-downloads and re-verifies the
 same prebuilt AppImage from this release -- no rebuild, ever. Applies to
 all three emulators.
+
+## RetroDECK: extra setup for Cemu, melonDS, and Azahar
+
+Installing the AppImage(s) above is necessary but not sufficient for
+RetroDECK specifically -- confirmed on real hardware, RetroDECK's
+sandbox is also missing the Flatpak permissions needed to actually run
+an AppImage and reach DualDeck's Host Service, and both of RetroDECK's
+own emulator-resolution mechanisms (its ES-DE GUI, and the separate
+\`run_game.sh\` script Tender also calls into) have real bugs that skip
+a valid host AppImage entirely. \`retrodeck-setup.sh\` applies the three
+local, \`--user\`-scoped Flatpak overrides (plus a \`~/.local/bin\`
+symlink per emulator) confirmed to fix all of that -- see
+\`docs/retrodeck-compatibility.md\`'s "Real, confirmed blockers" section
+for the full investigation, and that script's own \`--help\` for exactly
+what each grant does and why.
+
+    ./retrodeck-setup.sh --dry-run
+    ./retrodeck-setup.sh
+    ./retrodeck-setup.sh --status
+    ./retrodeck-setup.sh --restore
+
+With no \`--emulator\` flag it covers every emulator above you've
+already installed an AppImage for (skipping, not failing on, one you
+haven't); add \`--emulator cemu\`/\`--emulator melonds\`/
+\`--emulator azahar\` (repeatable) to target specific ones instead.
+
+Confirmed working end to end on real hardware for Cemu (Nintendo Wii U):
+RetroDECK's own game list, its CLI, and a game installed and launched
+through Tender (a Decky plugin) all correctly launch the
+DualDeck-patched Cemu with this applied -- zero Tender-specific code
+needed anywhere. melonDS and Azahar use the identical mechanism but
+haven't had the same full real-hardware pass yet -- see
+\`docs/retrodeck-compatibility.md\` for current status. **Nintendo DS
+needs one extra manual step regardless**: RetroDECK's own "nds" system
+lists four RetroArch cores before "melonDS (Standalone)", so nothing
+this script does takes effect until you manually switch DS's active
+emulator to "melonDS (Standalone)" in RetroDECK's own Configurator (or
+ES-DE's per-system/per-game "Select alternative emulator" screen).
+Nintendo Wii U and 3DS both already default to their "(Standalone)"
+command, so no such switch is needed for Cemu or Azahar.
 EMUDECK_README
 
 echo "Bundled EmuDeck integration tool at host/emudeck-integration/"
