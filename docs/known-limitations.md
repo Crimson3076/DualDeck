@@ -12514,6 +12514,87 @@ simulated failed action, backing out of both submenus, and a full
 Advanced install both succeeding and failing on a bad checksum) before
 either automated test was written.
 
+## 2026-10-08: PyroWave as a third, opt-in video codec (experimental, encoder not yet run on real hardware)
+
+User request: "integrate the new PyroWave video codec into the app."
+[PyroWave](https://github.com/Themaister/pyrowave) (MIT) is an intra-only
+wavelet codec implemented entirely in Vulkan compute shaders, built for
+exactly this project's situation -- LAN game streaming where latency
+matters more than bandwidth. Its upstream numbers are ~0.1 ms encode and
+decode at 1080p on a real GPU; it has no inter-frame dependency (so no
+keyframe wait after a reconnect, no smearing after a dropped frame) and
+an exact per-frame byte cap instead of a bitrate target. The trade-off
+is bitrate: its deliberately trivial entropy coding needs several times
+what H.264 does for the same quality, so it's another opt-in alongside
+JPEG/H.264, not a new default. Its bitstream was frozen as v1 on
+2026-10-03; its C API is versioned but not yet declared ABI-stable
+upstream, which is why it's built from a pinned commit
+(`PYROWAVE_COMMIT` in `scripts/lib/pinned_commits.sh`).
+
+**What was built**, following the same shape as the H.264 path:
+
+- `protocol.h`: `VideoCodec::PyroWave = 2` and `kVideoCodecBit_PyroWave`.
+  No `kProtocolVersion` bump -- payload shapes are unchanged, an older
+  client never sets the bit (so it's never sent PyroWave), and an older
+  host just masks the unknown bit off in its own `selectVideoCodec()`.
+- `host::PyroWaveEncoder` (`host/remote-server/include/host/pyrowave_encoder.h`):
+  PyroWave's standalone C API's CPU-buffer path. BGRA -> I420 on the CPU
+  (the existing converter, now shared with H.264 in
+  `host/yuv_conversion.h`), upload, GPU encode, readback. Every adapter
+  already hands `NetServer` CPU-side BGRA, so there's no GPU image to
+  share zero-copy, and at DS/3DS/GamePad sizes the upload/readback is
+  small next to JPEG's own encode time. Odd frame sizes are padded to
+  even by edge-replication (4:2:0 requires even dimensions).
+- `client::PyroWaveDecoder` (`client/src/pyrowave_decoder.h`): reads the
+  frame size straight from PyroWave's own start-of-frame header, so no
+  extra wire framing exists and a mid-session resolution change (Cemu)
+  just recreates the decoder. Output goes through the same shared
+  I420 -> BGRA converter and the same texture upload as JPEG/H.264.
+- `NetServer::selectVideoCodec()`: PyroWave > H.264 > JPEG, but PyroWave
+  only when the client advertised it AND `PyroWaveEncoder::isAvailable()`.
+  Rate control: `pyrowaveMaxFrameBytes()` maps the existing 1-100 quality
+  scale onto 0.5-3.0 bits/pixel/frame -- ~15 KB/frame for DS at the
+  default quality 80, ~100 KB/frame (~25 Mbit/s at 30 fps) for Cemu's
+  854x480 at its default 60. A first-pass mapping, not yet tuned against
+  real content.
+- Client Settings: VIDEO CODEC (EXPERIMENTAL) now cycles JPEG -> H264 ->
+  PYROWAVE, persisted as a new `video_codec_pyrowave_experimental=` key
+  (the existing `video_codec_h264_experimental=` key is untouched, so
+  older settings files load unchanged). The debug overlay shows
+  `CODEC: PYROWAVE`.
+- `tools/codec-benchmark` gained a PyroWave row (times include the
+  CPU<->GPU transfers, since that's what the real path pays).
+- `scripts/build-release.sh` builds PyroWave at the pinned commit before
+  the main configure (non-fatal: a PyroWave build failure ships a release
+  without it plus a loud warning). `libpyrowave-shared.so` is bundled into
+  `host/internal/lib/` and `client/lib/` by the existing
+  `bundle_library_dependencies()`; the Vulkan loader itself is not
+  bundled (it never is -- see that function's own exclusions).
+- CI: a new `pyrowave` job builds with it under `-Werror` and runs the
+  tests on Mesa's software Vulkan (lavapipe).
+
+**Availability is a runtime question**, unlike OpenH264: a PyroWave build
+still needs a Vulkan 1.3 device at runtime, and the *encoder* additionally
+needs subgroup-size control that can force wave16/32/64 (every desktop GPU
+and the Steam Deck's RDNA2 APU can). Both sides probe once, lazily, only
+when PyroWave is actually requested; a failed probe means the client just
+doesn't advertise it / the host just doesn't select it, and the session
+runs JPEG or H.264 exactly as before.
+
+**What has been verified**: everything builds warning-free under the
+project's `-Werror` flags with and without PyroWave; all existing tests
+pass; PyroWave's real GPU *decoder* runs on lavapipe in the unit tests
+(spec-built frames: flat-gray decode, mid-session resolution change,
+header validation). **What has not**: the PyroWave *encoder* has not
+executed anywhere yet -- lavapipe is fixed at wave8, which PyroWave's
+encoder rejects, and no real-GPU machine was available while building
+this. `test_pyrowave_encoder.cpp` and the full encode -> decode round
+trip in `test_pyrowave_decoder.cpp` skip themselves without a capable
+device; run `ctest` (and `dualdeck-codec-benchmark`) on a machine with a
+real GPU to exercise them before relying on it, then try a real session
+on a Deck with VIDEO CODEC set to PYROWAVE over a wired or strong 5 GHz
+link.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

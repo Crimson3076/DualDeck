@@ -13,6 +13,8 @@ add_library(dualdeck_host STATIC
     src/capability_bridge.cpp
     src/kdialog_approval_prompt.cpp
     src/h264_encoder.cpp
+    src/pyrowave_encoder.cpp
+    src/yuv_conversion.cpp
 )
 
 # Host Control screen-mirror experiment (DUALDECK_HOSTCONTROL_MIRROR_SCREEN,
@@ -115,12 +117,21 @@ else()
                     "as unavailable in this build (JPEG, protocol v8's existing codec, is unaffected)")
 endif()
 
-# SIMD BGRA->I420 conversion for h264_encoder.cpp's bgraToI420() -- see
+# PyroWave encode -- see top-level CMakeLists.txt's PyroWave::PyroWave
+# detection (which also defines DUALDECK_HAVE_PYROWAVE) and
+# pyrowave_encoder.h's own comment. PUBLIC so anything linking
+# dualdeck_host (tests, tools/codec-benchmark) sees the same
+# DUALDECK_HAVE_PYROWAVE the library itself was built with.
+if(DUALDECK_PYROWAVE_FOUND)
+    target_link_libraries(dualdeck_host PUBLIC PyroWave::PyroWave)
+endif()
+
+# SIMD BGRA->I420 conversion for yuv_conversion.cpp's bgraToI420() -- see
 # top-level CMakeLists.txt's LibYuv::LibYuv detection and that function's
-# own comment. Only meaningful alongside OpenH264 itself -- gated on
-# OPENH264_FOUND too so a build with libyuv but not OpenH264 doesn't
-# define a macro nothing reads.
-if(OPENH264_FOUND AND DUALDECK_LIBYUV_FOUND)
+# own comment. Only meaningful alongside a planar-YUV codec (OpenH264 or
+# PyroWave) -- gated on one of those too so a build with libyuv but
+# neither codec doesn't pull in a library nothing reachable uses.
+if((OPENH264_FOUND OR DUALDECK_PYROWAVE_FOUND) AND DUALDECK_LIBYUV_FOUND)
     target_compile_definitions(dualdeck_host PRIVATE DUALDECK_HAVE_LIBYUV)
     target_link_libraries(dualdeck_host PRIVATE LibYuv::LibYuv)
 endif()

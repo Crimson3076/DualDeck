@@ -9,6 +9,7 @@ add_executable(melonds_remote_host_tests
     test_capability_bridge.cpp
     test_kdialog_approval_prompt.cpp
     test_h264_encoder.cpp
+    test_pyrowave_encoder.cpp
     test_h264_sps.cpp
 )
 
@@ -48,7 +49,7 @@ endif()
 # (same reasoning already applied to OPENH264_LIBRARIES above). No
 # compile definition needed here -- nothing in this target's own sources
 # reads DUALDECK_HAVE_LIBYUV.
-if(OPENH264_FOUND AND DUALDECK_LIBYUV_FOUND)
+if((OPENH264_FOUND OR DUALDECK_PYROWAVE_FOUND) AND DUALDECK_LIBYUV_FOUND)
     target_link_libraries(melonds_remote_host_tests PRIVATE LibYuv::LibYuv)
 endif()
 

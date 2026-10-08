@@ -66,6 +66,20 @@ struct ClientSettings {
     // OpenH264 either.
     bool videoCodecH264Experimental = false;
 
+    // Whether this client also advertises VideoCodecBit_PyroWave -- see
+    // client/src/pyrowave_decoder.h for what PyroWave is. Same opt-in
+    // convention and same "host has the final say" caveat as
+    // videoCodecH264Experimental above, plus one more: it's only
+    // advertised if this machine's GPU can actually run PyroWave's
+    // Vulkan decoder (PyroWaveDecoder::isAvailable()). Kept as its own
+    // persisted flag rather than folding both into one enum so a
+    // settings file written before PyroWave existed loads unchanged.
+    // main.cpp's VIDEO CODEC menu entry treats the pair as one three-way
+    // choice (JPEG -> H264 -> PYROWAVE) and never sets both, but if a
+    // hand-edited file does, PyroWave wins (that's what the host would
+    // pick given both bits anyway -- see NetServer::selectVideoCodec()).
+    bool videoCodecPyroWaveExperimental = false;
+
     // Real user request, 2026-08-26: "some sort of way to show the user
     // what resolution is being streamed, what fps, codec, etc as a debug
     // overlay for the client." Purely a local rendering choice, like

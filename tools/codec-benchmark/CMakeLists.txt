@@ -9,6 +9,8 @@
 add_executable(dualdeck-codec-benchmark
     main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../client/src/h264_decoder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../client/src/pyrowave_decoder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../client/src/yuv_conversion.cpp
 )
 
 target_include_directories(dualdeck-codec-benchmark PRIVATE
@@ -46,7 +48,14 @@ endif()
 # available (needs the link regardless, same reasoning as
 # host/remote-server/tests/CMakeLists.txt's melonds_remote_host_tests
 # target).
-if(OPENH264_FOUND AND DUALDECK_LIBYUV_FOUND)
+# PyroWave side of the benchmark (pyrowave_decoder.cpp above) --
+# DUALDECK_HAVE_PYROWAVE itself already arrives through dualdeck_host's
+# PUBLIC PyroWave::PyroWave link.
+if(DUALDECK_PYROWAVE_FOUND)
+    target_link_libraries(dualdeck-codec-benchmark PRIVATE PyroWave::PyroWave)
+endif()
+
+if((OPENH264_FOUND OR DUALDECK_PYROWAVE_FOUND) AND DUALDECK_LIBYUV_FOUND)
     target_compile_definitions(dualdeck-codec-benchmark PRIVATE DUALDECK_HAVE_LIBYUV)
     target_link_libraries(dualdeck-codec-benchmark PRIVATE LibYuv::LibYuv)
 endif()

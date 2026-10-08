@@ -171,6 +171,29 @@ MDR_TEST(hello_ack_payload_rejects_invalid_selected_video_codec) {
     MDR_CHECK(!parseHelloAckPayload(buf.data(), buf.size()).has_value());
 }
 
+MDR_TEST(hello_ack_payload_round_trips_pyrowave_codec) {
+    HelloAckPayload ack;
+    ack.accepted = 1;
+    ack.selectedVideoCodec = VideoCodec::PyroWave;
+    ByteBuffer buf;
+    serializeHelloAckPayload(buf, ack);
+
+    auto parsed = parseHelloAckPayload(buf.data(), buf.size());
+    MDR_CHECK(parsed.has_value());
+    MDR_CHECK(parsed->selectedVideoCodec == VideoCodec::PyroWave);
+}
+
+MDR_TEST(hello_payload_round_trips_pyrowave_codec_bit) {
+    HelloPayload hello;
+    hello.supportedVideoCodecs = kVideoCodecBit_Jpeg | kVideoCodecBit_PyroWave;
+    ByteBuffer buf;
+    serializeHelloPayload(buf, hello);
+
+    auto parsed = parseHelloPayload(buf.data(), buf.size());
+    MDR_CHECK(parsed.has_value());
+    MDR_CHECK_EQ(parsed->supportedVideoCodecs, hello.supportedVideoCodecs);
+}
+
 MDR_TEST(hello_ack_payload_identity_defaults_to_empty) {
     HelloAckPayload ack;
     ack.accepted = 1;

@@ -23,6 +23,10 @@ on:
         description: "Ship this build with VIDEO CODEC defaulting to H264 instead of JPEG (only affects a fresh settings.conf -- an existing one on the test machine is untouched, and this never touches what real users get from main)"
         type: boolean
         default: true
+      default_to_pyrowave:
+        description: "Ship this build with VIDEO CODEC defaulting to PYROWAVE instead (wins over default_to_h264 if both are set; same fresh-settings.conf-only caveat). Needs a Vulkan-capable GPU on BOTH machines -- see docs/known-limitations.md's PyroWave entry"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -44,7 +48,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential cmake ninja-build git pkg-config \
-            libturbojpeg0-dev libopenh264-dev \
+            libturbojpeg0-dev libopenh264-dev libvulkan-dev \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
             libxfixes-dev libxi-dev libxss-dev libxtst-dev \
             libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev \
@@ -72,9 +76,38 @@ jobs:
           cmake --build "${{ runner.temp }}/sdl3-src/build" -j"$(nproc)"
           cmake --install "${{ runner.temp }}/sdl3-src/build"
 
+      # PyroWave (optional Vulkan-compute codec, see host/remote-server/
+      # include/host/pyrowave_encoder.h) at the commit build-release.sh
+      # pins -- same build ci.yml's pyrowave job does.
+      - name: Read pinned PyroWave commit
+        id: pin
+        run: |
+          source scripts/lib/pinned_commits.sh
+          echo "commit=${PYROWAVE_COMMIT}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache PyroWave build
+        id: pyrowave-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/pyrowave-install
+          key: pyrowave-${{ steps.pin.outputs.commit }}-${{ runner.os }}
+
+      - name: Build PyroWave
+        if: steps.pyrowave-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/Themaister/pyrowave.git "${{ runner.temp }}/pyrowave-src"
+          cd "${{ runner.temp }}/pyrowave-src"
+          git checkout "${{ steps.pin.outputs.commit }}"
+          bash checkout_granite.sh
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${{ runner.temp }}/pyrowave-install" -DCMAKE_INSTALL_LIBDIR=lib
+          cmake --build build -j"$(nproc)"
+          cmake --install build
+
       - name: Configure
         run: |
           set -euo pipefail
+          PKG_CONFIG_PATH="${{ runner.temp }}/pyrowave-install/lib/pkgconfig" \
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DDUALDECK_BUILD_CLIENT=ON -DDUALDECK_BUILD_HOST=ON \
@@ -92,6 +125,11 @@ jobs:
           # configure failure rather than a silently-degraded artifact.
           if grep -q "openh264 not found" configure.log; then
             echo "::error::OpenH264 was not detected by CMake even though libopenh264-dev was installed -- this build would be JPEG-only despite being requested as an H.264 test build. See configure.log above." >&2
+            exit 1
+          fi
+          # Same reasoning for PyroWave, built just above.
+          if grep -q "PyroWave video will be compiled out" configure.log; then
+            echo "::error::PyroWave was not detected by CMake even though it was just built -- see configure.log above." >&2
             exit 1
           fi
 
@@ -124,12 +162,22 @@ jobs:
       # only rebuilding (below) to actually pick it up into the binary
       # is.
       - name: Flip H264 default for this build only
-        if: ${{ inputs.default_to_h264 }}
+        if: ${{ inputs.default_to_h264 && !inputs.default_to_pyrowave }}
         run: |
           sed -i \
             's/bool videoCodecH264Experimental = false;/bool videoCodecH264Experimental = true; \/\/ TEST BUILD OVERRIDE, see build-test-client.yml/' \
             client/src/client_settings.h
           grep -n "videoCodecH264Experimental = true" client/src/client_settings.h
+          cmake --build build -j"$(nproc)" --target dualdeck-client dualdeck-host-service
+
+      # Same ephemeral, this-artifact-only override as the H264 one above.
+      - name: Flip PyroWave default for this build only
+        if: ${{ inputs.default_to_pyrowave }}
+        run: |
+          sed -i \
+            's/bool videoCodecPyroWaveExperimental = false;/bool videoCodecPyroWaveExperimental = true; \/\/ TEST BUILD OVERRIDE, see build-test-client.yml/' \
+            client/src/client_settings.h
+          grep -n "videoCodecPyroWaveExperimental = true" client/src/client_settings.h
           cmake --build build -j"$(nproc)" --target dualdeck-client dualdeck-host-service
 
       - name: Package
@@ -185,7 +233,12 @@ jobs:
             echo "protocol v13, with the opt-in H.264 video codec (see"
             echo "docs/known-limitations.md's 2026-08-25 video-codec-negotiation entries)."
             echo
-            if [[ "${{ inputs.default_to_h264 }}" == "true" ]]; then
+            if [[ "${{ inputs.default_to_pyrowave }}" == "true" ]]; then
+              echo "This build's VIDEO CODEC setting defaults to PYROWAVE (a fresh"
+              echo "~/.config/dualdeck-client/settings.conf starts on PYROWAVE -- an"
+              echo "existing one on your machine is untouched either way). Cycle it via"
+              echo "the client's Settings menu (JPEG -> H264 -> PYROWAVE)."
+            elif [[ "${{ inputs.default_to_h264 }}" == "true" ]]; then
               echo "This build's VIDEO CODEC setting defaults to H264 (a fresh"
               echo "~/.config/dualdeck-client/settings.conf starts on H264 -- an existing"
               echo "one on your machine is untouched either way). Toggle it back to JPEG"
@@ -200,6 +253,13 @@ jobs:
             echo "it wasn't built with OpenH264 either. This host build was built WITH"
             echo "OpenH264 (libopenh264-dev was present), so it can serve H.264 if the"
             echo "connecting client asks for it."
+            echo
+            echo "PyroWave (also opt-in, experimental) is built in too. It runs on the"
+            echo "GPU via Vulkan on both sides, so it is only negotiated when both the"
+            echo "host's and the client's GPUs can run it -- otherwise the session"
+            echo "silently falls back to H.264/JPEG. It trades bandwidth for latency"
+            echo "(roughly 10-30 Mbit/s for these screen sizes), so test it over a wired"
+            echo "or strong 5 GHz link. Turn on DEBUG OVERLAY to confirm CODEC: PYROWAVE."
             echo
             echo "Run:"
             echo "  ./host/run-host.sh     (on the machine running your emulators)"

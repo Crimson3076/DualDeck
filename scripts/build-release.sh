@@ -208,6 +208,59 @@ else
     echo "${SDL3_TAG}" > "${sdl3_tag_marker}"
 fi
 
+pyrowave_src="${work_dir}/pyrowave-src"
+pyrowave_install="${work_dir}/pyrowave-install"
+
+echo "== [1/6] PyroWave (commit ${PYROWAVE_COMMIT}) =="
+# Optional video codec -- see host/remote-server/include/host/
+# pyrowave_encoder.h. Built from source (no distro packages it) into its
+# own prefix, then handed to this repo's CMake configure via
+# PKG_CONFIG_PATH below, where top-level CMakeLists.txt's
+# pkg_check_modules(pyrowave-shared) picks it up. Its Vulkan-header
+# build dependency is already covered by the "azahar build"
+# ensure_packages list above; its shaders ship precompiled in its own
+# repo, so no shader compiler is needed. libpyrowave-shared.so ends up
+# in host/internal/lib/ and client/lib/ the same way every other linked
+# library does -- bundle_library_dependencies() follows the binaries'
+# build-tree RPATH to it.
+#
+# Deliberately non-fatal: PyroWave is opt-in and every session can fall
+# back to JPEG/H.264, so a PyroWave build break (e.g. upstream's Granite
+# checkout becoming unreachable) ships a release without PyroWave and a
+# loud warning, instead of blocking the whole release. Same marker-file
+# cache check as SDL3's above, for the same stale-cache reason.
+pyrowave_commit_marker="${pyrowave_install}/.dualdeck-pyrowave-commit"
+pyrowave_pkgconfig_dir=""
+if [[ -f "${pyrowave_install}/lib/pkgconfig/pyrowave-shared.pc" ]] && \
+   [[ "$(cat "${pyrowave_commit_marker}" 2>/dev/null)" == "${PYROWAVE_COMMIT}" ]]; then
+    echo "already built at ${pyrowave_install} (commit ${PYROWAVE_COMMIT}), skipping (cache hit)"
+    pyrowave_pkgconfig_dir="${pyrowave_install}/lib/pkgconfig"
+# An explicit && chain rather than `set -e` inside the subshell: bash
+# ignores errexit for anything evaluated as an if/elif condition,
+# subshells included, so `set -e` there would silently report a failed
+# build as success.
+elif (
+    rm -rf "${pyrowave_src}" "${pyrowave_install}" &&
+    git clone https://github.com/Themaister/pyrowave.git "${pyrowave_src}" &&
+    cd "${pyrowave_src}" &&
+    git checkout "${PYROWAVE_COMMIT}" &&
+    bash checkout_granite.sh &&
+    cmake -S "${pyrowave_src}" -B "${pyrowave_src}/build" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="${pyrowave_install}" \
+        -DCMAKE_INSTALL_LIBDIR=lib \
+        "${cmake_launcher_args[@]}" &&
+    cmake --build "${pyrowave_src}/build" -j"$(nproc)" &&
+    cmake --install "${pyrowave_src}/build" &&
+    [[ -f "${pyrowave_install}/lib/pkgconfig/pyrowave-shared.pc" ]] &&
+    echo "${PYROWAVE_COMMIT}" > "${pyrowave_commit_marker}"
+); then
+    pyrowave_pkgconfig_dir="${pyrowave_install}/lib/pkgconfig"
+else
+    echo "WARNING: PyroWave build failed -- this release will be built WITHOUT PyroWave video support" >&2
+    echo "         (JPEG/H.264 unaffected). See the output above for why." >&2
+    rm -rf "${pyrowave_install}"
+fi
+
 echo "== [2/6] Patched melonDS host (commit ${MELONDS_COMMIT}) =="
 build_melonds melonds_bin "${work_dir}" "${repo_root}" "${MELONDS_COMMIT}"
 
@@ -242,6 +295,7 @@ build_cemu cemu_bin "${work_dir}" "${repo_root}" "${CEMU_COMMIT}" "${CEMU_VERSIO
 
 echo "== [5/6] Client + host prototype (this repo) =="
 repo_build="${work_dir}/repo-build"
+PKG_CONFIG_PATH="${pyrowave_pkgconfig_dir}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}" \
 cmake -S "${repo_root}" -B "${repo_build}" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DDUALDECK_BUILD_CLIENT=ON \
     -DDUALDECK_BUILD_HOST=ON -DCMAKE_PREFIX_PATH="${sdl3_install}" \

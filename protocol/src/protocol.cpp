@@ -378,7 +378,7 @@ std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t 
         return std::nullopt;
     }
     uint8_t selectedVideoCodec = data[offset]; offset += 1;
-    if (selectedVideoCodec > static_cast<uint8_t>(VideoCodec::H264)) {
+    if (selectedVideoCodec > static_cast<uint8_t>(VideoCodec::PyroWave)) {
         return std::nullopt;
     }
     ack.selectedVideoCodec = static_cast<VideoCodec>(selectedVideoCodec);

@@ -321,7 +321,9 @@ void renderDebugOverlay(SDL_Renderer* renderer, NetClient& net, int requestedVid
     std::snprintf(buf, sizeof(buf), "FPS: %u", static_cast<unsigned>(net.receivedFps()));
     line(buf);
 
-    line(std::string("CODEC: ") + (net.negotiatedVideoCodec() == VideoCodec::H264 ? "H264" : "JPEG"));
+    const VideoCodec codec = net.negotiatedVideoCodec();
+    line(std::string("CODEC: ") +
+         (codec == VideoCodec::PyroWave ? "PYROWAVE" : codec == VideoCodec::H264 ? "H264" : "JPEG"));
 
     // Mirrors settingsMenuItems()' own videoQualityLabel() thresholds,
     // but with only-supported-character labels (that one's "LOW (SLOWEST
@@ -1977,6 +1979,7 @@ int main(int argc, char** argv) {
         // videoQuality above -- see NetClientConfig::preferH264's own
         // comment for why the host still gets the final say either way.
         netConfig.preferH264 = clientSettings.videoCodecH264Experimental;
+        netConfig.preferPyroWave = clientSettings.videoCodecPyroWaveExperimental;
         NetClient net(netConfig);
 
         // Forwards every logLine() call to the host as a ClientLog packet
@@ -2290,7 +2293,9 @@ int main(int argc, char** argv) {
                 std::string("MIRROR HOST SCREEN (EXPERIMENTAL): ") +
                     (clientSettings.mirrorHostScreen ? "ON" : "OFF"),
                 std::string("VIDEO CODEC (EXPERIMENTAL): ") +
-                    (clientSettings.videoCodecH264Experimental ? "H264" : "JPEG"),
+                    (clientSettings.videoCodecPyroWaveExperimental ? "PYROWAVE"
+                     : clientSettings.videoCodecH264Experimental  ? "H264"
+                                                                  : "JPEG"),
                 std::string("DEBUG OVERLAY: ") + (clientSettings.debugOverlayEnabled ? "ON" : "OFF"),
             };
             if (!hostExplicit) items.push_back("RUN SETUP WIZARD");
@@ -2329,13 +2334,23 @@ int main(int argc, char** argv) {
             settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
             reconnectRequested = true;
         };
-        // Toggles clientSettings.videoCodecH264Experimental. Same
-        // "only takes effect on the next connection" limitation and the
-        // same reconnectRequested fix as cycleVideoQuality() above --
-        // codec preference is negotiated once, in Hello, same as
-        // videoQuality.
+        // Cycles JPEG -> H264 -> PYROWAVE -> JPEG across
+        // clientSettings.videoCodecH264Experimental/
+        // videoCodecPyroWaveExperimental (see the latter's own comment
+        // for why it's two flags). Same "only takes effect on the next
+        // connection" limitation and the same reconnectRequested fix as
+        // cycleVideoQuality() above -- codec preference is negotiated
+        // once, in Hello, same as videoQuality.
         auto toggleVideoCodec = [&]() {
-            clientSettings.videoCodecH264Experimental = !clientSettings.videoCodecH264Experimental;
+            if (clientSettings.videoCodecPyroWaveExperimental) {
+                clientSettings.videoCodecPyroWaveExperimental = false;
+                clientSettings.videoCodecH264Experimental = false;
+            } else if (clientSettings.videoCodecH264Experimental) {
+                clientSettings.videoCodecH264Experimental = false;
+                clientSettings.videoCodecPyroWaveExperimental = true;
+            } else {
+                clientSettings.videoCodecH264Experimental = true;
+            }
             settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
             reconnectRequested = true;
         };

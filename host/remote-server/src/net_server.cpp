@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "host/h264_encoder.h"
+#include "host/pyrowave_encoder.h"
 #include "melonds_remote/protocol.h"
 
 namespace melonds_remote::host {
@@ -213,7 +214,17 @@ bool sendAll(int fd, const uint8_t* data, size_t size) {
 // support) still runs exactly the same JPEG path this project always
 // has. videoLoop() is what actually branches on the result -- see its
 // own H264Encoder usage.
+//
+// PyroWave wins over H.264 when both are agreed: the client only ever
+// advertises it when its user explicitly picked it (see NetClientConfig::
+// preferPyroWave), i.e. chose lowest latency over lowest bandwidth.
+// PyroWaveEncoder::isAvailable() is checked only once the client has
+// actually asked for it -- its first call probes for a capable Vulkan
+// device (see its own comment), which no other session should pay for.
 VideoCodec selectVideoCodec(uint8_t clientSupportedCodecs) {
+    if ((clientSupportedCodecs & kVideoCodecBit_PyroWave) && PyroWaveEncoder::isAvailable()) {
+        return VideoCodec::PyroWave;
+    }
     const uint8_t hostSupportedCodecs =
         kVideoCodecBit_Jpeg | (H264Encoder::isAvailable() ? kVideoCodecBit_H264 : 0);
     const uint8_t agreed = clientSupportedCodecs & hostSupportedCodecs;
@@ -244,6 +255,26 @@ int h264TargetBitrateBps(int quality, uint16_t width, uint16_t height, int fps) 
     const double bitrate =
         static_cast<double>(width) * static_cast<double>(height) * bitsPerPixelPerFrame * fps;
     return static_cast<int>(std::clamp(bitrate, 250'000.0, 20'000'000.0));
+}
+
+// PyroWave's rate control is an exact per-frame byte ceiling rather than
+// a bitrate target (intra-only: every frame stands alone, so there's no
+// GOP to average over), derived from the same 1-100 quality scale as
+// h264TargetBitrateBps() above. PyroWave's trivial entropy coding needs
+// far more bits than H.264 for the same quality -- its own README
+// targets ~200 Mbit/s at 1080p60, about 1.6 bits/pixel/frame -- so this
+// maps quality onto 0.5-3.0 bits/pixel/frame. At Cemu's 854x480 GamePad
+// and the large-surface default quality of 60 (see
+// defaultVideoQualityForFrameSize()) that's ~100 KB/frame, ~25 Mbit/s at
+// 30fps; DS's 256x192 at the default 80 is ~15 KB/frame. A first-pass
+// mapping, not tuned against real game content yet, same caveat as
+// h264TargetBitrateBps(). Floored so a tiny test-fixture frame still
+// leaves room for PyroWave's per-block headers.
+size_t pyrowaveMaxFrameBytes(int quality, uint16_t width, uint16_t height) {
+    const double clampedQuality = std::clamp(quality, 1, 100) / 100.0;
+    const double bitsPerPixelPerFrame = 0.5 + clampedQuality * 2.5;
+    const double bytes = static_cast<double>(width) * static_cast<double>(height) * bitsPerPixelPerFrame / 8.0;
+    return std::max<size_t>(static_cast<size_t>(bytes), 4096);
 }
 
 } // namespace
@@ -1144,6 +1175,15 @@ void NetServer::videoLoop() {
     host::H264Encoder h264Encoder;
     int h264InitializedWidth = 0;
     int h264InitializedHeight = 0;
+    // Same once-per-thread lifetime as h264Encoder above -- its Vulkan
+    // device in particular is real setup cost worth keeping across
+    // reconnects. Only ever initialized once a session selects
+    // VideoCodec::PyroWave (selectVideoCodec() already verified a capable
+    // device exists by then).
+    host::PyroWaveEncoder pyrowaveEncoder;
+    int pyrowaveInitializedWidth = 0;
+    int pyrowaveInitializedHeight = 0;
+    int pyrowaveInitializedQuality = 0;
 
     while (running_.load()) {
         sockaddr_in clientAddr{};
@@ -1215,6 +1255,7 @@ void NetServer::videoLoop() {
         // choice is only ever (re)negotiated at handshake time (protocol
         // v13), never mid-session.
         const bool useH264 = currentVideoCodec_.load() == VideoCodec::H264;
+        const bool usePyroWave = currentVideoCodec_.load() == VideoCodec::PyroWave;
         // Forces the inner loop's "not yet initialized for this size"
         // check to (re)initialize the encoder on this connection's very
         // first frame, even if a previous connection already left it
@@ -1256,6 +1297,7 @@ void NetServer::videoLoop() {
         std::vector<uint8_t> frame;
         ByteBuffer jpegFrame;
         ByteBuffer h264Frame;
+        ByteBuffer pyrowaveFrame;
         std::optional<uint64_t> lastSentFrameIndex;
         while (running_.load()) {
             auto tickStart = std::chrono::steady_clock::now();
@@ -1376,6 +1418,36 @@ void NetServer::videoLoop() {
                     // as "frame index unchanged" above, not an error.
                     gotFrame = false;
                 }
+            } else if (gotFrame && usePyroWave) {
+                // Intra-only, so unlike H.264 above there's no "fresh
+                // connection needs a keyframe" reset to force -- the
+                // encoder only needs rebuilding on a real size change,
+                // or when this session's negotiated quality (and so its
+                // per-frame byte budget) differs from the last one's.
+                const int quality = currentVideoQuality_.load();
+                if (currentFrameWidth != pyrowaveInitializedWidth || currentFrameHeight != pyrowaveInitializedHeight ||
+                    quality != pyrowaveInitializedQuality) {
+                    if (!pyrowaveEncoder.initialize(currentFrameWidth, currentFrameHeight,
+                                                    pyrowaveMaxFrameBytes(quality, currentFrameWidth,
+                                                                          currentFrameHeight))) {
+                        std::fprintf(stderr,
+                                     "NetServer: PyroWaveEncoder::initialize failed (%dx%d), skipping frame\n",
+                                     currentFrameWidth, currentFrameHeight);
+                        pyrowaveInitializedWidth = 0;
+                        pyrowaveInitializedHeight = 0;
+                        gotFrame = false;
+                    } else {
+                        pyrowaveInitializedWidth = currentFrameWidth;
+                        pyrowaveInitializedHeight = currentFrameHeight;
+                        pyrowaveInitializedQuality = quality;
+                    }
+                }
+                pyrowaveFrame.clear();
+                if (gotFrame &&
+                    !pyrowaveEncoder.encodeFrame(frame.data(), currentFrameWidth, currentFrameHeight, pyrowaveFrame)) {
+                    // Same "skip this tick" treatment as the other codecs.
+                    gotFrame = false;
+                }
             } else if (gotFrame && !compressFrameBgraToJpeg(jpegCompressor, frame.data(), currentFrameWidth, currentFrameHeight,
                                                       currentVideoQuality_.load(), jpegFrame)) {
                 // Logged inside compressFrameBgraToJpeg(); skip this tick
@@ -1392,7 +1464,7 @@ void NetServer::videoLoop() {
             if (gotFrame) {
                 VideoFramePayload videoPayload;
                 videoPayload.captureTimestampUs = captureTimestampUs;
-                videoPayload.jpeg = std::move(useH264 ? h264Frame : jpegFrame);
+                videoPayload.jpeg = std::move(useH264 ? h264Frame : usePyroWave ? pyrowaveFrame : jpegFrame);
                 ByteBuffer packet = buildVideoFramePacket(videoPayload);
                 // Same steady_clock reasoning as encodeStart above --
                 // isolates sendAll()'s own real cost (including any real

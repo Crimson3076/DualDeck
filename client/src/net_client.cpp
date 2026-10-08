@@ -2,6 +2,7 @@
 
 #include "client_log.h"
 #include "h264_decoder.h"
+#include "pyrowave_decoder.h"
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -275,8 +276,12 @@ bool NetClient::connect() {
     // off -- see that field's own comment) opted in. See
     // NetServer::selectVideoCodec() for the host's side of this
     // negotiation -- it has the final say either way.
+    // VideoCodecBit_PyroWave likewise only if config_.preferPyroWave
+    // opted in, and only once PyroWaveDecoder::isAvailable() has
+    // confirmed a capable Vulkan device -- see that field's own comment.
     helloPayload.supportedVideoCodecs =
-        kVideoCodecBit_Jpeg | (config_.preferH264 ? kVideoCodecBit_H264 : 0);
+        kVideoCodecBit_Jpeg | (config_.preferH264 ? kVideoCodecBit_H264 : 0) |
+        (config_.preferPyroWave && PyroWaveDecoder::isAvailable() ? kVideoCodecBit_PyroWave : 0);
     ByteBuffer hello = buildHelloPacket(helloPayload);
     // Protocol v14: the client's own half of the clock-offset estimate
     // below -- captured as close to the actual send as possible, same
@@ -643,6 +648,11 @@ void NetClient::videoReceiveLoop() {
     // isn't reachable from a shipped client today; this exists as the
     // building block for turning that on).
     H264Decoder h264Decoder;
+    // Same "constructed unconditionally, used only if negotiated" pattern
+    // as h264Decoder above -- PyroWaveDecoder creates no Vulkan device
+    // until its first decodeFrame() call, so this costs nothing on a
+    // JPEG/H.264 session.
+    PyroWaveDecoder pyrowaveDecoder;
 
     // Video-latency instrumentation: `networkStats` is
     // receipt-wall-clock-time minus VideoFramePayload::captureTimestampUs
@@ -750,6 +760,9 @@ void NetClient::videoReceiveLoop() {
                 // hoping the next packet arrives soon enough.
                 decoded = h264Decoder.decodeFrame(nullptr, 0, decodedFrame, decodedWidth, decodedHeight, hasFrame);
             }
+        } else if (negotiatedVideoCodec() == VideoCodec::PyroWave) {
+            decoded = pyrowaveDecoder.decodeFrame(videoFrame->jpeg.data(), videoFrame->jpeg.size(), decodedFrame,
+                                                  decodedWidth, decodedHeight, hasFrame);
         } else {
             decoded = decompressJpegToBgra(jpegDecompressor, videoFrame->jpeg.data(), videoFrame->jpeg.size(),
                                             decodedFrame, decodedWidth, decodedHeight);
@@ -763,13 +776,14 @@ void NetClient::videoReceiveLoop() {
             break;
         }
         if (!hasFrame) {
-            // H264Decoder-only case (decompressJpegToBgra() always either
-            // fails or produces a frame) -- reached only when the drain
-            // attempt above (or JPEG's own single decode call) still
-            // didn't produce a picture: a genuine SPS/PPS-only access
-            // unit with nothing to output at all, not a deferred frame
-            // that draining could have recovered. Nothing to display yet,
-            // not an error -- wait for the next packet.
+            // H264Decoder/PyroWaveDecoder-only case (decompressJpegToBgra()
+            // always either fails or produces a frame) -- reached only
+            // when the drain attempt above still didn't produce a
+            // picture: a genuine SPS/PPS-only access unit with nothing to
+            // output at all, not a deferred frame that draining could
+            // have recovered (or, for PyroWave, a frame whose blocks
+            // didn't add up to its own header's total_blocks). Nothing to
+            // display yet, not an error -- wait for the next packet.
             continue;
         }
         // Real bug this fixes: hostNativeWidth_/hostNativeHeight_ used to

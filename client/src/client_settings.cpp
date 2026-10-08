@@ -47,6 +47,7 @@ ClientSettings loadClientSettings(const std::string& settingsPath) {
         constexpr const char* kVideoQualityPrefix = "video_quality=";
         constexpr const char* kMirrorHostScreenPrefix = "mirror_host_screen=";
         constexpr const char* kVideoCodecH264Prefix = "video_codec_h264_experimental=";
+        constexpr const char* kVideoCodecPyroWavePrefix = "video_codec_pyrowave_experimental=";
         constexpr const char* kDebugOverlayPrefix = "debug_overlay_enabled=";
 
         if (line.rfind(kAutoUpdatePrefix, 0) == 0) {
@@ -92,6 +93,13 @@ ClientSettings loadClientSettings(const std::string& settingsPath) {
             } else if (value == "0" || value == "false" || value == "off") {
                 settings.videoCodecH264Experimental = false;
             }
+        } else if (line.rfind(kVideoCodecPyroWavePrefix, 0) == 0) {
+            std::string value = line.substr(std::char_traits<char>::length(kVideoCodecPyroWavePrefix));
+            if (value == "1" || value == "true" || value == "on") {
+                settings.videoCodecPyroWaveExperimental = true;
+            } else if (value == "0" || value == "false" || value == "off") {
+                settings.videoCodecPyroWaveExperimental = false;
+            }
         } else if (line.rfind(kDebugOverlayPrefix, 0) == 0) {
             std::string value = line.substr(std::char_traits<char>::length(kDebugOverlayPrefix));
             if (value == "1" || value == "true" || value == "on") {
@@ -125,6 +133,8 @@ bool saveClientSettings(const std::string& settingsPath, const ClientSettings& s
         out << "video_quality=" << settings.videoQuality << '\n';
         out << "mirror_host_screen=" << (settings.mirrorHostScreen ? "1" : "0") << '\n';
         out << "video_codec_h264_experimental=" << (settings.videoCodecH264Experimental ? "1" : "0") << '\n';
+        out << "video_codec_pyrowave_experimental=" << (settings.videoCodecPyroWaveExperimental ? "1" : "0")
+            << '\n';
         out << "debug_overlay_enabled=" << (settings.debugOverlayEnabled ? "1" : "0") << '\n';
         if (!out.good()) {
             out.close();
