@@ -36,17 +36,10 @@ import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-BUILD_RELEASE = REPO_ROOT / "scripts" / "build-release.sh"
+PACKAGING = REPO_ROOT / "packaging"
 BRANCH_LIB = REPO_ROOT / "scripts" / "lib" / "dualdeck_branch.sh"
 
 REPO = "Crimson3076/DualDeck"
-
-
-def extract_heredoc(src: str, marker: str) -> str:
-    idx = src.index(marker)
-    start = src.index("\n", idx) + 1
-    end = src.index("\nWRAP\n", start)
-    return src[start:end]
 
 
 def write_exec(path: Path, content: str) -> None:
@@ -311,16 +304,14 @@ dualdeck_branch_status_line
               "status_line with no prior install: does not create branch.conf (no implied reinstall)")
 
     # === Full menu-level test: Advanced submenu install, success + failure paths ===
-    src = BUILD_RELEASE.read_text()
-
     def build_host_dir(root: Path, fixtures: dict, install_behavior: str = "exit 0") -> tuple[Path, Path]:
         host_dir = root / "host"
         internal_dir = host_dir / "internal"
         internal_dir.mkdir(parents=True)
         write_exec(host_dir / "dualdeck-host.sh",
-                   extract_heredoc(src, "cat > \"${pkg_dir}/host/dualdeck-host.sh\" <<'WRAP'"))
+                   (PACKAGING / "host" / "dualdeck-host.sh").read_text())
         write_exec(internal_dir / "install-branch.sh",
-                   extract_heredoc(src, "cat > \"${pkg_dir}/host/internal/install-branch.sh\" <<'WRAP'"))
+                   (PACKAGING / "host" / "internal" / "install-branch.sh").read_text())
         shutil.copy(BRANCH_LIB, internal_dir / "dualdeck_branch.sh")
         for name in ("apply-update.sh", "install-steam-shortcut.sh", "uninstall-steam-shortcut.sh",
                      "uninstall-host-control-daemon.sh", "reconfigure-cemu-controls.sh",
