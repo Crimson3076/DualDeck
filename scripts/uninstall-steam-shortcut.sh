@@ -46,8 +46,8 @@ ${error_log}" 2>/dev/null || true
 trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
 
 # Keep in sync with the same constant in scripts/install-steam-shortcut.sh
-# and the packaged client/install-steam-shortcut.sh / uninstall-steam-shortcut.sh
-# heredocs in scripts/build-release.sh.
+# and the packaged packaging/client/internal/install-steam-shortcut.sh /
+# uninstall-steam-shortcut.sh.
 central_install_dir="${HOME}/.config/dualdeck-client/install"
 self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

@@ -114,9 +114,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Pure bash/python3 -- no build, no SDL3/melonDS. Both tests extract
-      # the dualdeck-host.sh/dualdeck-client.sh heredocs straight out of
-      # scripts/build-release.sh and run them against stub internal/
+      # Pure bash/python3 -- no build, no SDL3/melonDS. Both tests copy
+      # dualdeck-host.sh/dualdeck-client.sh straight out of packaging/
+      # and run them against stub internal/
       # scripts and a fake curl fixture (no real network access), so they
       # don't need this repo's normal build dependencies either.
       - name: Run host/client menu lifecycle test
