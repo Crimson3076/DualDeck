@@ -7,9 +7,13 @@
 # standalone (e.g. for scripting or troubleshooting) -- this is just
 # the single entry point a human actually needs to know about.
 #
-# Uses a graphical kdialog menu when available (SteamOS Desktop Mode
-# and Bazzite are both KDE Plasma, where kdialog is standard) and falls
-# back to a plain numbered prompt in a terminal otherwise.
+# Shows the full-screen DualDeck Host window (internal/dualdeck-host-ui,
+# driven over a pipe -- see host/ui/src/protocol.h) when it can open,
+# which works with a controller, mouse or keyboard, on the desktop and in
+# Gaming Mode. Falls back to kdialog popups (SteamOS Desktop Mode and
+# Bazzite are both KDE Plasma, where kdialog is standard), then to a
+# plain numbered prompt in a terminal. Set DUALDECK_HOST_UI=0 to skip the
+# window.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -52,12 +56,95 @@ source ./internal/dualdeck_branch.sh
 
 have_kdialog() { command -v kdialog >/dev/null 2>&1; }
 
+# --- The DualDeck Host window -------------------------------------------
+# Started once as a coprocess; each ui_* call writes one request line and,
+# where the window answers, reads one reply line. The window only draws:
+# every decision below stays in this script.
+ui_active=0
+ui_to=""
+ui_from=""
+
+ui_send() {
+    [[ -n "${ui_to}" ]] || return 1
+    local line="" field first=1
+    for field in "$@"; do
+        field="${field//\\/\\\\}"
+        field="${field//$'\t'/\\t}"
+        field="${field//$'\n'/\\n}"
+        if [[ "${first}" -eq 1 ]]; then
+            line="${field}"
+            first=0
+        else
+            line+=$'\t'"${field}"
+        fi
+    done
+    # In a subshell so a window that just closed (SIGPIPE) only ends that.
+    ( printf '%s\n' "${line}" 1>&"${ui_to}" ) 2>/dev/null
+}
+
+# The window's answer. If it's gone (closed or crashed), there's nothing
+# to answer with: an empty reply reads as Cancel everywhere, and the main
+# menu's Cancel ends this script.
+ui_read() {
+    local reply=""
+    read -r -u "${ui_from}" reply 2>/dev/null || reply=""
+    printf '%s' "${reply}"
+}
+
+ui_start() {
+    [[ "${DUALDECK_HOST_UI:-1}" != "0" ]] || return 1
+    [[ -x ./internal/dualdeck-host-ui ]] || return 1
+    [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] || return 1
+    mkdir -p "$(dirname "${error_log}")"
+    # Its own bundled SDL3 (internal/ui-lib/, see build-release.sh), set
+    # for the window only: nothing launched from this menu inherits it.
+    coproc DUALDECK_UI {
+        LD_LIBRARY_PATH="${PWD}/internal/ui-lib" exec ./internal/dualdeck-host-ui 2>>"${error_log}"
+    }
+    # Plain duplicates: usable from the $(...) subshells the menus run in.
+    exec {ui_to}>&"${DUALDECK_UI[1]}" {ui_from}<&"${DUALDECK_UI[0]}"
+    local reply=""
+    if ui_send hello; then
+        read -r -t 15 -u "${ui_from}" reply 2>/dev/null || reply=""
+    fi
+    if [[ "${reply}" != ready* ]]; then
+        ui_stop
+        return 1
+    fi
+    ui_active=1
+    ui_send header "${dualdeck_version}"
+}
+
+# Closes the window, e.g. right before exec'ing into an emulator.
+ui_stop() {
+    if [[ -n "${ui_to}" ]]; then
+        ui_send quit || true
+        exec {ui_to}>&- {ui_from}<&-
+        ui_to=""
+        ui_from=""
+    fi
+    if [[ -n "${DUALDECK_UI_PID:-}" ]]; then
+        wait "${DUALDECK_UI_PID}" 2>/dev/null || true
+    fi
+    ui_active=0
+}
+
+# A spinner over the current screen while something slow runs.
+ui_busy() {
+    if [[ "${ui_active}" -eq 1 ]]; then
+        ui_send busy "$1" || true
+    fi
+}
+
 # The release's VERSION file sits one level up (see build-release.sh);
 # shown in the main menu so it's obvious which build is installed.
 dualdeck_version="$(cat ../VERSION 2>/dev/null || true)"
 
 info() {
-    if have_kdialog; then
+    if [[ "${ui_active}" -eq 1 ]]; then
+        # An empty title: the window uses the first sentence.
+        ui_send message "" "$1" && ui_read >/dev/null
+    elif have_kdialog; then
         kdialog --title "DualDeck Host" --msgbox "$1" 2>/dev/null
     else
         echo
@@ -66,8 +153,13 @@ info() {
     fi
 }
 
+# confirm QUESTION [TITLE YES-LABEL NO-LABEL DANGER]
+# The optional fields only change how the DualDeck window shows it.
 confirm() {
-    if have_kdialog; then
+    if [[ "${ui_active}" -eq 1 ]]; then
+        ui_send confirm "${2:-Continue?}" "$1" "${3:-Yes}" "${4:-No}" "${5:-0}" || return 1
+        [[ "$(ui_read)" == "yes" ]]
+    elif have_kdialog; then
         kdialog --title "DualDeck Host" --yesno "$1" 2>/dev/null
     else
         read -rp "$1 [y/N] " reply
@@ -90,7 +182,17 @@ choose_branch_from_list() {
     if dualdeck_branch_cache_is_stale; then
         stale_note=" (cached list, may be out of date -- use Refresh to update)"
     fi
-    if have_kdialog; then
+    if [[ "${ui_active}" -eq 1 ]]; then
+        ui_send menu list "Installation branch" "Pick the branch to install from${stale_note}"
+        while IFS= read -r b; do
+            [[ -z "${b}" ]] && continue
+            ui_send item "${b}" "${b}" "" branch "" "" ""
+        done <<< "${branches}"
+        ui_send end
+        local picked
+        picked="$(ui_read)"
+        [[ "${picked}" == "cancel" ]] || printf '%s\n' "${picked}"
+    elif have_kdialog; then
         local -a kd_args=()
         while IFS= read -r b; do
             [[ -z "${b}" ]] && continue
@@ -122,7 +224,14 @@ choose_branch_from_list() {
 choose_advanced_action() {
     local status_line
     status_line="$(dualdeck_branch_status_line 2>/dev/null || echo "Installation branch: unknown")"
-    if have_kdialog; then
+    if [[ "${ui_active}" -eq 1 ]]; then
+        ui_send menu list "Advanced" "${status_line}"
+        ui_send item change-branch "Change installation branch" "Choose which GitHub branch updates come from" branch "" "" ""
+        ui_send item refresh-branches "Refresh branch list" "Fetch the latest branches from GitHub" refresh "" "" ""
+        ui_send item install-branch "Install selected branch" "Download and install the branch you picked" download "" "" ""
+        ui_send end
+        ui_read
+    elif have_kdialog; then
         kdialog --title "DualDeck Host -- Advanced" --menu "${status_line}" \
             change-branch "Change installation branch..." \
             refresh-branches "Refresh branch list" \
@@ -157,13 +266,33 @@ choose_action() {
     # status check, not just an action picker.
     local daemon_label="Always-on Host Control: OFF (turn on...)"
     local daemon_status="Always-on Host Control is off."
+    local daemon_on=0
     if command -v systemctl >/dev/null 2>&1 && \
        systemctl --user is-active --quiet dualdeck-host-control.service 2>/dev/null; then
         daemon_label="Always-on Host Control: ON (turn off...)"
         daemon_status="Always-on Host Control is on: a Deck can connect any time."
+        daemon_on=1
     fi
 
-    if have_kdialog; then
+    if [[ "${ui_active}" -eq 1 ]]; then
+        if [[ "${daemon_on}" -eq 1 ]]; then
+            ui_send menu home "DualDeck Host" ""
+            ui_send status on "A Deck can connect any time, even with no emulator open."
+        else
+            ui_send menu home "DualDeck Host" ""
+            ui_send status off "A Deck can connect while an emulator is running."
+        fi
+        ui_send item launch "Play" "Launch an emulator and stream it to your Deck. The Deck switches to the game on its own." "" "" "" "DS|melonDS,3DS|Azahar,WII U|Cemu,DESKTOP"
+        ui_send item hostcontrol-daemon "Always-on Host Control" "Starts at login, so a Deck can use this PC any time" monitor "" "$([[ "${daemon_on}" -eq 1 ]] && echo on || echo off)" ""
+        ui_send item steam-add "Add to Steam" "Shows DualDeck Host in Gaming Mode and Big Picture" plus "" "" ""
+        ui_send item update "Check for updates" "Download the newest DualDeck release" refresh "" "" ""
+        ui_send item reconfigure-controls "Fix Cemu controls" "When Deck input does nothing in Cemu" gamepad "" "" ""
+        ui_send item emudeck "Use my EmuDeck / RetroDECK emulators" "Stream the emulators you already have installed" list "Experimental" warn ""
+        ui_send item advanced "Advanced" "Installation branch and other options" gear "" "" ""
+        ui_send item steam-remove "Remove from Steam and uninstall" "Your ROMs, saves and firmware are never touched" trash "" danger ""
+        ui_send end
+        ui_read
+    elif have_kdialog; then
         kdialog --title "DualDeck Host${dualdeck_version:+ ${dualdeck_version}}" \
             --menu "${daemon_status}
 
@@ -224,7 +353,20 @@ choose_host_control_daemon_action() {
         active=1
     fi
 
-    if have_kdialog; then
+    if [[ "${ui_active}" -eq 1 ]]; then
+        if [[ "${active}" -eq 1 ]]; then
+            ui_send menu list "Always-on Host Control" "On: a Deck can connect and use this PC's desktop any time, even with no emulator open."
+            ui_send status on "A Deck can connect any time."
+            ui_send item stop "Turn off" "Stop now and don't start at login" power "" "" ""
+        else
+            ui_send menu list "Always-on Host Control" "Off: turn it on to let a Deck connect and use this PC's desktop any time. It starts again at every login."
+            ui_send status off "A Deck can connect while an emulator is running."
+            ui_send item start "Turn on" "Start now and at every login" power "" "" ""
+        fi
+        ui_send item status "Show service status" "What systemd reports for the background service" info "" "" ""
+        ui_send end
+        ui_read
+    elif have_kdialog; then
         if [[ "${active}" -eq 1 ]]; then
             kdialog --title "DualDeck Host" --menu "Always-on Host Control is ON. A Deck can connect and use this PC's desktop any time, even with no emulator open." \
                 stop "Turn off (and don't start at login)" \
@@ -274,7 +416,18 @@ choose_emulator() {
         [[ -n "${custom_path}" ]] && custom_label="Custom (${custom_path})"
     fi
 
-    if have_kdialog; then
+    if [[ "${ui_active}" -eq 1 ]]; then
+        local custom_detail="Patch and run my own emulator build"
+        [[ "${custom_label}" != "Custom (patch my own emulator)" ]] && custom_detail="${custom_label#Custom (}" && custom_detail="${custom_detail%)}"
+        ui_send menu cards "Choose a system" "The Deck connects as soon as the emulator is up."
+        ui_send item ds "DS" "melonDS, with both screens and the touch screen on the Deck" ds "" "" ""
+        ui_send item n3ds "3DS" "Azahar" 3ds "Experimental" warn ""
+        ui_send item wiiu "Wii U" "Cemu, with the GamePad screen on the Deck" wiiu "Experimental" warn ""
+        ui_send item hostcontrol "Desktop" "Host Control only: use this PC from the Deck, no emulator" desktop "Experimental" warn ""
+        ui_send item custom "Custom" "${custom_detail}" custom "" "" ""
+        ui_send end
+        ui_read
+    elif have_kdialog; then
         kdialog --title "DualDeck Host" --menu "Which system do you want to play?" \
             ds "Nintendo DS (melonDS)" \
             n3ds "Nintendo 3DS (Azahar, experimental)" \
@@ -318,6 +471,8 @@ choose_emulator() {
 # the dualdeck_trap_errors ERR trap above, which only fires for a genuinely unexpected
 # failure, not a handled one), or backing out of a submenu -- falls
 # through to the bottom of the loop and redisplays this same menu.
+ui_start || true
+
 while true; do
 action="$(choose_action)"
 
@@ -331,6 +486,7 @@ case "${action}" in
                 # (Steam shortcut, double-clicking internal/run-host.sh
                 # directly, etc.) -- no menu process left hanging
                 # around behind it.
+                ui_stop
                 exec ./internal/launch-host.sh
                 ;;
             n3ds)
@@ -343,6 +499,7 @@ case "${action}" in
                 # internal/run-host-azahar.sh's own comment) -- called
                 # directly, not through launch-host.sh's melonDS-specific
                 # Distrobox-vs-plain dispatch.
+                ui_stop
                 exec ./internal/run-host-azahar.sh
                 ;;
             wiiu)
@@ -352,6 +509,7 @@ case "${action}" in
                 # in-process device-approval path either. No Distrobox
                 # launch path yet -- called directly, not through
                 # launch-host.sh's melonDS-specific dispatch.
+                ui_stop
                 exec ./internal/run-host-cemu.sh
                 ;;
             hostcontrol)
@@ -364,9 +522,11 @@ case "${action}" in
                 # exists. No auth token exported here either, same
                 # zero-typing kdialog approval as the n3ds case above.
                 export DUALDECK_HOST_CONTROL=1
+                ui_stop
                 exec ./internal/launch-host.sh
                 ;;
             custom)
+                ui_stop
                 exec ./internal/launch-custom-emulator.sh
                 ;;
             *)
@@ -391,6 +551,7 @@ case "${action}" in
                 # commands' combined output and show it directly instead
                 # of guessing, falling back to the old generic message
                 # only if nothing was actually captured.
+                ui_busy "Turning on Host Control…"
                 if daemon_start_output="$(./internal/install-host-control-daemon.sh 2>&1 && \
                     systemctl --user enable --now dualdeck-host-control.service 2>&1)"; then
                     info "Always-on Host Control is on. A Deck can connect any time, and it starts again whenever you log in. Launching an emulator still works as before and switches the Deck to that game automatically."
@@ -411,7 +572,9 @@ ${daemon_start_output}"
                 ;;
             status)
                 status_output="$(systemctl --user status dualdeck-host-control.service --no-pager 2>&1 || true)"
-                if have_kdialog; then
+                if [[ "${ui_active}" -eq 1 ]]; then
+                    ui_send textview "Host Control service status" "${status_output}" && ui_read >/dev/null
+                elif have_kdialog; then
                     status_file="$(mktemp)"
                     echo "${status_output}" > "${status_file}"
                     kdialog --title "DualDeck Host Control daemon status" --textbox "${status_file}" 600 400 2>/dev/null || true
@@ -427,6 +590,7 @@ ${daemon_start_output}"
         esac
         ;;
     steam-add)
+        ui_busy "Adding DualDeck Host to Steam…"
         if ./internal/install-steam-shortcut.sh; then
             info "Added DualDeck Host to Steam. Restart Steam (or switch to Gaming Mode) to see it, and set its Controller Layout to a plain Gamepad template once it's there."
         fi
@@ -435,7 +599,9 @@ ${daemon_start_output}"
         # this script) -- nothing more to do.
         ;;
     steam-remove)
-        if confirm "This removes the Steam shortcut, the installed files, and the Distrobox container if one was created. Your ROMs, saves, and firmware are never touched. Continue?"; then
+        if confirm "This removes the Steam shortcut, the installed files, and the Distrobox container if one was created. Your ROMs, saves, and firmware are never touched. Continue?" \
+            "Remove DualDeck Host?" "Remove" "Keep" 1; then
+            ui_busy "Removing DualDeck Host…"
             # Best-effort, before the files it depends on are removed
             # below -- a full uninstall should also tear down the
             # persistent Host Control daemon if one was ever installed,
@@ -447,7 +613,9 @@ ${daemon_start_output}"
         fi
         ;;
     reconfigure-controls)
-        if confirm "This sets Cemu's own Controller 1 to type 'Wii U GamePad' if it isn't already, so DualDeck's remote input can auto-wire onto it -- fixes a fresh Cemu install showing no controls at all until this is set manually in Cemu's Input Settings. A real controller plugged into this host directly (e.g. for local co-op) stays mapped; only the controller *type* is touched, never existing bindings. Requires restarting Cemu (not just this menu) to take effect. Continue?"; then
+        if confirm "This sets Cemu's own Controller 1 to type 'Wii U GamePad' if it isn't already, so DualDeck's remote input can auto-wire onto it -- fixes a fresh Cemu install showing no controls at all until this is set manually in Cemu's Input Settings. A real controller plugged into this host directly (e.g. for local co-op) stays mapped; only the controller *type* is touched, never existing bindings. Requires restarting Cemu (not just this menu) to take effect. Continue?" \
+            "Fix Cemu controls?" "Fix" "Cancel"; then
+            ui_busy "Updating Cemu's controller settings…"
             if reconfigure_output="$(./internal/reconfigure-cemu-controls.sh 2>&1)"; then
                 info "${reconfigure_output}"
             else
@@ -458,12 +626,15 @@ ${reconfigure_output}"
         fi
         ;;
     update)
+        ui_busy "Checking for updates…"
         update_report="$(../check-for-updates.sh)"
         if echo "${update_report}" | grep -q "update available:"; then
             latest_version="$(echo "${update_report}" | sed -n 's/.*update available: //p' | head -1)"
             if confirm "${update_report}
 
-Install ${latest_version} now? This downloads it from GitHub and also adds/updates the Steam shortcut."; then
+Install ${latest_version} now? This downloads it from GitHub and also adds/updates the Steam shortcut." \
+                "Install ${latest_version}?" "Install" "Not now"; then
+                ui_busy "Downloading and installing ${latest_version}…"
                 # Captured (not just checked for success) so the message
                 # below can tell whether the Steam shortcut's Exe/AppName/
                 # LaunchOptions actually changed -- for a routine update
@@ -488,6 +659,7 @@ Install ${latest_version} now? This downloads it from GitHub and also adds/updat
         fi
         ;;
     emudeck)
+        ui_stop
         exec ./internal/launch-emudeck-integration.sh
         ;;
     advanced)
@@ -508,6 +680,7 @@ Install ${latest_version} now? This downloads it from GitHub and also adds/updat
                     fi
                     ;;
                 refresh-branches)
+                    ui_busy "Refreshing the branch list…"
                     if dualdeck_branch_refresh >/dev/null 2>&1; then
                         info "Branch list refreshed."
                     else
@@ -518,7 +691,9 @@ Install ${latest_version} now? This downloads it from GitHub and also adds/updat
                     selected_branch="$(dualdeck_branch_get_selected 2>/dev/null || true)"
                     if [[ -z "${selected_branch}" ]]; then
                         info "No branch selected yet -- use \"Change installation branch...\" first."
-                    elif confirm "Install DualDeck Host from branch '${selected_branch}'? This resolves it to a specific published commit, downloads and verifies that build, and only replaces the current install if that fully succeeds. Remember to install the same branch on the client too."; then
+                    elif confirm "Install DualDeck Host from branch '${selected_branch}'? This resolves it to a specific published commit, downloads and verifies that build, and only replaces the current install if that fully succeeds. Remember to install the same branch on the client too." \
+                        "Install branch '${selected_branch}'?" "Install" "Cancel"; then
+                        ui_busy "Installing branch '${selected_branch}'…"
                         if install_output="$(./internal/install-branch.sh 2>&1)"; then
                             info "${install_output}"
                         else
@@ -539,3 +714,5 @@ ${install_output}"
         ;;
 esac
 done
+
+ui_stop

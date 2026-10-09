@@ -112,3 +112,7 @@ See [`docs/building.md`](docs/building.md) for dependencies and
 GPLv3 (see [`LICENSE`](LICENSE)), matching melonDS's own license, since this
 project is designed to become a melonDS fork/patch. See
 `docs/melonds-integration-analysis.md` section 0 for details.
+
+The host window (`host/ui/`) compiles in the Chakra Petch and Atkinson
+Hyperlegible fonts, both under the SIL Open Font License 1.1 (see
+`host/ui/fonts/`), and uses stb_truetype (public domain).

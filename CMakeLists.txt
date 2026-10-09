@@ -8,6 +8,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(DUALDECK_BUILD_TESTS "Build unit tests" ON)
 option(DUALDECK_BUILD_CLIENT "Build the SDL3 Steam Deck client (requires SDL3)" OFF)
 option(DUALDECK_BUILD_HOST "Build the standalone host remote-server prototype" ON)
+option(DUALDECK_BUILD_HOST_UI "Build dualdeck-host-ui, the full-screen host menu window (requires SDL3)" OFF)
 option(DUALDECK_ENABLE_WARNINGS "Enable strict warnings (-Wall -Wextra -Wpedantic -Wconversion -Wshadow)" ON)
 
 enable_testing()
@@ -111,6 +112,10 @@ if(DUALDECK_BUILD_HOST)
     # so it's gated the same as the host build itself. See
     # tools/codec-benchmark/main.cpp's own top comment.
     add_subdirectory(tools/codec-benchmark)
+endif()
+
+if(DUALDECK_BUILD_HOST_UI)
+    add_subdirectory(host/ui)
 endif()
 
 if(DUALDECK_BUILD_CLIENT)

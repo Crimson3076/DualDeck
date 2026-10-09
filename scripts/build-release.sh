@@ -316,7 +316,7 @@ repo_build="${work_dir}/repo-build"
 PKG_CONFIG_PATH="${pyrowave_pkgconfig_dir}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}" \
 cmake -S "${repo_root}" -B "${repo_build}" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DDUALDECK_BUILD_CLIENT=ON \
-    -DDUALDECK_BUILD_HOST=ON -DCMAKE_PREFIX_PATH="${sdl3_install}" \
+    -DDUALDECK_BUILD_HOST=ON -DDUALDECK_BUILD_HOST_UI=ON -DCMAKE_PREFIX_PATH="${sdl3_install}" \
     "${cmake_launcher_args[@]}"
 cmake --build "${repo_build}" -j"$(nproc)"
 ctest --test-dir "${repo_build}" --output-on-failure
@@ -422,6 +422,18 @@ chmod +x "${pkg_dir}/host/internal/dualdeck-host-service"
 # scripts/lib/adapter_socket_probe.sh for where LD_LIBRARY_PATH now
 # points at this directory.
 bundle_library_dependencies "${pkg_dir}/host/internal/dualdeck-host-service" "${pkg_dir}/host/internal/lib"
+
+# The full-screen host menu window dualdeck-host.sh drives (host/ui/).
+# Its libraries (SDL3 and what it links) go in their own ui-lib/ rather
+# than lib/, so they never end up on the host service's or an
+# emulator's LD_LIBRARY_PATH; dualdeck-host.sh points only the window at
+# it. SDL3 is copied from the build prefix afterwards, as for the client.
+cp "${repo_build}/host/ui/dualdeck-host-ui" "${pkg_dir}/host/internal/dualdeck-host-ui"
+chmod +x "${pkg_dir}/host/internal/dualdeck-host-ui"
+bundle_library_dependencies "${pkg_dir}/host/internal/dualdeck-host-ui" "${pkg_dir}/host/internal/ui-lib"
+cp -a "${sdl3_install}"/lib/libSDL3.so* "${pkg_dir}/host/internal/ui-lib/"
+# The fonts compiled into it are OFL-licensed; their license travels too.
+cp "${repo_root}"/host/ui/fonts/OFL-*.txt "${pkg_dir}/docs/"
 
 # Prebuilt, patched, self-contained AppImages for
 # emudeck-replace-in-place.sh to download and drop straight into an
