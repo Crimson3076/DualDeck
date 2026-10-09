@@ -93,8 +93,8 @@ echo "Downloading ${resolved_tag} (branch ${branch}, commit ${resolved_sha:0:7})
 # SHA256SUMS (see build-release.sh's own SHA256SUMS-generation comment)
 # lists this exact name.
 archive_name="melonds-remote-linux-x86_64.tar.gz"
-curl -fsSL --max-time 180 -o "${work_dir}/${archive_name}" "${download_base}/${archive_name}"
-curl -fsSL --max-time 30 -o "${work_dir}/SHA256SUMS" "${download_base}/SHA256SUMS"
+curl --proto =https -fsSL --max-time 180 -o "${work_dir}/${archive_name}" "${download_base}/${archive_name}"
+curl --proto =https -fsSL --max-time 30 -o "${work_dir}/SHA256SUMS" "${download_base}/SHA256SUMS"
 
 echo "Verifying download integrity..."
 if ! (cd "${work_dir}" && sha256sum -c --ignore-missing SHA256SUMS) >/dev/null 2>&1; then

@@ -21,7 +21,7 @@ if ! command -v curl >/dev/null 2>&1; then
     exit 0
 fi
 
-api_response="$(curl -fsSL --max-time 5 \
+api_response="$(curl --proto =https -fsSL --max-time 5 \
     "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null)"
 if [[ -z "${api_response}" ]]; then
     echo "DualDeck ${current_version} -- couldn't reach GitHub to check for updates (offline?)."

@@ -59,7 +59,7 @@ work_dir="$(mktemp -d)"
 trap 'rm -rf "${work_dir}"' EXIT
 
 echo "Downloading the latest release..."
-curl -fsSL --max-time 180 -o "${work_dir}/release.tar.gz" "${download_url}"
+curl --proto =https -fsSL --max-time 180 -o "${work_dir}/release.tar.gz" "${download_url}"
 
 echo "Extracting..."
 tar xzf "${work_dir}/release.tar.gz" -C "${work_dir}"
