@@ -20,7 +20,9 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 host_root="$(cd .. && pwd)"
 
-export DUALDECK_HOST_CONTROL_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+DUALDECK_HOST_CONTROL_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+
+export DUALDECK_HOST_CONTROL_VERSION
 
 # Real user report, 2026-08-03: "Host Control Screen mirroring still does
 # not work, as falls back to a grey screen" -- even after the X11/Wayland

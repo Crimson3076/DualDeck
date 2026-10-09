@@ -168,6 +168,7 @@ ensure_packages "cemu build" \
 # translation units from scratch even though a patch usually touches
 # only a handful of files.
 cmake_launcher_args=()
+melonds_bin='' azahar_bin='' cemu_bin='' # set by build_melonds/azahar/cemu via nameref below
 if command -v sccache >/dev/null 2>&1; then
     echo "sccache found on PATH, enabling as CMake compiler launcher"
     cmake_launcher_args=(-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache)

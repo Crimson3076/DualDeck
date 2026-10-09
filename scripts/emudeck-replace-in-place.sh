@@ -92,6 +92,7 @@ unset LD_PRELOAD LD_LIBRARY_PATH
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="${EMUDECK_REPLACE_WORKDIR:-$(mktemp -d)}"
+# shellcheck disable=SC2154 # status is assigned inside the trap body itself
 trap '
     status=$?
     if [[ "${status}" -ne 0 ]]; then
@@ -731,6 +732,7 @@ install_emudeck_launcher_shims() {
         fi
 
         echo "== ${emulator}: redirecting ${target} -> ${shim} =="
+        # shellcheck disable=SC2094 # the heredoc only reads the basename of ${target}, not the file
         cat > "${target}" <<SHIM
 #!/usr/bin/env bash
 # Replaced by DualDeck (scripts/emudeck-replace-in-place.sh). The stock

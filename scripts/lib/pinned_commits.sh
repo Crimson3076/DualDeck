@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2034 # every variable here is consumed by the scripts that source this file
 # Single source of truth for the upstream commit each emulator patch is
 # pinned against, meant to be `source`d by every script that clones and
 # builds one of these emulators (scripts/build-release.sh,

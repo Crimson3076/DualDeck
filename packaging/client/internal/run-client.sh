@@ -83,6 +83,7 @@ ensure_packages "client runtime" \
 # HelloPayload::appVersion and net_server.cpp's comparison logic.
 # dirname(client_root) matches check-for-updates.sh's own VERSION lookup
 # (the archive root, or the central install directory's parent).
-export DUALDECK_VERSION="$(cat "$(dirname "${client_root}")/VERSION" 2>/dev/null || true)"
+DUALDECK_VERSION="$(cat "$(dirname "${client_root}")/VERSION" 2>/dev/null || true)"
+export DUALDECK_VERSION
 
 LD_LIBRARY_PATH="${client_root}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" exec "${client_root}/dualdeck-client" "$@"

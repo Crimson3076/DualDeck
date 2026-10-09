@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2154 # cmake_launcher_args comes from the caller's scope, see Contract below
 # Shared "clone + pin + patch + build" logic for melonDS/Azahar/Cemu, meant
 # to be `source`d (not executed directly) by scripts/build-release.sh and by
 # scripts/emudeck-replace-in-place.sh -- factored out so the EmuDeck

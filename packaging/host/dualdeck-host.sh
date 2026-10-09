@@ -49,7 +49,7 @@ Details logged to:
 ${error_log}" 2>/dev/null || true
     fi
 }
-trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
+trap 'on_error "$?" "${LINENO}" "${BASH_COMMAND}"' ERR
 
 # Advanced -> Installation branch. Own config dir, own cache, own
 # selection -- see internal/dualdeck_branch.sh's own header comment for

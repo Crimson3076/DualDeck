@@ -47,7 +47,7 @@ Details logged to:
 ${error_log}" 2>/dev/null || true
     fi
 }
-trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
+trap 'on_error "$?" "${LINENO}" "${BASH_COMMAND}"' ERR
 
 launch_options=""
 extra_args=()

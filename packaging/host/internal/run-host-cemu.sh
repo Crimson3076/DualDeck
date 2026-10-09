@@ -53,7 +53,8 @@ source ./adapter_socket_probe.sh
 
 # See run-host.sh's identical MELONDS_REMOTE_VERSION comment -- same
 # central VERSION file, read the same way.
-export CEMU_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+CEMU_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+export CEMU_REMOTE_VERSION
 
 auth_token_args=()
 if [[ -n "${CEMU_REMOTE_AUTH_TOKEN:-}" ]]; then

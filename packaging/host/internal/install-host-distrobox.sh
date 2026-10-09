@@ -112,7 +112,7 @@ container_name="dualdeck-host"
 # exactly why it went unnoticed. Not `distrobox enter`, unlike Azahar's
 # launch gate: starting a container purely to decide whether to delete
 # it would be backwards.
-distrobox_containers="$(command -v distrobox >/dev/null 2>&1 && distrobox list 2>/dev/null || true)"
+distrobox_containers="$(if command -v distrobox >/dev/null 2>&1; then distrobox list 2>/dev/null || true; fi)"
 if grep -qw "melonds-remote-host" <<<"${distrobox_containers}"; then
     echo "Removing old Distrobox container \"melonds-remote-host\" (renamed to \"${container_name}\") ..."
     distrobox rm "melonds-remote-host" --force 2>/dev/null || true

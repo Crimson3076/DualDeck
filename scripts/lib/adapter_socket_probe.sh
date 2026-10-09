@@ -76,6 +76,7 @@ except OSError:
 # "Not exec'd below" note) explaining exactly why its trap lives where
 # it does; centralizing the trap itself here would either duplicate or
 # disagree with those.
+# shellcheck disable=SC2034 # ADAPTER_SOCKET/HOST_SERVICE_PID are outputs for the caller
 probe_or_spawn_adapter_socket() {
     local private_socket_path="$1" host_service_bin="$2" state_dir="$3" app_version="$4"
     shift 4

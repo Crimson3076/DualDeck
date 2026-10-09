@@ -11,7 +11,7 @@
 # automatically (the host has no equivalent auto-update yet); run this
 # yourself (or use the host menu) to check there.
 set -uo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")"
+cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
 
 current_version="$(cat VERSION 2>/dev/null || echo "unknown")"
 repo="Crimson3076/DualDeck"

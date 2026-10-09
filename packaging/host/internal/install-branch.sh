@@ -32,7 +32,7 @@ Details logged to:
 ${error_log}" 2>/dev/null || true
     fi
 }
-trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
+trap 'on_error "$?" "${LINENO}" "${BASH_COMMAND}"' ERR
 
 if ! command -v curl >/dev/null 2>&1; then
     echo "error: curl is required -- install it and try again." >&2

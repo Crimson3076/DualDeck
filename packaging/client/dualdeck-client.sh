@@ -24,7 +24,7 @@ Details logged to:
 ${error_log}" 2>/dev/null || true
     fi
 }
-trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
+trap 'on_error "$?" "${LINENO}" "${BASH_COMMAND}"' ERR
 
 # Keep in sync with the same constant in internal/install-steam-shortcut.sh,
 # internal/uninstall-steam-shortcut.sh, internal/apply-update.sh, and
