@@ -56,6 +56,7 @@
 #include "client_settings.h"
 #include "device_identity.h"
 #include "discovery_client.h"
+#include "discovery_json.h"
 #include "discovery_store.h"
 #include "gamepad_input.h"
 #include "host_picker.h"
@@ -74,6 +75,8 @@ namespace {
 
 // Matches host::NetServerConfig::discoveryPort's default (net_server.h).
 constexpr uint16_t kDefaultDiscoveryPort = 8763;
+// How long `--discover` listens for replies.
+constexpr int kDiscoverOnlyTimeoutMs = 1500;
 
 // Wall-clock (epoch) microseconds, for the wire ControllerState.clientTimestampUs
 // field specifically. Deliberately not SDL_GetTicksNS() (which is time since
@@ -165,6 +168,7 @@ int main(int argc, char** argv) {
     }
     bool authTokenExplicit = false; // --auth-token given: skip device-approval entirely (CI/scripting use)
     bool hostExplicit = false;      // --host/positional given: skip LAN discovery entirely
+    bool discoverOnly = false;      // --discover: print one LAN scan as JSON and exit
     uint16_t discoveryPort = kDefaultDiscoveryPort;
 
     for (int i = 1; i < argc; ++i) {
@@ -189,6 +193,8 @@ int main(int argc, char** argv) {
             discoveryPort = static_cast<uint16_t>(std::stoi(nextArg()));
         } else if (arg == "--app-version") {
             netConfig.appVersion = nextArg(); // overrides DUALDECK_VERSION above
+        } else if (arg == "--discover") {
+            discoverOnly = true;
         } else if (!arg.empty() && arg[0] != '-') {
             // Positional host address, for scripts/run-client.sh's
             // `dualdeck-client 127.0.0.1` convenience form.
@@ -198,6 +204,14 @@ int main(int argc, char** argv) {
             logLine("unrecognized argument: %s\n", arg.c_str());
             return 1;
         }
+    }
+
+    // For front ends such as the Decky plugin: one scan, the same one the
+    // host picker runs, printed to stdout (see discovery_json.h). No
+    // window, no SDL.
+    if (discoverOnly) {
+        std::printf("%s\n", discoveredHostsToJson(discoverHosts(discoveryPort, kDiscoverOnlyTimeoutMs)).c_str());
+        return 0;
     }
 
     const std::string discoveryStorePath = defaultLastHostStorePath();

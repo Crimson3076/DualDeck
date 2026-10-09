@@ -194,7 +194,10 @@ touching the real ports at all.
 `DiscoveryRequest` has no payload -- the client broadcasts a bare packet
 with this type to `255.255.255.255:<discoveryPort>` and collects whatever
 `DiscoveryResponse` replies arrive within a short window (see
-`client/src/discovery_client.h`).
+`client/src/discovery_client.h`). `dualdeck-client --discover` runs one
+such scan without opening a window and prints the replies as a JSON
+array (`client/src/discovery_json.h`), for front ends like the Decky
+plugin.
 
 `DiscoveryResponse` payload (8 fixed bytes + `hostName` plus 5 more length-prefixed strings for identity):
 
