@@ -12648,6 +12648,37 @@ real hardware: `test_host_control_adapter.cpp` now only expects
 bitstream spec as flat mid-level) on the CPU, since a Radeon GPU's
 output for it wasn't gray where lavapipe's was.
 
+## 2026-10-09: Emulator patches no longer carry their own copy of the shared code
+
+The three integration patches each embedded a full copy of the shared
+DualDeck sources they compile: 13 files of `adapter-sdk/` and
+`protocol/` in Azahar's and Cemu's, 26 in melonDS's (which also carries
+part of `host/remote-server/`). Those copies are what drifted in the
+2026-08-01 "frozen protocol copy" entry above, and every protocol change
+since has had to be pasted into all three by hand.
+
+**Fix:** the copies are gone from the patches. Each
+`host/<emulator>-patches/shared-files.txt` lists the files and their
+place in the emulator's tree, and `scripts/lib/emulator_patch.sh` copies
+them from this repository right after `git apply`. The cache-hit checks
+in `build_emulator.sh` now also compare those files, and release.yml's
+Azahar/Cemu cache keys hash them, so a change to a shared file rebuilds
+the emulator exactly like a change to the patch does.
+`check-patch-protocol-sync.sh` now fails if a patch adds a listed file
+again. melonDS's frozen `net_server.{h,cpp}` (the JPEG-only in-process
+server behind `DUALDECK_MELONDS_IN_PROCESS=1`) intentionally stays in its
+patch, since it deliberately differs from the live one.
+
+**Verified:** applied the old and new patches to fresh checkouts of all
+three pinned upstream commits and diffed the trees. The only differences
+are `protocol.h`/`protocol.cpp`, whose embedded copies were a little
+behind the live ones: the live versions add the PyroWave `VideoCodec`
+value and codec bit, and accept that value when a client decodes a
+HelloAck. No emulator-side code uses any of those, so the emulators
+behave the same. melonDS's frozen `net_server.cpp`
+compiles against the live headers. The emulators themselves were not
+built here; the next release build is their first full compile.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

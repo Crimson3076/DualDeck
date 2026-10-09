@@ -16,6 +16,21 @@ verification against that earlier dev-branch base; the rebase section
 after it covers what's different (and what still needs re-verifying)
 now that the base is v2.6.
 
+## Shared DualDeck sources
+
+The patch does not carry its own copy of the shared DualDeck code it
+compiles (`adapter-sdk/`, `protocol/`). `shared-files.txt` lists those
+files and where they go in the emulator's tree, and
+`scripts/lib/emulator_patch.sh` copies them in from this repository right
+after `git apply` (used by `scripts/lib/build_emulator.sh` and
+`scripts/patch-existing-emulator.sh`). There is one copy of each file,
+the live one, so the patch can no longer drift behind it (see
+`docs/known-limitations.md`'s 2026-08-01 "frozen protocol copy" entry).
+
+When regenerating the patch, leave the files `shared-files.txt` lists out
+of the diff. `scripts/check-patch-protocol-sync.sh` (run in CI) fails if
+the patch adds any of them again.
+
 ## What the patch does
 
 1. `src/remote_server/CemuAdapter.{h,cpp}` (new) -- implements
@@ -122,9 +137,9 @@ now that the base is v2.6.
    `create_provider<DualDeck::RemoteServer::RemoteControllerProvider>()`
    alongside the other built-in providers.
 10. `src/CMakeLists.txt`, `src/remote_server/CMakeLists.txt` (new) -- a
-    new `CemuRemoteServer` static library (the files in 1-3 above, plus a
-    vendored `adapter_sdk/` subset copied byte-for-byte from this
-    repository's `adapter-sdk/` and `protocol/`), linked into `CemuBin`
+    new `CemuRemoteServer` static library (the files in 1-3 above, plus an
+    `adapter_sdk/` subset copied from this repository's `adapter-sdk/` and
+    `protocol/` at apply time, see "Shared DualDeck sources" above), linked into `CemuBin`
     alongside `CemuCafe`/`CemuInput`/etc.
 
 ## What has actually been verified

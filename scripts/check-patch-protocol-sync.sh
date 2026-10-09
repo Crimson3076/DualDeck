@@ -2,19 +2,16 @@
 # Guards against the exact bug fixed 2026-08-01 (see docs/known-
 # limitations.md's "All three host patches embed a frozen protocol copy"
 # entry): host/{melonds,azahar,cemu}-patches/0001-remote-server-
-# integration.patch each embed their own vendored copy of protocol.h
-# rather than referencing the live protocol/ directory, and nobody
-# noticed the embedded copy silently falling further behind the live
-# header (v7 vs v10, three real feature releases) across several
-# unrelated changes elsewhere in the repo -- "the patch is untouched" was
-# read as evidence of good scoping in each of those changes individually,
-# without anyone tracking that the patch was simultaneously drifting
-# further out of sync every time. This is not a full guarantee the three
-# patches are fully in sync (a change to protocol.h's *content* without a
-# kProtocolVersion bump, or a change to adapter_contract.h/net_server.h/
-# etc. that isn't reflected here, could still slip through silently) --
-# just the cheapest possible tripwire for the specific failure mode that
-# actually happened: a bumped kProtocolVersion nobody ever propagated.
+# integration.patch each used to embed their own vendored copy of
+# protocol.h (and the rest of adapter-sdk/), which silently fell behind
+# the live header across several unrelated changes.
+#
+# The patches no longer carry those files: each emulator's
+# shared-files.txt lists the shared sources scripts/lib/emulator_patch.sh
+# copies in from this repository at apply time, so the live copy is the
+# only copy. This script now checks that arrangement stays intact: every
+# listed source exists, and no patch has grown its own copy of a listed
+# file again (e.g. from regenerating a patch without excluding them).
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -30,32 +27,33 @@ fi
 echo "live protocol/include/melonds_remote/protocol.h: kProtocolVersion=${live_version}"
 
 failed=0
-for patch in host/melonds-patches/0001-remote-server-integration.patch \
-             host/azahar-patches/0001-remote-server-integration.patch \
-             host/cemu-patches/0001-remote-server-integration.patch; do
-    patch_path="${repo_root}/${patch}"
-    if [[ ! -f "${patch_path}" ]]; then
-        echo "error: ${patch} not found" >&2
-        failed=1
-        continue
-    fi
-    # The embedded copy's kProtocolVersion line appears as a diff
-    # addition ("+inline constexpr ..."), not the file's own literal
-    # content -- match either form so this doesn't care whether the
-    # patch adds the file fresh (today's case) or modifies an existing
-    # one (hypothetically, if melonDS/Azahar/Cemu ever shipped their own
-    # copy upstream).
-    patch_version="$(grep -oP '^\+?inline constexpr uint16_t kProtocolVersion = \K[0-9]+' \
-        "${patch_path}" | head -1 || true)"
-    if [[ -z "${patch_version}" ]]; then
-        echo "warning: ${patch} doesn't embed a kProtocolVersion at all -- skipping (not necessarily an error, but check by hand)" >&2
-        continue
-    fi
-    if [[ "${patch_version}" != "${live_version}" ]]; then
-        echo "error: ${patch} embeds kProtocolVersion=${patch_version}, live header is ${live_version} -- this patch needs regenerating (see docs/known-limitations.md's 2026-08-01 entry for how)" >&2
-        failed=1
+for patch_dir in host/melonds-patches host/azahar-patches host/cemu-patches; do
+    patch_path="${repo_root}/${patch_dir}/0001-remote-server-integration.patch"
+    manifest="${repo_root}/${patch_dir}/shared-files.txt"
+    for f in "${patch_path}" "${manifest}"; do
+        if [[ ! -f "${f}" ]]; then
+            echo "error: ${f#"${repo_root}"/} not found" >&2
+            failed=1
+            continue 2
+        fi
+    done
+    count=0
+    dir_failed=0
+    while read -r from to; do
+        count=$((count + 1))
+        if [[ ! -f "${repo_root}/${from}" ]]; then
+            echo "error: ${patch_dir}/shared-files.txt lists ${from}, which doesn't exist" >&2
+            dir_failed=1
+        fi
+        if grep -qF "diff --git a/${to} b/${to}" "${patch_path}"; then
+            echo "error: ${patch_dir}'s patch adds its own copy of ${to} -- drop it from the patch, shared-files.txt already copies it from ${from}" >&2
+            dir_failed=1
+        fi
+    done < <(grep -v -E '^[[:space:]]*(#|$)' "${manifest}")
+    if [[ "${dir_failed}" -eq 0 ]]; then
+        echo "${patch_dir}: ${count} shared files, copied from the live tree -- in sync"
     else
-        echo "${patch}: kProtocolVersion=${patch_version} -- in sync"
+        failed=1
     fi
 done
 
