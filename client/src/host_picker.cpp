@@ -69,7 +69,8 @@ constexpr int kPickerFrameIntervalMs = 16;
 std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_Gamepad*& gamepad,
                                                      uint16_t discoveryPort,
                                                      const std::string& lastHostAddress,
-                                                     const std::string& clientVersion, bool* backRequested) {
+                                                     const std::string& clientVersion, bool* backRequested,
+                                                     SettingsMenu* settings, bool* setupWizardRequested) {
     std::vector<DiscoveredHost> hosts;
     int selectedIndex = 0;
 
@@ -101,8 +102,19 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
     // screen previously had none at all (GitHub issues #8, #9).
     // Same deliberate-hold pattern and menu-navigation conventions as
     // main()'s inner loop (see kMenuChordHoldUs's declaration for why).
-    const std::vector<std::string> menuItems = {"RESUME", "ENTER AN IP ADDRESS", "EXIT"};
+    std::vector<std::string> menuItems = {"RESUME", "ENTER AN IP ADDRESS"};
+    if (settings) menuItems.push_back("SETTINGS");
+    menuItems.push_back("EXIT");
     bool menuActive = false;
+    // Settings before connecting. The mic rows are shown too: the device
+    // and mute choice are saved and used once a host with mic support
+    // connects.
+    bool settingsActive = false;
+    auto openSettings = [&]() {
+        menuActive = false;
+        settingsActive = true;
+        settings->open();
+    };
     int menuSelectedIndex = 0;
     uint64_t menuChordSinceUs = 0;
     bool menuChordFired = false;
@@ -122,6 +134,7 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
     while (true) {
         MenuAction action = MenuAction::None;
         bool enterAddressPressed = false;
+        bool openSettingsPressed = false;
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (handleGamepadHotplug(event, gamepad)) continue;
@@ -133,15 +146,23 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
                     // Mode/keyboard testing convenience) -- see the
                     // matching gate in main()'s inner loop for why.
                     if (!gamepad && event.key.key == SDLK_ESCAPE) {
-                        menuActive = !menuActive;
-                        menuSelectedIndex = 0;
+                        if (settingsActive) {
+                            settingsActive = false;
+                            menuActive = true;
+                        } else {
+                            menuActive = !menuActive;
+                            menuSelectedIndex = 0;
+                        }
                     } else {
                         action = menuActionForKey(event.key.key);
                     }
                     break;
                 case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-                    if (!menuActive && event.gbutton.button == SDL_GAMEPAD_BUTTON_NORTH) {
+                    if (!menuActive && !settingsActive && event.gbutton.button == SDL_GAMEPAD_BUTTON_NORTH) {
                         enterAddressPressed = true;
+                    } else if (settings && !menuActive && !settingsActive &&
+                               event.gbutton.button == SDL_GAMEPAD_BUTTON_WEST) {
+                        openSettingsPressed = true;
                     } else {
                         action = menuActionForButton(event.gbutton.button);
                     }
@@ -160,8 +181,12 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
         if (menuChordHeld) {
             if (menuChordSinceUs == 0) menuChordSinceUs = nowForChordUs;
             if (!menuChordFired && nowForChordUs - menuChordSinceUs >= kMenuChordHoldUs) {
-                menuActive = !menuActive;
-                menuSelectedIndex = 0;
+                if (settingsActive) {
+                    settingsActive = false;
+                } else {
+                    menuActive = !menuActive;
+                    menuSelectedIndex = 0;
+                }
                 menuChordFired = true;
             }
         } else {
@@ -170,7 +195,18 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
         }
         if (action == MenuAction::None) action = pollMenuStick(gamepad, stick, nowForChordUs);
 
-        if (menuActive) {
+        if (settingsActive) {
+            switch (settings->handle(action, true, nullptr)) {
+                case SettingsMenu::Result::Stay: break;
+                case SettingsMenu::Result::Close:
+                    settingsActive = false;
+                    menuActive = true;
+                    break;
+                case SettingsMenu::Result::RunSetupWizard:
+                    if (setupWizardRequested) *setupWizardRequested = true;
+                    return std::nullopt;
+            }
+        } else if (menuActive) {
             const int menuCount = static_cast<int>(menuItems.size());
             if (action == MenuAction::Up) menuSelectedIndex = (menuSelectedIndex + menuCount - 1) % menuCount;
             if (action == MenuAction::Down) menuSelectedIndex = (menuSelectedIndex + 1) % menuCount;
@@ -180,6 +216,7 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
                 if (picked == "EXIT") return std::nullopt;
                 menuActive = false;
                 if (picked == "ENTER AN IP ADDRESS") enterAddressPressed = true;
+                if (picked == "SETTINGS") openSettingsPressed = true;
             }
         } else if (action == MenuAction::Back && backRequested) {
             *backRequested = true;
@@ -194,6 +231,13 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
         if (enterAddressPressed) {
             if (auto host = enterAddress()) return host;
         }
+        if (openSettingsPressed) openSettings();
+
+        if (settingsActive) {
+            settings->render(renderer, true, -1.0f);
+            SDL_Delay(kPickerFrameIntervalMs);
+            continue;
+        }
 
         if (menuActive) {
             renderPauseMenu(renderer, menuItems, menuSelectedIndex);
@@ -204,9 +248,10 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
         const bool canGoBack = backRequested != nullptr;
         if (hosts.empty()) {
             const auto secondsSearching = static_cast<int>((nowForChordUs - openedAtUs) / 1'000'000);
-            renderDiscoverySearching(renderer, clientVersion, secondsSearching, canGoBack);
+            renderDiscoverySearching(renderer, clientVersion, secondsSearching, canGoBack, settings != nullptr);
         } else {
-            renderDiscoveryList(renderer, hosts, selectedIndex, clientVersion, lastHostAddress, canGoBack);
+            renderDiscoveryList(renderer, hosts, selectedIndex, clientVersion, lastHostAddress, canGoBack,
+                                settings != nullptr);
         }
 
         // Pull whatever the background scan thread has published so far --

@@ -66,6 +66,7 @@
 #include "dualdeck/touch_mapping.h"
 #include "net_client.h"
 #include "screens.h"
+#include "settings_menu.h"
 #include "setup_wizard.h"
 #include "wizard_state.h"
 
@@ -89,61 +90,6 @@ constexpr int kDiscoverOnlyTimeoutMs = 1500;
 uint64_t wallClockNowUs() {
     using namespace std::chrono;
     return static_cast<uint64_t>(duration_cast<microseconds>(system_clock::now().time_since_epoch()).count());
-}
-
-// runCaptureStdout <command>
-//
-// Real user report, 2026-08-02: the trackpad-experiment toggle
-// (docs/history.md's entry of the same date) originally only
-// lived in dualdeck-client.sh's outer shell menu, which is unreachable
-// from Gaming Mode (the Steam shortcut execs run-client.sh directly,
-// bypassing that menu). Moved into this Settings screen instead, which
-// shells out to configure-trackpad-experiment.sh (in the same directory
-// as this binary's CWD -- see below) -- the one place (shared with
-// dualdeck-client.sh's own menu) that actually knows how to check/
-// toggle it -- rather than reimplementing that logic
-// (Steam-restart-on-conflict safety, localconfig.vdf editing) in C++.
-// Relies on this binary always being launched with CWD ==
-// .../internal/ (true whenever launched via run-client.sh, which `cd`s
-// into internal/ and execs the binary without ever cd'ing back out --
-// see run-client.sh's own comment; this project has no existing
-// executable-path-resolution convention to fall back on for a
-// different launch method), so a bare "./configure-trackpad-
-// experiment.sh" -- NOT "./internal/configure-trackpad-experiment.sh"
-// -- is the correct relative path from here; real user report,
-// 2026-08-02, the "internal/" prefix silently pointed at a
-// nonexistent ".../internal/internal/..." path, so the toggle did
-// nothing at all.
-//
-// Blocking (popen() waits for the child to exit) -- acceptable here
-// since this only ever runs in direct response to a menu selection
-// (never per-frame; see settingsMenuItems()'s own comment on why the
-// *status* query is cached, not re-run every frame). Toggle calls below
-// always pass --no-restart: real user report, 2026-08-02, triggering
-// configure-trackpad-experiment.sh's normal Steam-restart handoff from
-// in here (this client is normally itself a Steam-launched process in
-// Gaming Mode) "seemingly crashe[d] Steam and restart[ed] it" -- killing
-// Steam out from under the game it's actively running it, rather than
-// something a standalone Desktop Mode menu action does before anything
-// is even launched. See that script's own comment on --no-restart.
-// Returns the child's stdout with trailing newlines stripped, or an
-// empty string if the command couldn't even be started (matching this
-// codebase's "degrade gracefully, log once, never crash" convention for
-// an unavailable optional resource elsewhere, e.g.
-// HostControlAdapter::isDeviceReady()).
-std::string runCaptureStdout(const std::string& command) {
-    FILE* pipe = popen(command.c_str(), "r");
-    if (!pipe) return "";
-    std::string result;
-    char buffer[256];
-    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-        result += buffer;
-    }
-    pclose(pipe);
-    while (!result.empty() && (result.back() == '\n' || result.back() == '\r')) {
-        result.pop_back();
-    }
-    return result;
 }
 
 // logGamepadTouchpadDiagnostics <gamepad>
@@ -370,6 +316,9 @@ int main(int argc, char** argv) {
     bool runWizardNow = !hostExplicit && !isSetupComplete(wizardStatePath);
     const std::string clientSettingsPath = defaultClientSettingsPath();
     ClientSettings clientSettings = loadClientSettings(clientSettingsPath);
+    // Opened from the in-session pause menu and from the host picker's
+    // menu, so settings can be changed before connecting.
+    SettingsMenu settingsMenu(clientSettings, clientSettingsPath, !hostExplicit);
 
     // L3+R3 "open menu" chord state -- see kMenuChordHoldUs's
     // declaration above for why a deliberate hold is required.
@@ -425,8 +374,8 @@ int main(int argc, char** argv) {
     // the full discovery picker, even to reconnect to the exact same
     // host) would see the old quality/codec keep streaming indefinitely,
     // indistinguishable from the setting simply not having saved.
-    // cycleVideoQuality()/toggleVideoCodec() below (settingsMenuItems())
-    // now set this flag -- but the actual reconnect only happens once the
+    // Changing either in Settings (SettingsMenu::takeReconnectRequest())
+    // now sets this flag -- but the actual reconnect only happens once the
     // user leaves the Settings screen (every settingsActive -> false
     // transition below checks it), not the instant either value changes,
     // so cycling through VIDEO QUALITY's presets or flipping VIDEO CODEC
@@ -451,6 +400,19 @@ int main(int argc, char** argv) {
         netConfig.videoPort = wizardConfig.videoPort;
         netConfig.audioPort = wizardConfig.audioPort;
         connectToWizardHost = true;
+    };
+    // RUN SETUP WIZARD in Settings. Unlike the automatic first-run case,
+    // cancelling it doesn't quit the whole app -- the next outer-loop
+    // iteration just shows the discovery screen, same as "CHANGE HOST".
+    auto runWizardFromSettings = [&]() {
+        logLine("[menu] launching setup wizard\n");
+        NetClientConfig wizardConfig;
+        const WizardOutcome outcome = runSetupWizard(window, renderer, texture, gamepad, discoveryPort, netConfig,
+                                                      discoveryStorePath, wizardConfig);
+        if (outcome == WizardOutcome::Completed) {
+            markSetupComplete(wizardStatePath);
+            adoptWizardHost(wizardConfig);
+        }
     };
     while (!quitApp) {
         if (runWizardNow) {
@@ -480,7 +442,7 @@ int main(int argc, char** argv) {
         // one as last time -- rather than silently reconnecting, so a
         // different HTPC is always one screen away.
         if (reconnectRequested) {
-            // A settings change (cycleVideoQuality()/toggleVideoCodec())
+            // A settings change (video quality or codec)
             // asked for a fresh connection to actually apply -- reuse
             // netConfig.hostAddress/ports exactly as the just-ended
             // connection had them (they're never cleared between outer-
@@ -497,7 +459,13 @@ int main(int argc, char** argv) {
             logLine("[wizard] connecting to \"%s\" chosen during setup\n", netConfig.hostAddress.c_str());
         } else if (!hostExplicit) {
             std::string lastHost = loadLastHost(discoveryStorePath).value_or("");
-            auto selected = discoverAndSelectHost(renderer, gamepad, discoveryPort, lastHost, netConfig.appVersion);
+            bool wizardFromSettings = false;
+            auto selected = discoverAndSelectHost(renderer, gamepad, discoveryPort, lastHost, netConfig.appVersion,
+                                                  nullptr, &settingsMenu, &wizardFromSettings);
+            if (wizardFromSettings) {
+                runWizardFromSettings();
+                continue;
+            }
             if (!selected) {
                 logLine("[discovery] cancelled before a host was chosen -- exiting\n");
                 quitApp = true;
@@ -534,9 +502,9 @@ int main(int argc, char** argv) {
         // Read fresh every time a NetClient is (re)constructed, not just
         // once at startup, so picking a new VIDEO QUALITY in Settings and
         // then reconnecting (CHANGE HOST, or a dropped connection) takes
-        // effect without needing to relaunch -- see settingsMenuItems()'s
-        // cycleVideoQuality() below for how clientSettings.videoQuality
-        // gets changed.
+        // effect without needing to relaunch -- see
+        // SettingsMenu::cycleVideoQuality() for how clientSettings.
+        // videoQuality gets changed.
         netConfig.videoQuality = static_cast<uint8_t>(clientSettings.videoQuality);
         // Same "read fresh on every (re)construction" reasoning as
         // videoQuality above -- see NetClientConfig::preferH264's own
@@ -783,8 +751,6 @@ int main(int argc, char** argv) {
         bool menuActive = false;
         int menuSelectedIndex = 0;
         bool settingsActive = false;
-        int settingsSelectedIndex = 0;
-        bool settingsSaveFailed = false;
 
         // Microphone capture (GitHub issue #2). Opened once the host's
         // HelloAck reports micSupported; reopened only when the user
@@ -792,162 +758,16 @@ int main(int argc, char** argv) {
         // -- see MicCapture::open()'s comment -- so the level meter
         // keeps reflecting real input while muted, distinct from "no
         // signal." Closed on disconnect (below) so a stale device isn't
-        // left open across host switches. Declared before
-        // settingsMenuItems/cycleMicDevice below since their `[&]`
-        // lambdas can only capture names already in scope.
+        // left open across host switches.
         dualdeck::client::MicCapture micCapture;
         std::vector<int16_t> micPendingSamples;
         uint32_t micSequence = 0;
         float micLevel = 0.0f;
 
-        // Labels the current ClientSettings::videoQuality value for the
-        // settings menu -- a handful of named presets rather than a raw
-        // number, matching this menu's cycle-through-fixed-choices style
-        // (MICROPHONE:/AUTO UPDATE ON LAUNCH: above) instead of a
-        // continuous slider this text UI has no widget for.
-        auto videoQualityLabel = [](int quality) -> std::string {
-            if (quality == 0) return "AUTO";
-            if (quality <= 40) return "LOW (SLOWEST LINKS)";
-            if (quality <= 65) return "MEDIUM";
-            if (quality <= 85) return "HIGH";
-            return "MAXIMUM (LARGEST)";
-        };
-        // Trackpad-as-native-input experiment (see runCaptureStdout's own
-        // comment). Cached, not queried live inside settingsMenuItems()
-        // below -- that lambda runs every frame while the Settings screen
-        // is open (it's called from the render loop, see this function's
-        // renderPauseMenu() call), and shelling out to a script on every
-        // single frame would be wasteful/janky. Instead this is refreshed
-        // only when Settings is actually opened (both the keyboard and
-        // gamepad "SETTINGS" handlers below) and right after toggling it,
-        // matching micLevel/micPendingSamples' own "updated at specific
-        // trigger points, not recomputed on every read" pattern above.
-        bool trackpadExperimentEnabled = false;
-        auto refreshTrackpadExperimentStatus = [&]() {
-            // NOT "./internal/configure-trackpad-experiment.sh" -- see
-            // runCaptureStdout's own comment on why this binary's CWD is
-            // already .../internal/, so that extra prefix silently
-            // pointed at a nonexistent path (real user report,
-            // 2026-08-02: the toggle appeared to do nothing at all).
-            trackpadExperimentEnabled =
-                runCaptureStdout("./configure-trackpad-experiment.sh --status 2>/dev/null") == "disabled";
-        };
-        auto toggleTrackpadExperiment = [&]() {
-            // --no-restart: see runCaptureStdout's own comment -- never
-            // let this trigger Steam restarting itself while this
-            // client is running as a live Steam-launched process.
-            runCaptureStdout(trackpadExperimentEnabled
-                                  ? "./configure-trackpad-experiment.sh --remove --no-restart 2>&1"
-                                  : "./configure-trackpad-experiment.sh --no-restart 2>&1");
-            // Re-queries rather than just flipping the cached bool --
-            // the underlying script writes with --force in --no-restart
-            // mode (see its own comment), so this should reliably
-            // reflect the just-requested state, but re-checking what's
-            // actually on disk is still cheap and more honest than
-            // assuming.
-            refreshTrackpadExperimentStatus();
-        };
-        auto settingsMenuItems = [&]() {
-            std::vector<std::string> items{
-                std::string("AUTO UPDATE ON LAUNCH: ") +
-                    (clientSettings.autoUpdateOnLaunch ? "ON" : "OFF"),
-                std::string("VIDEO QUALITY: ") + videoQualityLabel(clientSettings.videoQuality),
-                std::string("TRACKPAD AS NATIVE INPUT (EXPERIMENTAL): ") +
-                    (trackpadExperimentEnabled ? "ON" : "OFF"),
-                std::string("MIRROR HOST SCREEN (EXPERIMENTAL): ") +
-                    (clientSettings.mirrorHostScreen ? "ON" : "OFF"),
-                std::string("VIDEO CODEC: ") +
-                    (clientSettings.videoCodecAuto                 ? "AUTO"
-                     : clientSettings.videoCodecPyroWaveExperimental ? "PYROWAVE"
-                     : clientSettings.videoCodecH264Experimental     ? "H264"
-                                                                     : "JPEG"),
-                std::string("DEBUG OVERLAY: ") + (clientSettings.debugOverlayEnabled ? "ON" : "OFF"),
-            };
-            if (!hostExplicit) items.push_back("RUN SETUP WIZARD");
-            if (net.hostMicSupported()) {
-                std::string micLabel =
-                    clientSettings.micDeviceName.empty() ? "SYSTEM DEFAULT" : clientSettings.micDeviceName;
-                items.push_back(std::string("MICROPHONE: ") + micLabel);
-                items.push_back(std::string("MIC: ") + (clientSettings.micMuted ? "MUTED" : "ON"));
-            }
-            items.push_back("BACK");
-            return items;
-        };
-        // Cycles clientSettings.videoQuality through a fixed set of
-        // presets (see videoQualityLabel above), wrapping back to AUTO.
-        // Only takes effect on the next connection (see netConfig.
-        // videoQuality's own comment above, near NetClient's
-        // construction) -- there's no packet type for changing an
-        // already-connected session's compression quality. Sets
-        // reconnectRequested so leaving Settings afterward actually gets
-        // that next connection, instead of silently keeping the old
-        // quality until some unrelated later reconnect -- see
-        // reconnectRequested's own comment, near the outer loop, for the
-        // real user report this fixes and why the reconnect itself is
-        // deferred to Settings-exit rather than firing immediately here.
-        auto cycleVideoQuality = [&](int direction) {
-            static constexpr int kPresets[] = {0, 40, 65, 85, 100};
-            constexpr int kPresetCount = static_cast<int>(sizeof(kPresets) / sizeof(kPresets[0]));
-            int currentIndex = 0;
-            for (int i = 0; i < kPresetCount; ++i) {
-                if (kPresets[i] == clientSettings.videoQuality) {
-                    currentIndex = i;
-                    break;
-                }
-            }
-            clientSettings.videoQuality = kPresets[(currentIndex + kPresetCount + direction) % kPresetCount];
-            settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
-            reconnectRequested = true;
-        };
-        // Cycles JPEG -> H264 -> PYROWAVE -> JPEG across
-        // clientSettings.videoCodecH264Experimental/
-        // videoCodecPyroWaveExperimental (see the latter's own comment
-        // for why it's two flags). Same "only takes effect on the next
-        // connection" limitation and the same reconnectRequested fix as
-        // cycleVideoQuality() above -- codec preference is negotiated
-        // once, in Hello, same as videoQuality.
-        auto toggleVideoCodec = [&](int direction) {
-            // 0 = AUTO, 1 = JPEG, 2 = H264, 3 = PYROWAVE.
-            int current = clientSettings.videoCodecAuto                   ? 0
-                          : clientSettings.videoCodecPyroWaveExperimental ? 3
-                          : clientSettings.videoCodecH264Experimental     ? 2
-                                                                          : 1;
-            int next = (current + 4 + direction) % 4;
-            clientSettings.videoCodecAuto = next == 0;
-            clientSettings.videoCodecH264Experimental = next == 2;
-            clientSettings.videoCodecPyroWaveExperimental = next == 3;
-            settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
-            reconnectRequested = true;
-        };
-        // Cycles clientSettings.micDeviceName to the next enumerated
-        // recording device (wrapping back to "SYSTEM DEFAULT"), saves,
-        // and reopens capture on the new device. Shared by the keyboard
-        // and gamepad settings handlers below, same as the inline
-        // AUTO UPDATE ON LAUNCH toggle they already duplicate.
-        auto cycleMicDevice = [&](int direction) {
-            auto devices = dualdeck::client::listMicDevices();
-            size_t currentIndex = 0;
-            for (size_t i = 0; i < devices.size(); ++i) {
-                if (devices[i].name == clientSettings.micDeviceName) {
-                    currentIndex = i;
-                    break;
-                }
-            }
-            size_t nextIndex = (direction < 0 ? currentIndex + devices.size() - 1 : currentIndex + 1) %
-                               devices.size();
-            // "SYSTEM DEFAULT" is stored as an empty name (see
-            // ClientSettings::micDeviceName's comment), never the literal
-            // label -- so a later SDL enumeration change can't strand a
-            // saved setting that no longer matches anything.
-            clientSettings.micDeviceName =
-                devices[nextIndex].id == SDL_AUDIO_DEVICE_DEFAULT_RECORDING ? "" : devices[nextIndex].name;
-            settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
-            micCapture.open(clientSettings.micDeviceName);
-        };
         bool exitEmulationConfirm = false;
         int exitEmulationSelectedIndex = 0;
-        // A lambda re-evaluated at every use site (same pattern as
-        // settingsMenuItems above), not a fixed const vector -- the
+        // A lambda re-evaluated at every use site, not a fixed const
+        // vector -- the
         // middle item names whichever adapter is actually connected
         // (e.g. "EXIT AZAHAR ENTIRELY"), which used to be hardcoded to
         // "EXIT MELONDS ENTIRELY" even when connected to a non-melonDS
@@ -981,37 +801,9 @@ int main(int argc, char** argv) {
         auto closeSettings = [&](bool reopenMenu) {
             settingsActive = false;
             menuActive = reopenMenu;
-            if (reconnectRequested) runningInner = false;
-        };
-        // direction: +1 / -1 from D-pad right / left, 0 from A. A steps
-        // a value forward, the same as right.
-        auto applySetting = [&](const std::string& picked, int direction) {
-            const int step = direction == 0 ? 1 : direction;
-            if (picked.rfind("AUTO UPDATE ON LAUNCH:", 0) == 0) {
-                clientSettings.autoUpdateOnLaunch = !clientSettings.autoUpdateOnLaunch;
-                settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
-            } else if (picked.rfind("VIDEO QUALITY:", 0) == 0) {
-                cycleVideoQuality(step);
-            } else if (picked.rfind("TRACKPAD AS NATIVE INPUT", 0) == 0) {
-                toggleTrackpadExperiment();
-            } else if (picked.rfind("MIRROR HOST SCREEN", 0) == 0) {
-                clientSettings.mirrorHostScreen = !clientSettings.mirrorHostScreen;
-                settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
-            } else if (picked.rfind("VIDEO CODEC", 0) == 0) {
-                toggleVideoCodec(step);
-            } else if (picked.rfind("DEBUG OVERLAY:", 0) == 0) {
-                clientSettings.debugOverlayEnabled = !clientSettings.debugOverlayEnabled;
-                settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
-            } else if (picked.rfind("MICROPHONE:", 0) == 0) {
-                cycleMicDevice(step);
-            } else if (picked.rfind("MIC:", 0) == 0) {
-                clientSettings.micMuted = !clientSettings.micMuted;
-                settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
-            } else if (direction == 0 && picked == "RUN SETUP WIZARD") {
-                setupWizardRequested = true;
+            if (settingsMenu.takeReconnectRequest()) {
+                reconnectRequested = true;
                 runningInner = false;
-            } else if (direction == 0 && picked == "BACK") {
-                closeSettings(true);
             }
         };
         auto moveSelection = [](int& index, int count, MenuAction action) {
@@ -1025,21 +817,13 @@ int main(int argc, char** argv) {
         auto handleMenuAction = [&](MenuAction action) {
             if (action == MenuAction::None) return;
             if (settingsActive) {
-                const std::vector<std::string> items = settingsMenuItems();
-                // The list can shrink while open (the mic rows go away if
-                // the host drops), so keep the selection in range.
-                settingsSelectedIndex = std::min(settingsSelectedIndex, static_cast<int>(items.size()) - 1);
-                const std::string& picked = items[static_cast<size_t>(settingsSelectedIndex)];
-                switch (action) {
-                    case MenuAction::Up:
-                    case MenuAction::Down:
-                        moveSelection(settingsSelectedIndex, static_cast<int>(items.size()), action);
+                switch (settingsMenu.handle(action, net.hostMicSupported(), &micCapture)) {
+                    case SettingsMenu::Result::Stay: break;
+                    case SettingsMenu::Result::Close: closeSettings(true); break;
+                    case SettingsMenu::Result::RunSetupWizard:
+                        setupWizardRequested = true;
+                        runningInner = false;
                         break;
-                    case MenuAction::Left: applySetting(picked, -1); break;
-                    case MenuAction::Right: applySetting(picked, 1); break;
-                    case MenuAction::Select: applySetting(picked, 0); break;
-                    case MenuAction::Back: closeSettings(true); break;
-                    case MenuAction::None: break;
                 }
             } else if (menuActive && exitEmulationConfirm) {
                 const std::vector<std::string> items = exitEmulationItems();
@@ -1074,8 +858,7 @@ int main(int argc, char** argv) {
                     } else if (picked == "SETTINGS") {
                         menuActive = false;
                         settingsActive = true;
-                        settingsSelectedIndex = 0;
-                        refreshTrackpadExperimentStatus();
+                        settingsMenu.open();
                     } else if (picked == "EXIT EMULATION") {
                         exitEmulationConfirm = true;
                         exitEmulationSelectedIndex = 0;
@@ -1456,10 +1239,7 @@ int main(int argc, char** argv) {
             }
 
             if (settingsActive) {
-                renderPauseMenu(renderer, settingsMenuItems(), settingsSelectedIndex, "SETTINGS",
-                                settingsSaveFailed ? "COULD NOT SAVE SETTINGS" : "",
-                                net.hostMicSupported() ? micLevel : -1.0f, "",
-                                {{"D-PAD", "MOVE"}, {"LEFT/RIGHT", "CHANGE"}, {"A", "SELECT"}, {"B", "BACK"}});
+                settingsMenu.render(renderer, net.hostMicSupported(), net.hostMicSupported() ? micLevel : -1.0f);
                 menuWasShown = true;
                 continue;
             }
@@ -1762,20 +1542,7 @@ int main(int argc, char** argv) {
             logLine("[menu] changing host -- returning to discovery\n");
         }
 
-        if (setupWizardRequested) {
-            logLine("[menu] launching setup wizard\n");
-            NetClientConfig wizardConfig;
-            const WizardOutcome outcome = runSetupWizard(window, renderer, texture, gamepad, discoveryPort,
-                                                          netConfig, discoveryStorePath, wizardConfig);
-            // Unlike the automatic first-run case, a cancelled re-invocation
-            // from this menu should not quit the whole app -- just fall
-            // through to the normal discovery screen on the next iteration,
-            // same as "CHANGE HOST".
-            if (outcome == WizardOutcome::Completed) {
-                markSetupComplete(wizardStatePath);
-                adoptWizardHost(wizardConfig);
-            }
-        }
+        if (setupWizardRequested) runWizardFromSettings();
     }
 
     if (gamepad) SDL_CloseGamepad(gamepad);
