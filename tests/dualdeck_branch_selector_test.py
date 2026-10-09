@@ -313,6 +313,7 @@ dualdeck_branch_status_line
         write_exec(internal_dir / "install-branch.sh",
                    (PACKAGING / "host" / "internal" / "install-branch.sh").read_text())
         shutil.copy(BRANCH_LIB, internal_dir / "dualdeck_branch.sh")
+        shutil.copy(REPO_ROOT / "scripts" / "lib" / "release_install.sh", internal_dir / "release_install.sh")
         for name in ("apply-update.sh", "install-steam-shortcut.sh", "uninstall-steam-shortcut.sh",
                      "uninstall-host-control-daemon.sh", "reconfigure-cemu-controls.sh",
                      "launch-host.sh", "run-host-azahar.sh", "run-host-cemu.sh",

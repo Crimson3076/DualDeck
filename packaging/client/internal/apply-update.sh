@@ -29,19 +29,9 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 error_log="${HOME}/.config/dualdeck-client/install.log"
-on_error() {
-    local exit_code="$1" line_no="$2" failing_cmd="$3"
-    mkdir -p "$(dirname "${error_log}")"
-    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") apply-update.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
-    if command -v kdialog >/dev/null 2>&1; then
-        kdialog --title "DualDeck" --error "Updating failed: ${failing_cmd}
-(exit code ${exit_code})
-
-Details logged to:
-${error_log}" 2>/dev/null || true
-    fi
-}
-trap 'on_error "$?" "${LINENO}" "${BASH_COMMAND}"' ERR
+# shellcheck source=scripts/lib/release_install.sh
+source ./release_install.sh
+dualdeck_trap_errors "DualDeck" "Updating failed"
 
 if ! command -v curl >/dev/null 2>&1; then
     echo "error: curl is required to download updates -- install it, or download" >&2
@@ -50,25 +40,13 @@ if ! command -v curl >/dev/null 2>&1; then
 fi
 
 repo="Crimson3076/DualDeck"
-download_url="https://github.com/${repo}/releases/latest/download/melonds-remote-linux-x86_64.tar.gz"
+download_base="https://github.com/${repo}/releases/latest/download"
 
 work_dir="$(mktemp -d)"
 trap 'rm -rf "${work_dir}"' EXIT
 
 echo "Downloading the latest release..."
-curl --proto =https -fsSL --max-time 180 -o "${work_dir}/release.tar.gz" "${download_url}"
-
-echo "Extracting..."
-tar xzf "${work_dir}/release.tar.gz" -C "${work_dir}"
-
-extracted_dir=""
-for candidate in "${work_dir}"/melonds-remote-*; do
-    [[ -d "${candidate}" ]] && extracted_dir="${candidate}" && break
-done
-if [[ -z "${extracted_dir}" ]]; then
-    echo "error: couldn't find the extracted release directory" >&2
-    exit 1
-fi
+dualdeck_fetch_release "${download_base}" "${work_dir}" 0
 
 echo "Installing..."
 # Not exec'd: the work_dir EXIT trap above must still fire to clean up

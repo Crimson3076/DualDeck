@@ -34,20 +34,9 @@ source ./steam_restart_helper.sh
 # Bazzite are both KDE Plasma), pops up a graphical error dialog via
 # kdialog.
 error_log="${HOME}/.config/dualdeck-client/install.log"
-on_error() {
-    local exit_code="$1" line_no="$2" failing_cmd="$3"
-    mkdir -p "$(dirname "${error_log}")"
-    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") install-steam-shortcut.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
-    if command -v kdialog >/dev/null 2>&1; then
-        kdialog --title "DualDeck" \
-            --error "Installing the Steam shortcut failed: ${failing_cmd}
-(exit code ${exit_code})
-
-Details logged to:
-${error_log}" 2>/dev/null || true
-    fi
-}
-trap 'on_error "$?" "${LINENO}" "${BASH_COMMAND}"' ERR
+# shellcheck source=scripts/lib/release_install.sh
+source ./release_install.sh
+dualdeck_trap_errors "DualDeck" "Installing the Steam shortcut failed"
 
 launch_options=""
 extra_args=()
@@ -111,7 +100,7 @@ run_steam_shortcut_with_restart ./steam_shortcut.py "${error_log}" \
     --launch-options "${launch_options}" \
     "${extra_args[@]}" && shortcut_exit=0 || shortcut_exit=$?
 if [[ "${shortcut_exit}" -ne 0 ]]; then
-    on_error "${shortcut_exit}" "${LINENO}" "steam_shortcut.py"
+    dualdeck_report_error "${shortcut_exit}" "${LINENO}" "steam_shortcut.py"
     exit "${shortcut_exit}"
 fi
 

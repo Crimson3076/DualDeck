@@ -12,19 +12,9 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 error_log="${HOME}/.config/dualdeck-client/install.log"
-on_error() {
-    local exit_code="$1" line_no="$2" failing_cmd="$3"
-    mkdir -p "$(dirname "${error_log}")"
-    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") dualdeck-client.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
-    if command -v kdialog >/dev/null 2>&1; then
-        kdialog --title "DualDeck" --error "Something went wrong: ${failing_cmd}
-(exit code ${exit_code})
-
-Details logged to:
-${error_log}" 2>/dev/null || true
-    fi
-}
-trap 'on_error "$?" "${LINENO}" "${BASH_COMMAND}"' ERR
+# shellcheck source=scripts/lib/release_install.sh
+source ./internal/release_install.sh
+dualdeck_trap_errors "DualDeck" "Something went wrong"
 
 # Keep in sync with the same constant in internal/install-steam-shortcut.sh,
 # internal/uninstall-steam-shortcut.sh, internal/apply-update.sh, and
@@ -209,7 +199,7 @@ choose_action() {
 # a loop now: only the top-level Cancel/Exit (the `*` branch below)
 # breaks out -- a completed action or a failed one (each internal/
 # script shows its own error dialog and returns non-zero rather than
-# propagating a set -e exit -- see on_error's ERR trap above, which only
+# propagating a set -e exit -- see the dualdeck_trap_errors ERR trap above, which only
 # fires for a genuinely unexpected failure) falls through to the bottom
 # of the loop and redisplays this same menu.
 while true; do

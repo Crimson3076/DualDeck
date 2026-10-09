@@ -27,20 +27,9 @@ set -euo pipefail
 # Bazzite are both KDE Plasma), pops up a graphical error dialog via
 # kdialog.
 error_log="${HOME}/.config/dualdeck-client/install.log"
-on_error() {
-    local exit_code="$1" line_no="$2" failing_cmd="$3"
-    mkdir -p "$(dirname "${error_log}")"
-    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") uninstall-steam-shortcut.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
-    if command -v kdialog >/dev/null 2>&1; then
-        kdialog --title "DualDeck" \
-            --error "Removing the Steam shortcut failed: ${failing_cmd}
-(exit code ${exit_code})
-
-Details logged to:
-${error_log}" 2>/dev/null || true
-    fi
-}
-trap 'on_error "$?" "${LINENO}" "${BASH_COMMAND}"' ERR
+# shellcheck source=scripts/lib/release_install.sh
+source "$(dirname "${BASH_SOURCE[0]}")/release_install.sh"
+dualdeck_trap_errors "DualDeck" "Removing the Steam shortcut failed"
 
 # Keep in sync with the same constant in install-steam-shortcut.sh and
 # apply-update.sh.

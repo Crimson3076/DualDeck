@@ -552,16 +552,15 @@ pack_appimage "${cemu_staged}" "${out_dir}/dualdeck-cemu-patched-linux-x86_64.Ap
     cemu "${cemu_apprun}" "${repo_build}/host/remote-server/dualdeck-host-service" \
     "${cemu_bin_dir}/resources:${cemu_bin_dir}/gameProfiles"
 
-cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/host/internal/ensure-packages.sh"
-cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/host/internal/steam_shortcut.py"
-cp "${repo_root}/scripts/lib/steam_restart_helper.sh" "${pkg_dir}/host/internal/steam_restart_helper.sh"
-cp "${repo_root}/scripts/lib/host_firewall.sh" "${pkg_dir}/host/internal/host_firewall.sh"
-cp "${repo_root}/scripts/lib/adapter_socket_probe.sh" "${pkg_dir}/host/internal/adapter_socket_probe.sh"
-cp "${repo_root}/scripts/lib/pipewire_env.sh" "${pkg_dir}/host/internal/pipewire_env.sh"
-# Advanced -> Installation branch (shared discovery/cache/resolve logic
-# with client/internal/dualdeck_branch.sh below -- identical file, one
-# implementation, see that copy's own comment).
-cp "${repo_root}/scripts/lib/dualdeck_branch.sh" "${pkg_dir}/host/internal/dualdeck_branch.sh"
+# Shared scripts/lib/ helpers each side's internal/ scripts source or
+# run. Bundled per side (not shared from a top-level folder) so host/
+# and client/ each stay self-contained once installed. dualdeck_branch.sh
+# backs Advanced -> Installation branch; release_install.sh holds the
+# error trap and download/verify/extract steps.
+for lib in ensure-packages.sh steam_shortcut.py steam_restart_helper.sh dualdeck_branch.sh release_install.sh \
+           host_firewall.sh adapter_socket_probe.sh pipewire_env.sh; do
+    cp "${repo_root}/scripts/lib/${lib}" "${pkg_dir}/host/internal/${lib}"
+done
 
 cp "${repo_build}/client/dualdeck-client" "${pkg_dir}/client/dualdeck-client"
 chmod +x "${pkg_dir}/client/dualdeck-client"
@@ -593,174 +592,20 @@ bundle_library_dependencies "${pkg_dir}/client/dualdeck-client" "${pkg_dir}/clie
 # happened to resolve.
 cp -a "${sdl3_install}"/lib/libSDL3.so* "${pkg_dir}/client/lib/"
 
-cp "${repo_root}/scripts/lib/ensure-packages.sh" "${pkg_dir}/client/internal/ensure-packages.sh"
-cp "${repo_root}/scripts/lib/steam_shortcut.py" "${pkg_dir}/client/internal/steam_shortcut.py"
-cp "${repo_root}/scripts/lib/steam_restart_helper.sh" "${pkg_dir}/client/internal/steam_restart_helper.sh"
-# Advanced -> Installation branch -- same file as host/internal/
-# dualdeck_branch.sh above, one shared implementation for both sides
-# (see that file's own header comment for why).
-cp "${repo_root}/scripts/lib/dualdeck_branch.sh" "${pkg_dir}/client/internal/dualdeck_branch.sh"
-# Opt-in touchpad-as-native-input experiment (client-only -- this is
-# about the Deck's own trackpads, not anything host-side) -- see
-# steam_input_config.py's own module docstring for the real research
-# behind it.
-cp "${repo_root}/scripts/lib/steam_input_config.py" "${pkg_dir}/client/internal/steam_input_config.py"
+# Same shared helpers as host/internal/ above, plus steam_input_config.py
+# for the client-only touchpad-as-native-input experiment (see its module
+# docstring).
+for lib in ensure-packages.sh steam_shortcut.py steam_restart_helper.sh dualdeck_branch.sh release_install.sh \
+           steam_input_config.py; do
+    cp "${repo_root}/scripts/lib/${lib}" "${pkg_dir}/client/internal/${lib}"
+done
 
-# Real user report, 2026-08-02: the trackpad-experiment toggle only
-# existed in dualdeck-client.sh's outer shell menu, but that menu is
-# unreachable from Gaming Mode -- install-steam-shortcut.sh points the
-# Steam shortcut's Exe straight at run-client.sh (see its own comment
-# just below), never at this menu script, so the only way to reach it
-# was double-clicking dualdeck-client.sh manually in Desktop Mode. The
-# user (reasonably) expected it in the client's own in-app Settings
-# screen instead, which the Steam shortcut always reaches. This thin
-# wrapper is the one place that knows how to check/toggle the
-# experiment (sourcing steam_restart_helper.sh for the same
-# Steam-caches-this-file-in-memory safety steam_shortcut.py's own writes
-# already have), so both dualdeck-client.sh's menu AND main.cpp's
-# Settings screen (which shells out to this, not to steam_input_config.py
-# directly, since it's a plain script call away rather than needing
-# main.cpp to know steam_restart_helper.sh's bash-specific machinery)
-# stay in sync with exactly one implementation.
-cp "${repo_root}/packaging/client/internal/configure-trackpad-experiment.sh" "${pkg_dir}/client/internal/configure-trackpad-experiment.sh"
-chmod +x "${pkg_dir}/client/internal/configure-trackpad-experiment.sh"
-
-cp "${repo_root}/packaging/client/internal/run-client.sh" "${pkg_dir}/client/internal/run-client.sh"
-chmod +x "${pkg_dir}/client/internal/run-client.sh"
-
-cp "${repo_root}/packaging/client/internal/install-steam-shortcut.sh" "${pkg_dir}/client/internal/install-steam-shortcut.sh"
-chmod +x "${pkg_dir}/client/internal/install-steam-shortcut.sh"
-
-cp "${repo_root}/packaging/client/internal/uninstall-steam-shortcut.sh" "${pkg_dir}/client/internal/uninstall-steam-shortcut.sh"
-chmod +x "${pkg_dir}/client/internal/uninstall-steam-shortcut.sh"
-
-cp "${repo_root}/packaging/client/internal/apply-update.sh" "${pkg_dir}/client/internal/apply-update.sh"
-chmod +x "${pkg_dir}/client/internal/apply-update.sh"
-
-cp "${repo_root}/packaging/client/internal/install-branch.sh" "${pkg_dir}/client/internal/install-branch.sh"
-chmod +x "${pkg_dir}/client/internal/install-branch.sh"
-
-cp "${repo_root}/packaging/client/dualdeck-client.sh" "${pkg_dir}/client/dualdeck-client.sh"
-chmod +x "${pkg_dir}/client/dualdeck-client.sh"
-
-cp "${repo_root}/packaging/host/internal/run-host.sh" "${pkg_dir}/host/internal/run-host.sh"
-chmod +x "${pkg_dir}/host/internal/run-host.sh"
-
-cp "${repo_root}/packaging/host/internal/run-host-azahar.sh" "${pkg_dir}/host/internal/run-host-azahar.sh"
-chmod +x "${pkg_dir}/host/internal/run-host-azahar.sh"
-
-cp "${repo_root}/packaging/host/internal/run-host-cemu.sh" "${pkg_dir}/host/internal/run-host-cemu.sh"
-chmod +x "${pkg_dir}/host/internal/run-host-cemu.sh"
-
-cp "${repo_root}/packaging/host/internal/launch-custom-emulator.sh" "${pkg_dir}/host/internal/launch-custom-emulator.sh"
-chmod +x "${pkg_dir}/host/internal/launch-custom-emulator.sh"
-
-cp "${repo_root}/packaging/host/internal/launch-emudeck-melonds.sh" "${pkg_dir}/host/internal/launch-emudeck-melonds.sh"
-chmod +x "${pkg_dir}/host/internal/launch-emudeck-melonds.sh"
-
-cp "${repo_root}/packaging/host/internal/launch-emudeck-azahar.sh" "${pkg_dir}/host/internal/launch-emudeck-azahar.sh"
-chmod +x "${pkg_dir}/host/internal/launch-emudeck-azahar.sh"
-
-cp "${repo_root}/packaging/host/internal/launch-emudeck-integration.sh" "${pkg_dir}/host/internal/launch-emudeck-integration.sh"
-chmod +x "${pkg_dir}/host/internal/launch-emudeck-integration.sh"
-
-cp "${repo_root}/packaging/host/internal/install-host-distrobox.sh" "${pkg_dir}/host/internal/install-host-distrobox.sh"
-chmod +x "${pkg_dir}/host/internal/install-host-distrobox.sh"
-
-# Real user request, 2026-08-01: "Host control should be a constant
-# server from the host, being toggled via the eventual decky menu
-# plugin or the DualDeck Host GUI. Steam should not keep registering it
-# as a game running in the background." Today's "Host control only"
-# menu choice (run-host.sh's DUALDECK_HOST_CONTROL branch) execs
-# straight into dualdeck-host-service as the literal foreground process
-# of whatever launched it (a Steam shortcut, or this menu script) --
-# Steam's own "is this game still running" tracking watches that exact
-# process, with no separate PID/session layer to decouple from. A
-# systemd --user service is a completely independent process tree Steam
-# never launches and never tracks at all, closing that gap directly
-# rather than trying to make Steam stop noticing a process it's already
-# watching.
-cp "${repo_root}/packaging/host/internal/host-control-daemon.sh" "${pkg_dir}/host/internal/host-control-daemon.sh"
-chmod +x "${pkg_dir}/host/internal/host-control-daemon.sh"
-
-cp "${repo_root}/packaging/host/internal/install-host-control-daemon.sh" "${pkg_dir}/host/internal/install-host-control-daemon.sh"
-chmod +x "${pkg_dir}/host/internal/install-host-control-daemon.sh"
-
-cp "${repo_root}/packaging/host/internal/uninstall-host-control-daemon.sh" "${pkg_dir}/host/internal/uninstall-host-control-daemon.sh"
-chmod +x "${pkg_dir}/host/internal/uninstall-host-control-daemon.sh"
-
-cp "${repo_root}/packaging/host/internal/uninstall-host-distrobox.sh" "${pkg_dir}/host/internal/uninstall-host-distrobox.sh"
-chmod +x "${pkg_dir}/host/internal/uninstall-host-distrobox.sh"
-
-cp "${repo_root}/packaging/host/internal/launch-host.sh" "${pkg_dir}/host/internal/launch-host.sh"
-chmod +x "${pkg_dir}/host/internal/launch-host.sh"
-
-# Real user report, 2026-08-27: "controller 1 does not have any controls
-# mapped when opening [Cemu], and I need to manually add the controller
-# and API." Root-caused by direct inspection of real Cemu v2.6 source
-# (scripts/lib/pinned_commits.sh's pinned CEMU_COMMIT, cloned fresh to
-# confirm rather than guessed) against host/cemu-patches/README.md's own
-# "Silent VPAD-registration failure" entry: CemuAdapter's constructor
-# (host/cemu-patches/0001-remote-server-integration.patch) only auto-
-# wires DualDeck's remote controller onto VPAD player 1 if
-# InputManager::instance().get_vpad_controller(0) returns non-null --
-# which requires Cemu's own persisted controller profile for player 1
-# (controllerProfiles/controller0.xml, src/input/InputManager.cpp) to
-# already declare type "Wii U GamePad". Normally only Cemu's own Input
-# Settings GUI ever creates that file; a fresh Cemu install (or
-# DualDeck's bundled one, which has never been through that GUI at all)
-# has none, so the auto-wiring silently has nothing to attach to.
-#
-# Writes that file directly, in exactly the minimal shape Cemu's own
-# InputManager::migrate_config() produces for a "just declare the type,
-# no physical controller" profile (confirmed against that real function's
-# source, not guessed): a bare <type>Wii U GamePad</type>, no
-# <controller> child at all. That's sufficient on its own -- CemuAdapter's
-# existing runtime code does the actual button wiring the moment it finds
-# this slot exists; this script's only job is making sure the slot
-# exists in the first place.
-#
-# Deliberately never touches a profile that's already type "Wii U
-# GamePad", even one with real <controller> mappings from an actual
-# controller plugged into this host directly (e.g. local co-op) --
-# CemuAdapter's add_controller() call only ever adds the remote
-# controller alongside whatever's already mapped there, it never needs
-# this script to have cleared anything out first.
-cp "${repo_root}/packaging/host/internal/reconfigure-cemu-controls.sh" "${pkg_dir}/host/internal/reconfigure-cemu-controls.sh"
-chmod +x "${pkg_dir}/host/internal/reconfigure-cemu-controls.sh"
-
-cp "${repo_root}/packaging/host/dualdeck-host.sh" "${pkg_dir}/host/dualdeck-host.sh"
-chmod +x "${pkg_dir}/host/dualdeck-host.sh"
-
-cp "${repo_root}/packaging/host/internal/apply-update.sh" "${pkg_dir}/host/internal/apply-update.sh"
-chmod +x "${pkg_dir}/host/internal/apply-update.sh"
-
-cp "${repo_root}/packaging/host/internal/install-branch.sh" "${pkg_dir}/host/internal/install-branch.sh"
-chmod +x "${pkg_dir}/host/internal/install-branch.sh"
-
-cp "${repo_root}/packaging/host/internal/install-steam-shortcut.sh" "${pkg_dir}/host/internal/install-steam-shortcut.sh"
-chmod +x "${pkg_dir}/host/internal/install-steam-shortcut.sh"
-
-# Compatibility shim: every release before this host/internal/
-# restructuring had install-steam-shortcut.sh directly at host/, and
-# those releases' own host/apply-update.sh hardcodes exactly that path
-# when it downloads and invokes a newer release's copy (see
-# docs/history.md). That already-installed
-# old script can't be changed retroactively, so a real user on one of
-# those versions hit exactly this: "Check for updates" downloads this
-# new, restructured release fine, then fails with exit 127 trying to
-# run a file that no longer exists at the old flat path. This shim
-# forwards to the real (current) location so updating *from* one of
-# those older releases keeps working. New installs/updates never
-# reach this file directly -- dualdeck-host.sh and apply-update.sh
-# both already call internal/install-steam-shortcut.sh -- so this exists
-# purely for that one-time upgrade path and is safe to delete once no
-# supported release still depends on it.
-cp "${repo_root}/packaging/host/install-steam-shortcut.sh" "${pkg_dir}/host/install-steam-shortcut.sh"
-chmod +x "${pkg_dir}/host/install-steam-shortcut.sh"
-
-cp "${repo_root}/packaging/host/internal/uninstall-steam-shortcut.sh" "${pkg_dir}/host/internal/uninstall-steam-shortcut.sh"
-chmod +x "${pkg_dir}/host/internal/uninstall-steam-shortcut.sh"
+# packaging/ mirrors the release layout, so it's copied as whole trees.
+cp -a "${repo_root}/packaging/host/." "${pkg_dir}/host/"
+cp -a "${repo_root}/packaging/client/." "${pkg_dir}/client/"
+cp "${repo_root}/packaging/check-for-updates.sh" "${pkg_dir}/check-for-updates.sh"
+find "${pkg_dir}/host" "${pkg_dir}/client" -name '*.sh' -exec chmod +x {} +
+chmod +x "${pkg_dir}/check-for-updates.sh"
 
 cp "${repo_root}/docs/building.md" "${repo_root}/docs/steam-deck-setup.md" \
    "${repo_root}/docs/bazzite-host-setup.md" "${repo_root}/docs/troubleshooting.md" \
@@ -769,9 +614,6 @@ cp "${repo_root}/docs/building.md" "${repo_root}/docs/steam-deck-setup.md" \
    "${pkg_dir}/docs/"
 cp "${repo_root}/LICENSE" "${pkg_dir}/"
 cp "${repo_root}/docs/release-readme.md" "${pkg_dir}/README.md"
-
-cp "${repo_root}/packaging/check-for-updates.sh" "${pkg_dir}/check-for-updates.sh"
-chmod +x "${pkg_dir}/check-for-updates.sh"
 
 commit_full="$(cd "${repo_root}" && git rev-parse HEAD)"
 built_at="$(date -u +"%Y-%m-%d %H:%M UTC")"

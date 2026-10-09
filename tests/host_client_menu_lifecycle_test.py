@@ -66,6 +66,7 @@ def build_host_harness(root: Path, failing: set[str] = frozenset()) -> Path:
     # that), so an unreachable API host just makes every call fail fast
     # and cleanly rather than actually reaching GitHub.
     shutil.copy(REPO_ROOT / "scripts" / "lib" / "dualdeck_branch.sh", internal_dir / "dualdeck_branch.sh")
+    shutil.copy(REPO_ROOT / "scripts" / "lib" / "release_install.sh", internal_dir / "release_install.sh")
 
     return host_dir
 
@@ -94,6 +95,7 @@ def build_client_harness(root: Path, failing: set[str] = frozenset()) -> Path:
                "echo \"stub: configure-trackpad-experiment.sh called with: $*\" >&2\nexit 0\n")
 
     shutil.copy(REPO_ROOT / "scripts" / "lib" / "dualdeck_branch.sh", internal_dir / "dualdeck_branch.sh")
+    shutil.copy(REPO_ROOT / "scripts" / "lib" / "release_install.sh", internal_dir / "release_install.sh")
     # steam_input_config.py is invoked directly via `python3 ...` from
     # steam-remove -- a real, harmless no-op stands in for it.
     write_exec(internal_dir / "steam_input_config.py",

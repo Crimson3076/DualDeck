@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+# Real user report, 2026-08-02: the trackpad-experiment toggle only
+# existed in dualdeck-client.sh's outer shell menu, but that menu is
+# unreachable from Gaming Mode -- install-steam-shortcut.sh points the
+# Steam shortcut's Exe straight at run-client.sh (see its own comment
+# just below), never at this menu script, so the only way to reach it
+# was double-clicking dualdeck-client.sh manually in Desktop Mode. The
+# user (reasonably) expected it in the client's own in-app Settings
+# screen instead, which the Steam shortcut always reaches. This thin
+# wrapper is the one place that knows how to check/toggle the
+# experiment (sourcing steam_restart_helper.sh for the same
+# Steam-caches-this-file-in-memory safety steam_shortcut.py's own writes
+# already have), so both dualdeck-client.sh's menu AND main.cpp's
+# Settings screen (which shells out to this, not to steam_input_config.py
+# directly, since it's a plain script call away rather than needing
+# main.cpp to know steam_restart_helper.sh's bash-specific machinery)
+# stay in sync with exactly one implementation.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 # shellcheck source=scripts/lib/steam_restart_helper.sh
