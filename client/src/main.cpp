@@ -424,19 +424,38 @@ int main(int argc, char** argv) {
     // just inside this loop) to skip the picker and silently reconnect to
     // the same host instead of asking the user to re-pick it.
     bool reconnectRequested = false;
+    // Set when the setup wizard just finished: connect straight to the
+    // host it found rather than asking the user to pick it again (and a
+    // host typed in by address may not be in the discovery list at all).
+    // Applies the wizard's chosen host to netConfig.
+    bool connectToWizardHost = false;
+    auto adoptWizardHost = [&](const NetClientConfig& wizardConfig) {
+        netConfig.hostAddress = wizardConfig.hostAddress;
+        netConfig.controlPort = wizardConfig.controlPort;
+        netConfig.inputPort = wizardConfig.inputPort;
+        netConfig.videoPort = wizardConfig.videoPort;
+        netConfig.audioPort = wizardConfig.audioPort;
+        connectToWizardHost = true;
+    };
     while (!quitApp) {
         if (runWizardNow) {
             runWizardNow = false;
-            bool wizardCompleted =
-                runSetupWizard(window, renderer, texture, gamepad, discoveryPort, netConfig, discoveryStorePath);
-            if (wizardCompleted) {
+            NetClientConfig wizardConfig;
+            const WizardOutcome outcome = runSetupWizard(window, renderer, texture, gamepad, discoveryPort,
+                                                          netConfig, discoveryStorePath, wizardConfig);
+            if (outcome == WizardOutcome::Completed) {
+                markSetupComplete(wizardStatePath);
+                adoptWizardHost(wizardConfig);
+            } else if (outcome == WizardOutcome::Skipped) {
+                // Don't ask again on every launch; it's in Settings.
+                logLine("[wizard] skipped during first run\n");
                 markSetupComplete(wizardStatePath);
             } else {
                 logLine("[wizard] cancelled during first run -- exiting\n");
                 quitApp = true;
                 break;
             }
-            continue; // re-enter the loop: show the normal discovery screen next, same as any other launch
+            continue; // re-enter the loop: connects to the wizard's host, or shows the picker if skipped
         }
 
         // LAN discovery (spec section 8.1): always shown unless --host/a
@@ -457,6 +476,10 @@ int main(int argc, char** argv) {
             renderConnecting(renderer, netConfig.hostAddress);
             logLine("[settings] reconnecting to \"%s\" to apply the changed setting\n",
                         netConfig.hostAddress.c_str());
+        } else if (connectToWizardHost) {
+            connectToWizardHost = false;
+            renderConnecting(renderer, netConfig.hostAddress);
+            logLine("[wizard] connecting to \"%s\" chosen during setup\n", netConfig.hostAddress.c_str());
         } else if (!hostExplicit) {
             std::string lastHost = loadLastHost(discoveryStorePath).value_or("");
             auto selected = discoverAndSelectHost(renderer, gamepad, discoveryPort, lastHost, netConfig.appVersion);
@@ -1704,13 +1727,17 @@ int main(int argc, char** argv) {
 
         if (setupWizardRequested) {
             logLine("[menu] launching setup wizard\n");
-            bool wizardCompleted = runSetupWizard(window, renderer, texture, gamepad, discoveryPort, netConfig,
-                                                   discoveryStorePath);
+            NetClientConfig wizardConfig;
+            const WizardOutcome outcome = runSetupWizard(window, renderer, texture, gamepad, discoveryPort,
+                                                          netConfig, discoveryStorePath, wizardConfig);
             // Unlike the automatic first-run case, a cancelled re-invocation
             // from this menu should not quit the whole app -- just fall
             // through to the normal discovery screen on the next iteration,
             // same as "CHANGE HOST".
-            if (wizardCompleted) markSetupComplete(wizardStatePath);
+            if (outcome == WizardOutcome::Completed) {
+                markSetupComplete(wizardStatePath);
+                adoptWizardHost(wizardConfig);
+            }
         }
     }
 
