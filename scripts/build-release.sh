@@ -149,9 +149,13 @@ ensure_packages "azahar build" \
 # tiff port (and anything else whose find_package(ZLIB) lands on that
 # config) failed to configure with "references the file libz.a but this
 # file does not exist." Debian/Arch don't split it this way.
+# libpng-static: identical failure one step later, in Cemu's own
+# find_package(PNG) -- Fedora's PNGConfig.cmake declares
+# PNG::png_static pointing at /usr/lib64/libpng16.a, only shipped in
+# libpng-static.
 ensure_packages "cemu build" \
     "freeglut3-dev libbluetooth-dev libgcrypt20-dev libglm-dev libgtk-3-dev libpulse-dev libsecret-1-dev libsystemd-dev libtool nasm libusb-1.0-0-dev" \
-    "freeglut-devel bluez-libs-devel libgcrypt-devel glm-devel gtk3-devel pulseaudio-libs-devel libsecret-devel systemd-devel libtool nasm libusb1-devel perl-IPC-Cmd zlib-ng-compat-static" \
+    "freeglut-devel bluez-libs-devel libgcrypt-devel glm-devel gtk3-devel pulseaudio-libs-devel libsecret-devel systemd-devel libtool nasm libusb1-devel perl-IPC-Cmd zlib-ng-compat-static libpng-static" \
     "freeglut bluez-libs libgcrypt glm gtk3 libpulse libsecret systemd libtool nasm libusb"
 
 # sccache (github.com/mozilla/sccache), if present on PATH -- installed
