@@ -46,6 +46,7 @@ ClientSettings loadClientSettings(const std::string& settingsPath) {
         constexpr const char* kMicDevicePrefix = "mic_device_name=";
         constexpr const char* kMicMutedPrefix = "mic_muted=";
         constexpr const char* kVideoQualityPrefix = "video_quality=";
+        constexpr const char* kStreamFpsPrefix = "stream_fps=";
         constexpr const char* kMirrorHostScreenPrefix = "mirror_host_screen=";
         constexpr const char* kVideoCodecH264Prefix = "video_codec_h264_experimental=";
         constexpr const char* kVideoCodecPyroWavePrefix = "video_codec_pyrowave_experimental=";
@@ -77,6 +78,16 @@ ClientSettings loadClientSettings(const std::string& settingsPath) {
                 // rather than sending an out-of-range byte to the host.
                 if (parsed == 0 || (parsed >= 1 && parsed <= 100)) {
                     settings.videoQuality = parsed;
+                }
+            } catch (const std::exception&) {
+                // Leave the default in place.
+            }
+        } else if (line.rfind(kStreamFpsPrefix, 0) == 0) {
+            std::string value = line.substr(std::char_traits<char>::length(kStreamFpsPrefix));
+            try {
+                int parsed = std::stoi(value);
+                if (parsed >= 0 && parsed <= 240) {
+                    settings.streamFps = parsed;
                 }
             } catch (const std::exception&) {
                 // Leave the default in place.
@@ -148,6 +159,7 @@ bool saveClientSettings(const std::string& settingsPath, const ClientSettings& s
         out << "mic_device_name=" << settings.micDeviceName << '\n';
         out << "mic_muted=" << (settings.micMuted ? "1" : "0") << '\n';
         out << "video_quality=" << settings.videoQuality << '\n';
+        out << "stream_fps=" << settings.streamFps << '\n';
         out << "mirror_host_screen=" << (settings.mirrorHostScreen ? "1" : "0") << '\n';
         out << "video_codec_h264_experimental=" << (settings.videoCodecH264Experimental ? "1" : "0") << '\n';
         out << "video_codec_pyrowave_experimental=" << (settings.videoCodecPyroWaveExperimental ? "1" : "0")

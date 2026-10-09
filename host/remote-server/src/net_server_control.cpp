@@ -175,6 +175,7 @@ void NetServer::controlLoop() {
         // frameSource_->setTargetDisplaySize() call site below needs
         // it -- see that call site's own comment.
         uint16_t clientDisplayWidth = 0;
+        uint8_t clientMaxFrameRate = 0;
         uint16_t clientDisplayHeight = 0;
         // Same "hello goes out of scope early" reasoning as
         // clientDisplayWidth/Height above -- see selectVideoCodec()'s own
@@ -222,6 +223,7 @@ void NetServer::controlLoop() {
                     auto hello = parseHelloPayload(payloadBuf.data(), payloadBuf.size());
                     if (hello) {
                         clientDisplayWidth = hello->displayWidth;
+                        clientMaxFrameRate = hello->maxFrameRate;
                         clientDisplayHeight = hello->displayHeight;
                     }
                     if (!hello) {
@@ -349,6 +351,8 @@ void NetServer::controlLoop() {
             // active.
             if (handshakeOk) {
                 frameSource_->setTargetDisplaySize(clientDisplayWidth, clientDisplayHeight);
+                requestedFrameRate_ = clientMaxFrameRate;
+                frameSource_->setTargetFrameRate(requestedFrameRate_);
             }
             // See IFrameSource::frameDimensions()'s comment -- reports the
             // connected source's real dimensions (e.g. AzaharAdapter's
