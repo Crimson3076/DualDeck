@@ -32,15 +32,17 @@ void renderCenteredBitmapText(SDL_Renderer* renderer, const std::string& text, f
 void renderClientVersionStamp(SDL_Renderer* renderer, const std::string& clientVersion);
 void renderDebugOverlay(SDL_Renderer* renderer, NetClient& net, int requestedVideoQuality);
 // secondsSearching: how long the picker has been open with no host
-// found, to bring up troubleshooting tips. canGoBack adds a B hint.
+// found, to bring up troubleshooting tips. canGoBack adds a B hint,
+// canOpenSettings an X hint.
 void renderDiscoverySearching(SDL_Renderer* renderer, const std::string& clientVersion, int secondsSearching = 0,
-                               bool canGoBack = false);
+                               bool canGoBack = false, bool canOpenSettings = false);
 void renderConnecting(SDL_Renderer* renderer, const std::string& hostAddress);
 void renderHostControlScreen(SDL_Renderer* renderer, const std::string& identity);
 // lastHostAddress marks that row LAST USED.
 void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHost>& hosts,
                           int selectedIndex, const std::string& clientVersion,
-                          const std::string& lastHostAddress = "", bool canGoBack = false);
+                          const std::string& lastHostAddress = "", bool canGoBack = false,
+                          bool canOpenSettings = false);
 // One "[BUTTON] ACTION" entry in a screen's footer.
 struct ButtonHint {
     std::string button;
