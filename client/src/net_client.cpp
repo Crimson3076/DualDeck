@@ -848,7 +848,7 @@ void NetClient::videoReceiveLoop() {
 
 // GitHub issue #4 Phase E: the control channel is no longer write-only
 // from the client's side. This is the client-side counterpart to the
-// host's controlLoop() (host/remote-server/src/net_server.cpp) tolerant-
+// host's controlLoop() (host/remote-server/src/net_server_control.cpp) tolerant-
 // parsing convention: keep the connection open for any recognized-but-
 // unhandled packet type, and only drop the connection on a real
 // transport failure or a header/payload that fails to parse at all

@@ -463,7 +463,7 @@ struct HelloPayload {
     // JPEG quality (1-100, libjpeg-turbo's tjCompress2 scale) the client
     // wants this session's video compressed at, or 0 to defer to whatever
     // the host is configured with (NetServerConfig::videoJpegQuality --
-    // see net_server.cpp's compressFrameBgraToJpeg()). Added (protocol
+    // see net_server_util.cpp's compressFrameBgraToJpeg()). Added (protocol
     // v9) after v8's fixed default of 80 turned out to over-compress
     // DS/3DS: those surfaces are small enough that bandwidth was never
     // the constraint compression was introduced for, so a client
@@ -691,7 +691,7 @@ inline constexpr size_t kVideoFrameTimestampWireSize = 8;
 // is the host's own wall-clock time (same clock as
 // ControllerState::clientTimestampUs, epoch microseconds) taken
 // immediately before this frame's JPEG encoding began -- see
-// net_server.cpp's videoLoop(). Comparing it against the client's own
+// net_server_video.cpp's videoLoop(). Comparing it against the client's own
 // wall-clock receipt time gives an estimate of network + encode + send-
 // queue latency for the video path, the same "assumes synced clocks"
 // caveat the existing input-latency stat already documents (see
