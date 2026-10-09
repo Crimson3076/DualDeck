@@ -188,16 +188,18 @@ public:
     // interactive permission prompt this involves) if X11 didn't work.
     // Either way, once ready, periodically captures the host's screen
     // and returns it here instead of always returning false. Rate-limited internally
-    // (mirrorCaptureInterval_, default 5fps -- "a few frames per
-    // second, good enough to see settings menus," the user's own
-    // explicit choice over investing in a smoother capture path right
-    // away) rather than on every call: NetServer's videoLoop() polls
-    // this at up to videoSendFps (default 60), and a full-resolution
-    // desktop capture is real, non-negligible work worth not repeating
-    // 60 times a second for a feature whose whole point is periodic
-    // menu/setup visibility, not smooth gameplay video.
+    // (mirrorCaptureInterval_, default 30fps, DUALDECK_HOSTCONTROL_MIRROR_FPS
+    // overrides it within 1-60) rather than on every call: NetServer's
+    // videoLoop() polls this at up to videoSendFps (240 by default). The
+    // default was 5fps while JPEG was the only codec ("good enough to see
+    // settings menus"); with H.264 picked in Host Control that rate was
+    // the whole reason desktop streaming looked like a slideshow, so it
+    // now matches the emulator adapters' 30fps.
     bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
                         uint16_t& outWidth, uint16_t& outHeight) override;
+    // The cached capture's index while it's still fresh; nullopt once
+    // the next capture is due, so the caller's getLatestFrame() takes it.
+    std::optional<uint64_t> latestFrameIndex() override;
 
     // Overridden because a screen-mirror frame's real size (the host's
     // actual desktop resolution) is essentially never DS's fixed
@@ -314,8 +316,11 @@ private:
     // getLatestFrame() comment).
     uint64_t mirrorLastFrameIndex_ = 0;
     uint64_t mirrorNextFrameIndex_ = 0;
-    std::chrono::steady_clock::time_point mirrorLastCaptureTime_;
-    std::chrono::milliseconds mirrorCaptureInterval_{200};
+    // When the next capture is due. Advanced by one interval per capture
+    // (not reset to "now + interval"), so polling granularity doesn't
+    // stretch every interval and drag 30fps down to ~27.
+    std::chrono::steady_clock::time_point mirrorNextCaptureTime_;
+    std::chrono::microseconds mirrorCaptureInterval_{1'000'000 / 30};
 
     // Set by setTargetDisplaySize() once a client's real Hello handshake
     // reports its display resolution; 0 means "not known yet" (e.g. no

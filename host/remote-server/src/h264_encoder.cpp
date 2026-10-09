@@ -4,6 +4,7 @@
 
 #include <wels/codec_api.h>
 
+#include <chrono>
 #include <cstring>
 #include <vector>
 
@@ -64,21 +65,22 @@ bool H264Encoder::initialize(int width, int height, int fps, int targetBitrateBp
     // isn't stuck waiting long for a decodable frame -- requestKeyframe()
     // below covers the "right now" case explicitly.
     //
-    // bEnableFrameSkip = true: real, OpenH264-reported requirement, not
-    // a style choice -- first shipped as `false` on the (wrong) reasoning
-    // that skipping frames would hurt latency, which drew OpenH264's own
-    // runtime warning ("bitrate can't be controlled for ... RC_BITRATE_MODE
-    // ... without enabling skip frame"). Frame skip is unrelated to
-    // B-frame lookahead: it lets the encoder drop an occasional frame to
-    // stay within iTargetBitrate under sustained pressure, which is
-    // exactly the "bounded, not unbounded, added latency under a slow
-    // link" outcome this project already chose for JPEG (see net_server.cpp's
-    // SO_SNDBUF sizing) -- disabled, RC_BITRATE_MODE can't actually
-    // enforce the target bitrate at all, letting a congested link's queue
-    // grow the same unbounded way the pre-SO_SNDBUF JPEG path did.
+    // bEnableFrameSkip = false. It was true to silence OpenH264's
+    // "bitrate can't be controlled ... without enabling skip frame"
+    // warning, but with it on, any scene busier than the bitrate target
+    // makes rate control drop frames outright: measured with OpenH264
+    // 2.4 on synthetic 854x480 moving content at quality 60's target, 208-267 of
+    // 300 frames came out, i.e. a 30fps Cemu GamePad stream arrived at
+    // ~21-27fps -- the Wii U "24-25fps" report. The video loop then
+    // re-encoded the skipped frame on its next tick, so the link carried
+    // above-target bitrate anyway, just with fewer frames and more
+    // encoder time. With skip off, rate control holds the bitrate by
+    // raising QP instead (measured: same bytes on the wire, every frame
+    // delivered). A slow link is still bounded by the video socket's
+    // small SO_SNDBUF (see net_server_video.cpp), not by dropped frames.
     param.iTemporalLayerNum = 1;
     param.iSpatialLayerNum = 1;
-    param.bEnableFrameSkip = true;
+    param.bEnableFrameSkip = false;
     param.uiIntraPeriod = static_cast<unsigned int>(fps * 2);
     param.eSpsPpsIdStrategy = CONSTANT_ID;
 
@@ -125,6 +127,11 @@ bool H264Encoder::encodeFrame(const uint8_t* bgra, int width, int height, ByteBu
     pic.pData[0] = impl_->yPlane.data();
     pic.pData[1] = impl_->uPlane.data();
     pic.pData[2] = impl_->vPlane.data();
+    // Rate control paces itself off these (milliseconds); left at 0 it
+    // has no idea how much time passed between frames.
+    pic.uiTimeStamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now().time_since_epoch())
+                          .count();
 
     SFrameBSInfo info;
     std::memset(&info, 0, sizeof(info));

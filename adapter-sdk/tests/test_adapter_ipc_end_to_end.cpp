@@ -242,6 +242,17 @@ MDR_TEST(ipc_frame_relayed_from_adapter_to_server) {
     // real IPC socket, not just in the in-process serialize/parse tests.
     MDR_CHECK_EQ(outFrame.width, 256);
     MDR_CHECK_EQ(outFrame.height, 192);
+    MDR_CHECK(server.latestFrameIndex("bottom") == std::optional<uint64_t>(outFrame.frameIndex));
+    MDR_CHECK(!server.latestFrameIndex("top").has_value());
+
+    // A second frame advances the index the server reports without the
+    // caller having to copy the frame out to find out.
+    ds.pushFrame("bottom", {6, 5, 4}, 256, 192);
+    const uint64_t firstIndex = outFrame.frameIndex;
+    MDR_CHECK(waitUntil([&] {
+        const auto index = server.latestFrameIndex("bottom");
+        return index && *index != firstIndex;
+    }));
 
     client.disconnect();
     server.stop();

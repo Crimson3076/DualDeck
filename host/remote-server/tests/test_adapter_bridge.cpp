@@ -38,6 +38,10 @@ public:
         outFrame = frame_;
         return true;
     }
+    std::optional<uint64_t> latestFrameIndex(const std::string& surfaceId) override {
+        if (surfaceId != frame_.surfaceId || !hasFrame_) return std::nullopt;
+        return frame_.frameIndex;
+    }
 
     void connectNow() {
         VideoSurfaceDescriptor bottom;
@@ -371,4 +375,31 @@ MDR_TEST(adapter_bridge_touch_uses_live_surface_id_after_late_connection) {
 
     MDR_CHECK_EQ(adapter.lastInput().touches.size(), static_cast<size_t>(1));
     MDR_CHECK(adapter.lastInput().touches[0].surfaceId == "bottom");
+}
+
+MDR_TEST(adapter_bridge_latest_frame_index_defaults_to_unknown) {
+    // An adapter that doesn't override latestFrameIndex() must read as
+    // "unknown", so NetServer falls back to getLatestFrame().
+    FakeDsAdapter ds;
+    AdapterBridge bridge(ds);
+    MDR_CHECK(!bridge.latestFrameIndex().has_value());
+}
+
+MDR_TEST(adapter_bridge_latest_frame_index_tracks_the_target_surface) {
+    LateConnectingAdapter adapter;
+    adapter.connectNow();
+    AdapterBridge bridge(adapter);
+    MDR_CHECK(!bridge.latestFrameIndex().has_value());
+
+    adapter.pushFrame("bottom", std::vector<uint8_t>(320 * 240 * 4, 0x11));
+    MDR_CHECK(bridge.latestFrameIndex() == std::optional<uint64_t>(0));
+    adapter.pushFrame("bottom", std::vector<uint8_t>(320 * 240 * 4, 0x22));
+    MDR_CHECK(bridge.latestFrameIndex() == std::optional<uint64_t>(1));
+
+    std::vector<uint8_t> frame;
+    uint64_t index = 0;
+    uint16_t width = 0;
+    uint16_t height = 0;
+    MDR_CHECK(bridge.getLatestFrame(frame, index, width, height));
+    MDR_CHECK_EQ(index, static_cast<uint64_t>(1));
 }

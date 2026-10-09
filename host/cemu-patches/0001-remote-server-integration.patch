@@ -1566,10 +1566,10 @@ index 0000000..d7c39c0
 +)
 diff --git a/src/remote_server/CemuAdapter.cpp b/src/remote_server/CemuAdapter.cpp
 new file mode 100644
-index 0000000..63f64f4
+index 0000000..7869145
 --- /dev/null
 +++ b/src/remote_server/CemuAdapter.cpp
-@@ -0,0 +1,697 @@
+@@ -0,0 +1,726 @@
 +#include "remote_server/CemuAdapter.h"
 +
 +#include <algorithm>
@@ -1658,7 +1658,7 @@ index 0000000..63f64f4
 +// inside real rendering, which itself requires a constructed renderer --
 +// null is treated the same as "no async support" regardless, the
 +// conservative choice either way.
-+std::chrono::milliseconds resolveCaptureInterval() {
++std::chrono::microseconds resolveCaptureInterval() {
 +    const bool asyncCapable = g_renderer && g_renderer->SupportsAsyncCaptureSurfaceBGRA();
 +    // Real ceiling an explicit CEMU_REMOTE_CAPTURE_FPS override is
 +    // clamped to -- higher on the async/Vulkan path for someone who
@@ -1676,7 +1676,7 @@ index 0000000..63f64f4
 +            fps = std::clamp(parsed, 1, maxFps);
 +        }
 +    }
-+    return std::chrono::milliseconds(1000 / fps);
++    return std::chrono::microseconds(1'000'000 / fps);
 +}
 +
 +// Off by default. Real, measured waste, found while diagnosing the Wind
@@ -2014,6 +2014,22 @@ index 0000000..63f64f4
 +    m_inputStatus->touchActive = false;
 +}
 +
++std::optional<uint64_t> CemuAdapter::latestFrameIndex(const std::string& surfaceId) {
++    CapturedSurface* surface = nullptr;
++    if (surfaceId == kTvSurfaceId) {
++        surface = &m_tvSurface;
++    } else if (surfaceId == kGamePadSurfaceId) {
++        surface = &m_gamePadSurface;
++    } else {
++        return std::nullopt;
++    }
++    std::lock_guard guard(surface->mutex);
++    if (!surface->hasFrame) {
++        return std::nullopt;
++    }
++    return surface->frameIndex;
++}
++
 +bool CemuAdapter::latestFrame(const std::string& surfaceId, dualdeck::adapter::SurfaceFrame& outFrame) {
 +    CapturedSurface* surface = nullptr;
 +    if (surfaceId == kTvSurfaceId) {
@@ -2088,19 +2104,32 @@ index 0000000..63f64f4
 +    //  - A real client is actually connected and watching (see
 +    //    m_clientConnected's own comment) -- AdapterIpcClient merely
 +    //    being connected to dualdeck-host-service is not that signal.
-+    //  - This surface's own CEMU_REMOTE_CAPTURE_FPS throttle interval
-+    //    has actually elapsed since its last real capture.
++    //  - This surface's next CEMU_REMOTE_CAPTURE_FPS capture is due.
 +    if (!m_clientConnected.load()) {
 +        ++m_captureDiagnostics.skippedNoViewer;
 +        return;
 +    }
 +
-+    static const std::chrono::milliseconds kInterval = resolveCaptureInterval();
-+    auto& lastCapture = isPadView ? m_lastGamePadCapture : m_lastTvCapture;
++    // Deadline pacing with slack, not "has a whole interval passed since
++    // the last capture". A 30fps title hands over a frame every ~33.3ms
++    // with a little jitter either way, and the old strict check against a
++    // 33ms interval skipped every frame that arrived a hair early -- and
++    // a skipped frame means waiting for the next one, 66ms after the last
++    // capture. That aliasing is how a game running at 30 streamed at
++    // ~24-25fps. Now a frame up to a quarter interval early still counts,
++    // and the deadline advances by whole intervals from the previous
++    // one, so the long-run rate is exactly CEMU_REMOTE_CAPTURE_FPS: a
++    // 30fps title captures every frame, a 60fps one every other frame.
++    static const std::chrono::microseconds kInterval = resolveCaptureInterval();
++    static const std::chrono::microseconds kSlack = kInterval / 4;
++    auto& nextCapture = isPadView ? m_nextGamePadCapture : m_nextTvCapture;
 +    const auto now = std::chrono::steady_clock::now();
-+    if (now - lastCapture < kInterval) {
++    if (now + kSlack < nextCapture) {
 +        return;
 +    }
++    // Never schedule closer than (interval - slack) to this capture, so
++    // a late frame (or a stall) doesn't let the next ones burst.
++    const auto markCaptured = [&] { nextCapture = std::max(nextCapture + kInterval, now + kInterval - kSlack); };
 +
 +    if (!g_renderer) {
 +        return;
@@ -2120,7 +2149,7 @@ index 0000000..63f64f4
 +        if (!g_renderer->CaptureSurfaceBGRA(texView, isPadView, pixels, width, height)) {
 +            return;
 +        }
-+        lastCapture = now;
++        markCaptured();
 +        ++m_captureDiagnostics.completedSync;
 +
 +        CapturedSurface& surface = isPadView ? m_gamePadSurface : m_tvSurface;
@@ -2175,7 +2204,7 @@ index 0000000..63f64f4
 +        ++m_captureDiagnostics.failed;
 +        return;
 +    }
-+    lastCapture = now;
++    markCaptured();
 +    m_pendingCaptures[freeSlot] = PendingCapture{true, isPadView, width, height};
 +    ++m_captureDiagnostics.scheduled;
 +}
@@ -2269,10 +2298,10 @@ index 0000000..63f64f4
 +} // namespace DualDeck::RemoteServer
 diff --git a/src/remote_server/CemuAdapter.h b/src/remote_server/CemuAdapter.h
 new file mode 100644
-index 0000000..fc708e0
+index 0000000..87e76b6
 --- /dev/null
 +++ b/src/remote_server/CemuAdapter.h
-@@ -0,0 +1,344 @@
+@@ -0,0 +1,347 @@
 +#pragma once
 +
 +// DualDeck's IEmulatorAdapter implementation for Cemu (Nintendo Wii U).
@@ -2465,6 +2494,9 @@ index 0000000..fc708e0
 +    void releaseAllInputs() override;
 +    bool latestFrame(const std::string& surfaceId,
 +                      dualdeck::adapter::SurfaceFrame& outFrame) override;
++    // Lets AdapterIpcClient::writeLoop()'s ~250Hz poll skip latestFrame()'s
++    // full pixel copy when nothing new was captured since its last send.
++    std::optional<uint64_t> latestFrameIndex(const std::string& surfaceId) override;
 +
 +    // Called from the patch's LatteRenderTarget.cpp hook, once per frame
 +    // per surface, immediately after Cemu's own HandleScreenshotRequest()
@@ -2545,10 +2577,10 @@ index 0000000..fc708e0
 +    CapturedSurface m_tvSurface;
 +    CapturedSurface m_gamePadSurface;
 +
-+    // Per-surface throttle state for onSurfaceRendered() -- see that
-+    // method's declaration comment above.
-+    std::chrono::steady_clock::time_point m_lastTvCapture{};
-+    std::chrono::steady_clock::time_point m_lastGamePadCapture{};
++    // Per-surface throttle state for onSurfaceRendered(): when the next
++    // capture is due -- see that method's declaration comment above.
++    std::chrono::steady_clock::time_point m_nextTvCapture{};
++    std::chrono::steady_clock::time_point m_nextGamePadCapture{};
 +
 +    // Set by setClientConnected(), called by RemoteServerBridge via
 +    // AdapterIpcClient::setConnectionStateCallback() (ipc_protocol.h's
@@ -2590,7 +2622,7 @@ index 0000000..fc708e0
 +    // not atomics: every increment happens on the render thread (the
 +    // only thread that ever calls onSurfaceRendered()/pumpCaptures()),
 +    // same single-writer assumption every other per-surface state in
-+    // this class already relies on (m_lastTvCapture etc. above).
++    // this class already relies on (m_nextTvCapture etc. above).
 +    struct CaptureDiagnostics {
 +        uint64_t scheduled = 0;      // ScheduleCaptureSurfaceBGRA() succeeded (async path)
 +        uint64_t completedSync = 0;  // old synchronous CaptureSurfaceBGRA() path succeeded

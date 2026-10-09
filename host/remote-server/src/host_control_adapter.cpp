@@ -35,29 +35,52 @@ constexpr uint16_t kFallbackTargetDisplayHeight = 800;
 // scaling library (libyuv/swscale) for what's currently this one call
 // site -- O(srcW*srcH) total work, the same order as the memcpy this
 // replaces, negligible next to JPEG compression's own cost.
+//
+// With the mirror now running at 30fps instead of 5 this cost matters
+// (~25ms for 4K -> 1280x720 as first written), so it sums each output
+// row's source rows into per-column totals first, then box-sums those
+// per output pixel, with the column ranges computed once rather than
+// divided out per pixel. Same output, ~1.5-2x faster. (libyuv's
+// ARGBScale(kFilterBox) was tried: much faster, but it point-samples
+// ARGB at non-power-of-two ratios, which is exactly the text aliasing
+// this function exists to avoid.)
 void downscaleBgra8888(const uint8_t* src, int srcWidth, int srcHeight, std::vector<uint8_t>& dst, int dstWidth,
                         int dstHeight) {
-    dst.resize(static_cast<size_t>(dstWidth) * dstHeight * 4);
+    dst.resize(static_cast<size_t>(dstWidth) * static_cast<size_t>(dstHeight) * 4);
+    std::vector<int> colStart(static_cast<size_t>(dstWidth));
+    std::vector<int> colEnd(static_cast<size_t>(dstWidth));
+    for (int dx = 0; dx < dstWidth; ++dx) {
+        colStart[static_cast<size_t>(dx)] = dx * srcWidth / dstWidth;
+        colEnd[static_cast<size_t>(dx)] =
+            std::max(colStart[static_cast<size_t>(dx)] + 1, (dx + 1) * srcWidth / dstWidth);
+    }
+    const size_t srcRowBytes = static_cast<size_t>(srcWidth) * 4;
+    std::vector<uint32_t> columnSums(srcRowBytes);
     for (int dy = 0; dy < dstHeight; ++dy) {
-        int srcY0 = dy * srcHeight / dstHeight;
-        int srcY1 = std::max(srcY0 + 1, (dy + 1) * srcHeight / dstHeight);
-        for (int dx = 0; dx < dstWidth; ++dx) {
-            int srcX0 = dx * srcWidth / dstWidth;
-            int srcX1 = std::max(srcX0 + 1, (dx + 1) * srcWidth / dstWidth);
-            uint32_t sums[4] = {0, 0, 0, 0};
-            int count = 0;
-            for (int sy = srcY0; sy < srcY1; ++sy) {
-                const uint8_t* row = src + static_cast<size_t>(sy) * srcWidth * 4;
-                for (int sx = srcX0; sx < srcX1; ++sx) {
-                    const uint8_t* px = row + static_cast<size_t>(sx) * 4;
-                    sums[0] += px[0];
-                    sums[1] += px[1];
-                    sums[2] += px[2];
-                    sums[3] += px[3];
-                    ++count;
-                }
+        const int srcY0 = dy * srcHeight / dstHeight;
+        const int srcY1 = std::max(srcY0 + 1, (dy + 1) * srcHeight / dstHeight);
+        std::fill(columnSums.begin(), columnSums.end(), 0u);
+        for (int sy = srcY0; sy < srcY1; ++sy) {
+            const uint8_t* row = src + static_cast<size_t>(sy) * srcRowBytes;
+            for (size_t i = 0; i < srcRowBytes; ++i) {
+                columnSums[i] += row[i];
             }
-            uint8_t* outPx = dst.data() + (static_cast<size_t>(dy) * dstWidth + dx) * 4;
+        }
+        const auto rows = static_cast<uint32_t>(srcY1 - srcY0);
+        uint8_t* outRow = dst.data() + static_cast<size_t>(dy) * static_cast<size_t>(dstWidth) * 4;
+        for (int dx = 0; dx < dstWidth; ++dx) {
+            const int x0 = colStart[static_cast<size_t>(dx)];
+            const int x1 = colEnd[static_cast<size_t>(dx)];
+            uint32_t sums[4] = {0, 0, 0, 0};
+            for (int sx = x0; sx < x1; ++sx) {
+                const uint32_t* px = columnSums.data() + static_cast<size_t>(sx) * 4;
+                sums[0] += px[0];
+                sums[1] += px[1];
+                sums[2] += px[2];
+                sums[3] += px[3];
+            }
+            const uint32_t count = rows * static_cast<uint32_t>(x1 - x0);
+            uint8_t* outPx = outRow + static_cast<size_t>(dx) * 4;
             outPx[0] = static_cast<uint8_t>(sums[0] / count);
             outPx[1] = static_cast<uint8_t>(sums[1] / count);
             outPx[2] = static_cast<uint8_t>(sums[2] / count);
@@ -316,21 +339,16 @@ HostControlAdapter::HostControlAdapter() {
             }
         }
 
-        // Optional override of the default ~5fps capture rate (a full
-        // desktop capture is real work, not worth repeating at
-        // videoLoop()'s up-to-60fps poll rate for a feature whose whole
-        // point is periodic menu/setup visibility -- see
-        // getLatestFrame()'s comment). Clamped the same way other
-        // capture-fps env vars in this project are (e.g. the Azahar/Cemu
-        // patches' *_REMOTE_CAPTURE_FPS) -- an out-of-range or
+        // Optional override of the default 30fps capture rate (see
+        // getLatestFrame()'s comment in the header). An out-of-range or
         // unparseable value falls back to the default rather than
         // producing a nonsensical interval.
         const char* fpsEnv = std::getenv("DUALDECK_HOSTCONTROL_MIRROR_FPS");
         if (fpsEnv != nullptr && fpsEnv[0] != '\0') {
             char* end = nullptr;
             long fps = std::strtol(fpsEnv, &end, 10);
-            if (end != fpsEnv && *end == '\0' && fps >= 1 && fps <= 30) {
-                mirrorCaptureInterval_ = std::chrono::milliseconds(1000 / fps);
+            if (end != fpsEnv && *end == '\0' && fps >= 1 && fps <= 60) {
+                mirrorCaptureInterval_ = std::chrono::microseconds(1'000'000 / fps);
             }
         }
     }
@@ -676,7 +694,7 @@ bool HostControlAdapter::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t
     if (!isMirrorReady()) return false;
 
     auto now = std::chrono::steady_clock::now();
-    if (mirrorLastFrame_.empty() || now - mirrorLastCaptureTime_ >= mirrorCaptureInterval_) {
+    if (mirrorLastFrame_.empty() || now >= mirrorNextCaptureTime_) {
         std::vector<uint8_t> frame;
         uint16_t width = 0;
         uint16_t height = 0;
@@ -705,11 +723,16 @@ bool HostControlAdapter::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t
             mirrorLastHeight_ = height;
             mirrorLastFrameIndex_ = mirrorNextFrameIndex_++;
         }
-        // Reset the deadline regardless of whether the capture actually
+        // Advance the deadline regardless of whether the capture actually
         // succeeded this tick -- a transient capture failure should be
-        // retried at the configured rate, not on every single poll
-        // (which could be up to 60/sec, per videoLoop()'s own comment).
-        mirrorLastCaptureTime_ = now;
+        // retried at the configured rate, not on every single poll. Step
+        // from the previous deadline so the poll interval doesn't add up
+        // into a lower real rate; after a stall (or the very first
+        // capture) restart from now instead of bursting to catch up.
+        mirrorNextCaptureTime_ += mirrorCaptureInterval_;
+        if (mirrorNextCaptureTime_ <= now) {
+            mirrorNextCaptureTime_ = now + mirrorCaptureInterval_;
+        }
     }
 
     if (mirrorLastFrame_.empty()) return false;
@@ -718,6 +741,13 @@ bool HostControlAdapter::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t
     outWidth = mirrorLastWidth_;
     outHeight = mirrorLastHeight_;
     return true;
+}
+
+std::optional<uint64_t> HostControlAdapter::latestFrameIndex() {
+    if (!isMirrorReady() || mirrorLastFrame_.empty() || std::chrono::steady_clock::now() >= mirrorNextCaptureTime_) {
+        return std::nullopt;
+    }
+    return mirrorLastFrameIndex_;
 }
 
 void HostControlAdapter::frameDimensions(uint16_t& outWidth, uint16_t& outHeight) const {

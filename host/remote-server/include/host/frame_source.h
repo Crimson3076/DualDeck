@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace dualdeck::host {
@@ -44,6 +45,15 @@ public:
     // HostControlAdapter) just echo frameDimensions() here every call.
     virtual bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
                                 uint16_t& outWidth, uint16_t& outHeight) = 0;
+
+    // The frame index getLatestFrame() would report right now, without
+    // copying the frame. NetServer's video loop polls at up to
+    // videoSendFps (240 by default) and checks this first so an
+    // unchanged frame is never copied just to be thrown away. nullopt
+    // means "unknown, call getLatestFrame()" -- the default, and also
+    // what a source returns when calling getLatestFrame() is what would
+    // produce a new frame (HostControlAdapter's capture-on-poll).
+    virtual std::optional<uint64_t> latestFrameIndex() { return std::nullopt; }
 
     // The pixel dimensions of frames this source produces, reported to a
     // connecting client in HelloAck (see net_server.cpp) so it can size its

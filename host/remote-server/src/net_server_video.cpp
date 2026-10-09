@@ -174,6 +174,12 @@ void NetServer::videoLoop() {
         ByteBuffer h264Frame;
         ByteBuffer pyrowaveFrame;
         std::optional<uint64_t> lastSentFrameIndex;
+        // The last frame handed to an encoder, sent or not. H.264 rate
+        // control can decline a frame; this loop used to then re-encode
+        // that same frame on every following tick until one stuck, which
+        // burned encoder time the next real frame needed (and hid the
+        // skip from rate control anyway).
+        std::optional<uint64_t> lastEncodedFrameIndex;
         while (running_.load()) {
             auto tickStart = std::chrono::steady_clock::now();
 
@@ -188,10 +194,16 @@ void NetServer::videoLoop() {
             // exactly as before.
             uint16_t currentFrameWidth = frameWidth;
             uint16_t currentFrameHeight = frameHeight;
-            bool gotFrame;
+            bool gotFrame = false;
             {
                 std::lock_guard<std::mutex> lock(targetMutex_);
-                gotFrame = frameSource_->getLatestFrame(frame, frameIndex, currentFrameWidth, currentFrameHeight);
+                // Cheap index check first: this loop ticks at up to
+                // videoSendFps (240), far faster than any source produces
+                // frames, and getLatestFrame() copies the whole frame.
+                const auto newestIndex = frameSource_->latestFrameIndex();
+                if (!newestIndex || !lastEncodedFrameIndex || *newestIndex != *lastEncodedFrameIndex) {
+                    gotFrame = frameSource_->getLatestFrame(frame, frameIndex, currentFrameWidth, currentFrameHeight);
+                }
             }
             // Skip re-sending a frame whose index hasn't changed since the
             // last tick: getLatestFrame() is "return the most recent one,
@@ -205,8 +217,11 @@ void NetServer::videoLoop() {
             // client (main.cpp/net_client.cpp just redraw the same texture
             // either way), and reducing the send budget actually available
             // for genuinely new frames.
-            if (gotFrame && lastSentFrameIndex && frameIndex == *lastSentFrameIndex) {
+            if (gotFrame && lastEncodedFrameIndex && frameIndex == *lastEncodedFrameIndex) {
                 gotFrame = false;
+            }
+            if (gotFrame) {
+                lastEncodedFrameIndex = frameIndex;
             }
             // Taken right before encoding begins (protocol v10, see
             // protocol.h's kProtocolVersion comment and

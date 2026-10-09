@@ -73,6 +73,7 @@ public:
     // IFrameSource
     bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
                         uint16_t& outWidth, uint16_t& outHeight) override;
+    std::optional<uint64_t> latestFrameIndex() override;
     // Overrides IFrameSource's DS-sized default with the target surface's
     // actual declared width/height (from the adapter's own capabilities()
     // -- e.g. AzaharAdapter reports 320x240, not DS's 256x192).
