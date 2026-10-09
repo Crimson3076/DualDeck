@@ -97,11 +97,19 @@ function LocalHostSection() {
 
   const visible = useQuickAccessVisible();
 
-  const refresh = async () => setHost(await getLocalHost());
+  // A failed read (backend restarting, say) keeps the last state shown;
+  // the next poll tries again.
+  const refresh = async () => {
+    try {
+      setHost(await getLocalHost());
+    } catch {
+      // keep the last state
+    }
+  };
 
   useEffect(() => {
     if (!visible) return;
-    refresh();
+    void refresh();
     const timer = setInterval(refresh, kLocalHostPollMs);
     return () => clearInterval(timer);
   }, [visible]);
