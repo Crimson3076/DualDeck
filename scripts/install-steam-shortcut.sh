@@ -86,8 +86,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Keep in sync with the same constant in scripts/uninstall-steam-shortcut.sh
-# and the packaged client/install-steam-shortcut.sh / uninstall-steam-shortcut.sh
-# heredocs in scripts/build-release.sh.
+# and packaging/client/internal/install-steam-shortcut.sh /
+# uninstall-steam-shortcut.sh.
 central_install_dir="${HOME}/.config/dualdeck-client/install"
 staging_dir="${central_install_dir}.new"
 previous_dir="${central_install_dir}.previous"
