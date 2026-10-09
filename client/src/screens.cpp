@@ -234,62 +234,168 @@ void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHos
     SDL_RenderPresent(renderer);
 }
 
+namespace {
+
+// Draws `y`-aligned button hints, centered as a row, each as a light
+// badge holding the button name followed by what it does, e.g.
+// [A] SELECT   [B] BACK -- the way Steam's own UI labels buttons.
+void renderButtonHintRow(SDL_Renderer* renderer, const std::vector<ButtonHint>& hints, float y) {
+    constexpr int kPixelSize = 2;
+    constexpr float kBadgePadX = 8.0f;
+    constexpr float kBadgePadY = 5.0f;
+    constexpr float kLabelGap = 10.0f;
+    constexpr float kHintGap = 36.0f;
+
+    float total = 0.0f;
+    for (size_t i = 0; i < hints.size(); ++i) {
+        total += static_cast<float>(measureBitmapText(hints[i].button, kPixelSize)) + 2.0f * kBadgePadX +
+                 kLabelGap + static_cast<float>(measureBitmapText(hints[i].action, kPixelSize));
+        if (i + 1 < hints.size()) total += kHintGap;
+    }
+
+    float x = (static_cast<float>(kWindowWidth) - total) / 2.0f;
+    const float glyphHeight = static_cast<float>(kFontGlyphHeight * kPixelSize);
+    for (const auto& hint : hints) {
+        const float badgeWidth = static_cast<float>(measureBitmapText(hint.button, kPixelSize)) + 2.0f * kBadgePadX;
+        SDL_FRect badge{x, y - kBadgePadY, badgeWidth, glyphHeight + 2.0f * kBadgePadY};
+        SDL_SetRenderDrawColor(renderer, 200, 200, 205, 255);
+        SDL_RenderFillRect(renderer, &badge);
+        renderBitmapText(renderer, hint.button, x + kBadgePadX, y, kPixelSize, SDL_Color{20, 20, 24, 255});
+        x += badgeWidth + kLabelGap;
+        x += static_cast<float>(
+                 renderBitmapText(renderer, hint.action, x, y, kPixelSize, SDL_Color{170, 170, 175, 255})) +
+             kHintGap;
+    }
+}
+
+void renderScrollArrow(SDL_Renderer* renderer, float centerY, bool up) {
+    constexpr float kHalfWidth = 14.0f;
+    constexpr float kHeight = 10.0f;
+    const float cx = static_cast<float>(kWindowWidth) / 2.0f;
+    const SDL_FColor color{0.55f, 0.55f, 0.6f, 1.0f};
+    const float tipY = up ? centerY - kHeight / 2.0f : centerY + kHeight / 2.0f;
+    const float baseY = up ? centerY + kHeight / 2.0f : centerY - kHeight / 2.0f;
+    SDL_Vertex vertices[3] = {
+        {{cx, tipY}, color, {0.0f, 0.0f}},
+        {{cx - kHalfWidth, baseY}, color, {0.0f, 0.0f}},
+        {{cx + kHalfWidth, baseY}, color, {0.0f, 0.0f}},
+    };
+    SDL_RenderGeometry(renderer, nullptr, vertices, 3, nullptr, 0);
+}
+
+} // namespace
+
+void renderButtonHints(SDL_Renderer* renderer, const std::vector<ButtonHint>& hints) {
+    renderButtonHintRow(renderer, hints, static_cast<float>(kWindowHeight) - 56.0f);
+}
+
+const std::vector<ButtonHint>& defaultMenuHints() {
+    static const std::vector<ButtonHint> hints = {{"D-PAD", "MOVE"}, {"A", "SELECT"}, {"B", "BACK"}};
+    return hints;
+}
+
 void renderPauseMenu(SDL_Renderer* renderer, const std::vector<std::string>& items, int selectedIndex,
                      const std::string& title, const std::string& statusLine, float micLevel,
-                     const std::string& subtitle) {
+                     const std::string& subtitle, const std::vector<ButtonHint>& hints) {
     SDL_SetRenderDrawColor(renderer, 20, 20, 24, 220);
     SDL_RenderClear(renderer);
-    renderCenteredBitmapText(renderer, title, 100.0f, 4, SDL_Color{220, 220, 220, 255});
+    renderCenteredBitmapText(renderer, title, 60.0f, 4, SDL_Color{220, 220, 220, 255});
     // Active emulated system/adapter (GitHub issue #28), e.g.
     // "NINTENDO DS - MELONDS" -- shown right under the title in a
     // neutral color, distinct from statusLine below (which is reserved
     // for error/warning text in red).
     if (!subtitle.empty()) {
-        renderCenteredBitmapText(renderer, subtitle, 148.0f, 2, SDL_Color{150, 170, 210, 255});
+        renderCenteredBitmapText(renderer, subtitle, 108.0f, 2, SDL_Color{150, 170, 210, 255});
     }
 
-    constexpr float kRowHeight = 70.0f;
-    constexpr int kPixelSize = 4;
-    float startY = static_cast<float>(kWindowHeight) / 2.0f -
-                    (static_cast<float>(items.size()) * kRowHeight) / 2.0f;
+    // The list gets whatever space the header, mic meter and footer
+    // leave. A long list (Settings with a mic has ten rows) first drops
+    // to a smaller font, then scrolls with the selection, rather than
+    // running over the title and footer.
+    const bool showMeter = micLevel >= 0.0f;
+    const float listTop = subtitle.empty() ? 130.0f : 150.0f;
+    const float listBottom = static_cast<float>(kWindowHeight) - (showMeter ? 210.0f : 120.0f);
+    const float available = listBottom - listTop;
+    constexpr float kMaxTextWidth = static_cast<float>(kWindowWidth) - 120.0f;
 
-    for (size_t i = 0; i < items.size(); ++i) {
-        float rowY = startY + static_cast<float>(i) * kRowHeight;
-        bool selected = static_cast<int>(i) == selectedIndex;
-        SDL_Color color = selected ? SDL_Color{90, 200, 120, 255} : SDL_Color{200, 200, 200, 255};
+    // Settings rows are "LABEL: VALUE"; the selected one shows its value
+    // as "< VALUE >" to say left/right changes it.
+    auto displayText = [&](size_t i) {
+        const std::string& item = items[i];
+        const size_t colon = item.find(": ");
+        if (static_cast<int>(i) != selectedIndex || colon == std::string::npos) return item;
+        return item.substr(0, colon + 2) + "< " + item.substr(colon + 2) + " >";
+    };
+
+    int pixelSize = 4;
+    float rowHeight = 64.0f;
+    const float count = static_cast<float>(items.size());
+    if (count * rowHeight > available) {
+        pixelSize = 3;
+        rowHeight = 46.0f;
+    }
+    const int visibleCount = std::max(1, std::min(static_cast<int>(items.size()),
+                                                   static_cast<int>(available / rowHeight)));
+    int firstVisible = 0;
+    if (visibleCount < static_cast<int>(items.size())) {
+        firstVisible = std::clamp(selectedIndex - visibleCount / 2, 0,
+                                  static_cast<int>(items.size()) - visibleCount);
+    }
+
+    const float listHeight = static_cast<float>(visibleCount) * rowHeight;
+    const float startY = listTop + (available - listHeight) / 2.0f;
+
+    for (int row = 0; row < visibleCount; ++row) {
+        const size_t i = static_cast<size_t>(firstVisible + row);
+        const std::string text = displayText(i);
+        // Any single row still too wide (a long mic device name) drops
+        // a size on its own rather than shrinking the whole list.
+        int rowPixelSize = pixelSize;
+        while (rowPixelSize > 2 && static_cast<float>(measureBitmapText(text, rowPixelSize)) > kMaxTextWidth) {
+            --rowPixelSize;
+        }
+        const float glyphHeight = static_cast<float>(kFontGlyphHeight * rowPixelSize);
+        const float rowY = startY + static_cast<float>(row) * rowHeight +
+                           (rowHeight - glyphHeight) / 2.0f;
+        const bool selected = static_cast<int>(i) == selectedIndex;
+        const SDL_Color color = selected ? SDL_Color{90, 200, 120, 255} : SDL_Color{200, 200, 200, 255};
 
         if (selected) {
-            int width = measureBitmapText(items[i], kPixelSize);
-            float x = (static_cast<float>(kWindowWidth) - static_cast<float>(width)) / 2.0f;
-            SDL_FRect highlight{x - 24.0f, rowY - 10.0f, static_cast<float>(width) + 48.0f,
-                                 static_cast<float>(kFontGlyphHeight * kPixelSize) + 20.0f};
+            const float width = static_cast<float>(measureBitmapText(text, rowPixelSize));
+            const float x = (static_cast<float>(kWindowWidth) - width) / 2.0f;
+            SDL_FRect highlight{x - 24.0f, rowY - 10.0f, width + 48.0f, glyphHeight + 20.0f};
             SDL_SetRenderDrawColor(renderer, 50, 70, 55, 255);
             SDL_RenderFillRect(renderer, &highlight);
         }
-        renderCenteredBitmapText(renderer, items[i], rowY, kPixelSize, color);
+        renderCenteredBitmapText(renderer, text, rowY, rowPixelSize, color);
+    }
+
+    if (firstVisible > 0) renderScrollArrow(renderer, startY - 8.0f, true);
+    if (firstVisible + visibleCount < static_cast<int>(items.size())) {
+        renderScrollArrow(renderer, startY + listHeight + 8.0f, false);
     }
 
     // Live microphone input-level meter (GitHub issue #2), shown only on
     // screens that pass a real level (>= 0) -- the settings screen while
-    // the host supports mic input. Drawn below the menu rows regardless
-    // of mute state, so muting is visibly distinct from "no signal at
-    // all" (the bar keeps moving with real input; only the host stops
-    // receiving it).
-    if (micLevel >= 0.0f) {
-        float meterY = startY + static_cast<float>(items.size()) * kRowHeight + 30.0f;
+    // the host supports mic input. Drawn regardless of mute state, so
+    // muting is visibly distinct from "no signal at all" (the bar keeps
+    // moving with real input; only the host stops receiving it).
+    if (showMeter) {
+        const float meterY = static_cast<float>(kWindowHeight) - 165.0f;
         constexpr float kMeterWidth = 420.0f;
-        constexpr float kMeterHeight = 28.0f;
-        float meterX = (static_cast<float>(kWindowWidth) - kMeterWidth) / 2.0f;
+        constexpr float kMeterHeight = 24.0f;
+        const float meterX = (static_cast<float>(kWindowWidth) - kMeterWidth) / 2.0f;
 
-        renderCenteredBitmapText(renderer, "MIC LEVEL", meterY - 34.0f, 2, SDL_Color{140, 140, 140, 255});
+        renderCenteredBitmapText(renderer, "MIC LEVEL", meterY - 26.0f, 2, SDL_Color{140, 140, 140, 255});
 
         SDL_FRect meterBg{meterX, meterY, kMeterWidth, kMeterHeight};
         SDL_SetRenderDrawColor(renderer, 45, 45, 50, 255);
         SDL_RenderFillRect(renderer, &meterBg);
 
-        float clampedLevel = std::clamp(micLevel, 0.0f, 1.0f);
+        const float clampedLevel = std::clamp(micLevel, 0.0f, 1.0f);
         SDL_FRect meterFill{meterX, meterY, kMeterWidth * clampedLevel, kMeterHeight};
-        SDL_Color fillColor = clampedLevel > 0.9f ? SDL_Color{220, 90, 90, 255} : SDL_Color{90, 200, 120, 255};
+        const SDL_Color fillColor =
+            clampedLevel > 0.9f ? SDL_Color{220, 90, 90, 255} : SDL_Color{90, 200, 120, 255};
         SDL_SetRenderDrawColor(renderer, fillColor.r, fillColor.g, fillColor.b, fillColor.a);
         SDL_RenderFillRect(renderer, &meterFill);
 
@@ -298,12 +404,10 @@ void renderPauseMenu(SDL_Renderer* renderer, const std::vector<std::string>& ite
     }
 
     if (!statusLine.empty()) {
-        renderCenteredBitmapText(renderer, statusLine, static_cast<float>(kWindowHeight) - 125.0f, 2,
+        renderCenteredBitmapText(renderer, statusLine, static_cast<float>(kWindowHeight) - 100.0f, 2,
                                   SDL_Color{220, 90, 90, 255});
     }
-    renderCenteredBitmapText(renderer, "D-PAD TO MOVE, A TO SELECT, B TO GO BACK",
-                              static_cast<float>(kWindowHeight) - 80.0f, 2,
-                              SDL_Color{140, 140, 140, 255});
+    renderButtonHints(renderer, hints);
     SDL_RenderPresent(renderer);
 }
 

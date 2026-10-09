@@ -53,4 +53,23 @@ uint16_t buildButtonsFromGamepad(SDL_Gamepad* gamepad, bool stickEmulatesDpad = 
 
 void logGamepadTouchpadDiagnostics(SDL_Gamepad* gamepad);
 
+// What a press means on a menu screen, so keyboard and gamepad input
+// share one handler per menu instead of two copies of it.
+enum class MenuAction { None, Up, Down, Left, Right, Select, Back };
+
+// D-pad moves, A (South) selects, B (East) goes back.
+MenuAction menuActionForButton(uint8_t button);
+// Arrows move, Enter selects, Backspace goes back. Escape is left to the
+// caller: it opens and closes menus with no gamepad connected.
+MenuAction menuActionForKey(SDL_Keycode key);
+
+// Left-stick menu navigation: one action when the stick is pushed past
+// the threshold, then repeats while it's held, like a held D-pad on the
+// Steam Deck's own menus. Call once per frame.
+struct MenuStickState {
+    MenuAction held = MenuAction::None;
+    uint64_t nextRepeatUs = 0;
+};
+MenuAction pollMenuStick(SDL_Gamepad* gamepad, MenuStickState& state, uint64_t nowUs);
+
 } // namespace dualdeck::client

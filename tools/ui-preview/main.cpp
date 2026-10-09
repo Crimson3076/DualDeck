@@ -56,6 +56,9 @@ int main(int argc, char** argv) {
         makeHost("", "192.168.1.44", "NINTENDO WII U", "CEMU"),
     };
 
+    const std::vector<ButtonHint> settingsHints = {
+        {"D-PAD", "MOVE"}, {"LEFT/RIGHT", "CHANGE"}, {"A", "SELECT"}, {"B", "BACK"}};
+
     struct Shot {
         std::string name;
         std::function<void()> draw;
@@ -79,7 +82,12 @@ int main(int argc, char** argv) {
                               "MIRROR HOST SCREEN (EXPERIMENTAL): OFF", "VIDEO CODEC (EXPERIMENTAL): JPEG",
                               "DEBUG OVERLAY: OFF", "RUN SETUP WIZARD", "MICROPHONE: SYSTEM DEFAULT",
                               "MIC: ON", "BACK"},
-                             8, "SETTINGS", "", 0.4f);
+                             8, "SETTINGS", "", 0.4f, "", settingsHints);
+         }},
+        {"menu-scrolling", [&] {
+             std::vector<std::string> items;
+             for (int i = 1; i <= 16; ++i) items.push_back("ITEM " + std::to_string(i) + ": VALUE");
+             renderPauseMenu(renderer, items, 12, "LONG LIST", "COULD NOT SAVE SETTINGS");
          }},
     };
 
