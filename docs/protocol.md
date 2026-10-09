@@ -33,6 +33,8 @@ same fixed-size header.
 | 10    | `MicAudioFrame`   | client -> host  | UDP audio | see "MicAudioFrame payload" below |
 | 11    | `ModeChanged`     | host -> client  | TCP control | see "ModeChanged payload" below |
 | 12    | `ClientLog`       | client -> host  | TCP control | see "ClientLog payload" below |
+| 13    | `BandwidthProbe`  | host -> client  | TCP control | see "Automatic codec choice" below |
+| 14    | `BandwidthReport` | client -> host  | TCP control | see "Automatic codec choice" below |
 
 ## ControllerState payload (34 bytes)
 
@@ -564,6 +566,34 @@ host side instead (which normally has a real keyboard/mouse), and
 requires no typing on either side. See git history for the removed
 `PairingManager`/`pairing_store.h` code if it's ever needed for
 reference.
+
+## Automatic codec choice
+
+A client whose VIDEO CODEC setting is AUTO sets `kVideoCodecFlag_Auto`
+(bit 7) in `HelloPayload.supportedVideoCodecs`, alongside every codec it
+can decode. Once the host has accepted the Hello, and before it sends
+`HelloAck`, it runs a short link-speed test on the control connection:
+
+1. The host sends `BandwidthProbe` chunks: a 1-byte `last` flag followed
+   by zero filler, 32 KiB per packet, until it has sent 2 MiB or 300ms
+   has passed, then one final chunk with `last=1` and no filler. Its
+   send buffer is capped at 256 KiB first so kernel buffering doesn't
+   hide a slow link.
+2. The client times the chunks from the end of the first to the end of
+   the last (leaving out the round trip and TCP start-up) and replies
+   with `BandwidthReport`: a u32 `measuredKbps` (0 if it couldn't
+   measure).
+3. The host picks PyroWave if both sides support it, the host is in
+   Emulation mode, and `measuredKbps` is at least 1.25x what PyroWave
+   needs at its per-frame byte ceiling and 60fps for this session's
+   frame size and quality. Otherwise it picks H.264 if both sides have
+   it, and JPEG if not. The result goes in `HelloAck.selectedVideoCodec`
+   as usual.
+
+A rejected Hello gets no probe. Without the flag, the host picks the
+best codec the client advertised, as before. These are new packet types
+an older peer never sends or receives, so there was no
+`protocolVersion` bump.
 
 ## Handshake (as currently implemented)
 

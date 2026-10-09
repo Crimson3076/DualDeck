@@ -543,6 +543,7 @@ int main(int argc, char** argv) {
         // comment for why the host still gets the final say either way.
         netConfig.preferH264 = clientSettings.videoCodecH264Experimental;
         netConfig.preferPyroWave = clientSettings.videoCodecPyroWaveExperimental;
+        netConfig.autoVideoCodec = clientSettings.videoCodecAuto;
         NetClient net(netConfig);
 
         // Forwards every logLine() call to the host as a ClientLog packet
@@ -855,10 +856,11 @@ int main(int argc, char** argv) {
                     (trackpadExperimentEnabled ? "ON" : "OFF"),
                 std::string("MIRROR HOST SCREEN (EXPERIMENTAL): ") +
                     (clientSettings.mirrorHostScreen ? "ON" : "OFF"),
-                std::string("VIDEO CODEC (EXPERIMENTAL): ") +
-                    (clientSettings.videoCodecPyroWaveExperimental ? "PYROWAVE"
-                     : clientSettings.videoCodecH264Experimental  ? "H264"
-                                                                  : "JPEG"),
+                std::string("VIDEO CODEC: ") +
+                    (clientSettings.videoCodecAuto                 ? "AUTO"
+                     : clientSettings.videoCodecPyroWaveExperimental ? "PYROWAVE"
+                     : clientSettings.videoCodecH264Experimental     ? "H264"
+                                                                     : "JPEG"),
                 std::string("DEBUG OVERLAY: ") + (clientSettings.debugOverlayEnabled ? "ON" : "OFF"),
             };
             if (!hostExplicit) items.push_back("RUN SETUP WIZARD");
@@ -905,13 +907,15 @@ int main(int argc, char** argv) {
         // cycleVideoQuality() above -- codec preference is negotiated
         // once, in Hello, same as videoQuality.
         auto toggleVideoCodec = [&](int direction) {
-            // 0 = JPEG, 1 = H264, 2 = PYROWAVE.
-            int current = clientSettings.videoCodecPyroWaveExperimental ? 2
-                          : clientSettings.videoCodecH264Experimental  ? 1
-                                                                       : 0;
-            int next = (current + 3 + direction) % 3;
-            clientSettings.videoCodecH264Experimental = next == 1;
-            clientSettings.videoCodecPyroWaveExperimental = next == 2;
+            // 0 = AUTO, 1 = JPEG, 2 = H264, 3 = PYROWAVE.
+            int current = clientSettings.videoCodecAuto                   ? 0
+                          : clientSettings.videoCodecPyroWaveExperimental ? 3
+                          : clientSettings.videoCodecH264Experimental     ? 2
+                                                                          : 1;
+            int next = (current + 4 + direction) % 4;
+            clientSettings.videoCodecAuto = next == 0;
+            clientSettings.videoCodecH264Experimental = next == 2;
+            clientSettings.videoCodecPyroWaveExperimental = next == 3;
             settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
             reconnectRequested = true;
         };

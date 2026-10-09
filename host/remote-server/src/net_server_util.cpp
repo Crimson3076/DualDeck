@@ -250,4 +250,25 @@ size_t pyrowaveMaxFrameBytes(int quality, uint16_t width, uint16_t height) {
 }
 
 
+uint32_t pyrowavePeakKbps(int quality, uint16_t width, uint16_t height) {
+    constexpr uint64_t kAssumedPeakFps = 60;
+    return static_cast<uint32_t>(pyrowaveMaxFrameBytes(quality, width, height) * 8 * kAssumedPeakFps / 1000);
+}
+
+VideoCodec chooseAutoVideoCodec(uint8_t clientSupportedCodecs, bool hostHasH264, bool hostHasPyroWave,
+                                HostMode mode, int quality, uint16_t width, uint16_t height,
+                                uint32_t measuredKbps) {
+    const bool pyroWaveFits =
+        measuredKbps > 0 &&
+        static_cast<double>(measuredKbps) >= kAutoPyroWaveHeadroom * pyrowavePeakKbps(quality, width, height);
+    if ((clientSupportedCodecs & kVideoCodecBit_PyroWave) && hostHasPyroWave && mode == HostMode::Emulation &&
+        pyroWaveFits) {
+        return VideoCodec::PyroWave;
+    }
+    if ((clientSupportedCodecs & kVideoCodecBit_H264) && hostHasH264) {
+        return VideoCodec::H264;
+    }
+    return VideoCodec::Jpeg;
+}
+
 } // namespace dualdeck::host::net_detail

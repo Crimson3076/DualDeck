@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
              renderPauseMenu(renderer,
                              {"AUTO UPDATE ON LAUNCH: ON", "VIDEO QUALITY: LOW (SLOWEST LINKS)",
                               "TRACKPAD AS NATIVE INPUT (EXPERIMENTAL): OFF",
-                              "MIRROR HOST SCREEN (EXPERIMENTAL): OFF", "VIDEO CODEC (EXPERIMENTAL): JPEG",
+                              "MIRROR HOST SCREEN (EXPERIMENTAL): OFF", "VIDEO CODEC: AUTO",
                               "DEBUG OVERLAY: OFF", "RUN SETUP WIZARD", "MICROPHONE: SYSTEM DEFAULT",
                               "MIC: ON", "BACK"},
                              8, "SETTINGS", "", 0.4f, "", settingsHints);

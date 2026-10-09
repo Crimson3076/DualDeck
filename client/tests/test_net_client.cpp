@@ -25,8 +25,10 @@
 #include "host/logging_input_sink.h"
 #include "host/logging_mic_audio_sink.h"
 #include "host/net_server.h"
+#include "host/pyrowave_encoder.h"
 #include "dualdeck/protocol.h"
 #include "net_client.h"
+#include "pyrowave_decoder.h"
 #include "test_framework.h"
 
 using namespace dualdeck;
@@ -591,4 +593,43 @@ MDR_TEST(net_client_drops_a_log_line_when_not_connected) {
     client.sendClientLog("this should be dropped, not queued\n");
     // No observable effect to assert beyond "this doesn't crash or
     // block" -- there is no server to receive anything from, by design.
+}
+
+// VIDEO CODEC: AUTO end to end: the host runs its link-speed test before
+// HelloAck, the client reports a rate, and the session still connects
+// on a codec both sides can run. Loopback is far faster than any
+// PyroWave need, so PyroWave wins whenever both sides have it.
+MDR_TEST(net_client_auto_codec_measures_the_link_and_picks_a_codec) {
+    ServerFixture fixture;
+    SizedFrameSource dsFrame(256, 192);
+    fixture.server.setTarget(fixture.sinkA, dsFrame, HostMode::Emulation, SystemIdentity{"nds", "Nintendo DS"},
+                              AdapterIdentity{"melonds", "melonDS", "1.0"});
+
+    NetClientConfig clientConfig = fixture.clientConfig();
+    clientConfig.autoVideoCodec = true;
+    NetClient client(clientConfig);
+    MDR_CHECK(client.connect());
+    MDR_CHECK(client.isConnected());
+    MDR_CHECK(client.measuredBandwidthKbps() > 0);
+
+    VideoCodec expected = VideoCodec::Jpeg;
+#ifdef DUALDECK_HAVE_OPENH264
+    expected = VideoCodec::H264;
+#endif
+    if (PyroWaveDecoder::isAvailable() && dualdeck::host::PyroWaveEncoder::isAvailable()) {
+        expected = VideoCodec::PyroWave;
+    }
+    MDR_CHECK(client.negotiatedVideoCodec() == expected);
+
+    client.disconnect();
+}
+
+// Without AUTO there's no probe: nothing measured, same codec as before.
+MDR_TEST(net_client_without_auto_codec_skips_the_link_test) {
+    ServerFixture fixture;
+    NetClient client(fixture.clientConfig());
+    MDR_CHECK(client.connect());
+    MDR_CHECK_EQ(client.measuredBandwidthKbps(), 0u);
+    MDR_CHECK(client.negotiatedVideoCodec() == VideoCodec::Jpeg);
+    client.disconnect();
 }

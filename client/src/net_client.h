@@ -69,6 +69,13 @@ struct NetClientConfig {
     // hardware it needs at runtime.
     bool preferPyroWave = false;
 
+    // VIDEO CODEC: AUTO. Advertises every codec this build can decode
+    // plus kVideoCodecFlag_Auto, which makes the host pick one itself
+    // after a short link-speed test during the handshake (see
+    // PacketType::BandwidthProbe). preferH264/preferPyroWave are ignored
+    // when this is set.
+    bool autoVideoCodec = false;
+
     // How often to send a Heartbeat packet on the control channel while
     // otherwise idle, so the host's control-channel timeout doesn't fire
     // on a live-but-quiet connection.
@@ -197,6 +204,9 @@ public:
     // since codec choice is fixed for a session's whole lifetime (same
     // as HelloPayload::videoQuality).
     VideoCodec negotiatedVideoCodec() const { return negotiatedVideoCodec_.load(); }
+    // The link speed measured during the last AUTO-codec handshake, in
+    // kbit/s; 0 if none ran or it couldn't be measured.
+    uint32_t measuredBandwidthKbps() const { return measuredBandwidthKbps_.load(); }
 
     // Debug-overlay stats (GitHub/real user request, 2026-08-26: "show
     // the user what resolution is being streamed, what fps, codec, etc
@@ -285,6 +295,7 @@ private:
     std::atomic<bool> hostMicSupported_{false};
     std::atomic<HostMode> hostMode_{HostMode::Emulation};
     std::atomic<VideoCodec> negotiatedVideoCodec_{VideoCodec::Jpeg};
+    std::atomic<uint32_t> measuredBandwidthKbps_{0};
     // Read on every received video packet by videoReceiveLoop() (see
     // hostNativeWidth()/hostNativeHeight() below), so atomic like
     // sessionId_/hostMode_ above rather than mutex-guarded like

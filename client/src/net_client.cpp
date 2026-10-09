@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <thread>
 
 namespace dualdeck::client {
@@ -279,9 +280,15 @@ bool NetClient::connect() {
     // VideoCodecBit_PyroWave likewise only if config_.preferPyroWave
     // opted in, and only once PyroWaveDecoder::isAvailable() has
     // confirmed a capable Vulkan device -- see that field's own comment.
-    helloPayload.supportedVideoCodecs =
-        kVideoCodecBit_Jpeg | (config_.preferH264 ? kVideoCodecBit_H264 : 0) |
-        (config_.preferPyroWave && PyroWaveDecoder::isAvailable() ? kVideoCodecBit_PyroWave : 0);
+    if (config_.autoVideoCodec) {
+        helloPayload.supportedVideoCodecs =
+            kVideoCodecBit_Jpeg | kVideoCodecFlag_Auto | (H264Decoder::isAvailable() ? kVideoCodecBit_H264 : 0) |
+            (PyroWaveDecoder::isAvailable() ? kVideoCodecBit_PyroWave : 0);
+    } else {
+        helloPayload.supportedVideoCodecs =
+            kVideoCodecBit_Jpeg | (config_.preferH264 ? kVideoCodecBit_H264 : 0) |
+            (config_.preferPyroWave && PyroWaveDecoder::isAvailable() ? kVideoCodecBit_PyroWave : 0);
+    }
     ByteBuffer hello = buildHelloPacket(helloPayload);
     // Protocol v14: the client's own half of the clock-offset estimate
     // below -- captured as close to the actual send as possible, same
@@ -293,13 +300,71 @@ bool NetClient::connect() {
         return false;
     }
 
+    // An AUTO-codec host runs its link-speed test before HelloAck: time
+    // the BandwidthProbe chunks from the end of the first to the end of
+    // the last, and report the rate back. Skipping the first chunk's own
+    // arrival leaves the round trip and TCP's start-up out of the number.
     uint8_t ackHeaderBuf[kPacketHeaderWireSize];
-    if (!recvExact(controlFd_, ackHeaderBuf, sizeof(ackHeaderBuf))) {
-        logLine("failed to receive HelloAck\n");
-        closePartialConnection();
-        return false;
+    std::optional<PacketHeader> ackHeader;
+    measuredBandwidthKbps_ = 0;
+    std::optional<std::chrono::steady_clock::time_point> probeStart;
+    uint64_t probeBytes = 0;
+    ByteBuffer probeBuf;
+    while (true) {
+        if (!recvExact(controlFd_, ackHeaderBuf, sizeof(ackHeaderBuf))) {
+            logLine("failed to receive HelloAck\n");
+            closePartialConnection();
+            return false;
+        }
+        ackHeader = parseHeader(ackHeaderBuf, sizeof(ackHeaderBuf));
+        if (!config_.autoVideoCodec || !ackHeader || ackHeader->type != PacketType::BandwidthProbe) break;
+        if (ackHeader->payloadSize > 1 + kBandwidthProbeChunkBytes) {
+            logLine("handshake rejected by host (oversized bandwidth probe)\n");
+            closePartialConnection();
+            return false;
+        }
+        probeBuf.resize(ackHeader->payloadSize);
+        if (!probeBuf.empty() && !recvExact(controlFd_, probeBuf.data(), probeBuf.size())) {
+            logLine("failed to receive bandwidth probe\n");
+            closePartialConnection();
+            return false;
+        }
+        auto probe = parseBandwidthProbePayload(probeBuf.data(), probeBuf.size());
+        if (!probe) {
+            logLine("handshake rejected by host (malformed bandwidth probe)\n");
+            closePartialConnection();
+            return false;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (!probeStart) {
+            probeStart = now;
+        } else {
+            probeBytes += kPacketHeaderWireSize + probeBuf.size();
+        }
+        if (probe->last) {
+            const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(now - *probeStart).count();
+            uint64_t kbps = 0;
+            if (probeBytes > 0) {
+                // Faster than a 1us clock can tell apart: report the cap.
+                kbps = elapsedUs > 0 ? probeBytes * 8 * 1000 / static_cast<uint64_t>(elapsedUs) : UINT32_MAX;
+            }
+            measuredBandwidthKbps_ = static_cast<uint32_t>(std::min<uint64_t>(kbps, UINT32_MAX));
+            logLine("[net] measured link speed: %u kbit/s (%llu bytes in %lld us)\n",
+                    measuredBandwidthKbps_.load(), static_cast<unsigned long long>(probeBytes),
+                    static_cast<long long>(elapsedUs));
+            BandwidthReportPayload report;
+            report.measuredKbps = measuredBandwidthKbps_.load();
+            ByteBuffer reportPacket = buildBandwidthReportPacket(report);
+            // The clock-offset estimate below assumes nothing happens
+            // between our last send and HelloAck, so restart its clock.
+            helloSendTimeUs = wallClockNowUs();
+            if (!sendAll(controlFd_, reportPacket.data(), reportPacket.size())) {
+                logLine("failed to send bandwidth report\n");
+                closePartialConnection();
+                return false;
+            }
+        }
     }
-    auto ackHeader = parseHeader(ackHeaderBuf, sizeof(ackHeaderBuf));
     if (!ackHeader || ackHeader->type != PacketType::HelloAck || ackHeader->payloadSize > 256) {
         logLine("handshake rejected by host (bad response header)\n");
         closePartialConnection();
