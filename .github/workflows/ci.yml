@@ -139,17 +139,21 @@ jobs:
         working-directory: decky-plugin
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
 
       # The backend is tested against the real host service in the
       # protocol-and-host job (tests/decky_host_control_test.py); this
-      # checks the React panel still bundles against current @decky/*.
+      # checks the React panel still type-checks and bundles. Installs
+      # exactly what pnpm-lock.yaml pins, without running packages'
+      # install scripts (the build doesn't need any).
       - name: Install and build
         run: |
-          npm install -g pnpm@9
-          pnpm install
+          pnpm install --frozen-lockfile --ignore-scripts
           pnpm run typecheck
           pnpm run build
 

@@ -98,9 +98,13 @@ is the actual problem.
 ## Building
 
 ```sh
-pnpm install
+pnpm install --frozen-lockfile
 pnpm run build
 ```
+
+`pnpm-lock.yaml` pins every dependency; CI installs from it with
+pnpm 9.15.9. After changing `package.json`, run `pnpm install` and commit
+the updated lockfile.
 
 Then install the plugin directory into Decky Loader the normal way for
 a locally-built plugin (copy it into Decky's plugin directory, or use
