@@ -1,28 +1,18 @@
 #include "net_server_internal.h"
 
-#include "host/net_server.h"
-
 #include <arpa/inet.h>
 #include <netinet/in.h>
-#include <netinet/tcp.h>
 #include <sys/socket.h>
-#include <sys/time.h>
 #include <unistd.h>
-
-#include <turbojpeg.h>
 
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
-#include <optional>
-#include <utility>
 
 #include "host/h264_encoder.h"
 #include "host/pyrowave_encoder.h"
-#include "melonds_remote/protocol.h"
 
 namespace melonds_remote::host::net_detail {
 
@@ -46,17 +36,22 @@ uint64_t nowMicrosEpoch() {
         duration_cast<microseconds>(system_clock::now().time_since_epoch()).count());
 }
 
-// Binds a TCP listening socket to config.bindAddress:port. Returns -1 on
-// failure (logged); never falls back to binding all interfaces implicitly.
-int makeTcpListener(const std::string& bindAddress, uint16_t port) {
-    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+namespace {
+
+// Creates an AF_INET socket of `type` bound to bindAddress:port. Returns -1
+// on failure (logged); never falls back to binding all interfaces
+// implicitly. `kind` ("tcp"/"udp") only labels the log lines.
+int bindInetSocket(int type, const char* kind, const std::string& bindAddress, uint16_t port) {
+    int fd = ::socket(AF_INET, type, 0);
     if (fd < 0) {
-        std::perror("socket (tcp)");
+        std::fprintf(stderr, "socket (%s): %s\n", kind, std::strerror(errno));
         return -1;
     }
 
-    int reuse = 1;
-    ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    if (type == SOCK_STREAM) {
+        int reuse = 1;
+        ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    }
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
@@ -68,7 +63,8 @@ int makeTcpListener(const std::string& bindAddress, uint16_t port) {
     }
 
     if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-        std::perror("bind (tcp)");
+        const int bindErrno = errno;
+        std::fprintf(stderr, "bind (%s): %s\n", kind, std::strerror(bindErrno));
         // Real user report, 2026-08-03: melonDS's own in-process
         // NetServer (this file, vendored into the melonDS patch) and the
         // separate persistent Host Control daemon (dualdeck-host-
@@ -88,19 +84,13 @@ int makeTcpListener(const std::string& bindAddress, uint16_t port) {
         // failure) is exactly this scenario; call it out by name so
         // whoever reads this line (interactively, or via journalctl if
         // launched under systemd) doesn't have to guess.
-        if (errno == EADDRINUSE) {
+        if (bindErrno == EADDRINUSE) {
             std::fprintf(stderr,
                           "NetServer: port %u is already in use -- if the persistent Host Control "
                           "daemon (dualdeck-host-control.service) is running, stop it first "
                           "(systemctl --user stop dualdeck-host-control.service), then relaunch.\n",
                           port);
         }
-        ::close(fd);
-        return -1;
-    }
-
-    if (::listen(fd, 1) < 0) {
-        std::perror("listen");
         ::close(fd);
         return -1;
     }
@@ -108,39 +98,20 @@ int makeTcpListener(const std::string& bindAddress, uint16_t port) {
     return fd;
 }
 
-int makeUdpSocket(const std::string& bindAddress, uint16_t port) {
-    int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0) {
-        std::perror("socket (udp)");
-        return -1;
-    }
+} // namespace
 
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    if (::inet_pton(AF_INET, bindAddress.c_str(), &addr.sin_addr) != 1) {
-        std::fprintf(stderr, "invalid bind address: %s\n", bindAddress.c_str());
+int makeTcpListener(const std::string& bindAddress, uint16_t port) {
+    int fd = bindInetSocket(SOCK_STREAM, "tcp", bindAddress, port);
+    if (fd >= 0 && ::listen(fd, 1) < 0) {
+        std::perror("listen");
         ::close(fd);
         return -1;
     }
-
-    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-        std::perror("bind (udp)");
-        // See makeTcpListener()'s identical EADDRINUSE handling above --
-        // same melonDS-vs-persistent-daemon port conflict, just on the
-        // UDP input port instead of the TCP control/video ones.
-        if (errno == EADDRINUSE) {
-            std::fprintf(stderr,
-                          "NetServer: port %u is already in use -- if the persistent Host Control "
-                          "daemon (dualdeck-host-control.service) is running, stop it first "
-                          "(systemctl --user stop dualdeck-host-control.service), then relaunch.\n",
-                          port);
-        }
-        ::close(fd);
-        return -1;
-    }
-
     return fd;
+}
+
+int makeUdpSocket(const std::string& bindAddress, uint16_t port) {
+    return bindInetSocket(SOCK_DGRAM, "udp", bindAddress, port);
 }
 
 // Constant-time-ish string comparison: always compares the same number of

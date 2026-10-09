@@ -2,27 +2,22 @@
 
 #include "net_server_internal.h"
 
-#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
 
-#include <turbojpeg.h>
-
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <optional>
+#include <thread>
 #include <utility>
 
 #include "host/h264_encoder.h"
 #include "host/pyrowave_encoder.h"
-#include "melonds_remote/protocol.h"
 
 namespace melonds_remote::host {
 
