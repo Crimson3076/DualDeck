@@ -131,6 +131,32 @@ jobs:
       - name: Run update checksum test
         run: python3 tests/apply_update_test.py
 
+  decky-plugin-frontend:
+    name: Build the Decky plugin frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: decky-plugin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Node's bundled Corepack provides the pnpm version package.json's
+      # packageManager field pins.
+      - run: corepack enable
+
+      # The backend is tested against the real host service in the
+      # protocol-and-host job (tests/decky_host_control_test.py); this
+      # checks the React panel still type-checks and bundles. Installs
+      # exactly what pnpm-lock.yaml pins, without running packages'
+      # install scripts (the build doesn't need any).
+      - name: Install and build
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm run typecheck
+          pnpm run build
+
   net-client-compiles:
     name: Compile client net_client.cpp/device_identity.cpp standalone (no SDL3 available)
     runs-on: ubuntu-latest
