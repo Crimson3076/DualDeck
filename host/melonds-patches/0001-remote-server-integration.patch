@@ -427,7 +427,7 @@ index a8b1021..e5771ec 100755
 +    // Real user report, 2026-08-01: this used to unconditionally log
 +    // "enabled" and return, even when the NetServer underneath failed to
 +    // bind (e.g. a leftover process -- most plausibly an orphaned
-+    // dualdeck-host-service, see docs/known-limitations.md's "orphaned
++    // dualdeck-host-service, see docs/history.md's "orphaned
 +    // private host-service" entry -- already listening on one of the
 +    // same default ports) -- the only trace of the real failure was a
 +    // NetServer stderr line nobody launching via a Steam/EmuDeck
@@ -511,7 +511,7 @@ index a1eab0e..2c30617 100755
 +    // separate one, so it gets melonDS's existing time-stretch-to-
 +    // DS-mic-rate handling for free. Called from inputProcess() on the
 +    // emulation thread once per frame with whatever RemoteServerBridge
-+    // has queued since the last call (see docs/known-limitations.md for
++    // has queued since the last call (see docs/history.md for
 +    // the one tradeoff this reuse creates: local External-mode capture
 +    // and remote audio would interleave in this same buffer if both were
 +    // active at once, an unsupported combination this patch doesn't try
@@ -640,7 +640,7 @@ index 7df4d9f..d27911f 100644
 +    // setup with silence). If a host operator has *also* manually
 +    // enabled local External-mode capture from a real device at the
 +    // same time, both sources share micExtBuffer and interleave -- an
-+    // unsupported combination documented in docs/known-limitations.md,
++    // unsupported combination documented in docs/history.md,
 +    // not something this patch tries to arbitrate between.
 +    bool remoteActive;
 +    {
@@ -819,7 +819,7 @@ index a0bc623..0373ce7 100644
 +        // Only the emulator actions with an existing, unambiguous hotkey
 +        // equivalent are wired up via hotkeyMask so far; save/load state
 +        // and the rest of spec section 7.5 are intentionally not
-+        // implemented yet (see docs/known-limitations.md in the
++        // implemented yet (see docs/history.md in the
 +        // melonds-remote repository). QuitSession/QuitApplication just
 +        // below are the two exceptions -- melonDS has no *hotkey*
 +        // equivalent for "eject the cart" or "quit the app" at all, only
@@ -1245,7 +1245,7 @@ index 0000000..3e0cf18
 +
 +// Reads the bottom-screen layer back from melonDS's OpenGL/OpenGLCompute
 +// 3D renderer's final-output array texture, for hosts that don't use the
-+// software 3D renderer (see docs/known-limitations.md's "Video transport"
++// software 3D renderer (see docs/history.md's "Video transport"
 +// entry and docs/melonds-integration-analysis.md section 1.2 for why
 +// GPU::GetFramebuffers() alone isn't enough in that case: it hands back a
 +// GL texture handle instead of a RAM pointer, and doesn't split out the
@@ -2442,7 +2442,7 @@ index 0000000..2abf61f
 +        // these exact same default client-facing ports -- melonDS isn't
 +        // wired into the shared-daemon/adapter-IPC model Azahar/Cemu use
 +        // (a known, deliberately-deferred larger rework, see
-+        // docs/known-limitations.md), so nothing today stops both from
++        // docs/history.md), so nothing today stops both from
 +        // trying to claim the same port at once. When that happens here,
 +        // this melonDS instance silently never starts a server at all
 +        // while the client, upon connecting, reaches whichever one *did*
@@ -3781,7 +3781,7 @@ index 0000000..632e3d2
 +    // approvalStateFilePath / onPendingRequestsChanged) rather than
 +    // requiring a fixed secret configured and distributed by hand, or a
 +    // code typed on the client (which Steam Input's virtual keyboard
-+    // doesn't reliably bring up -- see docs/known-limitations.md).
++    // doesn't reliably bring up -- see docs/history.md).
 +    std::string authToken;
 +
 +    // Where approved device identities are persisted so an approved

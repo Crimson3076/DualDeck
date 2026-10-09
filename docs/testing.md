@@ -107,7 +107,7 @@ exercised a 6-digit-code-typed-on-the-client flow (spec section 13's
 "six-digit pairing code" option as originally proposed). That flow was
 replaced with device-approval because Steam Input doesn't reliably bring
 up a virtual keyboard in Gaming Mode, so requiring the client to type
-anything wasn't a workable UX -- see `docs/known-limitations.md`.
+anything wasn't a workable UX -- see `docs/history.md`.
 
 ## Host/client menu lifecycle test (`tests/host_client_menu_lifecycle_test.py`)
 
@@ -178,7 +178,7 @@ python3 tests/dualdeck_branch_selector_test.py
 - Real Steam Deck hardware: the SDL3 client has been build- and
   run-verified (real handshake/device-approval, real sustained
   video/input traffic against both the standalone host and the actual
-  patched melonDS host -- see `docs/known-limitations.md`), but only
+  patched melonDS host -- see `docs/history.md`), but only
   headlessly in this sandbox, with no physical gamepad. Manual testing on
   real Deck hardware (Gaming Mode and Desktop Mode, both LCD and OLED
   models) is still needed.
@@ -195,4 +195,4 @@ python3 tests/dualdeck_branch_selector_test.py
   `host/remote-server/` and compiles `client/src/net_client.cpp`
   standalone, but does not attempt a full SDL3 client build (no SDL3
   system package pinned in the CI image yet) -- see
-  `docs/known-limitations.md`.
+  `docs/history.md`.

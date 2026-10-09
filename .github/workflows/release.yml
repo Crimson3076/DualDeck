@@ -4,7 +4,7 @@ name: Release (versioned build)
 # scratch and publishes them as a new, uniquely-tagged GitHub Release,
 # so there's always something to grab and test without needing to build
 # anything yourself. See scripts/build-release.sh for what actually gets
-# built/packaged, and docs/known-limitations.md (bundled in the archive)
+# built/packaged, and docs/history.md (bundled in the archive)
 # for what is/isn't verified in a given build.
 #
 # Deliberately **manual only** (workflow_dispatch), not triggered by
@@ -236,7 +236,7 @@ jobs:
             this version turns out to have a problem, previous versions remain
             available on the [**Releases**](../../releases) page. See
             `RELEASE_NOTES.md` inside the archive for the exact commit it was
-            built from, and `docs/known-limitations.md` (also bundled) for what
+            built from, and `docs/history.md` (also bundled) for what
             is and isn't verified.
           files: |
             release-out/*.tar.gz

@@ -2,7 +2,7 @@
 # Checks whether any EmuDeck AppImage scripts/emudeck-replace-in-place.sh
 # previously installed has been silently replaced since (most likely by
 # EmuDeck's own "Manage Emulators" updater doing a straight file swap) --
-# see docs/known-limitations.md's Phase A entry for why this can only ever
+# see docs/history.md's Phase A entry for why this can only ever
 # detect drift after the fact, not prevent the window where a replaced
 # file is transiently back to stock (no remote-server capability) between
 # the swap and the next time this runs.

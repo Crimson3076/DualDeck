@@ -2,7 +2,7 @@
 // kdialog_approval_prompt.h that doesn't require a real subprocess/display
 // to exercise. promptDeviceApprovalViaKdialog() itself (the fork()/
 // execlp()/waitpid() wrapper) is only verified by manual testing on a real
-// KDE desktop -- see docs/known-limitations.md.
+// KDE desktop -- see docs/history.md.
 
 #include "host/kdialog_approval_prompt.h"
 #include "test_framework.h"

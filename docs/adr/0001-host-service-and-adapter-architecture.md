@@ -27,7 +27,7 @@ phase (GitHub issue #28's "foundation milestone") added shared,
 emulator-independent identity types (`SystemIdentity`/`AdapterIdentity`
 in `protocol.h`) so the host can say *what* it's emulating and *which*
 adapter is driving it, without the client hardcoding any assumptions --
-see that phase's own summary in `docs/known-limitations.md`. That work
+see that phase's own summary in `docs/history.md`. That work
 did not touch surfaces, input, or the networking/adapter boundary
 itself.
 
@@ -125,7 +125,7 @@ real out-of-process `dualdeck-synthetic-adapter` binary
 (`adapter-sdk/synthetic_adapter/`) proven to exchange real, changing
 frames with a real server across two genuinely separate OS processes
 (not just an in-test-process pair) -- see
-`docs/known-limitations.md`'s matching entry for the exact verification
+`docs/history.md`'s matching entry for the exact verification
 performed, including a real bug this caught (see that entry's "Verified"
 section).
 
@@ -137,7 +137,7 @@ section 4 below, instead of the default `LoggingInputSink`+
 `SyntheticFrameSource` pair. The default (no-flag) invocation is
 completely unchanged -- this is additive, not a replacement. See section
 4's "Implemented" note for the compatibility-adapter details and
-`docs/known-limitations.md` for the real client/server/adapter
+`docs/history.md` for the real client/server/adapter
 cross-process verification performed against this mode.
 
 For an adapter that runs **in the same process** as the Host Service
@@ -213,7 +213,7 @@ L2/R2/L3/R3 that DS has no equivalent of), and passes
 `EmulatorAction`/`GenericEmulatorAction` straight through as a raw
 `uint32_t` since those two enums were deliberately given identical bit
 positions. Mic audio is **not** bridged in this phase -- see
-`docs/known-limitations.md`.
+`docs/history.md`.
 
 `host/remote-server/src/main.cpp` gained an opt-in
 `--adapter-ipc`/`--adapter-socket PATH` mode: it starts an
@@ -231,7 +231,7 @@ real cross-process run (a genuine SDL3 `melonds-remote-client`, a real
 `melonds-remote-server --adapter-socket`, and the real
 `dualdeck-synthetic-adapter` binary as three separate OS processes) that
 confirmed the client renders live, animating frames sourced entirely
-from the separate adapter process. See `docs/known-limitations.md` for
+from the separate adapter process. See `docs/history.md` for
 the exact verification performed.
 
 Concretely: the live wire protocol (`protocol.h`, `kProtocolVersion 6`,
@@ -310,7 +310,7 @@ process-boundary question for when out-of-process operation is actually
 attempted.
 
 **Verified**: the full `interactive_pipeline_test.py`-style real-pipeline
-proof (see `docs/known-limitations.md` for the exact run) -- a real UDP
+proof (see `docs/history.md` for the exact run) -- a real UDP
 `ControllerState` packet for each of A/B/Up, sent through the actual
 `NetServer` → `AdapterBridge` → `MelonDSAdapter` → `MelonDSInputSink` →
 `EmuInstance::inputProcess()` → `NDS::SetKeyMask()` chain, produced three
@@ -344,7 +344,7 @@ proves the IPC connection itself works reliably enough to build on,
 including surfacing and fixing two real concurrency/lifecycle bugs in
 `adapter-sdk/ipc/` along the way (reconnect-after-drop crash from an
 unjoined thread, and an adapter-side idle timeout when no client is
-connected yet) -- see `docs/known-limitations.md`'s matching entry for
+connected yet) -- see `docs/history.md`'s matching entry for
 both fixes and the full real-pipeline verification, including a
 deliberate 7-second zero-input-traffic gap proving the second fix.
 
@@ -372,7 +372,7 @@ the control channel after its handshake today, so a sent `ModeChanged`
 packet is real on the wire but currently unconsumed (issue #4 Phase E).
 This phase only had to prove the mechanism itself -- swap, release,
 notify -- works correctly under real concurrent socket traffic; see
-`docs/known-limitations.md`'s matching entry for the real end-to-end
+`docs/history.md`'s matching entry for the real end-to-end
 test suite that verifies it.
 
 ### 8. HostControlAdapter: a virtual gamepad for host navigation (GitHub issue #4 Phase C)
@@ -394,7 +394,7 @@ This section explicitly does not decide *when* a Host Service actually
 constructs a `HostControlAdapter` and calls `setTarget()` with it --
 that coordination (start-up default, swap-out on an adapter connecting,
 swap-back on disconnect, and any manual override) is issue #4 Phase D,
-still open. See `docs/known-limitations.md`'s matching entry for the
+still open. See `docs/history.md`'s matching entry for the
 translation-logic test coverage and this sandbox's `/dev/uinput`
 limitation.
 
@@ -463,20 +463,20 @@ and announces it (7), `HostControlAdapter` is a real target to swap to
 (8), `ModeCoordinator` drives the swap automatically with a manual
 override (9), and now a client can actually be sitting in front of a
 person while all of that happens, transparently, without a reconnect.
-See `docs/known-limitations.md`'s matching entry for what was verified
+See `docs/history.md`'s matching entry for what was verified
 (a real `NetClient`-against-real-`NetServer` test suite, and a full
 real-binary run of the actual client executable against the actual
 server and synthetic-adapter binaries) and what remains
 sandbox-unverifiable (uinput on real hardware, a real display).
 
 **What section 10 does not close**: the product-packaging gap noted in
-`docs/known-limitations.md`'s Phase E entry -- nothing yet starts the
+`docs/history.md`'s Phase E entry -- nothing yet starts the
 standalone Host Service independently of melonDS in the actual shipped
 release, so host-control mode has no trigger in the real product outside
 of this phase's own scripted verification against the standalone
 binaries. GitHub issue #4 Phase F closes this, but deliberately as an
 opt-in, clearly-labeled-experimental launch path rather than the
-default -- see `docs/known-limitations.md`'s matching Phase F entry for
+default -- see `docs/history.md`'s matching Phase F entry for
 why: it needs a static auth token because melonDS's interactive
 device-approval dialog has no bridge to a Host Service running in a
 different process, which is real, separate, unfinished work this ADR's
@@ -494,7 +494,7 @@ against fake DS/3DS/Wii U fixtures until now, actually holds up against
 a second genuine emulator. It does, unmodified: no change to
 `adapter_contract.h`, `generic_input.h`, `video_surface.h`, or
 `session_state.h` was needed. See `docs/azahar-integration-analysis.md`
-(this milestone's own Phase 0) and `docs/known-limitations.md`'s
+(this milestone's own Phase 0) and `docs/history.md`'s
 matching entry for the full technical detail; this section records the
 architectural decisions.
 
@@ -531,7 +531,7 @@ pattern:
   `host/remote-server`'s own code -- only a new adapter implementation
   and launcher-level plumbing.
 
-**What section 11 does not close**: everything `docs/known-limitations.md`'s
+**What section 11 does not close**: everything `docs/history.md`'s
 matching entry lists under "Still open" -- no real 3DS game has been
 tested against this (no display/GPU stack in this sandbox), no
 Distrobox path exists for Azahar yet, and this remains deliberately

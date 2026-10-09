@@ -48,8 +48,8 @@ After that, it's remembered automatically.
   directly.
 - `client/` -- the Steam Deck client, laid out the same way.
 - `docs/` -- setup guides, the wire protocol reference, and
-  `known-limitations.md` (an honest list of what is and isn't verified
-  in this specific build).
+  `known-limitations.md` (what doesn't work yet), and `history.md` (the
+  full development log those notes link into).
 - `RELEASE_NOTES.md` -- exactly which commit this build was made from.
 - `VERSION` / `check-for-updates.sh` -- what the "Check for updates"
   menu choice uses; read-only if run directly, never downloads or

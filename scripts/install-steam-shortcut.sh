@@ -98,7 +98,7 @@ exe="${central_install_dir}/client/dualdeck-client"
 # the Steam AppName changed ("melonDS Remote" -> "DualDeck")
 # simultaneously, so steam_shortcut.py's Exe-OR-AppName matching can't
 # reliably find-and-update the old entry on its own (see
-# docs/known-limitations.md's rebrand section). Explicitly remove the
+# docs/history.md's rebrand section). Explicitly remove the
 # old entry by its old identity first, best-effort -- if it doesn't
 # exist, or Steam is running and --force wasn't passed, this just fails
 # silently and the upsert below still succeeds with the new identity.

@@ -12,7 +12,7 @@
 # runtime available to test against here. The one part that *is*
 # independently verified against a real, patched, running melonDS is
 # management_client.py (see its own file and
-# docs/known-limitations.md's Decky plugin section for exactly what was
+# docs/history.md's Decky plugin section for exactly what was
 # tested and how). If this plugin fails to load or behaves oddly in
 # Decky itself, that's the untested boundary -- please report it.
 import os

@@ -2,7 +2,7 @@
 
 // PyroWave encoder wrapper -- an optional third video codec alongside
 // JPEG and H.264 (see NetServer::selectVideoCodec()'s own comment and
-// docs/known-limitations.md's PyroWave entry). PyroWave
+// docs/history.md's PyroWave entry). PyroWave
 // (https://github.com/Themaister/pyrowave, MIT) is an intra-only
 // wavelet codec implemented entirely in Vulkan compute shaders, built
 // for exactly this project's use case: LAN game streaming where encode/

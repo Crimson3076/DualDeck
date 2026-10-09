@@ -77,7 +77,7 @@ fi
 # below outright (exit 127, "error while loading shared libraries:
 # libGL.so.1") before melonDS ever starts -- identical root cause,
 # same fix, as scripts/emudeck-replace-in-place.sh's
-# run_in_distrobox_build_container() (see docs/known-limitations.md's
+# run_in_distrobox_build_container() (see docs/history.md's
 # 2026-08-01 entry on that one). melonDS silently never launching
 # explains the symptom exactly: no host process means no listening
 # ports, which means nothing for the client to discover no matter how

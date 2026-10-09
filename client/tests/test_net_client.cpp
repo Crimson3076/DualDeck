@@ -9,7 +9,7 @@
 // updates hostMode()/hostSystemIdentity()/hostAdapterIdentity() while
 // connected, and a dead server connection is actually detected (isConnected()
 // becomes false) rather than hanging forever -- the gap this phase closed
-// (see net_client.h's hostMode() doc comment and docs/known-limitations.md).
+// (see net_client.h's hostMode() doc comment and docs/history.md).
 
 #include <arpa/inet.h>
 #include <netinet/in.h>

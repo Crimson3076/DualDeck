@@ -5,7 +5,7 @@
 // SessionState (an individual adapter's own lifecycle): this describes
 // what the *host process as a whole* is doing, from before any client has
 // even connected through an emulator running and back down again. See
-// docs/known-limitations.md for the design this is the foundation of.
+// docs/history.md for the design this is the foundation of.
 //
 // Not yet wired into the wire protocol (no HostSessionState field exists
 // in HelloAckPayload/ModeChangedPayload yet -- protocol.h's HostMode is

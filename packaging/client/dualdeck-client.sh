@@ -240,7 +240,7 @@ case "${action}" in
                 fi
             fi
         else
-            if confirm "Disable Steam Input for the DualDeck Client shortcut? This is an experimental fix for the touchpad only working while STEAM is held -- see docs/known-limitations.md's 2026-08-02 entry. Not yet confirmed on real hardware; you can turn it back off from this same menu."; then
+            if confirm "Disable Steam Input for the DualDeck Client shortcut? This is an experimental fix for the touchpad only working while STEAM is held -- see docs/history.md's 2026-08-02 entry. Not yet confirmed on real hardware; you can turn it back off from this same menu."; then
                 if ./internal/configure-trackpad-experiment.sh; then
                     info "Steam Input disabled for DualDeck Client. Restart Steam for this to take effect, then relaunch DualDeck and test the touchpad without holding STEAM."
                 fi

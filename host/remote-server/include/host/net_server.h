@@ -96,7 +96,7 @@ struct NetServerConfig {
     // approvalStateFilePath / onPendingRequestsChanged) rather than
     // requiring a fixed secret configured and distributed by hand, or a
     // code typed on the client (which Steam Input's virtual keyboard
-    // doesn't reliably bring up -- see docs/known-limitations.md).
+    // doesn't reliably bring up -- see docs/history.md).
     std::string authToken;
 
     // Where approved device identities are persisted so an approved

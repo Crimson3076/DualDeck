@@ -9,7 +9,7 @@ request.
 ## What this actually does
 
 Toggles the same live on/off switch documented in
-`docs/known-limitations.md`'s "Live-toggle: start/stop remote streaming
+`docs/history.md`'s "Live-toggle: start/stop remote streaming
 without restarting melonDS" section: melonDS (built from
 `host/melonds-patches/0001-remote-server-integration.patch`) runs a
 small always-on management listener whenever a management token is

@@ -93,7 +93,7 @@ else()
 endif()
 
 # H.264 encode (protocol v13's optional codec alongside JPEG -- see
-# docs/known-limitations.md's 2026-08-25 video-codec-negotiation entry
+# docs/history.md's 2026-08-25 video-codec-negotiation entry
 # and h264_encoder.h's own comment). Optional-at-configure-time exactly
 # like X11/Wayland above, not required like TurboJPEG: no session can
 # ever *require* H.264 (NetServer::selectVideoCodec() only ever picks it

@@ -6,7 +6,7 @@
 // mirror the screen"). Both of the user's actual test machines turned
 // out to be Wayland sessions, confirmed real-hardware after the X11-only
 // first cut showed a uniform grey (XWayland's empty compositing root,
-// not a crash -- see docs/known-limitations.md's 2026-08-03 entry on
+// not a crash -- see docs/history.md's 2026-08-03 entry on
 // that finding), so this is the follow-up: the only Wayland capture
 // approach that's portable across both GNOME/Mutter and KDE/KWin (the
 // user's two actual desktop environments) is the xdg-desktop-portal

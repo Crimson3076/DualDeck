@@ -5,7 +5,7 @@
 # shortcuts already point at (~/Applications/*.AppImage), backing up the
 # original first -- so an existing EmuDeck install and its Steam shortcuts
 # keep working completely unedited, just running DualDeck's remote-
-# streaming-capable binary instead of stock. See docs/known-limitations.md's
+# streaming-capable binary instead of stock. See docs/history.md's
 # 2026-08-01 "prebuilt AppImages" entry for the full design rationale
 # (in particular: EmuDeck's exact AppImage naming/glob convention has not
 # been confirmed against a real EmuDeck install from inside this repo --
@@ -36,7 +36,7 @@
 # not because EmuDeck needs it there, but because that's also exactly
 # where RetroDECK's own ES-DE fork (and EmuDeck's upstream ES-DE) checks
 # *before* falling back to RetroDECK's own bundled, unpatched copy (see
-# that function's own comment, and docs/known-limitations.md's 2026-08-28
+# that function's own comment, and docs/history.md's 2026-08-28
 # "RetroDECK" entry, for how this was actually confirmed against
 # RetroDECK's own source rather than assumed). This is a strict addition:
 # an existing EmuDeck install behaves exactly as before, nothing here
@@ -84,7 +84,7 @@ set -euo pipefail
 # Cheap, unconditional insurance against Steam's LD_PRELOAD/LD_LIBRARY_PATH
 # (this tool is normally launched from a Steam shortcut) leaking into any
 # child process this script spawns -- curl, sha256sum, python3. See
-# docs/known-limitations.md's 2026-08-01 entries for the real-world reports
+# docs/history.md's 2026-08-01 entries for the real-world reports
 # that motivated always stripping both unconditionally, before any child
 # process can inherit them, rather than only at whichever call site first
 # surfaces a problem.
@@ -560,7 +560,7 @@ replace_in_place_one() {
                 if flatpak_id="$(find_emudeck_cemu_flatpak_id)"; then
                     echo "== cemu: found a Flatpak install (${flatpak_id}) -- replace-in-place doesn't" >&2
                     echo "   support Flatpak yet (a different, sandboxed install shape -- see" >&2
-                    echo "   docs/known-limitations.md's Phase A entry). Skipping cemu. ==" >&2
+                    echo "   docs/history.md's Phase A entry). Skipping cemu. ==" >&2
                     return 0
                 fi
                 install_fresh_standalone_appimage "cemu" "Cemu.AppImage"

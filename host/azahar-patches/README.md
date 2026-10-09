@@ -21,7 +21,7 @@ files and where they go in the emulator's tree, and
 after `git apply` (used by `scripts/lib/build_emulator.sh` and
 `scripts/patch-existing-emulator.sh`). There is one copy of each file,
 the live one, so the patch can no longer drift behind it (see
-`docs/known-limitations.md`'s 2026-08-01 "frozen protocol copy" entry).
+`docs/history.md`'s 2026-08-01 "frozen protocol copy" entry).
 
 When regenerating the patch, leave the files `shared-files.txt` lists out
 of the diff. `scripts/check-patch-protocol-sync.sh` (run in CI) fails if
@@ -50,7 +50,7 @@ the patch adds any of them again.
      uses (confirmed by reading `Settings::NativeButton::Values`, not
      assumed) so `protocol.h` and `host/adapter_bridge.cpp` needed zero
      changes. New3DS-exclusive ZL/ZR have no wire representation --
-     documented limitation, see `docs/known-limitations.md`.
+     documented limitation, see `docs/history.md`.
 2. `src/citra_qt/remote_server/RemoteServerBridge.{h,cpp}` (new) --
    owns the `AzaharAdapter` plus an `AdapterIpcClient` that connects
    *out* to an already-running `dualdeck-host-service --adapter-ipc`
@@ -81,7 +81,7 @@ running Host Service, authenticated with a static shared secret
 cross-process device-approval bridge (proxying an Approve/Deny prompt
 from the Host Service back into Azahar's Qt UI, or vice versa) was
 explicitly scoped out of this pass as separate, unfinished work -- see
-`docs/known-limitations.md`'s AzaharAdapter entry for the full
+`docs/history.md`'s AzaharAdapter entry for the full
 reasoning. This mirrors the same trade-off already shipped for
 host-control mode (issue #4).
 

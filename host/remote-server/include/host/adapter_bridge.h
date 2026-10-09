@@ -40,7 +40,7 @@
 // confirmed via AzaharAdapter's own capture-loop diagnostics showing
 // 100% successful captures on the Azahar side while NetServer's video
 // stats stayed at zero sent frames the entire session -- see
-// docs/known-limitations.md.
+// docs/history.md.
 //
 // Microphone audio is deliberately NOT bridged here: the generic
 // contract's GenericInputState only carries a micActive flag, not raw

@@ -2,7 +2,7 @@ name: Build test client (H.264 opt-in)
 
 # On-demand build of just the two binaries you actually iterate on --
 # dualdeck-client and dualdeck-host-service -- for testing protocol v13's
-# opt-in H.264 video codec (see docs/known-limitations.md's 2026-08-25
+# opt-in H.264 video codec (see docs/history.md's 2026-08-25
 # video-codec-negotiation entries) against your already-patched Cemu/
 # melonDS/Azahar hosts. Deliberately NOT release.yml: that workflow also
 # rebuilds the patched emulators from scratch (Cemu alone is ~108 vcpkg
@@ -24,7 +24,7 @@ on:
         type: boolean
         default: true
       default_to_pyrowave:
-        description: "Ship this build with VIDEO CODEC defaulting to PYROWAVE instead (wins over default_to_h264 if both are set; same fresh-settings.conf-only caveat). Needs a Vulkan-capable GPU on BOTH machines -- see docs/known-limitations.md's PyroWave entry"
+        description: "Ship this build with VIDEO CODEC defaulting to PYROWAVE instead (wins over default_to_h264 if both are set; same fresh-settings.conf-only caveat). Needs a Vulkan-capable GPU on BOTH machines -- see docs/history.md's PyroWave entry"
         type: boolean
         default: false
 
@@ -231,7 +231,7 @@ jobs:
             echo "bundled. Use this against your existing patched Cemu/melonDS/Azahar"
             echo "install; this is only a fresher dualdeck-client + dualdeck-host-service,"
             echo "protocol v13, with the opt-in H.264 video codec (see"
-            echo "docs/known-limitations.md's 2026-08-25 video-codec-negotiation entries)."
+            echo "docs/history.md's 2026-08-25 video-codec-negotiation entries)."
             echo
             if [[ "${{ inputs.default_to_pyrowave }}" == "true" ]]; then
               echo "This build's VIDEO CODEC setting defaults to PYROWAVE (a fresh"
@@ -266,7 +266,7 @@ jobs:
             echo "  ./client/run-client.sh <host-address>   (on the Steam Deck/laptop)"
           } > "${pkg_dir}/README.md"
 
-          cp docs/known-limitations.md "${pkg_dir}/known-limitations.md"
+          cp docs/history.md "${pkg_dir}/history.md"
 
           echo "PKG_DIR=${pkg_dir}" >> "$GITHUB_ENV"
 

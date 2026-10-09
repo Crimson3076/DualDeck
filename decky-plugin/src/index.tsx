@@ -5,7 +5,7 @@
 // closely as possible, but has NOT been loaded into a real Decky Loader
 // instance or compiled against a real @decky/ui package -- there's no
 // Decky runtime in this project's sandbox to test against. See this
-// plugin's README.md and docs/known-limitations.md for exactly what is
+// plugin's README.md and docs/history.md for exactly what is
 // and isn't verified (the host-side management protocol this calls into
 // is verified; this frontend/backend glue is not).
 import {

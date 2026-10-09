@@ -12,7 +12,7 @@
 #
 # The patches used to embed their own vendored copy of those shared
 # sources, one per emulator, which drifted out of sync with the live
-# ones more than once (see docs/known-limitations.md's 2026-08-01 "frozen
+# ones more than once (see docs/history.md's 2026-08-01 "frozen
 # protocol copy" entry). Copying them from the live tree at apply time
 # keeps exactly one copy of each.
 
