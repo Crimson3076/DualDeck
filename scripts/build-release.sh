@@ -142,9 +142,16 @@ ensure_packages "azahar build" \
 # is not verified yet" section (this project's sandbox cannot reach the
 # hosts Cemu's vcpkg-based dependency graph needs, so this whole step
 # has only ever been reasoned through, never actually run here).
+# zlib-ng-compat-static (dnf only): real Fedora 44 build failure,
+# 2026-10-09 -- Fedora's zlib-ng-compat-devel ships a ZLIBConfig.cmake
+# whose ZLIB::ZLIBSTATIC imported target points at /usr/lib64/libz.a,
+# but that file is only in the separate -static package, so vcpkg's
+# tiff port (and anything else whose find_package(ZLIB) lands on that
+# config) failed to configure with "references the file libz.a but this
+# file does not exist." Debian/Arch don't split it this way.
 ensure_packages "cemu build" \
     "freeglut3-dev libbluetooth-dev libgcrypt20-dev libglm-dev libgtk-3-dev libpulse-dev libsecret-1-dev libsystemd-dev libtool nasm libusb-1.0-0-dev" \
-    "freeglut-devel bluez-libs-devel libgcrypt-devel glm-devel gtk3-devel pulseaudio-libs-devel libsecret-devel systemd-devel libtool nasm libusb1-devel perl-IPC-Cmd" \
+    "freeglut-devel bluez-libs-devel libgcrypt-devel glm-devel gtk3-devel pulseaudio-libs-devel libsecret-devel systemd-devel libtool nasm libusb1-devel perl-IPC-Cmd zlib-ng-compat-static" \
     "freeglut bluez-libs libgcrypt glm gtk3 libpulse libsecret systemd libtool nasm libusb"
 
 # sccache (github.com/mozilla/sccache), if present on PATH -- installed
