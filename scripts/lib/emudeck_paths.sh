@@ -148,7 +148,8 @@ emudeck_launchers_dir() {
 # tool, or a non-Flatpak stock install the normal AppImage path already
 # handles).
 find_emudeck_melonds_flatpak_launcher() {
-    local launcher="$(emudeck_launchers_dir)/melonds.sh"
+    local launcher
+    launcher="$(emudeck_launchers_dir)/melonds.sh"
     [[ -f "${launcher}" ]] || return 1
     grep -qi "flatpak run.*melonds" "${launcher}" && echo "${launcher}" || return 1
 }

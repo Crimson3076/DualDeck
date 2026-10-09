@@ -86,6 +86,7 @@ _steam_restart_and_retry() {
     local steam_shortcut_py="$1" error_log="$2"
     shift 2
 
+    # shellcheck disable=SC2016 # the script body expands in the child bash, not here
     setsid nohup bash -c '
         steam_shortcut_py="$1"; shift
         error_log="$1"; shift
