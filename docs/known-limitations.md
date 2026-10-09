@@ -52,8 +52,8 @@ an item is fixed or a new gap is found.
   It is unlikely to show over a running game in Steam Gaming Mode
   (inferred, not tested). The host service's local control socket
   (`dualdeck-host-service --help`) can list and approve requests
-  instead, but nothing in the release uses it yet; the Decky plugin is
-  meant to.
+  instead, and the Decky plugin does so when Decky is installed on the
+  host PC. Without Decky on the host, the popup is still the only prompt.
 
 ## Host Control mode
 
@@ -81,9 +81,16 @@ an item is fixed or a new gap is found.
 ## Decky plugin
 
 - [`decky-plugin/`](../decky-plugin/README.md) has never been loaded in
-  a real Decky Loader. It only toggles melonDS's in-process management
-  listener, which is now the fallback path, so it does nothing for
-  Azahar, Cemu or out-of-process melonDS sessions.
+  a real Decky Loader. Its backend is tested against the real host
+  service, with a stand-in for Decky's `decky` module.
+- On the Deck, it only toggles melonDS's in-process management listener,
+  which is now the fallback path, so it does nothing for Azahar, Cemu or
+  out-of-process melonDS sessions.
+- Its host-side panel (approve devices, Host Control switch) needs Decky
+  on the host PC itself. It finds the host service's socket through
+  `$XDG_RUNTIME_DIR`, `/run/user/<uid>` or `~/.cache`. If Decky's backend
+  runs as a different user than the service, the socket's 0600 mode
+  keeps it out (root aside).
 
 ## Testing gaps
 
