@@ -9,9 +9,11 @@ using namespace dualdeck::client;
 
 namespace {
 
+// Under ctest's working directory (the build tree), not a shared
+// temp directory.
 std::filesystem::path temporarySettingsPath(const std::string& name) {
     auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
-    return std::filesystem::temp_directory_path() /
+    return std::filesystem::current_path() /
            ("dualdeck-settings-menu-test-" + name + "-" + std::to_string(suffix)) / "settings.conf";
 }
 

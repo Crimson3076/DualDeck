@@ -69,7 +69,7 @@ int main(int argc, char** argv) {
     const std::vector<Shot> shots = {
         {"picker-searching", [&] { renderDiscoverySearching(renderer, version, 0, false, true); }},
         {"picker-searching-tips", [&] { renderDiscoverySearching(renderer, version, 10, true); }},
-        {"picker-list", [&] { renderDiscoveryList(renderer, hosts, 1, version, "192.168.1.20", false, true); }},
+        {"picker-list", [&] { renderDiscoveryList(renderer, hosts, 1, version, hosts[0].address, false, true); }},
         {"picker-menu", [&] {
              renderPauseMenu(renderer, {"RESUME", "ENTER AN IP ADDRESS", "SETTINGS", "EXIT"}, 2);
          }},
