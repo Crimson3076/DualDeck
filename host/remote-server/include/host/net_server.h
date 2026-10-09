@@ -374,6 +374,11 @@ public:
     // never called). Safe from any thread.
     HostMode currentMode() const;
 
+    // The system/adapter identity set alongside that mode, e.g. for the
+    // local control socket's status reply. Safe from any thread.
+    SystemIdentity currentSystemIdentity() const;
+    AdapterIdentity currentAdapterIdentity() const;
+
     // Approves/denies a pending connection request by exact device id or
     // unambiguous prefix (see DeviceApprovalManager::approve/deny).
     // Returns false if nothing pending matches. Safe to call from any

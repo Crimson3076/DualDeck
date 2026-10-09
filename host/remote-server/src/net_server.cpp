@@ -143,6 +143,16 @@ HostMode NetServer::currentMode() const {
     return currentMode_;
 }
 
+SystemIdentity NetServer::currentSystemIdentity() const {
+    std::lock_guard<std::mutex> lock(targetMutex_);
+    return currentSystemIdentity_;
+}
+
+AdapterIdentity NetServer::currentAdapterIdentity() const {
+    std::lock_guard<std::mutex> lock(targetMutex_);
+    return currentAdapterIdentity_;
+}
+
 bool NetServer::approveDevice(const std::string& deviceIdOrPrefix) {
     return deviceApproval_.approve(deviceIdOrPrefix);
 }
