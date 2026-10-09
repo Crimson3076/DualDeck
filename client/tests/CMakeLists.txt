@@ -123,3 +123,26 @@ if(DUALDECK_ENABLE_WARNINGS)
 endif()
 
 add_test(NAME config_migration_tests COMMAND dualdeck_config_migration_tests)
+
+# `dualdeck-client --discover`'s JSON output (discovery_json.h); pure
+# string formatting, no sockets or SDL.
+add_executable(dualdeck_discovery_json_tests
+    main.cpp
+    test_discovery_json.cpp
+    ../src/discovery_json.cpp
+)
+
+target_include_directories(dualdeck_discovery_json_tests PRIVATE
+    ../src
+    ../../protocol/tests
+)
+target_link_libraries(dualdeck_discovery_json_tests PRIVATE dualdeck_protocol)
+target_compile_features(dualdeck_discovery_json_tests PRIVATE cxx_std_20)
+
+if(DUALDECK_ENABLE_WARNINGS)
+    target_compile_options(dualdeck_discovery_json_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow
+    )
+endif()
+
+add_test(NAME discovery_json_tests COMMAND dualdeck_discovery_json_tests)

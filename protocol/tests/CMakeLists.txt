@@ -12,6 +12,7 @@ add_executable(dualdeck_protocol_tests
     test_mode_changed.cpp
     test_client_log.cpp
     test_video_frame.cpp
+    test_json_string.cpp
 )
 
 target_link_libraries(dualdeck_protocol_tests PRIVATE dualdeck_protocol)

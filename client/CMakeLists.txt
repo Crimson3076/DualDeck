@@ -10,6 +10,7 @@ add_library(dualdeck_client_core STATIC
     src/net_client.cpp
     src/device_identity.cpp
     src/discovery_client.cpp
+    src/discovery_json.cpp
     src/discovery_store.cpp
     src/client_settings.cpp
     src/client_log.cpp

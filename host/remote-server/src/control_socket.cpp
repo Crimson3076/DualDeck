@@ -15,6 +15,7 @@
 #include "host/mode_coordinator.h"
 #include "host/net_server.h"
 #include "dualdeck/adapter/ipc/socket_path.h"
+#include "dualdeck/json_string.h"
 
 namespace dualdeck::host {
 
@@ -25,31 +26,8 @@ namespace {
 constexpr size_t kMaxLineBytes = 1024;
 constexpr int kPollTimeoutMs = 200;
 
-std::string jsonString(const std::string& value) {
-    std::string out = "\"";
-    for (unsigned char c : value) {
-        switch (c) {
-            case '"': out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default:
-                if (c < 0x20) {
-                    char buf[8];
-                    std::snprintf(buf, sizeof(buf), "\\u%04x", c);
-                    out += buf;
-                } else {
-                    out += static_cast<char>(c);
-                }
-        }
-    }
-    out += "\"";
-    return out;
-}
-
 std::string errorReply(const std::string& message) {
-    return "{\"ok\":false,\"error\":" + jsonString(message) + "}";
+    return "{\"ok\":false,\"error\":" + jsonQuote(message) + "}";
 }
 
 std::string pendingJson(NetServer& server) {
@@ -58,8 +36,8 @@ std::string pendingJson(NetServer& server) {
     for (const auto& request : server.pendingRequests()) {
         if (!first) out += ",";
         first = false;
-        out += "{\"id\":" + jsonString(request.deviceId) + ",\"name\":" + jsonString(request.clientName) +
-               ",\"address\":" + jsonString(request.address) + "}";
+        out += "{\"id\":" + jsonQuote(request.deviceId) + ",\"name\":" + jsonQuote(request.clientName) +
+               ",\"address\":" + jsonQuote(request.address) + "}";
     }
     out += "]";
     return out;
@@ -84,10 +62,10 @@ std::string handleControlCommand(const std::string& line, NetServer& server, Mod
         return std::string("{\"ok\":true,\"mode\":") +
                (server.currentMode() == HostMode::HostControl ? "\"host-control\"" : "\"emulation\"") +
                ",\"overridden\":" + (coordinator && coordinator->isOverridden() ? "true" : "false") +
-               ",\"system\":{\"id\":" + jsonString(system.systemId) + ",\"name\":" + jsonString(system.systemName) +
-               "},\"adapter\":{\"id\":" + jsonString(adapter.adapterId) +
-               ",\"name\":" + jsonString(adapter.adapterName) +
-               ",\"version\":" + jsonString(adapter.adapterVersion) + "},\"pending\":" + pendingJson(server) + "}";
+               ",\"system\":{\"id\":" + jsonQuote(system.systemId) + ",\"name\":" + jsonQuote(system.systemName) +
+               "},\"adapter\":{\"id\":" + jsonQuote(adapter.adapterId) +
+               ",\"name\":" + jsonQuote(adapter.adapterName) +
+               ",\"version\":" + jsonQuote(adapter.adapterVersion) + "},\"pending\":" + pendingJson(server) + "}";
     }
     if (cmd == "pending") {
         return "{\"ok\":true,\"pending\":" + pendingJson(server) + "}";
