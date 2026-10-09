@@ -2,6 +2,9 @@ add_library(dualdeck_host STATIC
     src/logging_input_sink.cpp
     src/synthetic_frame_source.cpp
     src/net_server.cpp
+    src/net_server_control.cpp
+    src/net_server_util.cpp
+    src/net_server_video.cpp
     src/device_approval_manager.cpp
     src/logging_mic_audio_sink.cpp
     src/adapter_bridge.cpp
@@ -151,7 +154,7 @@ find_package(Threads REQUIRED)
 target_link_libraries(dualdeck_host PUBLIC Threads::Threads)
 
 # JPEG-compresses video frames before they go out over the wire (protocol
-# v8) -- see net_server.cpp's videoLoop() and top-level CMakeLists.txt for
+# v8) -- see net_server_video.cpp's videoLoop() and top-level CMakeLists.txt for
 # where TurboJPEG::TurboJPEG is found.
 target_link_libraries(dualdeck_host PRIVATE TurboJPEG::TurboJPEG)
 

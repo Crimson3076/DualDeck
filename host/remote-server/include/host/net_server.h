@@ -213,7 +213,7 @@ struct NetServerConfig {
     // melonDS's in-process integration, which has no way to "restart
     // itself" mid-emulation without losing the user's game entirely.
     // When set, this is the full shell command run (detached, fire-and-
-    // forget -- see runSelfUpdateCommand() in net_server.cpp) the moment
+    // forget -- see runSelfUpdateCommand() in net_server_control.cpp) the moment
     // an already-approved device's Hello is rejected for a version
     // mismatch; main.cpp wires this to
     // "<host_root>/internal/apply-update.sh" (already idempotent, and

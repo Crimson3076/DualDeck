@@ -80,7 +80,7 @@ int defaultVideoQualityForFrameSize(int width, int height) {
                                                  : kConfiguredDefault;
 }
 
-// Mirrors net_server.cpp's h264TargetBitrateBps() exactly -- same
+// Mirrors net_server_util.cpp's h264TargetBitrateBps() exactly -- same
 // duplication rationale as defaultVideoQualityForFrameSize() above.
 int h264TargetBitrateBps(int quality, int width, int height, int fps) {
     const double clampedQuality = std::clamp(quality, 1, 100) / 100.0;
@@ -89,7 +89,7 @@ int h264TargetBitrateBps(int quality, int width, int height, int fps) {
     return static_cast<int>(std::clamp(bitrate, 250'000.0, 20'000'000.0));
 }
 
-// Mirrors net_server.cpp's pyrowaveMaxFrameBytes() exactly -- same
+// Mirrors net_server_util.cpp's pyrowaveMaxFrameBytes() exactly -- same
 // duplication rationale as defaultVideoQualityForFrameSize() above.
 size_t pyrowaveMaxFrameBytes(int quality, int width, int height) {
     const double clampedQuality = std::clamp(quality, 1, 100) / 100.0;
@@ -164,7 +164,7 @@ double microsSince(std::chrono::steady_clock::time_point start) {
 
 void runJpegBenchmark(const Resolution& res) {
     int quality = defaultVideoQualityForFrameSize(res.width, res.height);
-    // Same subsampling rule net_server.cpp's compressFrameBgraToJpeg() uses.
+    // Same subsampling rule net_server_util.cpp's compressFrameBgraToJpeg() uses.
     TJSAMP subsampling = quality >= 90 ? TJSAMP_444 : TJSAMP_420;
 
     tjhandle compressor = tjInitCompress();
