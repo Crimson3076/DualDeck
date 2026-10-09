@@ -80,7 +80,7 @@ void fitDownscaleTarget(int srcWidth, int srcHeight, int maxWidth, int maxHeight
 
 // Plain `-axis` overflows int16_t's range at the negative extreme
 // (-(-32768) doesn't fit in 16 bits) -- same clamp-to-range technique as
-// client/src/main.cpp's own negateStickAxis(), duplicated here rather than
+// client/src/gamepad_input.cpp's own negateStickAxis(), duplicated here rather than
 // shared since the two live in entirely separate binaries/build targets.
 int16_t negateStickAxis(int16_t axis) {
     return axis == INT16_MIN ? INT16_MAX : static_cast<int16_t>(-axis);

@@ -137,7 +137,7 @@ public:
     // axes. It also does not replace the still-separately-needed
     // client-side fix for whatever's actually preventing
     // SDL_EVENT_GAMEPAD_TOUCHPAD_* from reaching the wire in the first
-    // place (see client/src/main.cpp's own touchpad diagnostics) -- the
+    // place (see client/src/gamepad_input.cpp's own touchpad diagnostics) -- the
     // wire-level ControllerState::mouseDeltaX/Y data this reads has to
     // originate from the client either way.
     //

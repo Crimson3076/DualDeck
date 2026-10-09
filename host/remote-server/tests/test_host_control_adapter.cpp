@@ -143,7 +143,7 @@ MDR_TEST(translate_left_stick_x_passes_through_y_is_renegated) {
 
 MDR_TEST(translate_left_stick_y_negation_clamps_at_int16_min) {
     // INT16_MIN negated overflows int16_t's range -- must clamp to
-    // INT16_MAX rather than wrap, matching client/src/main.cpp's own
+    // INT16_MAX rather than wrap, matching client/src/gamepad_input.cpp's own
     // negateStickAxis() behavior at this same edge case.
     ControllerState state;
     state.leftStickY = INT16_MIN;

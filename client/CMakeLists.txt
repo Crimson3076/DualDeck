@@ -2,6 +2,10 @@ find_package(SDL3 REQUIRED CONFIG)
 
 add_executable(dualdeck-client
     src/main.cpp
+    src/gamepad_input.cpp
+    src/host_picker.cpp
+    src/screens.cpp
+    src/setup_wizard.cpp
     src/net_client.cpp
     src/device_identity.cpp
     src/discovery_client.cpp
