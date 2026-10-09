@@ -8,7 +8,7 @@ on:
 
 jobs:
   patch-protocol-sync:
-    name: Check host patches embed the current protocol version
+    name: Check host patches use the shared sources and tests use the current protocol version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
