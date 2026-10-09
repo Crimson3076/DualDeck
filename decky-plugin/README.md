@@ -11,7 +11,9 @@ The panel has two sections:
   **Return to the emulator**.
 - **Remote melonDS** starts or stops the streaming server on a melonDS
   already running on another PC, from the Steam Deck's Quick Access
-  Menu. See GitHub issue "Decky plugin to start/stop the host server"
+  Menu. **Find hosts on this network** lists the DualDeck hosts that
+  answer a LAN scan (run by the installed client's `--discover`); pick
+  one to fill in its address. See GitHub issue "Decky plugin to start/stop the host server"
   for the original request.
 
 ## This PC (host)

@@ -48,6 +48,16 @@ interface LocalHost {
 }
 
 const getLocalHost = callable<[], LocalHost>("get_local_host");
+
+// One entry of `dualdeck-client --discover` (client/src/discovery_json.h).
+interface DiscoveredHost {
+  address: string;
+  name: string;
+  system: { id: string; name: string };
+  adapter: { id: string; name: string };
+}
+
+const discoverHosts = callable<[], { hosts?: DiscoveredHost[]; error?: string }>("discover_hosts");
 const answerDevice = callable<[deviceId: string, approve: boolean], string>("answer_device");
 const setHostControl = callable<[force: boolean], string>("set_host_control");
 
@@ -173,6 +183,22 @@ function Content() {
   const [token, setToken] = useState("");
   const [status, setStatus] = useState<string>("unknown");
   const [busy, setBusy] = useState(false);
+  const [found, setFound] = useState<DiscoveredHost[] | null>(null);
+  const [scanMessage, setScanMessage] = useState("");
+
+  const onFindHosts = async () => {
+    setBusy(true);
+    setScanMessage("Looking for hosts...");
+    try {
+      const result = await discoverHosts();
+      setFound(result.hosts ?? []);
+      if (result.error) setScanMessage(result.error);
+      else if ((result.hosts ?? []).length === 0) setScanMessage("No hosts answered on this network.");
+      else setScanMessage("");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   useEffect(() => {
     getSettings().then((s) => {
@@ -214,6 +240,19 @@ function Content() {
         <PanelSectionRow>
           <TextField label="Host address" value={host} onChange={(e) => setHost(e.target.value)} />
         </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={onFindHosts} disabled={busy}>
+            Find hosts on this network
+          </ButtonItem>
+        </PanelSectionRow>
+        {scanMessage && <PanelSectionRow>{scanMessage}</PanelSectionRow>}
+        {(found ?? []).map((h) => (
+          <PanelSectionRow key={h.address}>
+            <ButtonItem layout="below" onClick={() => setHost(h.address)} disabled={busy}>
+              {`${h.name || h.address} (${h.address})${h.system?.name ? ` · ${h.system.name}` : ""}`}
+            </ButtonItem>
+          </PanelSectionRow>
+        ))}
         <PanelSectionRow>
           <TextField label="Management port" value={port} onChange={(e) => setPort(e.target.value)} />
         </PanelSectionRow>
