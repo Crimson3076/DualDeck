@@ -148,3 +148,27 @@ if(DUALDECK_ENABLE_WARNINGS)
 endif()
 
 add_test(NAME discovery_json_tests COMMAND dualdeck_discovery_json_tests)
+
+# The Settings screen's rows and what each press does. Needs the SDL3
+# client library, so only built alongside the client.
+if(DUALDECK_BUILD_CLIENT)
+    add_executable(dualdeck_settings_menu_tests
+        main.cpp
+        test_settings_menu.cpp
+    )
+
+    target_include_directories(dualdeck_settings_menu_tests PRIVATE
+        ../src
+        ../../protocol/tests
+    )
+    target_link_libraries(dualdeck_settings_menu_tests PRIVATE dualdeck_client_core)
+    target_compile_features(dualdeck_settings_menu_tests PRIVATE cxx_std_20)
+
+    if(DUALDECK_ENABLE_WARNINGS)
+        target_compile_options(dualdeck_settings_menu_tests PRIVATE
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow
+        )
+    endif()
+
+    add_test(NAME settings_menu_tests COMMAND dualdeck_settings_menu_tests)
+endif()

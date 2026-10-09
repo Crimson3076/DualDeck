@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "screens.h"
+#include "settings_menu.h"
 
 using namespace dualdeck::client;
 
@@ -56,17 +57,22 @@ int main(int argc, char** argv) {
         makeHost("", "192.168.1.44", "NINTENDO WII U", "CEMU"),
     };
 
-    const std::vector<ButtonHint> settingsHints = {
-        {"D-PAD", "MOVE"}, {"LEFT/RIGHT", "CHANGE"}, {"A", "SELECT"}, {"B", "BACK"}};
+    // Never saved: the preview only draws the screen.
+    ClientSettings settings;
+    settings.videoQuality = 40;
+    SettingsMenu settingsMenu(settings, "", true);
 
     struct Shot {
         std::string name;
         std::function<void()> draw;
     };
     const std::vector<Shot> shots = {
-        {"picker-searching", [&] { renderDiscoverySearching(renderer, version); }},
+        {"picker-searching", [&] { renderDiscoverySearching(renderer, version, 0, false, true); }},
         {"picker-searching-tips", [&] { renderDiscoverySearching(renderer, version, 10, true); }},
-        {"picker-list", [&] { renderDiscoveryList(renderer, hosts, 1, version, "192.168.1.20"); }},
+        {"picker-list", [&] { renderDiscoveryList(renderer, hosts, 1, version, hosts[0].address, false, true); }},
+        {"picker-menu", [&] {
+             renderPauseMenu(renderer, {"RESUME", "ENTER AN IP ADDRESS", "SETTINGS", "EXIT"}, 2);
+         }},
         {"connecting", [&] { renderConnecting(renderer, "192.168.1.20"); }},
         {"host-control", [&] { renderHostControlScreen(renderer, "HOST CONTROL - LIVING-ROOM-PC"); }},
         {"menu", [&] {
@@ -76,15 +82,7 @@ int main(int argc, char** argv) {
         {"menu-exit-emulation", [&] {
              renderPauseMenu(renderer, {"EXIT ROM", "EXIT MELONDS ENTIRELY", "CANCEL"}, 2, "EXIT EMULATION");
          }},
-        {"settings", [&] {
-             renderPauseMenu(renderer,
-                             {"AUTO UPDATE ON LAUNCH: ON", "VIDEO QUALITY: LOW (SLOWEST LINKS)",
-                              "TRACKPAD AS NATIVE INPUT (EXPERIMENTAL): OFF",
-                              "MIRROR HOST SCREEN (EXPERIMENTAL): OFF", "VIDEO CODEC (EXPERIMENTAL): JPEG",
-                              "DEBUG OVERLAY: OFF", "RUN SETUP WIZARD", "MICROPHONE: SYSTEM DEFAULT",
-                              "MIC: ON", "BACK"},
-                             8, "SETTINGS", "", 0.4f, "", settingsHints);
-         }},
+        {"settings", [&] { settingsMenu.render(renderer, true, 0.4f); }},
         {"menu-scrolling", [&] {
              std::vector<std::string> items;
              for (int i = 1; i <= 16; ++i) items.push_back("ITEM " + std::to_string(i) + ": VALUE");

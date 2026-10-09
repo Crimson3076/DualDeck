@@ -121,7 +121,7 @@ void renderDebugOverlay(SDL_Renderer* renderer, NetClient& net, int requestedVid
 }
 
 void renderDiscoverySearching(SDL_Renderer* renderer, const std::string& clientVersion, int secondsSearching,
-                               bool canGoBack) {
+                               bool canGoBack, bool canOpenSettings) {
     SDL_SetRenderDrawColor(renderer, 20, 20, 24, 255);
     SDL_RenderClear(renderer);
     renderCenteredBitmapText(renderer, "LOOKING FOR HOSTS", 150.0f, 4, SDL_Color{220, 220, 220, 255});
@@ -145,6 +145,7 @@ void renderDiscoverySearching(SDL_Renderer* renderer, const std::string& clientV
     renderCenteredBitmapText(renderer, kMenuComboHint, static_cast<float>(kWindowHeight) - 100.0f, 2,
                               SDL_Color{110, 110, 116, 255});
     std::vector<ButtonHint> hints = {{"Y", "ENTER IP ADDRESS"}};
+    if (canOpenSettings) hints.push_back({"X", "SETTINGS"});
     if (canGoBack) hints.push_back({"B", "BACK"});
     renderButtonHints(renderer, hints);
     renderClientVersionStamp(renderer, clientVersion);
@@ -192,7 +193,7 @@ void renderHostControlScreen(SDL_Renderer* renderer, const std::string& identity
 
 void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHost>& hosts,
                           int selectedIndex, const std::string& clientVersion,
-                          const std::string& lastHostAddress, bool canGoBack) {
+                          const std::string& lastHostAddress, bool canGoBack, bool canOpenSettings) {
     SDL_SetRenderDrawColor(renderer, 20, 20, 24, 255);
     SDL_RenderClear(renderer);
     renderCenteredBitmapText(renderer, "SELECT A HOST", 60.0f, 4, SDL_Color{220, 220, 220, 255});
@@ -247,6 +248,7 @@ void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHos
     renderCenteredBitmapText(renderer, kMenuComboHint, static_cast<float>(kWindowHeight) - 100.0f, 2,
                               SDL_Color{110, 110, 116, 255});
     std::vector<ButtonHint> hints = {{"D-PAD", "MOVE"}, {"A", "CONNECT"}, {"Y", "ENTER IP ADDRESS"}};
+    if (canOpenSettings) hints.push_back({"X", "SETTINGS"});
     if (canGoBack) hints.push_back({"B", "BACK"});
     renderButtonHints(renderer, hints);
     renderClientVersionStamp(renderer, clientVersion);

@@ -7,6 +7,7 @@ add_library(dualdeck_client_core STATIC
     src/gamepad_input.cpp
     src/host_picker.cpp
     src/screens.cpp
+    src/settings_menu.cpp
     src/setup_wizard.cpp
     src/net_client.cpp
     src/device_identity.cpp
