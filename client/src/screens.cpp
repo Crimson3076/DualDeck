@@ -120,17 +120,33 @@ void renderDebugOverlay(SDL_Renderer* renderer, NetClient& net, int requestedVid
     line(buf);
 }
 
-void renderDiscoverySearching(SDL_Renderer* renderer, const std::string& clientVersion) {
+void renderDiscoverySearching(SDL_Renderer* renderer, const std::string& clientVersion, int secondsSearching,
+                               bool canGoBack) {
     SDL_SetRenderDrawColor(renderer, 20, 20, 24, 255);
     SDL_RenderClear(renderer);
-    renderCenteredBitmapText(renderer, "SEARCHING FOR HOST...",
-                              static_cast<float>(kWindowHeight) / 2.0f - 20.0f, 4,
+    renderCenteredBitmapText(renderer, "LOOKING FOR HOSTS", 150.0f, 4, SDL_Color{220, 220, 220, 255});
+    renderSpinner(renderer, static_cast<float>(kWindowWidth) / 2.0f, 260.0f);
+    renderCenteredBitmapText(renderer, "START DUALDECK HOST ON YOUR PC AND IT WILL APPEAR HERE", 340.0f, 2,
                               SDL_Color{200, 200, 200, 255});
-    renderCenteredBitmapText(renderer, "MAKE SURE A DUALDECK HOST IS RUNNING ON THIS NETWORK",
-                              static_cast<float>(kWindowHeight) / 2.0f + 40.0f, 2,
-                              SDL_Color{140, 140, 140, 255});
-    renderCenteredBitmapText(renderer, kMenuComboHint, static_cast<float>(kWindowHeight) - 80.0f, 2,
-                              SDL_Color{140, 140, 140, 255});
+
+    // Only once it's been a while: a host normally answers within a
+    // couple of scans, and tips straight away would just be noise.
+    constexpr int kTipsAfterSeconds = 6;
+    if (secondsSearching >= kTipsAfterSeconds) {
+        const SDL_Color tipColor{150, 150, 155, 255};
+        renderCenteredBitmapText(renderer, "NOT SHOWING UP?", 420.0f, 2, SDL_Color{220, 200, 80, 255});
+        renderCenteredBitmapText(renderer, "THE PC AND THIS DECK NEED TO BE ON THE SAME NETWORK.", 456.0f, 2,
+                                  tipColor);
+        renderCenteredBitmapText(renderer, "A FIREWALL ON THE PC MAY BE BLOCKING DISCOVERY (UDP PORT 8763).",
+                                  486.0f, 2, tipColor);
+        renderCenteredBitmapText(renderer, "OR PRESS Y TO TYPE THE PC'S IP ADDRESS INSTEAD.", 516.0f, 2, tipColor);
+    }
+
+    renderCenteredBitmapText(renderer, kMenuComboHint, static_cast<float>(kWindowHeight) - 100.0f, 2,
+                              SDL_Color{110, 110, 116, 255});
+    std::vector<ButtonHint> hints = {{"Y", "ENTER IP ADDRESS"}};
+    if (canGoBack) hints.push_back({"B", "BACK"});
+    renderButtonHints(renderer, hints);
     renderClientVersionStamp(renderer, clientVersion);
     SDL_RenderPresent(renderer);
 }
@@ -138,12 +154,11 @@ void renderDiscoverySearching(SDL_Renderer* renderer, const std::string& clientV
 void renderConnecting(SDL_Renderer* renderer, const std::string& hostAddress) {
     SDL_SetRenderDrawColor(renderer, 20, 20, 24, 255);
     SDL_RenderClear(renderer);
-    renderCenteredBitmapText(renderer, "CONNECTING TO " + hostAddress + "...",
-                              static_cast<float>(kWindowHeight) / 2.0f - 20.0f, 4,
-                              SDL_Color{220, 200, 80, 255});
-    renderCenteredBitmapText(renderer, "PLEASE WAIT WHILE THE HOST RESPONDS",
-                              static_cast<float>(kWindowHeight) / 2.0f + 40.0f, 2,
-                              SDL_Color{140, 140, 140, 255});
+    renderSpinner(renderer, static_cast<float>(kWindowWidth) / 2.0f, static_cast<float>(kWindowHeight) / 2.0f - 90.0f);
+    renderCenteredBitmapText(renderer, "CONNECTING TO " + hostAddress, static_cast<float>(kWindowHeight) / 2.0f - 20.0f,
+                              4, SDL_Color{220, 200, 80, 255});
+    renderCenteredBitmapText(renderer, "WAITING FOR THE HOST TO ANSWER", static_cast<float>(kWindowHeight) / 2.0f + 40.0f,
+                              2, SDL_Color{160, 160, 165, 255});
     renderCenteredBitmapText(renderer, kMenuComboHint, static_cast<float>(kWindowHeight) - 80.0f, 2,
                               SDL_Color{140, 140, 140, 255});
     SDL_RenderPresent(renderer);
@@ -176,7 +191,8 @@ void renderHostControlScreen(SDL_Renderer* renderer, const std::string& identity
 }
 
 void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHost>& hosts,
-                          int selectedIndex, const std::string& clientVersion) {
+                          int selectedIndex, const std::string& clientVersion,
+                          const std::string& lastHostAddress, bool canGoBack) {
     SDL_SetRenderDrawColor(renderer, 20, 20, 24, 255);
     SDL_RenderClear(renderer);
     renderCenteredBitmapText(renderer, "SELECT A HOST", 60.0f, 4, SDL_Color{220, 220, 220, 255});
@@ -204,6 +220,9 @@ void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHos
         if (!hosts[i].adapter.adapterName.empty()) {
             identity += (identity.empty() ? "" : " - ") + hosts[i].adapter.adapterName;
         }
+        if (!lastHostAddress.empty() && hosts[i].address == lastHostAddress) {
+            identity += identity.empty() ? "LAST USED" : "  (LAST USED)";
+        }
         bool selected = static_cast<int>(i) == selectedIndex;
         SDL_Color color = selected ? SDL_Color{90, 200, 120, 255} : SDL_Color{200, 200, 200, 255};
         SDL_Color identityColor = selected ? SDL_Color{150, 210, 170, 255} : SDL_Color{140, 140, 140, 255};
@@ -225,11 +244,11 @@ void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHos
         }
     }
 
-    renderCenteredBitmapText(renderer, "D-PAD TO MOVE, A TO SELECT",
-                              static_cast<float>(kWindowHeight) - 100.0f, 2,
-                              SDL_Color{140, 140, 140, 255});
-    renderCenteredBitmapText(renderer, kMenuComboHint, static_cast<float>(kWindowHeight) - 60.0f, 2,
-                              SDL_Color{140, 140, 140, 255});
+    renderCenteredBitmapText(renderer, kMenuComboHint, static_cast<float>(kWindowHeight) - 100.0f, 2,
+                              SDL_Color{110, 110, 116, 255});
+    std::vector<ButtonHint> hints = {{"D-PAD", "MOVE"}, {"A", "CONNECT"}, {"Y", "ENTER IP ADDRESS"}};
+    if (canGoBack) hints.push_back({"B", "BACK"});
+    renderButtonHints(renderer, hints);
     renderClientVersionStamp(renderer, clientVersion);
     SDL_RenderPresent(renderer);
 }

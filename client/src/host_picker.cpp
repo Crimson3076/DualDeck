@@ -7,6 +7,7 @@
 #include <thread>
 #include <vector>
 
+#include "address_entry.h"
 #include "gamepad_input.h"
 #include "screens.h"
 
@@ -64,10 +65,11 @@ constexpr int kPickerFrameIntervalMs = 16;
 // Returns std::nullopt if the user closed the window before a host was
 // chosen (SDL_EVENT_QUIT), or chose EXIT from the L3+R3 menu below;
 // main() treats either as "cancel the whole run", not "connect anyway."
+// Y (or the menu) opens address entry for a host discovery can't see.
 std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_Gamepad*& gamepad,
                                                      uint16_t discoveryPort,
                                                      const std::string& lastHostAddress,
-                                                     const std::string& clientVersion) {
+                                                     const std::string& clientVersion, bool* backRequested) {
     std::vector<DiscoveredHost> hosts;
     int selectedIndex = 0;
 
@@ -96,85 +98,52 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
     } scanThreadGuard{scanStop, scanThread};
 
     // L3+R3 "open menu" chord, offering an EXIT control -- this
-    // screen previously had none at all (GitHub issues #8, #9), despite
-    // already showing the menu-combo hint via kMenuComboHint.
+    // screen previously had none at all (GitHub issues #8, #9).
     // Same deliberate-hold pattern and menu-navigation conventions as
     // main()'s inner loop (see kMenuChordHoldUs's declaration for why).
-    // No "CHANGE HOST"/"RESUME SEARCH" distinction is needed here beyond
-    // RESUME (close the menu, keep searching) since there's nothing else
-    // to navigate to from this screen.
-    const std::vector<std::string> menuItems = {"RESUME", "EXIT"};
+    const std::vector<std::string> menuItems = {"RESUME", "ENTER AN IP ADDRESS", "EXIT"};
     bool menuActive = false;
     int menuSelectedIndex = 0;
     uint64_t menuChordSinceUs = 0;
     bool menuChordFired = false;
+    MenuStickState stick;
+    const uint64_t openedAtUs = SDL_GetTicksNS() / 1000;
+
+    // For a host that never answers discovery (another subnet, a
+    // firewall): type its address instead. Ports are the defaults.
+    auto enterAddress = [&]() -> std::optional<DiscoveredHost> {
+        auto address = runAddressEntry(renderer, SDL_GetRenderWindow(renderer), gamepad, lastHostAddress);
+        if (!address) return std::nullopt;
+        DiscoveredHost host;
+        host.address = *address;
+        return host;
+    };
 
     while (true) {
+        MenuAction action = MenuAction::None;
+        bool enterAddressPressed = false;
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
+            if (handleGamepadHotplug(event, gamepad)) continue;
             switch (event.type) {
                 case SDL_EVENT_QUIT:
                     return std::nullopt;
-                case SDL_EVENT_GAMEPAD_ADDED:
-                    if (!gamepad) {
-                        gamepad = SDL_OpenGamepad(event.gdevice.which);
-                    }
-                    break;
-                case SDL_EVENT_GAMEPAD_REMOVED:
-                    if (gamepad && SDL_GetGamepadID(gamepad) == event.gdevice.which) {
-                        SDL_CloseGamepad(gamepad);
-                        gamepad = nullptr;
-                    }
-                    break;
-                case SDL_EVENT_KEY_DOWN: {
-                    int menuCount = static_cast<int>(menuItems.size());
+                case SDL_EVENT_KEY_DOWN:
                     // Only honored with no gamepad connected (Desktop
                     // Mode/keyboard testing convenience) -- see the
                     // matching gate in main()'s inner loop for why.
                     if (!gamepad && event.key.key == SDLK_ESCAPE) {
                         menuActive = !menuActive;
                         menuSelectedIndex = 0;
-                    } else if (menuActive && event.key.key == SDLK_UP) {
-                        menuSelectedIndex = (menuSelectedIndex + menuCount - 1) % menuCount;
-                    } else if (menuActive && event.key.key == SDLK_DOWN) {
-                        menuSelectedIndex = (menuSelectedIndex + 1) % menuCount;
-                    } else if (menuActive && event.key.key == SDLK_RETURN) {
-                        if (menuItems[static_cast<size_t>(menuSelectedIndex)] == "EXIT") return std::nullopt;
-                        menuActive = false; // RESUME
-                    } else if (!menuActive && !hosts.empty()) {
-                        int count = static_cast<int>(hosts.size());
-                        if (event.key.key == SDLK_UP) {
-                            selectedIndex = (selectedIndex + count - 1) % count;
-                        } else if (event.key.key == SDLK_DOWN) {
-                            selectedIndex = (selectedIndex + 1) % count;
-                        } else if (event.key.key == SDLK_RETURN) {
-                            return hosts[static_cast<size_t>(selectedIndex)];
-                        }
+                    } else {
+                        action = menuActionForKey(event.key.key);
                     }
                     break;
-                }
                 case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-                    if (menuActive) {
-                        int menuCount = static_cast<int>(menuItems.size());
-                        if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP) {
-                            menuSelectedIndex = (menuSelectedIndex + menuCount - 1) % menuCount;
-                        } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_DOWN) {
-                            menuSelectedIndex = (menuSelectedIndex + 1) % menuCount;
-                        } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH) {
-                            if (menuItems[static_cast<size_t>(menuSelectedIndex)] == "EXIT") return std::nullopt;
-                            menuActive = false; // RESUME
-                        } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_EAST) {
-                            menuActive = false; // back/cancel, no action taken
-                        }
-                    } else if (!hosts.empty()) {
-                        int count = static_cast<int>(hosts.size());
-                        if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP) {
-                            selectedIndex = (selectedIndex + count - 1) % count;
-                        } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_DOWN) {
-                            selectedIndex = (selectedIndex + 1) % count;
-                        } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH) {
-                            return hosts[static_cast<size_t>(selectedIndex)];
-                        }
+                    if (!menuActive && event.gbutton.button == SDL_GAMEPAD_BUTTON_NORTH) {
+                        enterAddressPressed = true;
+                    } else {
+                        action = menuActionForButton(event.gbutton.button);
                     }
                     break;
                 default:
@@ -199,6 +168,32 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
             menuChordSinceUs = 0;
             menuChordFired = false;
         }
+        if (action == MenuAction::None) action = pollMenuStick(gamepad, stick, nowForChordUs);
+
+        if (menuActive) {
+            const int menuCount = static_cast<int>(menuItems.size());
+            if (action == MenuAction::Up) menuSelectedIndex = (menuSelectedIndex + menuCount - 1) % menuCount;
+            if (action == MenuAction::Down) menuSelectedIndex = (menuSelectedIndex + 1) % menuCount;
+            if (action == MenuAction::Back) menuActive = false; // back/cancel, no action taken
+            if (action == MenuAction::Select) {
+                const std::string& picked = menuItems[static_cast<size_t>(menuSelectedIndex)];
+                if (picked == "EXIT") return std::nullopt;
+                menuActive = false;
+                if (picked == "ENTER AN IP ADDRESS") enterAddressPressed = true;
+            }
+        } else if (action == MenuAction::Back && backRequested) {
+            *backRequested = true;
+            return std::nullopt;
+        } else if (!hosts.empty()) {
+            const int count = static_cast<int>(hosts.size());
+            if (action == MenuAction::Up) selectedIndex = (selectedIndex + count - 1) % count;
+            if (action == MenuAction::Down) selectedIndex = (selectedIndex + 1) % count;
+            if (action == MenuAction::Select) return hosts[static_cast<size_t>(selectedIndex)];
+        }
+
+        if (enterAddressPressed) {
+            if (auto host = enterAddress()) return host;
+        }
 
         if (menuActive) {
             renderPauseMenu(renderer, menuItems, menuSelectedIndex);
@@ -206,10 +201,12 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
             continue;
         }
 
+        const bool canGoBack = backRequested != nullptr;
         if (hosts.empty()) {
-            renderDiscoverySearching(renderer, clientVersion);
+            const auto secondsSearching = static_cast<int>((nowForChordUs - openedAtUs) / 1'000'000);
+            renderDiscoverySearching(renderer, clientVersion, secondsSearching, canGoBack);
         } else {
-            renderDiscoveryList(renderer, hosts, selectedIndex, clientVersion);
+            renderDiscoveryList(renderer, hosts, selectedIndex, clientVersion, lastHostAddress, canGoBack);
         }
 
         // Pull whatever the background scan thread has published so far --

@@ -53,6 +53,10 @@ uint16_t buildButtonsFromGamepad(SDL_Gamepad* gamepad, bool stickEmulatesDpad = 
 
 void logGamepadTouchpadDiagnostics(SDL_Gamepad* gamepad);
 
+// Opens or closes the gamepad as it's plugged in or removed. Returns
+// true when it handled the event.
+bool handleGamepadHotplug(const SDL_Event& event, SDL_Gamepad*& gamepad);
+
 // What a press means on a menu screen, so keyboard and gamepad input
 // share one handler per menu instead of two copies of it.
 enum class MenuAction { None, Up, Down, Left, Right, Select, Back };

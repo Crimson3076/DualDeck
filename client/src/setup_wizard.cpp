@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "bitmap_font.h"
+#include "address_entry.h"
 #include "client_log.h"
 #include "discovery_store.h"
 #include "gamepad_input.h"
@@ -65,23 +66,6 @@ constexpr uint64_t kSkipHoldUs = 1'000'000;
 
 std::string stepLabel(int step) {
     return "STEP " + std::to_string(step) + " OF " + std::to_string(kWizardStepCount);
-}
-
-// Opens or closes the gamepad as it's plugged in or removed. Returns
-// true when it handled the event.
-bool handleGamepadHotplug(const SDL_Event& event, SDL_Gamepad*& gamepad) {
-    if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
-        if (!gamepad) gamepad = SDL_OpenGamepad(event.gdevice.which);
-        return true;
-    }
-    if (event.type == SDL_EVENT_GAMEPAD_REMOVED) {
-        if (gamepad && SDL_GetGamepadID(gamepad) == event.gdevice.which) {
-            SDL_CloseGamepad(gamepad);
-            gamepad = nullptr;
-        }
-        return true;
-    }
-    return false;
 }
 
 // Title, step counter and background shared by every wizard screen.
@@ -211,154 +195,6 @@ WizardStepResult wizardChooseMethod(SDL_Renderer* renderer, SDL_Gamepad*& gamepa
         }
 
         renderWizardMenu(renderer, "HOW SHOULD WE FIND YOUR HOST?", 3, items, descriptions, selectedIndex);
-        SDL_Delay(kWizardFrameIntervalMs);
-    }
-}
-
-// Address entry that works with only a controller: an on-screen number
-// pad driven by the D-pad, since Steam's virtual keyboard doesn't
-// reliably come up for this app in Gaming Mode (the same limitation that
-// retired the old pairing-code screen -- see docs/history.md). A
-// physical or Bluetooth keyboard can still type straight in, including
-// host names. Returns std::nullopt if the user backed out.
-std::optional<std::string> wizardManualEntry(SDL_Renderer* renderer, SDL_Window* window, SDL_Gamepad*& gamepad,
-                                              const std::string& initialText) {
-    // 4 rows of 3 keys, then a full-width CONNECT row.
-    const char* const keys[4][3] = {
-        {"1", "2", "3"}, {"4", "5", "6"}, {"7", "8", "9"}, {".", "0", "DEL"}};
-    constexpr int kKeyRows = 4;
-    constexpr int kKeyCols = 3;
-    constexpr int kConnectRow = kKeyRows;
-    constexpr size_t kMaxLength = 63;
-
-    std::string text = initialText;
-    int row = 0;
-    int col = 0;
-    MenuStickState stick;
-    SDL_StartTextInput(window);
-
-    auto finish = [&](std::optional<std::string> result) {
-        SDL_StopTextInput(window);
-        return result;
-    };
-    auto deleteLast = [&]() {
-        if (!text.empty()) text.pop_back();
-    };
-    auto pressKey = [&]() -> bool {
-        if (row == kConnectRow) return !text.empty();
-        const std::string key = keys[row][col];
-        if (key == "DEL") {
-            deleteLast();
-        } else if (text.size() < kMaxLength) {
-            text += key;
-        }
-        return false;
-    };
-
-    while (true) {
-        MenuAction action = MenuAction::None;
-        bool connect = false;
-        SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            if (handleGamepadHotplug(event, gamepad)) continue;
-            switch (event.type) {
-                case SDL_EVENT_QUIT:
-                    return finish(std::nullopt);
-                case SDL_EVENT_TEXT_INPUT:
-                    for (const char* c = event.text.text; *c && text.size() < kMaxLength; ++c) {
-                        if (*c != ' ') text += *c;
-                    }
-                    break;
-                case SDL_EVENT_KEY_DOWN:
-                    if (event.key.key == SDLK_BACKSPACE) {
-                        deleteLast();
-                        break;
-                    }
-                    if (gamepad) break; // see "Keyboard input" above
-                    if (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER) {
-                        connect = !text.empty();
-                    } else if (event.key.key == SDLK_ESCAPE) {
-                        return finish(std::nullopt);
-                    }
-                    break;
-                case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-                    if (event.gbutton.button == SDL_GAMEPAD_BUTTON_WEST) {
-                        deleteLast();
-                    } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_START) {
-                        connect = !text.empty();
-                    } else {
-                        action = menuActionForButton(event.gbutton.button);
-                    }
-                    break;
-                default:
-                    break;
-            }
-        }
-        if (action == MenuAction::None) action = pollMenuStick(gamepad, stick, SDL_GetTicksNS() / 1000);
-
-        switch (action) {
-            case MenuAction::Up: row = (row + kKeyRows) % (kKeyRows + 1); break;
-            case MenuAction::Down: row = (row + 1) % (kKeyRows + 1); break;
-            case MenuAction::Left: col = (col + kKeyCols - 1) % kKeyCols; break;
-            case MenuAction::Right: col = (col + 1) % kKeyCols; break;
-            case MenuAction::Select: connect = pressKey(); break;
-            case MenuAction::Back: return finish(std::nullopt);
-            case MenuAction::None: break;
-        }
-        if (connect) return finish(text);
-
-        beginWizardScreen(renderer, "ENTER YOUR HOST'S ADDRESS", 3);
-
-        // Text field.
-        constexpr float kFieldWidth = 560.0f;
-        constexpr float kFieldY = 150.0f;
-        const float fieldX = (static_cast<float>(kWindowWidth) - kFieldWidth) / 2.0f;
-        SDL_FRect field{fieldX, kFieldY, kFieldWidth, 56.0f};
-        SDL_SetRenderDrawColor(renderer, 36, 36, 42, 255);
-        SDL_RenderFillRect(renderer, &field);
-        SDL_SetRenderDrawColor(renderer, 110, 150, 200, 255);
-        SDL_RenderRect(renderer, &field);
-        const bool cursorOn = (SDL_GetTicks() / 500) % 2 == 0;
-        if (text.empty()) {
-            renderCenteredBitmapText(renderer, "E.G. 192.168.1.20", kFieldY + 18.0f, 3, SDL_Color{90, 90, 96, 255});
-        } else {
-            renderCenteredBitmapText(renderer, text + (cursorOn ? "_" : " "), kFieldY + 18.0f, 3,
-                                      SDL_Color{230, 230, 230, 255});
-        }
-
-        // Key grid.
-        constexpr float kKeyWidth = 140.0f;
-        constexpr float kKeyHeight = 58.0f;
-        constexpr float kGap = 12.0f;
-        constexpr float kGridY = 240.0f;
-        const float gridWidth = kKeyCols * kKeyWidth + (kKeyCols - 1) * kGap;
-        const float gridX = (static_cast<float>(kWindowWidth) - gridWidth) / 2.0f;
-        auto drawKey = [&](float x, float y, float w, const std::string& label, bool selected) {
-            SDL_FRect box{x, y, w, kKeyHeight};
-            if (selected) {
-                SDL_SetRenderDrawColor(renderer, 50, 70, 55, 255);
-            } else {
-                SDL_SetRenderDrawColor(renderer, 36, 36, 42, 255);
-            }
-            SDL_RenderFillRect(renderer, &box);
-            SDL_SetRenderDrawColor(renderer, selected ? 90 : 70, selected ? 200 : 70, selected ? 120 : 78, 255);
-            SDL_RenderRect(renderer, &box);
-            const SDL_Color color = selected ? SDL_Color{90, 200, 120, 255} : SDL_Color{200, 200, 200, 255};
-            const float labelWidth = static_cast<float>(measureBitmapText(label, 3));
-            renderBitmapText(renderer, label, x + (w - labelWidth) / 2.0f,
-                             y + (kKeyHeight - static_cast<float>(kFontGlyphHeight * 3)) / 2.0f, 3, color);
-        };
-        for (int r = 0; r < kKeyRows; ++r) {
-            for (int c = 0; c < kKeyCols; ++c) {
-                drawKey(gridX + static_cast<float>(c) * (kKeyWidth + kGap),
-                        kGridY + static_cast<float>(r) * (kKeyHeight + kGap), kKeyWidth, keys[r][c],
-                        row == r && col == c);
-            }
-        }
-        drawKey(gridX, kGridY + kKeyRows * (kKeyHeight + kGap), gridWidth, "CONNECT", row == kConnectRow);
-
-        renderButtonHints(renderer, {{"A", "PRESS"}, {"X", "DELETE"}, {"START", "CONNECT"}, {"B", "BACK"}});
-        SDL_RenderPresent(renderer);
         SDL_Delay(kWizardFrameIntervalMs);
     }
 }
@@ -855,11 +691,9 @@ WizardStepResult wizardDone(SDL_Renderer* renderer, SDL_Gamepad*& gamepad) {
 // Orchestrates the whole wizard as an explicit step state machine (see
 // setup_wizard.h for what each outcome means).
 //
-// discoverAndSelectHost()'s std::nullopt already means "exit the whole
-// run" everywhere else it's used (it conflates SDL_EVENT_QUIT with its own
-// internal EXIT menu item), so the FindHost step below treats it the same
-// way here for consistency, even though within the wizard's own step
-// functions "cancel" more often means "go back" instead.
+// B on the host picker goes back a step (its backRequested flag); any
+// other std::nullopt from it (window closed, EXIT from its L3+R3 menu)
+// quits, the same as everywhere else it's used.
 WizardOutcome runSetupWizard(SDL_Window* window, SDL_Renderer* renderer, SDL_Texture* texture, SDL_Gamepad*& gamepad,
                     uint16_t discoveryPort, NetClientConfig baseNetConfig,
                     const std::string& discoveryStorePath, NetClientConfig& outNetConfig) {
@@ -920,8 +754,8 @@ WizardOutcome runSetupWizard(SDL_Window* window, SDL_Renderer* renderer, SDL_Tex
                 break;
             }
             case Step::ManualEntry: {
-                auto address = wizardManualEntry(renderer, window, gamepad,
-                                                 loadLastHost(discoveryStorePath).value_or(""));
+                auto address = runAddressEntry(renderer, window, gamepad,
+                                               loadLastHost(discoveryStorePath).value_or(""), stepLabel(3));
                 if (!address) {
                     step = Step::ChooseMethod;
                     break;
@@ -936,7 +770,14 @@ WizardOutcome runSetupWizard(SDL_Window* window, SDL_Renderer* renderer, SDL_Tex
                 break;
             }
             case Step::FindHost: {
-                auto selected = discoverAndSelectHost(renderer, gamepad, discoveryPort, "", baseNetConfig.appVersion);
+                bool back = false;
+                auto selected = discoverAndSelectHost(renderer, gamepad, discoveryPort,
+                                                      loadLastHost(discoveryStorePath).value_or(""),
+                                                      baseNetConfig.appVersion, &back);
+                if (back) {
+                    step = Step::ChooseMethod;
+                    break;
+                }
                 if (!selected) return WizardOutcome::Quit;
                 netConfig.hostAddress = selected->address;
                 netConfig.controlPort = selected->controlPort;

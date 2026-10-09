@@ -3,6 +3,7 @@ find_package(SDL3 REQUIRED CONFIG)
 # Everything but main(), so the UI preview tool below can draw the same
 # screens without its own copy of the source list.
 add_library(dualdeck_client_core STATIC
+    src/address_entry.cpp
     src/gamepad_input.cpp
     src/host_picker.cpp
     src/screens.cpp

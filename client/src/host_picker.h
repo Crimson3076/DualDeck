@@ -14,10 +14,13 @@
 namespace dualdeck::client {
 
 // Returns std::nullopt if the user closed the window or chose EXIT from
-// the L3+R3 menu; callers treat that as "cancel the whole run".
+// the L3+R3 menu; callers treat that as "cancel the whole run". When
+// backRequested is given, B also returns std::nullopt and sets it, for a
+// caller with a previous screen to go back to (the setup wizard).
 std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_Gamepad*& gamepad,
                                                      uint16_t discoveryPort,
                                                      const std::string& lastHostAddress,
-                                                     const std::string& clientVersion);
+                                                     const std::string& clientVersion,
+                                                     bool* backRequested = nullptr);
 
 } // namespace dualdeck::client
