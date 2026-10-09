@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# See build-release.sh's own comment just above this heredoc for the
-# real bug this fixes and why this exact file/shape is correct. Normally
+# See docs/packaging.md's entry for this script for the real bug this
+# fixes and why this exact file/shape is correct. Normally
 # launched via ../dualdeck-host.sh's "Reconfigure Controls" menu choice,
 # not directly.
 set -euo pipefail
