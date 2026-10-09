@@ -3880,6 +3880,21 @@ echo "Installing..."
 # the download afterward, which exec'ing over this process would skip.
 "${extracted_dir}/host/internal/install-steam-shortcut.sh" --force
 
+# Each DualDeck-patched emulator AppImage carries its own copy of
+# dualdeck-host-service (see apprun_templates.sh), which the install
+# step above never touches -- real report, 2026-10-09: after updating,
+# Cemu kept running the old host service and PyroWave silently fell back
+# to JPEG. Re-patch only the emulators DualDeck already patched (see
+# emudeck-replace-in-place.sh's --refresh-installed). Non-fatal:
+# the DualDeck update itself already succeeded, and a stale emulator is
+# recoverable later from the host menu's EmuDeck integration entry.
+refresh_tool="${extracted_dir}/host/emudeck-integration/scripts/emudeck-replace-in-place.sh"
+if [[ -x "${refresh_tool}" ]]; then
+    echo "Refreshing DualDeck-patched emulators..."
+    "${refresh_tool}" --refresh-installed ||
+        echo "warning: couldn't refresh patched emulator AppImages -- re-run the EmuDeck integration from the host menu" >&2
+fi
+
 if [[ "${daemon_was_active}" -eq 1 ]]; then
     echo "Restarting the Host Control daemon to pick up the update..."
     if ! systemctl --user restart dualdeck-host-control.service 2>/dev/null; then
@@ -4023,6 +4038,22 @@ echo "Installing..."
 # Only recorded once the staged swap above has actually completed.
 dualdeck_branch_record_installed "${branch}" "${resolved_sha}" "${resolved_tag}"
 echo "Installed ${resolved_tag} (branch ${branch}, commit ${resolved_sha:0:7})."
+
+# Each DualDeck-patched emulator AppImage carries its own copy of
+# dualdeck-host-service (see apprun_templates.sh), which the install
+# step above never touches -- real report, 2026-10-09: after updating,
+# Cemu kept running the old host service and PyroWave silently fell back
+# to JPEG. Re-patch only the emulators DualDeck already patched (see
+# emudeck-replace-in-place.sh's --refresh-installed), from this
+# same branch release rather than the latest one. Non-fatal:
+# the DualDeck update itself already succeeded, and a stale emulator is
+# recoverable later from the host menu's EmuDeck integration entry.
+refresh_tool="${extracted_dir}/host/emudeck-integration/scripts/emudeck-replace-in-place.sh"
+if [[ -x "${refresh_tool}" ]]; then
+    echo "Refreshing DualDeck-patched emulators..."
+    DUALDECK_REPLACE_DOWNLOAD_BASE="${download_base}" "${refresh_tool}" --refresh-installed ||
+        echo "warning: couldn't refresh patched emulator AppImages -- re-run the EmuDeck integration from the host menu" >&2
+fi
 
 if [[ "${daemon_was_active}" -eq 1 ]]; then
     echo "Restarting the Host Control daemon to pick up the update..."
