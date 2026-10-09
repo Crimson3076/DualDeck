@@ -27,7 +27,8 @@
 #
 # Only ever downloads from this exact, hardcoded GitHub Releases URL
 # over HTTPS -- never anything derived from user input, an environment
-# variable, or a config file.
+# variable, or a config file -- and installs nothing unless the archive
+# matches the release's SHA256SUMS, same as install-branch.sh.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -49,7 +50,7 @@ work_dir="$(mktemp -d)"
 trap 'rm -rf "${work_dir}"' EXIT
 
 echo "Downloading the latest release..."
-dualdeck_fetch_release "${download_base}" "${work_dir}" 0
+dualdeck_fetch_release "${download_base}" "${work_dir}"
 
 # Real user request: "it should also reset on updates, so toggle off and
 # back on if it was already running" -- checked *before* the install

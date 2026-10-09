@@ -46,7 +46,7 @@ work_dir="$(mktemp -d)"
 trap 'rm -rf "${work_dir}"' EXIT
 
 echo "Downloading the latest release..."
-dualdeck_fetch_release "${download_base}" "${work_dir}" 0
+dualdeck_fetch_release "${download_base}" "${work_dir}"
 
 echo "Installing..."
 # Not exec'd: the work_dir EXIT trap above must still fire to clean up
