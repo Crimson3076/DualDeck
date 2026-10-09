@@ -55,11 +55,7 @@ void renderClientVersionStamp(SDL_Renderer* renderer, const std::string& clientV
 // RES/FPS/CODEC stack while reconnecting would be actively misleading
 // rather than merely uninformative.
 //
-// All-caps, ASCII-only content by construction (bitmap_font.h's glyph set
-// is space/0-9/A-Z/./-/: only -- anything else silently renders blank,
-// same graceful-degradation behavior settingsMenuItems()' own labels
-// already rely on elsewhere in this file, so this isn't a new risk, just
-// deliberately avoided here too).
+// All-caps ASCII only (see bitmap_font.h for the supported glyphs).
 void renderDebugOverlay(SDL_Renderer* renderer, NetClient& net, int requestedVideoQuality) {
     constexpr int kPixelSize = 2;
     constexpr float kLineHeight = 16.0f;
@@ -85,10 +81,8 @@ void renderDebugOverlay(SDL_Renderer* renderer, NetClient& net, int requestedVid
     line(std::string("CODEC: ") +
          (codec == VideoCodec::PyroWave ? "PYROWAVE" : codec == VideoCodec::H264 ? "H264" : "JPEG"));
 
-    // Mirrors settingsMenuItems()' own videoQualityLabel() thresholds,
-    // but with only-supported-character labels (that one's "LOW (SLOWEST
-    // LINKS)" etc. include parens/lowercase, harmless there -- see this
-    // function's own top comment -- not worth reusing verbatim here).
+    // Shows the raw requested quality number (0 = AUTO) rather than
+    // settingsMenuItems()' preset names.
     std::string qualityLabel;
     if (requestedVideoQuality == 0) {
         qualityLabel = "AUTO";
@@ -191,11 +185,10 @@ void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHos
     // host-selection UI to display the host, emulated system, and
     // actual emulator"): the host name/address as before, plus a second
     // line naming the emulated system and adapter reported in its
-    // DiscoveryResponse, e.g. "NINTENDO DS - MELONDS" -- the bitmap font
-    // has no glyph for the middle-dot separator used in issue #28's own
-    // example text (see bitmap_font.cpp's supported character set), so
-    // "-" stands in for it here, matching the connected-session menu's
-    // identity line (see identityLine() in main()).
+    // DiscoveryResponse, e.g. "NINTENDO DS - MELONDS" ("-" stands in for
+    // issue #28's middle dot, which the bitmap font has no glyph for),
+    // matching the connected-session menu's identity line (see
+    // identityLine() in main()).
     constexpr float kRowHeight = 84.0f;
     constexpr int kPixelSize = 3;
     constexpr int kIdentityPixelSize = 2;

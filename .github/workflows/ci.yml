@@ -213,3 +213,14 @@ jobs:
 
       - name: Run unit tests
         run: ctest --test-dir build --output-on-failure
+
+      # Every client screen as a BMP, downloadable from the run page, so a
+      # UI change can be reviewed without a Steam Deck.
+      - name: Render UI previews
+        run: SDL_VIDEO_DRIVER=dummy ./build/client/dualdeck-ui-preview ui-preview
+
+      - name: Upload UI previews
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-preview
+          path: ui-preview/
