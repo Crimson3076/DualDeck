@@ -236,9 +236,10 @@ void AdapterIpcClient::writeLoop() {
     // rates); this just governs how often writeLoop() checks whether
     // there's anything new to send, not how often frames actually
     // change. Each iteration that finds nothing new (the per-surface
-    // lastSentFrameIndex_ check below) is just a mutex-guarded
-    // struct/vector copy and comparison -- no message is sent -- so
-    // polling this often costs CPU wakeups, not bandwidth. Kept well
+    // latestFrameIndex()/lastSentFrameIndex_ check below) is just a
+    // mutex-guarded index read and comparison -- no pixels are copied
+    // and no message is sent -- so polling this often costs CPU
+    // wakeups, not bandwidth. Kept well
     // below the video-loop's own tick rate on the host side
     // (NetServerConfig::videoSendFps) so this stage is never the
     // bottleneck in the capture -> IPC -> relay -> send latency chain.
@@ -264,10 +265,17 @@ void AdapterIpcClient::writeLoop() {
         }
 
         for (const auto& surface : localAdapter_.capabilities().surfaces) {
+            auto it = lastSentFrameIndex_.find(surface.surfaceId);
+            // Cheap index check first, so an unchanged frame never gets
+            // copied out of the adapter at all (see latestFrameIndex()).
+            const auto newestIndex = localAdapter_.latestFrameIndex(surface.surfaceId);
+            if (newestIndex && it != lastSentFrameIndex_.end() && it->second == *newestIndex) {
+                continue;
+            }
+
             SurfaceFrame frame;
             if (!localAdapter_.latestFrame(surface.surfaceId, frame)) continue;
 
-            auto it = lastSentFrameIndex_.find(surface.surfaceId);
             if (it != lastSentFrameIndex_.end() && it->second == frame.frameIndex) {
                 continue; // nothing new for this surface since last tick
             }

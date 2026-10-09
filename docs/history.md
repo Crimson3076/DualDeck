@@ -12683,6 +12683,44 @@ behave the same. melonDS's frozen `net_server.cpp`
 compiles against the live headers. The emulators themselves were not
 built here; the next release build is their first full compile.
 
+## 2026-10-09: Wii U stream at 24-25fps, Host Control desktop at ~5fps
+
+Real report: a Cemu title running at 30+fps reached the client at
+~24-25fps, and Host Control's desktop mirror ran at about 5fps with
+noticeably less traffic than in-game. Four causes, all host side:
+
+- **Cemu capture pacing aliased against the game's own frame rate.**
+  `CemuAdapter::onSurfaceRendered()` captured only if a full 33ms had
+  passed since the last capture. A 30fps title delivers frames every
+  ~33.3ms with jitter, so any frame a hair early was skipped and the next
+  capture came 66ms later. It now uses a deadline with a quarter-interval
+  of slack that advances by whole intervals, so the long-run rate is
+  exactly `CEMU_REMOTE_CAPTURE_FPS` (30fps titles capture every frame,
+  60fps titles every other frame) and late frames can't cause bursts.
+- **H.264 rate control dropped frames.** `bEnableFrameSkip` was on, so
+  any scene above the bitrate target lost frames outright (on synthetic
+  854x480 moving content at quality 60: 208-267 of 300 frames survived).
+  The video loop then re-encoded the declined frame on its next tick
+  until one stuck, so the extra bitrate went out anyway, just with fewer
+  frames. Skip is now off (rate control raises QP instead; measured: the
+  same bytes on the wire, every frame delivered), the encoder gets real
+  timestamps, and the video loop never encodes the same frame index twice.
+- **Host Control's mirror was capped at 5fps by design** from when JPEG
+  was the only codec. It now defaults to 30fps
+  (`DUALDECK_HOSTCONTROL_MIRROR_FPS` overrides it, 1-60) on a
+  deadline schedule, and the box-filter downscale it runs every capture
+  is ~1.5-2x faster with the same output.
+- **Every poll copied the whole frame.** `AdapterIpcClient::writeLoop()`
+  (~250Hz, inside Cemu) and NetServer's video loop (240Hz) both copied
+  the full frame just to compare its index with the last one sent: about
+  0.9 GB/s of memcpy each at a 1280x720 surface, the host-side copy under
+  the IPC session mutex the frame publisher also needs. A new optional
+  `IEmulatorAdapter::latestFrameIndex()` / `IFrameSource::latestFrameIndex()`
+  lets both check the index first; Cemu, the IPC server, AdapterBridge and
+  HostControlAdapter implement it, other adapters keep the old behavior.
+
+Not yet verified on real hardware.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

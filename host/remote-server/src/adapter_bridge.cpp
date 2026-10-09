@@ -137,6 +137,10 @@ bool AdapterBridge::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& out
     return true;
 }
 
+std::optional<uint64_t> AdapterBridge::latestFrameIndex() {
+    return adapter_.latestFrameIndex(targetSurfaceId());
+}
+
 void AdapterBridge::frameDimensions(uint16_t& outWidth, uint16_t& outHeight) const {
     const auto caps = adapter_.capabilities();
     lookupTargetDimensions(caps, pickTargetSurface(caps), outWidth, outHeight);

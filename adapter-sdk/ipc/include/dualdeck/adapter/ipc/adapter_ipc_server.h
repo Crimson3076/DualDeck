@@ -69,6 +69,7 @@ public:
     void applyGenericInput(const GenericInputState& state) override;
     void releaseAllInputs() override;
     bool latestFrame(const std::string& surfaceId, SurfaceFrame& outFrame) override;
+    std::optional<uint64_t> latestFrameIndex(const std::string& surfaceId) override;
 
 private:
     void acceptLoop();

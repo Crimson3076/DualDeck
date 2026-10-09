@@ -394,4 +394,11 @@ bool AdapterIpcServer::latestFrame(const std::string& surfaceId, SurfaceFrame& o
     return true;
 }
 
+std::optional<uint64_t> AdapterIpcServer::latestFrameIndex(const std::string& surfaceId) {
+    std::lock_guard<std::mutex> lock(sessionMutex_);
+    auto it = latestFrames_.find(surfaceId);
+    if (it == latestFrames_.end()) return std::nullopt;
+    return it->second.frameIndex;
+}
+
 } // namespace dualdeck::adapter::ipc

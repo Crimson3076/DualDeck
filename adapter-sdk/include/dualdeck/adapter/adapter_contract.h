@@ -15,6 +15,7 @@
 // Wii U fixtures under adapter-sdk/fake_adapters/.
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -133,6 +134,16 @@ public:
     // false if no frame has been produced yet for that surface ID (or
     // the surface ID is unknown to this adapter).
     virtual bool latestFrame(const std::string& surfaceId, SurfaceFrame& outFrame) = 0;
+
+    // The frameIndex latestFrame() would report right now, without
+    // copying any pixels. Pollers (AdapterIpcClient::writeLoop() at
+    // ~250Hz, NetServer's video loop at up to 240Hz) check this first and
+    // only call latestFrame() when the index moved: a 1280x720 frame is
+    // 3.6 MB, and copying it on every poll just to find it unchanged cost
+    // close to 1 GB/s of memcpy per stage. nullopt means "unknown" (the
+    // default, for adapters that don't track it cheaply), in which case
+    // the caller falls back to latestFrame().
+    virtual std::optional<uint64_t> latestFrameIndex(const std::string& /*surfaceId*/) { return std::nullopt; }
 };
 
 } // namespace dualdeck::adapter
