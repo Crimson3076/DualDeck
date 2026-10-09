@@ -52,6 +52,10 @@ source ./internal/dualdeck_branch.sh
 
 have_kdialog() { command -v kdialog >/dev/null 2>&1; }
 
+# The release's VERSION file sits one level up (see build-release.sh);
+# shown in the main menu so it's obvious which build is installed.
+dualdeck_version="$(cat ../VERSION 2>/dev/null || true)"
+
 info() {
     if have_kdialog; then
         kdialog --title "DualDeck Host" --msgbox "$1" 2>/dev/null
@@ -151,21 +155,26 @@ choose_action() {
     # current systemd --user state (mirrors choose_emulator()'s own
     # dynamic custom_label precedent below) so this menu doubles as a
     # status check, not just an action picker.
-    local daemon_label="Host Control daemon (persistent, not running)"
+    local daemon_label="Always-on Host Control: OFF (turn on...)"
+    local daemon_status="Always-on Host Control is off."
     if command -v systemctl >/dev/null 2>&1 && \
        systemctl --user is-active --quiet dualdeck-host-control.service 2>/dev/null; then
-        daemon_label="Host Control daemon (persistent, RUNNING)"
+        daemon_label="Always-on Host Control: ON (turn off...)"
+        daemon_status="Always-on Host Control is on: a Deck can connect any time."
     fi
 
     if have_kdialog; then
-        kdialog --title "DualDeck Host" --menu "What would you like to do?" \
-            launch "Launch..." \
+        kdialog --title "DualDeck Host${dualdeck_version:+ ${dualdeck_version}}" \
+            --menu "${daemon_status}
+
+What would you like to do?" \
+            launch "Play: launch an emulator..." \
             hostcontrol-daemon "${daemon_label}" \
-            steam-add "Add to Steam (Big Picture / Gaming Mode)" \
-            steam-remove "Remove from Steam / uninstall" \
-            reconfigure-controls "Reconfigure Controls (fixes 'no controls' in Cemu)" \
-            update "Check for updates / update" \
-            emudeck "Patch my EmuDeck/RetroDECK-installed emulators (experimental)" \
+            steam-add "Add DualDeck Host to Steam (Gaming Mode / Big Picture)" \
+            steam-remove "Remove from Steam and uninstall..." \
+            reconfigure-controls "Fix Cemu controls (Deck input does nothing in Cemu)" \
+            update "Check for updates" \
+            emudeck "Use my EmuDeck/RetroDECK emulators (experimental)" \
             advanced "Advanced..." \
             2>/dev/null || echo "cancel"
     else
@@ -176,13 +185,15 @@ choose_action() {
         # and break the case match entirely.
         {
             echo "DualDeck Host"
-            echo "  1) Launch..."
+            [[ -n "${dualdeck_version}" ]] && echo "Version ${dualdeck_version}"
+            echo "${daemon_status}"
+            echo "  1) Play: launch an emulator..."
             echo "  2) ${daemon_label}"
-            echo "  3) Add to Steam (Big Picture / Gaming Mode)"
-            echo "  4) Remove from Steam / uninstall"
-            echo "  5) Reconfigure Controls (fixes 'no controls' in Cemu)"
-            echo "  6) Check for updates / update"
-            echo "  7) Patch my EmuDeck/RetroDECK-installed emulators (experimental)"
+            echo "  3) Add DualDeck Host to Steam (Gaming Mode / Big Picture)"
+            echo "  4) Remove from Steam and uninstall..."
+            echo "  5) Fix Cemu controls (Deck input does nothing in Cemu)"
+            echo "  6) Check for updates"
+            echo "  7) Use my EmuDeck/RetroDECK emulators (experimental)"
             echo "  8) Advanced..."
             echo "  9) Exit"
         } >&2
@@ -215,26 +226,26 @@ choose_host_control_daemon_action() {
 
     if have_kdialog; then
         if [[ "${active}" -eq 1 ]]; then
-            kdialog --title "DualDeck Host" --menu "Host Control daemon is RUNNING" \
-                stop "Stop && disable" \
-                status "Status" \
+            kdialog --title "DualDeck Host" --menu "Always-on Host Control is ON. A Deck can connect and use this PC's desktop any time, even with no emulator open." \
+                stop "Turn off (and don't start at login)" \
+                status "Show service status" \
                 2>/dev/null || echo "cancel"
         else
-            kdialog --title "DualDeck Host" --menu "Host Control daemon is not running" \
-                start "Enable && start now" \
-                status "Status" \
+            kdialog --title "DualDeck Host" --menu "Always-on Host Control is OFF. Turn it on to let a Deck connect and use this PC's desktop any time, even with no emulator open. It starts again at every login." \
+                start "Turn on now (and at every login)" \
+                status "Show service status" \
                 2>/dev/null || echo "cancel"
         fi
     else
         {
             if [[ "${active}" -eq 1 ]]; then
-                echo "Host Control daemon is RUNNING"
-                echo "  1) Stop & disable"
+                echo "Always-on Host Control is ON"
+                echo "  1) Turn off (and don't start at login)"
             else
-                echo "Host Control daemon is not running"
-                echo "  1) Enable & start now"
+                echo "Always-on Host Control is OFF"
+                echo "  1) Turn on now (and at every login)"
             fi
-            echo "  2) Status"
+            echo "  2) Show service status"
             echo "  3) Back"
         } >&2
         read -rp "Choice [1-3]: " choice
@@ -264,7 +275,7 @@ choose_emulator() {
     fi
 
     if have_kdialog; then
-        kdialog --title "DualDeck Host" --menu "Which system?" \
+        kdialog --title "DualDeck Host" --menu "Which system do you want to play?" \
             ds "Nintendo DS (melonDS)" \
             n3ds "Nintendo 3DS (Azahar, experimental)" \
             wiiu "Nintendo Wii U (Cemu, experimental)" \
@@ -382,20 +393,20 @@ case "${action}" in
                 # only if nothing was actually captured.
                 if daemon_start_output="$(./internal/install-host-control-daemon.sh 2>&1 && \
                     systemctl --user enable --now dualdeck-host-control.service 2>&1)"; then
-                    info "Host Control daemon started -- it now runs independently of Steam and stays up across reboots (once your desktop session's systemd --user manager comes up). Connect a client any time; launching a real emulator elsewhere still works exactly as before and switches this session to Emulation mode automatically."
+                    info "Always-on Host Control is on. A Deck can connect any time, and it starts again whenever you log in. Launching an emulator still works as before and switches the Deck to that game automatically."
                 elif [[ -n "${daemon_start_output}" ]]; then
-                    info "Could not start the Host Control daemon:
+                    info "Couldn't turn on always-on Host Control:
 
 ${daemon_start_output}"
                 else
-                    info "Could not start the Host Control daemon -- see ${error_log} for details, or check whether systemd --user is available on this system."
+                    info "Couldn't turn on always-on Host Control. See ${error_log} for details, or check whether systemd --user is available on this system."
                 fi
                 ;;
             stop)
                 if systemctl --user disable --now dualdeck-host-control.service 2>/dev/null; then
-                    info "Host Control daemon stopped and disabled."
+                    info "Always-on Host Control is off and won't start at login."
                 else
-                    info "Could not stop the Host Control daemon (it may not have been installed yet)."
+                    info "Couldn't turn off always-on Host Control (it may never have been turned on)."
                 fi
                 ;;
             status)

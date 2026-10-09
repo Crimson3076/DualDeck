@@ -20,8 +20,11 @@ KdialogPromptResult interpretKdialogExitStatus(bool exitedNormally, int exitCode
 
 KdialogPromptResult promptDeviceApprovalViaKdialog(const std::string& clientName,
                                                     const std::string& address) {
-    const std::string message =
-        "Allow \"" + clientName + "\" (" + address + ") to connect to this host?";
+    const std::string message = "\"" + clientName + "\" (" + address +
+                                ") wants to connect to this PC.\n\n"
+                                "Allowing it lets it stream video from this PC and send it "
+                                "controller input. Only allow devices you recognize. Once "
+                                "allowed, it won't ask again for this device.";
 
     pid_t pid = fork();
     if (pid < 0) {
@@ -33,8 +36,8 @@ KdialogPromptResult promptDeviceApprovalViaKdialog(const std::string& clientName
         // controlled, since they come from whatever the connecting device
         // claims about itself -- can't inject shell commands regardless of
         // their content.
-        execlp("kdialog", "kdialog", "--title", "DualDeck Host", "--yesno", message.c_str(),
-               static_cast<char*>(nullptr));
+        execlp("kdialog", "kdialog", "--title", "DualDeck Host: allow this device?", "--yes-label", "Allow",
+               "--no-label", "Deny", "--yesno", message.c_str(), static_cast<char*>(nullptr));
         _exit(127); // execlp only returns on failure (e.g. kdialog not installed)
     }
 
