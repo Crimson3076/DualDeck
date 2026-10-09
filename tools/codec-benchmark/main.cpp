@@ -7,7 +7,9 @@
 // 854x480). Not a pass/fail test (see client/tests/ and
 // host/remote-server/tests/ for those): a standalone dev tool for
 // answering "is H.264 actually competitive with JPEG here," with real
-// numbers, on whatever machine it's run on -- not an estimate.
+// numbers, on whatever machine it's run on -- not an estimate. PyroWave
+// (PyroWaveEncoder/PyroWaveDecoder) was added later as a third row,
+// whenever this build has it and this machine's GPU can run it.
 //
 // Caveat this tool cannot remove: the test content below is synthetic (a
 // gradient background, a few solid-color UI-like panels, and a moving
@@ -22,7 +24,9 @@
 // there for that.
 
 #include "host/h264_encoder.h"
+#include "host/pyrowave_encoder.h"
 #include "melonds_remote/protocol.h"
+#include "pyrowave_decoder.h"
 
 #include <turbojpeg.h>
 
@@ -83,6 +87,15 @@ int h264TargetBitrateBps(int quality, int width, int height, int fps) {
     const double bitsPerPixelPerFrame = 0.05 + clampedQuality * 0.25;
     const double bitrate = static_cast<double>(width) * static_cast<double>(height) * bitsPerPixelPerFrame * fps;
     return static_cast<int>(std::clamp(bitrate, 250'000.0, 20'000'000.0));
+}
+
+// Mirrors net_server.cpp's pyrowaveMaxFrameBytes() exactly -- same
+// duplication rationale as defaultVideoQualityForFrameSize() above.
+size_t pyrowaveMaxFrameBytes(int quality, int width, int height) {
+    const double clampedQuality = std::clamp(quality, 1, 100) / 100.0;
+    const double bitsPerPixelPerFrame = 0.5 + clampedQuality * 2.5;
+    const double bytes = static_cast<double>(width) * static_cast<double>(height) * bitsPerPixelPerFrame / 8.0;
+    return std::max<size_t>(static_cast<size_t>(bytes), 4096);
 }
 
 // Generates frame `frameIndex` of a synthetic kFrameCount-frame sequence --
@@ -256,6 +269,64 @@ void runH264Benchmark(const Resolution& res) {
 }
 #endif // DUALDECK_HAVE_OPENH264
 
+// PyroWave is intra-only (no I/P distinction) and its timings include
+// the CPU<->GPU upload/readback the CPU-buffer API does on every frame
+// -- exactly what NetServer/NetClient pay, so that's the honest number.
+// The first frame's encode/decode also includes one-time Vulkan pipeline
+// setup, so it's excluded from the stats as warm-up.
+void runPyroWaveBenchmark(const Resolution& res) {
+    if (!PyroWaveEncoder::isAvailable() || !melonds_remote::client::PyroWaveDecoder::isAvailable()) {
+        std::printf("  PyroWave: skipped -- no PyroWave-capable Vulkan device on this machine\n");
+        return;
+    }
+    int quality = defaultVideoQualityForFrameSize(res.width, res.height);
+    size_t maxFrameBytes = pyrowaveMaxFrameBytes(quality, res.width, res.height);
+
+    PyroWaveEncoder encoder;
+    if (!encoder.initialize(res.width, res.height, maxFrameBytes)) {
+        std::printf("  PyroWave (quality=%d): initialize() failed\n", quality);
+        return;
+    }
+    melonds_remote::client::PyroWaveDecoder decoder;
+
+    MinMaxAvg encodeUs, decodeUs, sizeBytes;
+    for (int i = 0; i <= kFrameCount; ++i) {
+        auto frame = makeSyntheticFrame(res.width, res.height, i);
+
+        ByteBuffer bitstream;
+        auto t0 = std::chrono::steady_clock::now();
+        bool ok = encoder.encodeFrame(frame.data(), res.width, res.height, bitstream);
+        double encodeElapsed = microsSince(t0);
+        if (!ok) {
+            std::printf("  PyroWave (quality=%d): encodeFrame() failed on frame %d\n", quality, i);
+            return;
+        }
+
+        std::vector<uint8_t> decodedBgra;
+        int decodedWidth = 0, decodedHeight = 0;
+        bool hasFrame = false;
+        auto t1 = std::chrono::steady_clock::now();
+        bool decoded = decoder.decodeFrame(bitstream.data(), bitstream.size(), decodedBgra, decodedWidth,
+                                           decodedHeight, hasFrame);
+        double decodeElapsed = microsSince(t1);
+        if (!decoded || !hasFrame) {
+            std::printf("  PyroWave (quality=%d): decodeFrame() failed to produce a picture on frame %d\n",
+                        quality, i);
+            return;
+        }
+        if (i == 0) continue; // warm-up, see above
+        encodeUs.record(encodeElapsed);
+        decodeUs.record(decodeElapsed);
+        sizeBytes.record(static_cast<double>(bitstream.size()));
+    }
+
+    std::printf("  PyroWave (quality=%d, cap=%.1fKB/frame = %.1fMbps@%dfps): encode avg=%.0fus min=%.0fus "
+                "max=%.0fus | decode avg=%.0fus min=%.0fus max=%.0fus | size avg=%.1fKB\n",
+                quality, static_cast<double>(maxFrameBytes) / 1024.0,
+                static_cast<double>(maxFrameBytes) * 8.0 * kAssumedFps / 1'000'000.0, kAssumedFps, encodeUs.avg(),
+                encodeUs.minV, encodeUs.maxV, decodeUs.avg(), decodeUs.minV, decodeUs.maxV, sizeBytes.avg() / 1024.0);
+}
+
 } // namespace
 
 int main() {
@@ -272,6 +343,7 @@ int main() {
 #ifdef DUALDECK_HAVE_OPENH264
         runH264Benchmark(res);
 #endif
+        runPyroWaveBenchmark(res);
     }
     return 0;
 }

@@ -149,6 +149,25 @@ MDR_TEST(client_settings_missing_file_uses_video_codec_h264_off_default) {
     MDR_CHECK(!settings.videoCodecH264Experimental);
 }
 
+MDR_TEST(client_settings_round_trip_video_codec_pyrowave_experimental) {
+    auto path = temporarySettingsPath("video-codec-pyrowave-round-trip");
+    MDR_CHECK(!loadClientSettings(path.string()).videoCodecPyroWaveExperimental);
+
+    ClientSettings settings;
+    settings.videoCodecPyroWaveExperimental = true;
+    MDR_CHECK(saveClientSettings(path.string(), settings));
+    ClientSettings loaded = loadClientSettings(path.string());
+    MDR_CHECK(loaded.videoCodecPyroWaveExperimental);
+    MDR_CHECK(!loaded.videoCodecH264Experimental);
+
+    settings.videoCodecPyroWaveExperimental = false;
+    MDR_CHECK(saveClientSettings(path.string(), settings));
+    MDR_CHECK(!loadClientSettings(path.string()).videoCodecPyroWaveExperimental);
+
+    std::error_code ec;
+    std::filesystem::remove_all(path.parent_path(), ec);
+}
+
 MDR_TEST(client_settings_round_trip_video_codec_h264_experimental) {
     auto path = temporarySettingsPath("video-codec-h264-round-trip");
     ClientSettings settings;

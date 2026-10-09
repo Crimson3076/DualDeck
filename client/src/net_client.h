@@ -60,6 +60,15 @@ struct NetClientConfig {
     // possibility, never forces H.264.
     bool preferH264 = false;
 
+    // Same idea as preferH264 above, for VideoCodecBit_PyroWave (see
+    // pyrowave_decoder.h). Set from ClientSettings::
+    // videoCodecPyroWaveExperimental in main.cpp. Only actually
+    // advertised if PyroWaveDecoder::isAvailable() also confirms this
+    // machine has a Vulkan device that can run it -- unlike OpenH264's
+    // pure-CPU decoder, a PyroWave build can still be missing the
+    // hardware it needs at runtime.
+    bool preferPyroWave = false;
+
     // How often to send a Heartbeat packet on the control channel while
     // otherwise idle, so the host's control-channel timeout doesn't fire
     // on a live-but-quiet connection.

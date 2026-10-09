@@ -27,9 +27,12 @@ add_executable(melonds_remote_net_client_tests
     main.cpp
     test_net_client.cpp
     test_h264_decoder.cpp
+    test_pyrowave_decoder.cpp
     ../src/net_client.cpp
     ../src/client_log.cpp
     ../src/h264_decoder.cpp
+    ../src/pyrowave_decoder.cpp
+    ../src/yuv_conversion.cpp
 )
 
 target_include_directories(melonds_remote_net_client_tests PRIVATE
@@ -74,12 +77,21 @@ if(OPENH264_FOUND)
     target_link_directories(melonds_remote_net_client_tests PRIVATE ${OPENH264_LIBRARY_DIRS})
 endif()
 
-# SIMD I420->BGRA conversion for h264_decoder.cpp's i420ToBgra() -- see
+# PyroWave decode (pyrowave_decoder.cpp, compiled directly above). Already
+# pulled in transitively via dualdeck_host's PUBLIC link when found (see
+# host/remote-server/CMakeLists.txt), but listed explicitly since this
+# target compiles the client's own decoder source itself -- same
+# reasoning as OpenH264 just above.
+if(DUALDECK_PYROWAVE_FOUND)
+    target_link_libraries(melonds_remote_net_client_tests PRIVATE PyroWave::PyroWave)
+endif()
+
+# SIMD I420->BGRA conversion for yuv_conversion.cpp's i420ToBgra() -- see
 # top-level CMakeLists.txt's LibYuv::LibYuv detection and that function's
-# own comment. This target compiles h264_decoder.cpp directly (see the
+# own comment. This target compiles yuv_conversion.cpp directly (see the
 # source list above), so it needs both the compile definition and the
 # link, same as client/CMakeLists.txt's dualdeck-client target.
-if(OPENH264_FOUND AND DUALDECK_LIBYUV_FOUND)
+if((OPENH264_FOUND OR DUALDECK_PYROWAVE_FOUND) AND DUALDECK_LIBYUV_FOUND)
     target_compile_definitions(melonds_remote_net_client_tests PRIVATE DUALDECK_HAVE_LIBYUV)
     target_link_libraries(melonds_remote_net_client_tests PRIVATE LibYuv::LibYuv)
 endif()

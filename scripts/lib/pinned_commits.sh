@@ -54,3 +54,13 @@ CEMU_COMMIT="a6fb0a48eb437a8a41c13b782ac8ae0433bf8f98" # v2.6, latest stable rel
 # CEMU_COMMIT above every time it's bumped to a newer tag.
 CEMU_VERSION_MAJOR="2"
 CEMU_VERSION_MINOR="6"
+
+# PyroWave (github.com/Themaister/pyrowave): the optional Vulkan-compute
+# video codec (see host/remote-server/include/host/pyrowave_encoder.h).
+# Not packaged by any distro, so scripts/build-release.sh builds its
+# standalone C API from this commit. Its own checkout_granite.sh pins the
+# Granite commit it needs in turn, so this one hash pins the whole thing.
+# Its C API is versioned but not yet declared ABI-stable upstream ("still
+# under development"), so bump this deliberately, re-running the
+# PyroWave tests on a real GPU, rather than tracking upstream HEAD.
+PYROWAVE_COMMIT="502a3b52a39312ab82c85b1e2fc0e746faee91a4"

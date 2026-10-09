@@ -425,12 +425,22 @@ struct WireHostCapabilities {
 // older client, or a client/host built without the new codec's library,
 // simply never advertises/selects it and the session runs JPEG exactly
 // as it always has.
+//
+// PyroWave (an intra-only Vulkan-compute wavelet codec, see
+// host/remote-server/include/host/pyrowave_encoder.h) was added the same
+// way H.264 was, without a kProtocolVersion bump: the payload shapes are
+// unchanged, an older client never sets kVideoCodecBit_PyroWave so an
+// older-or-newer host never selects it for one, and an older host simply
+// masks the unknown bit off in selectVideoCodec() and picks something
+// both sides already understand.
 enum class VideoCodec : uint8_t {
     Jpeg = 0,
     H264 = 1,
+    PyroWave = 2,
 };
 inline constexpr uint8_t kVideoCodecBit_Jpeg = 1u << 0;
 inline constexpr uint8_t kVideoCodecBit_H264 = 1u << 1;
+inline constexpr uint8_t kVideoCodecBit_PyroWave = 1u << 2;
 
 struct HelloPayload {
     std::string clientName;    // up to kMaxProtocolStringLength bytes
@@ -694,9 +704,11 @@ struct VideoFramePayload {
     // otherwise-mechanical rename across every call site for a field
     // whose wire meaning never actually depended on its name), this
     // holds whatever bytes HelloAckPayload::selectedVideoCodec (v13)
-    // negotiated for the session -- JPEG bytes today, or H.264 Annex-B
-    // NAL units once a session actually selects VideoCodec::H264 (see
-    // NetServer::videoLoop()'s own codec branch). The receiver already
+    // negotiated for the session -- JPEG bytes, H.264 Annex-B NAL units
+    // (VideoCodec::H264), or one complete PyroWave frame -- start-of-frame
+    // sequence header plus every coefficient block, PyroWave bitstream v1
+    // (VideoCodec::PyroWave) -- see NetServer::videoLoop()'s own codec
+    // branch. The receiver already
     // knows which from the handshake, so no extra framing is needed
     // here to distinguish them.
     std::vector<uint8_t> jpeg;

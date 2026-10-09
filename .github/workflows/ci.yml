@@ -42,6 +42,72 @@ jobs:
       - name: Run device-approval smoke test
         run: python3 tests/device_approval_smoke_test.py build/host/remote-server/dualdeck-host-service
 
+  # Same build as protocol-and-host above, but WITH PyroWave (see
+  # host/remote-server/include/host/pyrowave_encoder.h) -- that job keeps
+  # covering the compiled-out stub, this one the real
+  # DUALDECK_HAVE_PYROWAVE code under -Werror. GitHub's runners have no
+  # GPU, so tests run on Mesa's software Vulkan (lavapipe): PyroWave's
+  # decoder runs there for real (test_pyrowave_decoder.cpp's hand-built-
+  # frame tests), while its encoder needs subgroup sizes lavapipe can't
+  # provide, so the encoder/round-trip tests detect that at runtime and
+  # skip -- run them on a machine with a real GPU when touching that path.
+  pyrowave:
+    name: Build + test protocol/host/client-tests with PyroWave (lavapipe)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+            libturbojpeg0-dev libopenh264-dev libvulkan-dev mesa-vulkan-drivers ninja-build
+
+      - name: Read pinned PyroWave commit
+        id: pin
+        run: |
+          source scripts/lib/pinned_commits.sh
+          echo "commit=${PYROWAVE_COMMIT}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache PyroWave build
+        id: cache-pyrowave
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/pyrowave-install
+          key: pyrowave-${{ steps.pin.outputs.commit }}-ubuntu-24.04
+
+      - name: Build PyroWave (pinned commit)
+        if: steps.cache-pyrowave.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/Themaister/pyrowave.git "${{ runner.temp }}/pyrowave-src"
+          cd "${{ runner.temp }}/pyrowave-src"
+          git checkout "${{ steps.pin.outputs.commit }}"
+          bash checkout_granite.sh
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${{ runner.temp }}/pyrowave-install" -DCMAKE_INSTALL_LIBDIR=lib
+          cmake --build build -j"$(nproc)"
+          cmake --install build
+
+      - name: Configure
+        run: |
+          PKG_CONFIG_PATH="${{ runner.temp }}/pyrowave-install/lib/pkgconfig" \
+          cmake -S . -B build \
+            -DDUALDECK_BUILD_CLIENT=OFF \
+            -DDUALDECK_BUILD_HOST=ON \
+            -DCMAKE_CXX_FLAGS="-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror" 2>&1 | tee configure.log
+          # Fail loudly rather than silently testing the stub again.
+          if grep -q "PyroWave video will be compiled out" configure.log; then
+            echo "::error::PyroWave was not detected by CMake -- see configure.log above." >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Run unit tests (lavapipe)
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
+        run: ctest --test-dir build --output-on-failure
+
   host-client-menu-and-branch-selector:
     name: Host/client menu lifecycle + Installation branch selector tests
     runs-on: ubuntu-latest

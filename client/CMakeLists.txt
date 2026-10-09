@@ -12,6 +12,8 @@ add_executable(dualdeck-client
     src/bitmap_font.cpp
     src/mic_capture.cpp
     src/h264_decoder.cpp
+    src/pyrowave_decoder.cpp
+    src/yuv_conversion.cpp
 )
 
 target_link_libraries(dualdeck-client PRIVATE
@@ -41,12 +43,19 @@ else()
                     "as unavailable in this build (JPEG, protocol v8's existing codec, is unaffected)")
 endif()
 
-# SIMD I420->BGRA conversion for h264_decoder.cpp's i420ToBgra() -- see
+# PyroWave decode -- see top-level CMakeLists.txt's PyroWave::PyroWave
+# detection and pyrowave_decoder.h's own comment. A client built without
+# it never advertises VideoCodecBit_PyroWave (see net_client.cpp's
+# connect()).
+if(DUALDECK_PYROWAVE_FOUND)
+    target_link_libraries(dualdeck-client PRIVATE PyroWave::PyroWave)
+endif()
+
+# SIMD I420->BGRA conversion for yuv_conversion.cpp's i420ToBgra() -- see
 # top-level CMakeLists.txt's LibYuv::LibYuv detection and that function's
-# own comment. Only meaningful alongside OpenH264 itself -- gated on
-# OPENH264_FOUND too so a build with libyuv but not OpenH264 doesn't
-# define a macro nothing reads.
-if(OPENH264_FOUND AND DUALDECK_LIBYUV_FOUND)
+# own comment. Only meaningful alongside a planar-YUV codec (OpenH264 or
+# PyroWave), same gating as host/remote-server/CMakeLists.txt's.
+if((OPENH264_FOUND OR DUALDECK_PYROWAVE_FOUND) AND DUALDECK_LIBYUV_FOUND)
     target_compile_definitions(dualdeck-client PRIVATE DUALDECK_HAVE_LIBYUV)
     target_link_libraries(dualdeck-client PRIVATE LibYuv::LibYuv)
 endif()
