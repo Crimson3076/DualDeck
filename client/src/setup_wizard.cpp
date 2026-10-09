@@ -55,6 +55,13 @@ constexpr int kWizardFrameIntervalMs = 16;
 // How long L3+R3 must be held to skip the controller test, where every
 // face button is itself under test and can't be used to skip.
 constexpr uint64_t kSkipHoldUs = 1'000'000;
+// Keyboard input: Enter/Escape/arrow keys only count while no
+// gamepad is connected (keyboard testing in Desktop Mode). Steam Input's
+// default template for a non-Steam shortcut synthesizes Escape for B and
+// Start (see the same gate in main()'s inner loop), which would otherwise
+// fire a second Back after the real B press -- e.g. backing out two
+// screens -- or end the controller test while B is being tested. Typed
+// text and Backspace on the address screen still always work.
 
 std::string stepLabel(int step) {
     return "STEP " + std::to_string(step) + " OF " + std::to_string(kWizardStepCount);
@@ -143,6 +150,7 @@ WizardStepResult wizardWelcome(SDL_Renderer* renderer, SDL_Gamepad*& gamepad) {
                 case SDL_EVENT_QUIT:
                     return WizardStepResult::Exit;
                 case SDL_EVENT_KEY_DOWN:
+                    if (gamepad) break; // see "Keyboard input" above
                     if (event.key.key == SDLK_RETURN) return WizardStepResult::Advance;
                     if (event.key.key == SDLK_ESCAPE) return WizardStepResult::Skip;
                     break;
@@ -181,6 +189,7 @@ WizardStepResult wizardChooseMethod(SDL_Renderer* renderer, SDL_Gamepad*& gamepa
                 case SDL_EVENT_QUIT:
                     return WizardStepResult::Exit;
                 case SDL_EVENT_KEY_DOWN:
+                    if (gamepad) break; // see "Keyboard input" above
                     action = event.key.key == SDLK_ESCAPE ? MenuAction::Back : menuActionForKey(event.key.key);
                     break;
                 case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
@@ -263,7 +272,10 @@ std::optional<std::string> wizardManualEntry(SDL_Renderer* renderer, SDL_Window*
                 case SDL_EVENT_KEY_DOWN:
                     if (event.key.key == SDLK_BACKSPACE) {
                         deleteLast();
-                    } else if (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER) {
+                        break;
+                    }
+                    if (gamepad) break; // see "Keyboard input" above
+                    if (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER) {
                         connect = !text.empty();
                     } else if (event.key.key == SDLK_ESCAPE) {
                         return finish(std::nullopt);
@@ -387,6 +399,7 @@ WizardConnectResult wizardConnectAndApprove(SDL_Renderer* renderer, SDL_Gamepad*
                     done = true;
                     break;
                 case SDL_EVENT_KEY_DOWN:
+                    if (gamepad) break; // see "Keyboard input" above
                     if (event.key.key == SDLK_ESCAPE) {
                         outcome = WizardConnectResult::Back;
                         done = true;
@@ -501,6 +514,7 @@ WizardVideoResult wizardVideoTest(SDL_Renderer* renderer, SDL_Texture* texture, 
                 // with no game open yet, has no video to show, and that
                 // shouldn't trap someone in setup.
                 case SDL_EVENT_KEY_DOWN:
+                    if (gamepad) break; // see "Keyboard input" above
                     if (event.key.key == SDLK_RETURN) return WizardVideoResult::Passed;
                     if (event.key.key == SDLK_ESCAPE) return WizardVideoResult::Reconnect;
                     break;
@@ -577,6 +591,7 @@ WizardSimpleResult wizardControllerTest(SDL_Renderer* renderer, SDL_Gamepad*& ga
                 case SDL_EVENT_QUIT:
                     return WizardSimpleResult::Exit;
                 case SDL_EVENT_KEY_DOWN:
+                    if (gamepad) break; // see "Keyboard input" above
                     // Deliberately keyboard-only: every gamepad face
                     // button is itself under test here, so treating one as
                     // a menu action would make it impossible to confirm it
@@ -724,6 +739,7 @@ WizardSimpleResult wizardTouchTest(SDL_Renderer* renderer, SDL_Gamepad*& gamepad
                 case SDL_EVENT_QUIT:
                     return WizardSimpleResult::Exit;
                 case SDL_EVENT_KEY_DOWN:
+                    if (gamepad) break; // see "Keyboard input" above
                     if (event.key.key == SDLK_ESCAPE) return WizardSimpleResult::Back;
                     if (event.key.key == SDLK_RETURN) return WizardSimpleResult::Passed;
                     break;
@@ -814,6 +830,7 @@ WizardStepResult wizardDone(SDL_Renderer* renderer, SDL_Gamepad*& gamepad) {
                 case SDL_EVENT_QUIT:
                     return WizardStepResult::Exit;
                 case SDL_EVENT_KEY_DOWN:
+                    if (gamepad) break; // see "Keyboard input" above
                     if (event.key.key == SDLK_RETURN) return WizardStepResult::Advance;
                     break;
                 case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
