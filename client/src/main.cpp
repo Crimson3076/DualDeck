@@ -52,6 +52,7 @@
 #include <vector>
 
 #include "bitmap_font.h"
+#include "button_latch.h"
 #include "client_log.h"
 #include "client_settings.h"
 #include "device_identity.h"
@@ -1082,6 +1083,12 @@ int main(int argc, char** argv) {
             }
         };
         MenuStickState menuStick;
+        // Buttons still held when a menu closes (the B that left it, the
+        // A on RESUME, the L3+R3 chord) stay hidden from the game until
+        // released -- see button_latch.h.
+        bool menuWasShown = false;
+        ButtonReleaseLatch<uint16_t> dsButtonLatch;
+        ButtonReleaseLatch<uint8_t> extraButtonLatch;
 
         while (runningInner) {
             // Use the connected host's actual reported aspect ratio, not the
@@ -1449,6 +1456,7 @@ int main(int argc, char** argv) {
                                 settingsSaveFailed ? "COULD NOT SAVE SETTINGS" : "",
                                 net.hostMicSupported() ? micLevel : -1.0f, "",
                                 {{"D-PAD", "MOVE"}, {"LEFT/RIGHT", "CHANGE"}, {"A", "SELECT"}, {"B", "BACK"}});
+                menuWasShown = true;
                 continue;
             }
 
@@ -1459,7 +1467,25 @@ int main(int argc, char** argv) {
                     renderPauseMenu(renderer, menuItems, menuSelectedIndex, "MENU", "", -1.0f, identityLine(),
                                     {{"D-PAD", "MOVE"}, {"A", "SELECT"}, {"B", "CLOSE"}});
                 }
+                menuWasShown = true;
                 continue;
+            }
+
+            const bool stickEmulatesDpad = sessionSystemId == "nds";
+            auto heldExtraButtons = [&]() {
+                uint8_t extra = 0;
+                if (gamepad && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_LEFT_STICK)) {
+                    extra |= ExtraButton_ThumbLeft;
+                }
+                if (gamepad && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_RIGHT_STICK)) {
+                    extra |= ExtraButton_ThumbRight;
+                }
+                return extra;
+            };
+            if (menuWasShown) {
+                menuWasShown = false;
+                dsButtonLatch.block(buildButtonsFromGamepad(gamepad, stickEmulatesDpad));
+                extraButtonLatch.block(heldExtraButtons());
             }
 
             uint64_t nowUs = SDL_GetTicksNS() / 1000;
@@ -1476,7 +1502,7 @@ int main(int argc, char** argv) {
                 // "3ds" specifically, so a future system (e.g. Wii U,
                 // whose GamePad has two real analog sticks already)
                 // doesn't inherit DS's convenience by accident.
-                state.dsButtons = buildButtonsFromGamepad(gamepad, sessionSystemId == "nds");
+                state.dsButtons = dsButtonLatch.filter(buildButtonsFromGamepad(gamepad, stickEmulatesDpad));
 
                 // Real analog stick data (protocol.h's leftStickX/Y,
                 // rightStickX/Y) -- always sent regardless of session
@@ -1516,14 +1542,7 @@ int main(int argc, char** argv) {
                     // kMenuChordHoldUs's comment); a lone click of either
                     // stick is never part of that chord and is safe to
                     // forward every tick.
-                    uint8_t extraButtons = 0;
-                    if (SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_LEFT_STICK)) {
-                        extraButtons |= ExtraButton_ThumbLeft;
-                    }
-                    if (SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_RIGHT_STICK)) {
-                        extraButtons |= ExtraButton_ThumbRight;
-                    }
-                    state.extraButtons = extraButtons;
+                    state.extraButtons = extraButtonLatch.filter(heldExtraButtons());
                 }
                 // See pendingEmulatorAction's declaration above for why this
                 // resends for a window instead of just the one packet that

@@ -125,10 +125,12 @@ endif()
 add_test(NAME config_migration_tests COMMAND dualdeck_config_migration_tests)
 
 # `dualdeck-client --discover`'s JSON output (discovery_json.h); pure
-# string formatting, no sockets or SDL.
+# string formatting, no sockets or SDL. Also the menu button latch
+# (button_latch.h), header-only bit masks.
 add_executable(dualdeck_discovery_json_tests
     main.cpp
     test_discovery_json.cpp
+    test_button_latch.cpp
     ../src/discovery_json.cpp
 )
 
