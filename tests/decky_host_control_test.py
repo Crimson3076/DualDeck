@@ -15,6 +15,10 @@ which is how the plugin finds the socket on a real host.
      second one out.
   4. set_host_control(True/False) sets and clears the Host Control
      override.
+  5. discover_hosts runs the installed client's `--discover` (a stand-in
+     script here, since this job doesn't build the client) with its
+     bundled lib/ on LD_LIBRARY_PATH, and reports a missing client or
+     unexpected output as an error.
 
 Usage:
     python3 tests/decky_host_control_test.py /path/to/dualdeck-host-service
@@ -60,6 +64,30 @@ def wait_for(predicate, what, deadline_s=3.0):
             return result
         time.sleep(0.05)
     raise AssertionError(f"timed out waiting for {what}")
+
+
+def check_discover(plugin, home, call):
+    assert "isn't installed" in call(plugin.discover_hosts())["error"]
+
+    root = os.path.join(home, ".config", "dualdeck-client", "install")
+    os.makedirs(os.path.join(root, "lib"))
+    stand_in = os.path.join(root, "dualdeck-client")
+    host = ('{"address":"192.168.1.50","name":"htpc","controlPort":8760,"inputPort":8761,'
+            '"videoPort":8762,"audioPort":8765,"system":{"id":"nds","name":"Nintendo DS"},'
+            '"adapter":{"id":"melonds","name":"melonDS","version":"1"}}')
+    with open(stand_in, "w") as f:
+        f.write("#!/bin/sh\n"
+                f'[ "$1" = --discover ] || exit 3\n'
+                f'case "$LD_LIBRARY_PATH" in "{root}/lib"*) ;; *) exit 4 ;; esac\n'
+                f"echo '[{host}]'\n")
+    os.chmod(stand_in, 0o755)
+    hosts = call(plugin.discover_hosts())["hosts"]
+    assert [h["address"] for h in hosts] == ["192.168.1.50"] and hosts[0]["system"]["name"] == "Nintendo DS", hosts
+
+    with open(stand_in, "w") as f:
+        f.write("#!/bin/sh\necho not json\n")
+    assert "unexpected" in call(plugin.discover_hosts())["error"]
+    print("[ok] discover_hosts runs the installed client's --discover and parses its JSON")
 
 
 def run(server_path):
@@ -139,6 +167,8 @@ def run(server_path):
             print("[ok] Host Control override goes on and back off")
         finally:
             stop_server(proc)
+
+        check_discover(plugin, os.path.join(work, "home"), call)
 
         print("\nDECKY HOST CONTROL TEST PASSED")
         return 0

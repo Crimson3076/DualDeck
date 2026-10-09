@@ -18,6 +18,8 @@
 # docs/history.md's Decky plugin section for exactly what was
 # tested and how). If this plugin fails to load or behaves oddly in
 # Decky itself, that's the untested boundary -- please report it.
+import asyncio
+import json
 import os
 import pwd
 
@@ -32,7 +34,6 @@ _LEGACY_SETTINGS_PATH = os.path.join(decky.DECKY_USER_HOME, ".config", "melonds-
 
 class Plugin:
     def _load_settings(self):
-        import json
         # One-time melonDS-Remote -> DualDeck rebrand migration: copy an
         # old settings file forward if the new one doesn't exist yet,
         # same as the client binary's config-dir migration. Never
@@ -53,7 +54,6 @@ class Plugin:
             return {"host": "", "port": 8764, "token": ""}
 
     def _save_settings(self, settings):
-        import json
         os.makedirs(os.path.dirname(_SETTINGS_PATH), exist_ok=True)
         with open(_SETTINGS_PATH, "w") as f:
             json.dump(settings, f)
@@ -133,6 +133,41 @@ class Plugin:
             return "ok"
         except Exception as exc:  # noqa: BLE001
             return f"error: {exc}"
+
+    # --- LAN discovery, through the installed client's `--discover` ---
+
+    def _client_root(self):
+        # Where the client menu's "Add to Steam" installs it (see
+        # packaging/client/internal/run-client.sh).
+        return os.path.join(decky.DECKY_USER_HOME, ".config", "dualdeck-client", "install")
+
+    async def discover_hosts(self) -> dict:
+        """Runs one LAN scan with `dualdeck-client --discover`:
+        {"hosts": [...]} (see client/src/discovery_json.h), or
+        {"error": "..."} if the client isn't installed or the scan failed."""
+        root = self._client_root()
+        binary = os.path.join(root, "dualdeck-client")
+        if not os.access(binary, os.X_OK):
+            return {"error": "the DualDeck client isn't installed on this device"}
+        env = dict(os.environ)
+        lib_dir = os.path.join(root, "lib")
+        env["LD_LIBRARY_PATH"] = lib_dir + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                binary, "--discover",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=env)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return {"error": "the scan didn't finish"}
+        except OSError as exc:
+            return {"error": str(exc)}
+        if proc.returncode != 0:
+            return {"error": f"the scan failed (exit {proc.returncode})"}
+        try:
+            return {"hosts": json.loads(stdout.decode("utf-8"))}
+        except ValueError:
+            return {"error": "the client printed something unexpected"}
 
     # --- Decky lifecycle hooks (see decky-plugin-template's main.py) ---
 
