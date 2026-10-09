@@ -94,10 +94,9 @@ an item is fixed or a new gap is found.
 
 ## Testing gaps
 
-- CI does not build the SDL3 client binary on every push (only the
-  manual "Build test client" workflow and releases do). `NetClient` and
-  the client settings code are tested without SDL3; the screens, wizard
-  and stream loop are not.
+- CI builds the SDL3 client on every push (headless SDL3) and renders
+  its picker and menu screens to images (the `ui-preview` artifact), but
+  nothing drives the screens, wizard or stream loop with real input.
 - No real Steam Deck or Bazzite hardware runs in CI. Most fixes in
   `history.md` marked "not yet verified" are waiting on a real-hardware
   report.

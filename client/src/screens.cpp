@@ -285,6 +285,25 @@ void renderScrollArrow(SDL_Renderer* renderer, float centerY, bool up) {
 
 } // namespace
 
+void renderSpinner(SDL_Renderer* renderer, float centerX, float centerY) {
+    constexpr int kDots = 8;
+    constexpr float kRadius = 30.0f;
+    constexpr float kDotSize = 10.0f;
+    constexpr uint64_t kStepMs = 110;
+    const int lit = static_cast<int>((SDL_GetTicks() / kStepMs) % kDots);
+    for (int i = 0; i < kDots; ++i) {
+        const float angle = static_cast<float>(i) * 2.0f * SDL_PI_F / static_cast<float>(kDots);
+        const float x = centerX + kRadius * SDL_cosf(angle) - kDotSize / 2.0f;
+        const float y = centerY + kRadius * SDL_sinf(angle) - kDotSize / 2.0f;
+        // Fades behind the lit dot, so it reads as motion.
+        const int age = (lit - i + kDots) % kDots;
+        const auto shade = static_cast<Uint8>(std::max(60, 230 - age * 28));
+        SDL_SetRenderDrawColor(renderer, shade, shade, static_cast<Uint8>(std::min(255, shade + 10)), 255);
+        SDL_FRect dot{x, y, kDotSize, kDotSize};
+        SDL_RenderFillRect(renderer, &dot);
+    }
+}
+
 void renderButtonHints(SDL_Renderer* renderer, const std::vector<ButtonHint>& hints) {
     renderButtonHintRow(renderer, hints, static_cast<float>(kWindowHeight) - 56.0f);
 }

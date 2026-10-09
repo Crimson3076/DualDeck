@@ -12,13 +12,20 @@
 
 namespace dualdeck::client {
 
-// Orchestrates the whole wizard as an explicit step state machine. Returns
-// true if the user reached the end (Done), false if they exited entirely
-// (window close, or Exit/B from the very first screen) -- callers decide
-// separately whether "false" means quit the whole app (first automatic
-// run) or just fall through to the normal discovery screen (re-invoked
-bool runSetupWizard(SDL_Window* window, SDL_Renderer* renderer, SDL_Texture* texture, SDL_Gamepad*& gamepad,
+enum class WizardOutcome {
+    // Reached the end. outNetConfig holds the host the wizard connected
+    // to, so the caller can go straight to it -- a host entered by
+    // address may never show up in the discovery list.
+    Completed,
+    // B on the welcome screen: carry on to the normal host picker.
+    Skipped,
+    // Window closed, or EXIT chosen from the host picker's menu.
+    Quit,
+};
+
+// Orchestrates the whole wizard as an explicit step state machine.
+WizardOutcome runSetupWizard(SDL_Window* window, SDL_Renderer* renderer, SDL_Texture* texture, SDL_Gamepad*& gamepad,
                     uint16_t discoveryPort, NetClientConfig baseNetConfig,
-                    const std::string& discoveryStorePath);
+                    const std::string& discoveryStorePath, NetClientConfig& outNetConfig);
 
 } // namespace dualdeck::client

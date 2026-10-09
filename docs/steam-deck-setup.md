@@ -17,9 +17,12 @@ gameplay performance. If video still doesn't show up, see
 `docs/troubleshooting.md`'s "screen stays blank" entry.
 
 **First launch runs a setup wizard.** The client walks you through
-picking a host (or entering its address manually), connecting, and
-testing video/controller/touch, entirely with the D-pad and face
-buttons -- no typing needed unless you choose manual entry. It only runs
+testing your controller and touch screen, picking a host (or entering
+its address on an on-screen number pad), connecting, and checking
+video, entirely with the D-pad and face buttons. Press B on its first
+screen to skip it, hold L3+R3 to skip the controller test, and press A
+to skip the touch test (e.g. when docked). When it finishes it connects
+straight to the host it found. It only runs
 automatically once; open **Settings > Run Setup Wizard** from the L3+R3
 pause menu to run it again later (e.g. after switching to a different
 host). The same Settings screen lets you turn automatic update checks on

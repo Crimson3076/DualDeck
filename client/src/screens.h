@@ -46,6 +46,10 @@ void renderButtonHints(SDL_Renderer* renderer, const std::vector<ButtonHint>& hi
 // D-PAD MOVE, A SELECT, B BACK.
 const std::vector<ButtonHint>& defaultMenuHints();
 
+// A ring of dots with one lit dot that circles, so a screen that's
+// waiting on the network visibly isn't frozen. Driven by the clock.
+void renderSpinner(SDL_Renderer* renderer, float centerX, float centerY);
+
 void renderPauseMenu(SDL_Renderer* renderer, const std::vector<std::string>& items, int selectedIndex,
                      const std::string& title = "MENU", const std::string& statusLine = "",
                      float micLevel = -1.0f, const std::string& subtitle = "",
