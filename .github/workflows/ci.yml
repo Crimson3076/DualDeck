@@ -157,3 +157,53 @@ jobs:
           g++ -std=c++20 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
             -I client/src \
             -c client/src/discovery_store.cpp -o /tmp/discovery_store_test.o
+
+  # The full SDL3 client (setup wizard, host picker, menus, stream loop).
+  # The jobs above only compile the SDL-free parts of client/, so before
+  # this job a typo in main.cpp or the UI screens wasn't caught until a
+  # release or a manual build-test-client.yml run. SDL3 is built with
+  # only the dummy/offscreen video drivers: enough to compile and link
+  # the client, and quick to build once per cache key.
+  client:
+    name: Build + test the SDL3 client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libturbojpeg0-dev libopenh264-dev ninja-build
+
+      # Same tag as build-release.sh's SDL3_TAG and build-test-client.yml.
+      - name: Cache SDL3 build
+        id: sdl3-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/sdl3-install
+          key: sdl3-release-3.4.12-headless-${{ runner.os }}
+
+      - name: Build SDL3 (headless)
+        if: steps.sdl3-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch release-3.4.12 https://github.com/libsdl-org/SDL.git "${{ runner.temp }}/sdl3-src"
+          cmake -S "${{ runner.temp }}/sdl3-src" -B "${{ runner.temp }}/sdl3-src/build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="${{ runner.temp }}/sdl3-install" \
+            -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF \
+            -DSDL_UNIX_CONSOLE_BUILD=ON -DSDL_X11=OFF -DSDL_WAYLAND=OFF -DSDL_KMSDRM=OFF \
+            -DSDL_OPENGL=OFF -DSDL_OPENGLES=OFF -DSDL_VULKAN=OFF -DSDL_PIPEWIRE=OFF \
+            -DSDL_PULSEAUDIO=OFF -DSDL_ALSA=OFF -DSDL_JACK=OFF -DSDL_SNDIO=OFF \
+            -DSDL_DBUS=OFF -DSDL_IBUS=OFF
+          cmake --build "${{ runner.temp }}/sdl3-src/build" -j"$(nproc)"
+          cmake --install "${{ runner.temp }}/sdl3-src/build"
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DDUALDECK_BUILD_CLIENT=ON -DDUALDECK_BUILD_HOST=ON \
+            -DCMAKE_PREFIX_PATH="${{ runner.temp }}/sdl3-install" \
+            -DCMAKE_CXX_FLAGS="-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror"
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Run unit tests
+        run: ctest --test-dir build --output-on-failure
