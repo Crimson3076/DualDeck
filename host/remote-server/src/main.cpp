@@ -11,6 +11,7 @@
 #include <unordered_set>
 
 #include "host/adapter_bridge.h"
+#include "host/control_socket.h"
 #include "host/host_control_adapter.h"
 #include "host/kdialog_approval_prompt.h"
 #include "host/logging_input_sink.h"
@@ -167,8 +168,23 @@ private:
 // until SIGINT/SIGTERM, then returns so the caller can tear down
 // whatever sink/frame-source objects it constructed.
 void runUntilStopped(melonds_remote::host::NetServer& server, const melonds_remote::host::NetServerConfig& config,
+                      const std::string& controlSocketPath,
                       melonds_remote::host::ModeCoordinator* coordinator = nullptr) {
     server.start();
+
+    // Local control API (see control_socket.h). Optional: the service
+    // runs the same without it, so a failure is only logged.
+    melonds_remote::host::ControlSocketServer controlSocket(
+        controlSocketPath, [&server, coordinator](const std::string& line) {
+            return melonds_remote::host::handleControlCommand(line, server, coordinator);
+        });
+    if (!controlSocketPath.empty()) {
+        if (controlSocket.start()) {
+            std::printf("Control socket: %s\n", controlSocketPath.c_str());
+        } else {
+            std::fprintf(stderr, "control socket unavailable -- continuing without it\n");
+        }
+    }
 
     if (config.authToken.empty() || coordinator) {
         std::thread(consoleLoop, std::ref(server), coordinator).detach();
@@ -181,6 +197,7 @@ void runUntilStopped(melonds_remote::host::NetServer& server, const melonds_remo
     }
 
     std::printf("shutting down...\n");
+    controlSocket.stop();
     server.stop();
 }
 } // namespace
@@ -193,6 +210,8 @@ int main(int argc, char** argv) {
     // LoggingInputSink/SyntheticFrameSource pair -- see
     // docs/adr/0001-host-service-and-adapter-architecture.md section 4.
     bool useAdapterIpc = false;
+    std::string controlSocketPath = melonds_remote::host::defaultControlSocketPath();
+    bool approvalPopup = true;
     std::string adapterSocketPath; // empty -> defaultAdapterSocketPath()
     // Whether --system-id/--system-name or --adapter-id/--adapter-name/
     // --adapter-version were explicitly given -- if so, they win over
@@ -265,6 +284,12 @@ int main(int argc, char** argv) {
             adapterIdentityExplicit = true;
         } else if (arg == "--adapter-ipc") {
             useAdapterIpc = true;
+        } else if (arg == "--control-socket") {
+            controlSocketPath = nextArg();
+        } else if (arg == "--no-control-socket") {
+            controlSocketPath.clear();
+        } else if (arg == "--no-approval-popup") {
+            approvalPopup = false;
         } else if (arg == "--adapter-socket") {
             adapterSocketPath = nextArg();
             useAdapterIpc = true;
@@ -277,7 +302,8 @@ int main(int argc, char** argv) {
                 "[--audio-port N] [--no-mic] [--app-version STRING] [--self-update COMMAND] "
                 "[--system-id ID] [--system-name NAME] [--adapter-id ID] "
                 "[--adapter-name NAME] [--adapter-version STRING] "
-                "[--adapter-ipc] [--adapter-socket PATH]\n"
+                "[--adapter-ipc] [--adapter-socket PATH] [--control-socket PATH] "
+                "[--no-control-socket] [--no-approval-popup]\n"
                 "\n"
                 "Phase 1 prototype: serves a synthetic 256x192 test-pattern bottom\n"
                 "screen and logs received controller/touch state. Not yet wired to\n"
@@ -381,6 +407,15 @@ int main(int argc, char** argv) {
                 "in this mode; only where this process gets its frames/sends its\n"
                 "input from/to internally changes.\n"
                 "\n"
+                "Local control API: a Unix socket (default\n"
+                "$XDG_RUNTIME_DIR/dualdeck/host-control.sock, --control-socket PATH to\n"
+                "move it, --no-control-socket to turn it off) answers one command per\n"
+                "line with one JSON line: 'status', 'pending', 'approve <id>',\n"
+                "'deny <id>', and with --adapter-ipc 'hostcontrol'/'resume'. It's how a\n"
+                "front end such as the Decky plugin approves devices. Pass\n"
+                "--no-approval-popup when that front end answers approvals, so the\n"
+                "kdialog popup doesn't ask the same question twice.\n"
+                "\n"
                 "GitHub issue #4 Phase D: in --adapter-ipc mode this host no longer\n"
                 "waits for an adapter before a client can connect -- it starts in\n"
                 "host-control mode (a virtual gamepad, via Linux's uinput, for\n"
@@ -405,7 +440,7 @@ int main(int argc, char** argv) {
     // giving Azahar/host-control the same zero-typing approval flow
     // melonDS's in-process Qt integration already has.
     KdialogApprovalHook approvalHook;
-    if (config.authToken.empty()) {
+    if (config.authToken.empty() && approvalPopup) {
         config.onPendingRequestsChanged =
             [&approvalHook](std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest> pending) {
                 approvalHook.onPendingRequestsChanged(std::move(pending));
@@ -467,7 +502,7 @@ int main(int argc, char** argv) {
             "IPC channel (e.g. dualdeck-synthetic-adapter) to switch to emulation mode "
             "automatically. Type 'hostcontrol' to force host-control mode even once one "
             "connects, 'resume' to clear that override, or 'mode' to check the current mode.\n");
-        runUntilStopped(server, config, &coordinator);
+        runUntilStopped(server, config, controlSocketPath, &coordinator);
         coordinator.stop();
         adapterServer.stop();
     } else {
@@ -477,7 +512,7 @@ int main(int argc, char** argv) {
 
         melonds_remote::host::NetServer server(config, inputSink, frameSource, micSink);
         approvalHook.setServer(&server);
-        runUntilStopped(server, config);
+        runUntilStopped(server, config, controlSocketPath);
         frameSource.stop();
     }
 

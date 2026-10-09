@@ -1,6 +1,7 @@
 add_library(dualdeck_host STATIC
     src/logging_input_sink.cpp
     src/synthetic_frame_source.cpp
+    src/control_socket.cpp
     src/net_server.cpp
     src/net_server_control.cpp
     src/net_server_util.cpp

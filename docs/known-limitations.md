@@ -50,7 +50,10 @@ an item is fixed or a new gap is found.
   deleting the approved-devices file forgets all of them.
 - The host's approval prompt is a `kdialog` popup on the host's desktop.
   It is unlikely to show over a running game in Steam Gaming Mode
-  (inferred, not tested).
+  (inferred, not tested). The host service's local control socket
+  (`dualdeck-host-service --help`) can list and approve requests
+  instead, but nothing in the release uses it yet; the Decky plugin is
+  meant to.
 
 ## Host Control mode
 
