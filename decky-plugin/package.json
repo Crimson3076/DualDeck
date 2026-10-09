@@ -10,6 +10,7 @@
   },
   "author": "DualDeck contributors",
   "license": "BSD-3-Clause",
+  "packageManager": "pnpm@9.15.9",
   "devDependencies": {
     "@decky/rollup": "^1.0.2",
     "@decky/ui": "^4.11.0",

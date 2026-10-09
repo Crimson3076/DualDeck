@@ -139,12 +139,12 @@ jobs:
         working-directory: decky-plugin
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9.15.9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # Node's bundled Corepack provides the pnpm version package.json's
+      # packageManager field pins.
+      - run: corepack enable
 
       # The backend is tested against the real host service in the
       # protocol-and-host job (tests/decky_host_control_test.py); this
