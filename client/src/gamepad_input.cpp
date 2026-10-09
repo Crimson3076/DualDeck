@@ -175,6 +175,22 @@ void logGamepadTouchpadDiagnostics(SDL_Gamepad* gamepad) {
 }
 
 
+bool handleGamepadHotplug(const SDL_Event& event, SDL_Gamepad*& gamepad) {
+    if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
+        if (!gamepad) gamepad = SDL_OpenGamepad(event.gdevice.which);
+        return true;
+    }
+    if (event.type == SDL_EVENT_GAMEPAD_REMOVED) {
+        if (gamepad && SDL_GetGamepadID(gamepad) == event.gdevice.which) {
+            SDL_CloseGamepad(gamepad);
+            gamepad = nullptr;
+        }
+        return true;
+    }
+    return false;
+}
+
+
 MenuAction menuActionForButton(uint8_t button) {
     switch (button) {
         case SDL_GAMEPAD_BUTTON_DPAD_UP: return MenuAction::Up;
