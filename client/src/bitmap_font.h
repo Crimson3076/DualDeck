@@ -9,10 +9,10 @@
 // printing discovered host names to stdout, as a "simplest possible"
 // approach might otherwise do, isn't actually usable there.
 //
-// Deliberately small: space, 0-9, A-Z, and '.', '-', ':' (enough for
-// hostnames, IPv4 addresses, and "host:port" strings). Any unsupported
-// character (lowercase is upper-cased first; anything else falls
-// through) renders as a blank cell rather than failing.
+// Deliberately small: space, 0-9, A-Z, and the punctuation UI text
+// actually uses (. - : , ' " ! ? ( ) [ ] < > + = / % _ # & *). Any
+// unsupported character (lowercase is upper-cased first; anything else
+// falls through) renders as a blank cell rather than failing.
 
 #include <SDL3/SDL.h>
 

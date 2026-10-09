@@ -129,7 +129,7 @@ WizardStepResult wizardWelcome(SDL_Renderer* renderer, SDL_Gamepad*& gamepad) {
 
         renderWizardMessage(renderer, "SETUP WIZARD",
                              {"THIS WILL HELP YOU CONNECT TO A HOST",
-                              "AND TEST VIDEO CONTROLLER AND TOUCH",
+                              "AND TEST VIDEO, CONTROLLER AND TOUCH",
                               "IT TAKES ABOUT A MINUTE"},
                              "A TO CONTINUE - B TO EXIT");
     }
@@ -242,8 +242,8 @@ std::optional<std::string> wizardManualEntry(SDL_Renderer* renderer, SDL_Window*
         if (result) break;
 
         renderWizardMessage(renderer, "ENTER HOST ADDRESS",
-                             {text.empty() ? "TYPE THE HOSTS IP ADDRESS" : text,
-                              "USES DEFAULT PORTS 8760 8761 8762",
+                             {text.empty() ? "TYPE THE HOST'S IP ADDRESS" : text,
+                              "USES DEFAULT PORTS 8760, 8761, 8762",
                               "A KEYBOARD IS NEEDED FOR THIS SCREEN"},
                              "ENTER TO CONNECT - ESCAPE TO GO BACK");
     }
