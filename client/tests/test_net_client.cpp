@@ -392,6 +392,53 @@ MDR_TEST(net_client_receives_an_h264_video_frame_without_needing_a_second_frame)
 }
 #endif // DUALDECK_HAVE_OPENH264
 
+// NetServer::receiveSessionPacket(), the shared front half of the
+// host's input and mic loops: a packet from the authenticated client's
+// address still has to be the right type with a header that matches its
+// size before it reaches the input sink.
+MDR_TEST(net_server_applies_only_well_formed_controller_state_packets) {
+    ServerFixture fixture;
+    NetClient client(fixture.clientConfig());
+    MDR_CHECK(client.connect());
+
+    ControllerState first;
+    first.sequence = 1;
+    first.dsButtons = 0x1;
+    client.sendControllerState(first);
+    MDR_CHECK(waitUntil([&] { return fixture.sinkA.lastState().dsButtons == 0x1; }));
+
+    // Same address as the client (loopback), so only the packet checks
+    // can reject these.
+    ControllerState rejected;
+    rejected.sequence = 2;
+    rejected.dsButtons = 0x2;
+    ByteBuffer payload;
+    serializeControllerState(payload, rejected);
+    ByteBuffer wrongType = buildPacket(PacketType::MicAudioFrame, payload);
+    ByteBuffer truncated = buildControllerStatePacket(rejected);
+    truncated.pop_back();
+
+    int rawFd = ::socket(AF_INET, SOCK_DGRAM, 0);
+    sockaddr_in to{};
+    to.sin_family = AF_INET;
+    to.sin_port = htons(fixture.config.inputPort);
+    ::inet_pton(AF_INET, "127.0.0.1", &to.sin_addr);
+    for (const ByteBuffer* packet : {&wrongType, &truncated}) {
+        ::sendto(rawFd, packet->data(), packet->size(), 0, reinterpret_cast<sockaddr*>(&to), sizeof(to));
+    }
+    ::close(rawFd);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    MDR_CHECK_EQ(fixture.sinkA.lastState().dsButtons, static_cast<uint16_t>(0x1));
+
+    // The session is still live: the next good packet goes through.
+    ControllerState next;
+    next.sequence = 3;
+    next.dsButtons = 0x4;
+    client.sendControllerState(next);
+    MDR_CHECK(waitUntil([&] { return fixture.sinkA.lastState().dsButtons == 0x4; }));
+    client.disconnect();
+}
+
 MDR_TEST(net_client_detects_a_dead_server_connection) {
     ServerFixture fixture;
     NetClient client(fixture.clientConfig());

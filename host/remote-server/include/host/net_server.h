@@ -398,6 +398,14 @@ private:
     void watchdogLoop();
     void discoveryLoop();
     void audioLoop();
+    // Shared front half of inputLoop()/audioLoop(): receives one UDP
+    // packet on `fd` into `buf` and returns its payload size, or nullopt
+    // when it should be skipped (nothing received, not from the
+    // authenticated client, wrong type, or a bad header -- the last two
+    // counted in stats_.*malformed). The payload starts at
+    // kPacketHeaderWireSize.
+    std::optional<size_t> receiveSessionPacket(int fd, ByteBuffer& buf, PacketType type,
+                                               uint64_t NetServerStats::*malformed);
 
     NetServerConfig config_;
 
