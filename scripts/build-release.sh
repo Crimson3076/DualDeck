@@ -203,6 +203,11 @@ echo "== [1/6] SDL3 (${SDL3_TAG}) =="
 # also bump release.yml's cache key, this check still catches the
 # mismatch and rebuilds for real, rather than silently trusting a
 # same-named-but-wrong-tag cached directory.
+# -DCMAKE_INSTALL_LIBDIR=lib below: real Fedora 44 report, 2026-10-09 --
+# GNUInstallDirs defaults to lib64/ on Fedora, so the cache check here
+# (and the packaging step's `cp ${sdl3_install}/lib/libSDL3.so*`) only
+# ever looked in lib/, rebuilding SDL3 on every run and failing at
+# packaging. Pinning the libdir keeps every distro on the same layout.
 sdl3_tag_marker="${sdl3_install}/.dualdeck-sdl3-tag"
 if [[ -f "${sdl3_install}/lib/cmake/SDL3/SDL3Config.cmake" ]] && \
    [[ "$(cat "${sdl3_tag_marker}" 2>/dev/null)" == "${SDL3_TAG}" ]]; then
@@ -212,6 +217,7 @@ else
     git clone --depth 1 --branch "${SDL3_TAG}" https://github.com/libsdl-org/SDL.git "${sdl3_src}"
     cmake -S "${sdl3_src}" -B "${sdl3_src}/build" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="${sdl3_install}" \
+        -DCMAKE_INSTALL_LIBDIR=lib \
         -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF \
         "${cmake_launcher_args[@]}"
     cmake --build "${sdl3_src}/build" -j"$(nproc)"
