@@ -1,12 +1,37 @@
 # DualDeck -- Decky Loader plugin
 
-Lets you start or stop DualDeck's streaming server from the Steam
-Deck's Quick Access Menu, on a melonDS that's already running on your
-HTPC -- no walking over to the host, no restarting melonDS. See GitHub
-issue "Decky plugin to start/stop the host server" for the original
-request.
+The panel has two sections:
 
-## What this actually does
+- **This PC (host)** appears only when the machine running Decky is
+  also running the DualDeck host service, for example a PC in Steam Big
+  Picture with the Host Control daemon installed. It lists devices
+  asking to connect, with **Approve** and **Deny** buttons, so you don't
+  have to find the desktop `kdialog` popup. While an emulator is
+  streaming, it also offers **Switch to Host Control** and
+  **Return to the emulator**.
+- **Remote melonDS** starts or stops the streaming server on a melonDS
+  already running on another PC, from the Steam Deck's Quick Access
+  Menu. See GitHub issue "Decky plugin to start/stop the host server"
+  for the original request.
+
+## This PC (host)
+
+`host_control_client.py` talks to the host service's local control
+socket (`host/remote-server/include/host/control_socket.h`). It looks
+for the socket at `$XDG_RUNTIME_DIR/dualdeck/host-control.sock`, then
+`/run/user/<uid>/...`, then `~/.cache/dualdeck/...`. The panel re-reads
+it every two seconds while it's open. While it's closed, the plugin still
+checks every three seconds and raises a Steam notification for each
+new connection request, so you hear about it mid-game. There is nothing
+to configure.
+
+`tests/decky_host_control_test.py` runs `main.py`'s host-side calls
+against the real `dualdeck-host-service` in CI, using a stand-in for
+the `decky` module.
+
+## Remote melonDS
+
+### What this actually does
 
 Toggles the same live on/off switch documented in
 `docs/history.md`'s "Live-toggle: start/stop remote streaming
@@ -21,7 +46,7 @@ thin client for that listener -- see `management_client.py`.
 This does **not** start or stop melonDS itself -- melonDS has to already
 be running on the host for there to be anything to toggle.
 
-## Setup
+### Setup
 
 1. On the host, set a management token (Emu Settings, or
    `MelonDSRemote.ManagementToken = "some-shared-secret"` in
@@ -46,6 +71,9 @@ project's own sandbox:
   real host, using a minimal stand-in for the `decky` module Decky
   Loader normally provides (this sandbox has no real Decky Loader
   runtime to test against).
+- `main.py`'s host-side calls (`get_local_host`/`answer_device`/
+  `set_host_control`) and `host_control_client.py`, run in CI against
+  the real host service by `tests/decky_host_control_test.py`.
 - `src/index.tsx` -- compiles cleanly (`pnpm install && pnpm run build`)
   against the real, current `@decky/ui`/`@decky/api`/`@decky/rollup`
   packages, not just written from memory of the API shape.

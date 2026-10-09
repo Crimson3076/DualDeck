@@ -5,7 +5,7 @@
   "api_version": 1,
   "publish": {
     "tags": ["emulation", "melonds"],
-    "description": "Start or stop melonDS's remote-streaming server on your HTPC from the Steam Deck's Quick Access Menu, without walking over to the host or restarting melonDS.",
+    "description": "On the host PC: approve devices asking to connect and switch Host Control mode from the Quick Access Menu. On the Deck: start or stop a remote melonDS's streaming server.",
     "image": ""
   }
 }
