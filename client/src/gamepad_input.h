@@ -8,7 +8,7 @@
 
 #include <cstdint>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 // Deliberate-hold duration for the L3+R3 "open menu" chord, shared
 // by discoverAndSelectHost() and main()'s inner loop so every screen uses
@@ -53,4 +53,4 @@ uint16_t buildButtonsFromGamepad(SDL_Gamepad* gamepad, bool stickEmulatesDpad = 
 
 void logGamepadTouchpadDiagnostics(SDL_Gamepad* gamepad);
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

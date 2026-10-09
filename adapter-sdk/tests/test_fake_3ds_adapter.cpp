@@ -1,8 +1,8 @@
-#include "melonds_remote/adapter/fake/fake_3ds_adapter.h"
+#include "dualdeck/adapter/fake/fake_3ds_adapter.h"
 #include "test_framework.h"
 
-using namespace melonds_remote::adapter;
-using namespace melonds_remote::adapter::fake;
+using namespace dualdeck::adapter;
+using namespace dualdeck::adapter::fake;
 
 MDR_TEST(fake_3ds_adapter_reports_3ds_identity_and_two_surfaces) {
     FakeThreeDsAdapter ds3;

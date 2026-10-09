@@ -17,14 +17,14 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 live_version="$(grep -oP 'inline constexpr uint16_t kProtocolVersion = \K[0-9]+' \
-    "${repo_root}/protocol/include/melonds_remote/protocol.h")"
+    "${repo_root}/protocol/include/dualdeck/protocol.h")"
 
 if [[ -z "${live_version}" ]]; then
-    echo "error: couldn't find kProtocolVersion in protocol/include/melonds_remote/protocol.h" >&2
+    echo "error: couldn't find kProtocolVersion in protocol/include/dualdeck/protocol.h" >&2
     exit 1
 fi
 
-echo "live protocol/include/melonds_remote/protocol.h: kProtocolVersion=${live_version}"
+echo "live protocol/include/dualdeck/protocol.h: kProtocolVersion=${live_version}"
 
 failed=0
 for patch_dir in host/melonds-patches host/azahar-patches host/cemu-patches; do

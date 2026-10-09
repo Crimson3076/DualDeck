@@ -39,7 +39,7 @@
 #include <memory>
 #include <vector>
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 class WaylandScreenCapture {
 public:
@@ -85,4 +85,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

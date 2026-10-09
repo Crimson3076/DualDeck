@@ -11,7 +11,7 @@
 
 #include "discovery_client.h"
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 // Returns std::nullopt if the user closed the window or chose EXIT from
 // the L3+R3 menu; callers treat that as "cancel the whole run".
@@ -20,4 +20,4 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
                                                      const std::string& lastHostAddress,
                                                      const std::string& clientVersion);
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

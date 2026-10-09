@@ -11,9 +11,9 @@
 #include <string>
 #include <vector>
 
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 
-namespace melonds_remote::host::net_detail {
+namespace dualdeck::host::net_detail {
 
 uint64_t nowMicros();
 
@@ -36,4 +36,4 @@ int h264TargetBitrateBps(int quality, uint16_t width, uint16_t height, int fps);
 
 size_t pyrowaveMaxFrameBytes(int quality, uint16_t width, uint16_t height);
 
-} // namespace melonds_remote::host::net_detail
+} // namespace dualdeck::host::net_detail

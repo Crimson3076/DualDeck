@@ -15,11 +15,11 @@
 #include "discovery_store.h"
 #include "gamepad_input.h"
 #include "host_picker.h"
-#include "melonds_remote/protocol.h"
-#include "melonds_remote/touch_mapping.h"
+#include "dualdeck/protocol.h"
+#include "dualdeck/touch_mapping.h"
 #include "screens.h"
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 namespace {
 
@@ -764,4 +764,4 @@ bool runSetupWizard(SDL_Window* window, SDL_Renderer* renderer, SDL_Texture* tex
     }
 }
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

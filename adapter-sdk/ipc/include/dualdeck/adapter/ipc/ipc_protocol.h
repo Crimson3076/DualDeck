@@ -11,7 +11,7 @@
 // different channel serving a different purpose (Host Service <->
 // local adapter, not client <-> host over a LAN), so it gets its own
 // magic number and its own kAdapterContractVersion (already declared in
-// adapter_contract.h), never melonds_remote::kPacketMagic/
+// adapter_contract.h), never dualdeck::kPacketMagic/
 // kProtocolVersion. A message on the wrong channel is rejected exactly
 // like a foreign packet on protocol.h's channels is: by magic mismatch,
 // before anything else is parsed.
@@ -28,15 +28,15 @@
 #include <optional>
 #include <vector>
 
-#include "melonds_remote/adapter/adapter_contract.h"
-#include "melonds_remote/adapter/generic_input.h"
-#include "melonds_remote/adapter/session_state.h"
-#include "melonds_remote/protocol.h" // ByteBuffer, appendString/readString, etc.
+#include "dualdeck/adapter/adapter_contract.h"
+#include "dualdeck/adapter/generic_input.h"
+#include "dualdeck/adapter/session_state.h"
+#include "dualdeck/protocol.h" // ByteBuffer, appendString/readString, etc.
 
-namespace melonds_remote::adapter::ipc {
+namespace dualdeck::adapter::ipc {
 
 // "DAI1" ("DualDeck Adapter IPC", version 1 of the byte layout below) --
-// distinct from melonds_remote::kPacketMagic ("DMR1") so a message from
+// distinct from dualdeck::kPacketMagic ("DMR1") so a message from
 // the wrong channel is rejected immediately rather than partially
 // parsed.
 inline constexpr uint32_t kAdapterIpcMagic = 0x44414931;
@@ -69,12 +69,12 @@ struct IpcHeader {
 
 inline constexpr size_t kIpcHeaderWireSize = 4 + 2 + 2 + 4;
 
-void serializeIpcHeader(melonds_remote::ByteBuffer& out, const IpcHeader& header);
+void serializeIpcHeader(dualdeck::ByteBuffer& out, const IpcHeader& header);
 std::optional<IpcHeader> parseIpcHeader(const uint8_t* data, size_t size);
 
 // Builds a complete message: header + payload. `payload` may be empty
 // for payload-less types (Heartbeat, Disconnect, ReleaseInputs).
-melonds_remote::ByteBuffer buildIpcMessage(IpcMessageType type, const melonds_remote::ByteBuffer& payload);
+dualdeck::ByteBuffer buildIpcMessage(IpcMessageType type, const dualdeck::ByteBuffer& payload);
 
 // Upper bound on a single Frame message's pixel payload (128 MiB).
 //
@@ -134,26 +134,26 @@ struct AdapterHelloAckPayload {
     AdapterHelloAckReason reason = AdapterHelloAckReason::None;
 };
 
-void serializeAdapterCapabilities(melonds_remote::ByteBuffer& out, const AdapterCapabilities& caps);
+void serializeAdapterCapabilities(dualdeck::ByteBuffer& out, const AdapterCapabilities& caps);
 std::optional<AdapterCapabilities> parseAdapterCapabilities(const uint8_t* data, size_t size);
 
-void serializeAdapterHelloAckPayload(melonds_remote::ByteBuffer& out, const AdapterHelloAckPayload& ack);
+void serializeAdapterHelloAckPayload(dualdeck::ByteBuffer& out, const AdapterHelloAckPayload& ack);
 std::optional<AdapterHelloAckPayload> parseAdapterHelloAckPayload(const uint8_t* data, size_t size);
 
-void serializeGenericInputState(melonds_remote::ByteBuffer& out, const GenericInputState& state);
+void serializeGenericInputState(dualdeck::ByteBuffer& out, const GenericInputState& state);
 std::optional<GenericInputState> parseGenericInputState(const uint8_t* data, size_t size);
 
-void serializeSurfaceFrame(melonds_remote::ByteBuffer& out, const SurfaceFrame& frame);
+void serializeSurfaceFrame(dualdeck::ByteBuffer& out, const SurfaceFrame& frame);
 // Rejects (returns std::nullopt) a declared pixel count over
 // kMaxIpcFramePixelBytes, or a size mismatch between the declared count
 // and what actually follows -- same validation discipline as
 // protocol.h's parseMicAudioFramePayload().
 std::optional<SurfaceFrame> parseSurfaceFrame(const uint8_t* data, size_t size);
 
-void serializeSessionState(melonds_remote::ByteBuffer& out, SessionState state);
+void serializeSessionState(dualdeck::ByteBuffer& out, SessionState state);
 std::optional<SessionState> parseSessionState(const uint8_t* data, size_t size);
 
-void serializeClientConnectionChanged(melonds_remote::ByteBuffer& out, bool connected);
+void serializeClientConnectionChanged(dualdeck::ByteBuffer& out, bool connected);
 std::optional<bool> parseClientConnectionChanged(const uint8_t* data, size_t size);
 
-} // namespace melonds_remote::adapter::ipc
+} // namespace dualdeck::adapter::ipc

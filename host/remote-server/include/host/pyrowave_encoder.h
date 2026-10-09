@@ -31,9 +31,9 @@
 #include <cstdint>
 #include <memory>
 
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 class PyroWaveEncoder {
 public:
@@ -83,4 +83,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

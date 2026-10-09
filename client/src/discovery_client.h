@@ -18,9 +18,9 @@
 #include <string>
 #include <vector>
 
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 struct DiscoveredHost {
     std::string address;  // dotted-quad IPv4, e.g. "192.168.1.50"
@@ -53,4 +53,4 @@ struct DiscoveredHost {
 std::vector<DiscoveredHost> discoverHosts(uint16_t discoveryPort, int timeoutMs,
                                            const std::atomic<bool>* cancel = nullptr);
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

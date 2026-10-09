@@ -3,7 +3,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 KdialogPromptResult interpretKdialogExitStatus(bool exitedNormally, int exitCode) {
     if (!exitedNormally) {
@@ -45,4 +45,4 @@ KdialogPromptResult promptDeviceApprovalViaKdialog(const std::string& clientName
     return interpretKdialogExitStatus(WIFEXITED(status), WIFEXITED(status) ? WEXITSTATUS(status) : 0);
 }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

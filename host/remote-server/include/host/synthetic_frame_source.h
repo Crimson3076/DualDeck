@@ -6,7 +6,7 @@
 
 #include "host/frame_source.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 // Generates a moving test pattern at a fixed rate on its own thread and
 // exposes the latest completed frame through a single-slot, mutex-protected
@@ -42,4 +42,4 @@ private:
     bool hasFrame_ = false;
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

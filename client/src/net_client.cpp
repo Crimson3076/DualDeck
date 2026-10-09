@@ -21,7 +21,7 @@
 #include <limits>
 #include <thread>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 namespace {
 
@@ -927,4 +927,4 @@ void NetClient::controlReceiveLoop() {
     connected_ = false;
 }
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

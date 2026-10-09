@@ -15,7 +15,7 @@ typedef VkQueueGlobalPriorityKHR VkQueueGlobalPriority;
 
 #include "yuv_conversion.h"
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 namespace {
 
@@ -205,11 +205,11 @@ bool PyroWaveDecoder::decodeFrame(const uint8_t* data, size_t size, std::vector<
     return true;
 }
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client
 
 #else // !DUALDECK_HAVE_PYROWAVE
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 // Built without PyroWave -- same "always compiled, real work stubbed
 // out" pattern as h264_decoder.cpp's own no-OpenH264 build.
@@ -224,6 +224,6 @@ bool PyroWaveDecoder::decodeFrame(const uint8_t*, size_t, std::vector<uint8_t>&,
     return false;
 }
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client
 
 #endif // DUALDECK_HAVE_PYROWAVE

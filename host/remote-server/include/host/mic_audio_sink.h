@@ -8,9 +8,9 @@
 // implements this same interface and feeds EmuInstance::remoteMicFeed()
 // on the emulation thread, never directly from the network thread.
 
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 class IMicAudioSink {
 public:
@@ -32,4 +32,4 @@ public:
     virtual void releaseAudio() = 0;
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

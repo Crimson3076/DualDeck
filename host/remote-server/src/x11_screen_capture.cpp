@@ -14,7 +14,7 @@
 #include <cstring>
 #endif
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 #if defined(DUALDECK_HAVE_X11_SCREEN_CAPTURE)
 
@@ -287,4 +287,4 @@ bool X11ScreenCapture::capture(std::vector<uint8_t>&, uint16_t&, uint16_t&) { re
 
 #endif
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

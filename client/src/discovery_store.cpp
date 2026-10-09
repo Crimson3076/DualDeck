@@ -4,7 +4,7 @@
 #include <filesystem>
 #include <fstream>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 namespace {
 
@@ -56,4 +56,4 @@ void saveLastHost(const std::string& storePath, const std::string& hostAddress) 
     }
 }
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

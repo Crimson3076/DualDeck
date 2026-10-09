@@ -25,13 +25,13 @@
 #include "host/logging_input_sink.h"
 #include "host/logging_mic_audio_sink.h"
 #include "host/net_server.h"
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 #include "net_client.h"
 #include "test_framework.h"
 
-using namespace melonds_remote;
-using namespace melonds_remote::host;
-using namespace melonds_remote::client;
+using namespace dualdeck;
+using namespace dualdeck::host;
+using namespace dualdeck::client;
 
 namespace {
 

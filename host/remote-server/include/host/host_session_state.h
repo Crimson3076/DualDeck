@@ -1,7 +1,7 @@
 #pragma once
 
 // The Host Service's own session lifecycle -- broader than HostMode
-// (protocol.h, Emulation/HostControl) and melonds_remote::adapter::
+// (protocol.h, Emulation/HostControl) and dualdeck::adapter::
 // SessionState (an individual adapter's own lifecycle): this describes
 // what the *host process as a whole* is doing, from before any client has
 // even connected through an emulator running and back down again. See
@@ -15,12 +15,12 @@
 // that produces them today -- see mode_coordinator.h's
 // computeDesiredHostSessionState() for exactly which subset is wired to
 // a real signal right now). Defined in full anyway, matching this
-// project's existing practice (adapter-sdk/include/melonds_remote/
+// project's existing practice (adapter-sdk/include/dualdeck/
 // adapter/session_state.h) of designing a state machine's complete shape
 // up front even before every transition has a driver, so later work only
 // has to wire up new triggers, not invent new states under time pressure.
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 enum class HostSessionState {
     Idle,               // host process up, nothing connected yet
@@ -63,4 +63,4 @@ const char* toString(HostSessionState state);
 // either depending on the other's types.
 bool isValidTransition(HostSessionState from, HostSessionState to);
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

@@ -10,7 +10,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 inline constexpr int kFrameWidth = 256;
 inline constexpr int kFrameHeight = 192;
@@ -77,4 +77,4 @@ public:
     virtual void setTargetDisplaySize(uint16_t /*width*/, uint16_t /*height*/) {}
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

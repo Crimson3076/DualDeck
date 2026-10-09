@@ -1,11 +1,11 @@
-#include "melonds_remote/adapter/ipc/socket_path.h"
+#include "dualdeck/adapter/ipc/socket_path.h"
 
 #include <sys/stat.h>
 
 #include <cerrno>
 #include <cstdlib>
 
-namespace melonds_remote::adapter::ipc {
+namespace dualdeck::adapter::ipc {
 
 std::string defaultAdapterSocketPath() {
     if (const char* runtimeDir = std::getenv("XDG_RUNTIME_DIR"); runtimeDir && *runtimeDir) {
@@ -52,4 +52,4 @@ bool ensureSocketDirectory(const std::string& socketPath) {
     return true;
 }
 
-} // namespace melonds_remote::adapter::ipc
+} // namespace dualdeck::adapter::ipc

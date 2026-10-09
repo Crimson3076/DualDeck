@@ -3,9 +3,9 @@
 #include <cstdint>
 
 #include "client_log.h"
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 namespace {
 
@@ -173,4 +173,4 @@ void logGamepadTouchpadDiagnostics(SDL_Gamepad* gamepad) {
     }
 }
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

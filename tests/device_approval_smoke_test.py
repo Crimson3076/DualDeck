@@ -47,7 +47,7 @@ import tempfile
 import time
 
 MAGIC = 0x444D5231
-# Kept in sync with protocol/include/melonds_remote/protocol.h's
+# Kept in sync with protocol/include/dualdeck/protocol.h's
 # kProtocolVersion by hand -- see smoke_test.py's identical constant for
 # why a stale value here fails quietly (every Hello gets rejected as a
 # protocol-version mismatch instead of exercising whatever this script

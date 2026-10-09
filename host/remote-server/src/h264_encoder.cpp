@@ -9,7 +9,7 @@
 
 #include "host/yuv_conversion.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 struct H264Encoder::Impl {
     ISVCEncoder* encoder = nullptr;
@@ -150,11 +150,11 @@ bool H264Encoder::encodeFrame(const uint8_t* bgra, int width, int height, ByteBu
     return true;
 }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host
 
 #else // !DUALDECK_HAVE_OPENH264
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 // This build was configured without OpenH264 (see host/remote-server/
 // CMakeLists.txt's optional detection) -- every method is a no-op that
@@ -171,6 +171,6 @@ bool H264Encoder::initialize(int, int, int, int) { return false; }
 void H264Encoder::requestKeyframe() {}
 bool H264Encoder::encodeFrame(const uint8_t*, int, int, ByteBuffer&, bool&) { return false; }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host
 
 #endif // DUALDECK_HAVE_OPENH264

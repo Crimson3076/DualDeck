@@ -25,7 +25,7 @@
 
 #include "host/h264_encoder.h"
 #include "host/pyrowave_encoder.h"
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 #include "pyrowave_decoder.h"
 
 #include <turbojpeg.h>
@@ -41,8 +41,8 @@
 #include <string>
 #include <vector>
 
-using namespace melonds_remote;
-using namespace melonds_remote::host;
+using namespace dualdeck;
+using namespace dualdeck::host;
 
 namespace {
 
@@ -210,7 +210,7 @@ void runH264Benchmark(const Resolution& res) {
         std::printf("  H264  (quality=%d): initialize() failed\n", quality);
         return;
     }
-    melonds_remote::client::H264Decoder decoder;
+    dualdeck::client::H264Decoder decoder;
 
     MinMaxAvg encodeUs, decodeUs, keyframeSizeBytes, deltaSizeBytes;
     int keyframeCount = 0, deltaFrameCount = 0, skippedCount = 0;
@@ -275,7 +275,7 @@ void runH264Benchmark(const Resolution& res) {
 // The first frame's encode/decode also includes one-time Vulkan pipeline
 // setup, so it's excluded from the stats as warm-up.
 void runPyroWaveBenchmark(const Resolution& res) {
-    if (!PyroWaveEncoder::isAvailable() || !melonds_remote::client::PyroWaveDecoder::isAvailable()) {
+    if (!PyroWaveEncoder::isAvailable() || !dualdeck::client::PyroWaveDecoder::isAvailable()) {
         std::printf("  PyroWave: skipped -- no PyroWave-capable Vulkan device on this machine\n");
         return;
     }
@@ -287,7 +287,7 @@ void runPyroWaveBenchmark(const Resolution& res) {
         std::printf("  PyroWave (quality=%d): initialize() failed\n", quality);
         return;
     }
-    melonds_remote::client::PyroWaveDecoder decoder;
+    dualdeck::client::PyroWaveDecoder decoder;
 
     MinMaxAvg encodeUs, decodeUs, sizeBytes;
     for (int i = 0; i <= kFrameCount; ++i) {

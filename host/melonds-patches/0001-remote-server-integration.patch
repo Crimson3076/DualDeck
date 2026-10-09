@@ -36,7 +36,7 @@ index 31207f8..41a6a1d 100644
 +# host/melonds-patches/README.md in the melonds-remote repository this was
 +# vendored from). Kept as its own include root so remote_server/ code
 +# includes its headers the same way it does in the standalone
-+# melonds-remote repo (e.g. "melonds_remote/protocol.h", "host/net_server.h").
++# melonds-remote repo (e.g. "dualdeck/protocol.h", "host/net_server.h").
 +target_include_directories(melonDS PRIVATE
 +    "${CMAKE_CURRENT_SOURCE_DIR}/remote_server/protocol/include"
 +    "${CMAKE_CURRENT_SOURCE_DIR}/remote_server/adapter_sdk/include"
@@ -124,7 +124,7 @@ index 0d48ee1..cfd686e 100644
 +
 +    // GitHub issue #4: overrides the socket path an out-of-process
 +    // adapter connects to (see MelonDSRemote.OutOfProcess above). Empty
-+    // (default) uses melonds_remote::adapter::ipc::defaultAdapterSocketPath()
++    // (default) uses dualdeck::adapter::ipc::defaultAdapterSocketPath()
 +    // -- $XDG_RUNTIME_DIR/dualdeck/adapter.sock -- the same default the
 +    // standalone host's --adapter-socket flag falls back to.
 +    {"MelonDSRemote.AdapterSocket", ""},
@@ -202,7 +202,7 @@ index a8b1021..e5771ec 100755
 +        std::string managementToken = globalCfg.GetString("MelonDSRemote.ManagementToken");
 +        if (!managementToken.empty())
 +        {
-+            managementServer = std::make_unique<melonds_remote_bridge::ManagementServer>(
++            managementServer = std::make_unique<dualdeck_bridge::ManagementServer>(
 +                globalCfg.GetString("MelonDSRemote.Bind"),
 +                static_cast<uint16_t>(globalCfg.GetInt("MelonDSRemote.ManagementPort")), managementToken,
 +                [this](bool enable) {
@@ -281,7 +281,7 @@ index a8b1021..e5771ec 100755
 +        ? true : globalCfg.GetBool("MelonDSRemote.OutOfProcess");
 +    if (outOfProcess)
 +    {
-+        remoteServer = std::make_unique<melonds_remote_bridge::RemoteServerBridge>(
++        remoteServer = std::make_unique<dualdeck_bridge::RemoteServerBridge>(
 +            envOr("MELONDS_REMOTE_ADAPTER_SOCKET", "MelonDSRemote.AdapterSocket"));
 +        // Always true for this constructor -- see RemoteServerBridge::
 +        // start()'s own comment -- but checked anyway rather than
@@ -323,14 +323,14 @@ index a8b1021..e5771ec 100755
 +    // (which may outlive any single invocation) keeps it alive.
 +    auto shownDeviceIds = std::make_shared<std::unordered_set<std::string>>();
 +
-+    remoteServer = std::make_unique<melonds_remote_bridge::RemoteServerBridge>(
++    remoteServer = std::make_unique<dualdeck_bridge::RemoteServerBridge>(
 +        envOr("MELONDS_REMOTE_BIND", "MelonDSRemote.Bind"),
 +        envPortOr("MELONDS_REMOTE_CONTROL_PORT", "MelonDSRemote.ControlPort"),
 +        envPortOr("MELONDS_REMOTE_INPUT_PORT", "MelonDSRemote.InputPort"),
 +        envPortOr("MELONDS_REMOTE_VIDEO_PORT", "MelonDSRemote.VideoPort"),
 +        envOr("MELONDS_REMOTE_AUTH_TOKEN", "MelonDSRemote.AuthToken"),
 +        approvalStateFilePath,
-+        [this, shownDeviceIds](std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest> requests) {
++        [this, shownDeviceIds](std::vector<dualdeck::host::DeviceApprovalManager::PendingRequest> requests) {
 +            // Fired on NetServer's control thread (or its watchdog
 +            // thread, for stale evictions) -- marshal to the Qt UI
 +            // thread via qApp (always valid once Qt is up, unlike
@@ -495,7 +495,7 @@ index a1eab0e..2c30617 100755
 +// forward-declared here so EmuInstance.h doesn't need to pull in the
 +// networking headers; the full RemoteServerBridge type is only needed
 +// where EmuInstance.cpp/EmuInstanceInput.cpp construct or call into it.
-+namespace melonds_remote_bridge { class RemoteServerBridge; class ManagementServer; }
++namespace dualdeck_bridge { class RemoteServerBridge; class ManagementServer; }
 +
  const int kMaxWindows = 4;
  
@@ -533,7 +533,7 @@ index a1eab0e..2c30617 100755
 +    // live (not just at process startup) via the management server below,
 +    // so every read/write of this pointer -- including the two call
 +    // sites just described -- must hold remoteServerMutex first.
-+    std::unique_ptr<melonds_remote_bridge::RemoteServerBridge> remoteServer;
++    std::unique_ptr<dualdeck_bridge::RemoteServerBridge> remoteServer;
 +    std::mutex remoteServerMutex;
 +
 +    // Constructs/starts (or destroys/stops) remoteServer under
@@ -554,7 +554,7 @@ index a1eab0e..2c30617 100755
 +    // itself is currently on -- it's the thing a client (e.g. a Decky
 +    // plugin on the Steam Deck) talks to in order to turn remote
 +    // streaming on/off on a melonDS that's already running.
-+    std::unique_ptr<melonds_remote_bridge::ManagementServer> managementServer;
++    std::unique_ptr<dualdeck_bridge::ManagementServer> managementServer;
 +
 +    // Tracks whether the *current* touch was caused by remote input, so
 +    // inputProcess() releases it when the remote client lifts its finger
@@ -563,7 +563,7 @@ index a1eab0e..2c30617 100755
 +    // can't just be "isTouching = remote.touchActive" every frame).
 +    bool remoteTouchActive = false;
 +
-+    // Rising-edge state for melonds_remote::EmulatorAction_QuitSession/
++    // Rising-edge state for dualdeck::EmulatorAction_QuitSession/
 +    // _QuitApplication (GitHub issue #25 in the melonds-remote repo: a
 +    // client-side "exit emulation" menu). The client resends whichever
 +    // action bit is set for a short window (its own resend-for-
@@ -614,7 +614,7 @@ index 7df4d9f..d27911f 100644
 +    // the local Mic.InputType setting -- so this must always be valid
 +    // regardless of local mic configuration. 48000 matches micOpen()'s
 +    // own request rate, and is what a remote client's MicAudioFrame
-+    // stream is fixed at (melonds_remote::kMicAudioSampleRate).
++    // stream is fixed at (dualdeck::kMicAudioSampleRate).
 +    micFreq = 48000;
 +
      setupMicInputData();
@@ -730,7 +730,7 @@ index a0bc623..0373ce7 100644
  
 +namespace
 +{
-+// Wire DSButton bit (melonds_remote::DSButton, see protocol.h) that
++// Wire DSButton bit (dualdeck::DSButton, see protocol.h) that
 +// corresponds to each local EmuInstance::buttonNames[]/inputMask bit
 +// index. The two orderings are independent by design -- see
 +// docs/protocol.md "DS button bits" in the melonds-remote repository --
@@ -776,7 +776,7 @@ index a0bc623..0373ce7 100644
 +    // hold remoteServerMutex -- but only for that one call, not the rest
 +    // of the merge logic below, which only touches the local `remote`
 +    // copy it returns.
-+    melonds_remote::ControllerState remote{};
++    dualdeck::ControllerState remote{};
 +    bool hasRemote = false;
 +    {
 +        std::lock_guard<std::mutex> lock(remoteServerMutex);
@@ -825,11 +825,11 @@ index a0bc623..0373ce7 100644
 +        // equivalent for "eject the cart" or "quit the app" at all, only
 +        // Qt menu actions, so they're handled separately rather than
 +        // through hotkeyMask.
-+        if (remote.emulatorActions & melonds_remote::EmulatorAction_PauseResume)
++        if (remote.emulatorActions & dualdeck::EmulatorAction_PauseResume)
 +            hotkeyMask |= (1 << HK_Pause);
-+        if (remote.emulatorActions & melonds_remote::EmulatorAction_FastForward)
++        if (remote.emulatorActions & dualdeck::EmulatorAction_FastForward)
 +            hotkeyMask |= (1 << HK_FastForward);
-+        if (remote.emulatorActions & melonds_remote::EmulatorAction_SwapScreens)
++        if (remote.emulatorActions & dualdeck::EmulatorAction_SwapScreens)
 +            hotkeyMask |= (1 << HK_SwapScreens);
 +
 +        // GitHub issue #25: client-side "exit emulation" menu, letting the
@@ -851,11 +851,11 @@ index a0bc623..0373ce7 100644
 +        // for invocation by name regardless of C++ access control, so
 +        // this doesn't need Window.h changed to call them from here.
 +        uint16_t remoteActionsRisingEdge = remote.emulatorActions & static_cast<uint16_t>(~lastRemoteEmulatorActions);
-+        if (mainWindow && (remoteActionsRisingEdge & melonds_remote::EmulatorAction_QuitSession))
++        if (mainWindow && (remoteActionsRisingEdge & dualdeck::EmulatorAction_QuitSession))
 +        {
 +            QMetaObject::invokeMethod(mainWindow, "onEjectCart", Qt::QueuedConnection);
 +        }
-+        if (mainWindow && (remoteActionsRisingEdge & melonds_remote::EmulatorAction_QuitApplication))
++        if (mainWindow && (remoteActionsRisingEdge & dualdeck::EmulatorAction_QuitApplication))
 +        {
 +            QMetaObject::invokeMethod(mainWindow, "onQuit", Qt::QueuedConnection);
 +        }
@@ -1016,9 +1016,9 @@ index c3fbdfe..88d5ccc 100755
 +                    if (emuInstance->remoteServer)
 +                    {
 +                        emuInstance->remoteServer->pushBottomFrame(
-+                            botBuf, melonds_remote::host::kFrameSizeBytes,
-+                            static_cast<uint16_t>(melonds_remote::host::kFrameWidth),
-+                            static_cast<uint16_t>(melonds_remote::host::kFrameHeight));
++                            botBuf, dualdeck::host::kFrameSizeBytes,
++                            static_cast<uint16_t>(dualdeck::host::kFrameWidth),
++                            static_cast<uint16_t>(dualdeck::host::kFrameHeight));
 +                    }
 +                }
 +                else
@@ -1031,7 +1031,7 @@ index c3fbdfe..88d5ccc 100755
 +                    // layout this relies on) -- read the bottom screen
 +                    // back from it directly rather than leaving the
 +                    // remote client with nothing.
-+                    static melonds_remote_bridge::GLBottomScreenCapture glCapture;
++                    static dualdeck_bridge::GLBottomScreenCapture glCapture;
 +                    static std::vector<uint8_t> glFrame;
 +                    bool captured = false;
 +                    if (useOpenGL && topBuf)
@@ -1124,11 +1124,11 @@ index 0000000..a4f3c01
 +
 +#include "host/frame_source.h"
 +
-+namespace melonds_remote_bridge {
++namespace dualdeck_bridge {
 +
 +namespace {
-+constexpr GLsizei kNativeW = melonds_remote::host::kFrameWidth;
-+constexpr GLsizei kNativeH = melonds_remote::host::kFrameHeight;
++constexpr GLsizei kNativeW = dualdeck::host::kFrameWidth;
++constexpr GLsizei kNativeH = dualdeck::host::kFrameHeight;
 +
 +// Upper bound on how much of melonDS's own internal 3D upscale (up to
 +// 16x, Config's "3D.GL.ScaleFactor" range) actually gets forwarded to a
@@ -1234,7 +1234,7 @@ index 0000000..a4f3c01
 +    return ok;
 +}
 +
-+} // namespace melonds_remote_bridge
++} // namespace dualdeck_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.h b/src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.h
 new file mode 100644
 index 0000000..3e0cf18
@@ -1272,7 +1272,7 @@ index 0000000..3e0cf18
 +#include <cstdint>
 +#include <vector>
 +
-+namespace melonds_remote_bridge {
++namespace dualdeck_bridge {
 +
 +class GLBottomScreenCapture {
 +public:
@@ -1332,7 +1332,7 @@ index 0000000..3e0cf18
 +    GLsizei downscaleTexH_ = 0;
 +};
 +
-+} // namespace melonds_remote_bridge
++} // namespace dualdeck_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/ManagementServer.cpp b/src/frontend/qt_sdl/remote_server/ManagementServer.cpp
 new file mode 100644
 index 0000000..4ec55e2
@@ -1350,7 +1350,7 @@ index 0000000..4ec55e2
 +#include <cstdio>
 +#include <cstring>
 +
-+namespace melonds_remote_bridge {
++namespace dualdeck_bridge {
 +
 +namespace {
 +
@@ -1486,7 +1486,7 @@ index 0000000..4ec55e2
 +    ::send(clientFd, response.data(), response.size(), 0);
 +}
 +
-+} // namespace melonds_remote_bridge
++} // namespace dualdeck_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/ManagementServer.h b/src/frontend/qt_sdl/remote_server/ManagementServer.h
 new file mode 100644
 index 0000000..2aece35
@@ -1523,7 +1523,7 @@ index 0000000..2aece35
 +#include <string>
 +#include <thread>
 +
-+namespace melonds_remote_bridge {
++namespace dualdeck_bridge {
 +
 +class ManagementServer {
 +public:
@@ -1560,7 +1560,7 @@ index 0000000..2aece35
 +    std::thread acceptThread_;
 +};
 +
-+} // namespace melonds_remote_bridge
++} // namespace dualdeck_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSAdapter.cpp b/src/frontend/qt_sdl/remote_server/MelonDSAdapter.cpp
 new file mode 100644
 index 0000000..cecf7b6
@@ -1574,25 +1574,25 @@ index 0000000..cecf7b6
 +// configure time, already on the include path).
 +#include "version.h"
 +
-+namespace melonds_remote_bridge {
++namespace dualdeck_bridge {
 +
 +namespace {
 +
 +constexpr const char* kBottomSurfaceId = "bottom";
 +
-+melonds_remote::adapter::AdapterCapabilities buildCapabilities() {
-+    melonds_remote::adapter::AdapterCapabilities caps;
-+    caps.system = melonds_remote::SystemIdentity{"nds", "Nintendo DS"};
-+    caps.adapter = melonds_remote::AdapterIdentity{"melonds", "melonDS", MELONDS_VERSION};
++dualdeck::adapter::AdapterCapabilities buildCapabilities() {
++    dualdeck::adapter::AdapterCapabilities caps;
++    caps.system = dualdeck::SystemIdentity{"nds", "Nintendo DS"};
++    caps.adapter = dualdeck::AdapterIdentity{"melonds", "melonDS", MELONDS_VERSION};
 +
-+    melonds_remote::adapter::VideoSurfaceDescriptor bottom;
++    dualdeck::adapter::VideoSurfaceDescriptor bottom;
 +    bottom.surfaceId = kBottomSurfaceId;
-+    bottom.role = melonds_remote::adapter::SurfaceRole::Bottom;
++    bottom.role = dualdeck::adapter::SurfaceRole::Bottom;
 +    bottom.width = 256;
 +    bottom.height = 192;
 +    bottom.touchSupported = true;
-+    bottom.touchRangeX = melonds_remote::kTouchMaxX;
-+    bottom.touchRangeY = melonds_remote::kTouchMaxY;
++    bottom.touchRangeX = dualdeck::kTouchMaxX;
++    bottom.touchRangeY = dualdeck::kTouchMaxY;
 +    bottom.required = true;
 +    bottom.remotelyDisplayed = true;
 +    caps.surfaces = {bottom};
@@ -1614,39 +1614,39 @@ index 0000000..cecf7b6
 +// R3, concepts the DS has none of.
 +uint16_t genericButtonsToDsButtons(uint32_t generic) {
 +    uint16_t ds = 0;
-+    if (generic & melonds_remote::adapter::GenericButton_South) ds |= melonds_remote::DSButton_A;
-+    if (generic & melonds_remote::adapter::GenericButton_East) ds |= melonds_remote::DSButton_B;
-+    if (generic & melonds_remote::adapter::GenericButton_West) ds |= melonds_remote::DSButton_X;
-+    if (generic & melonds_remote::adapter::GenericButton_North) ds |= melonds_remote::DSButton_Y;
-+    if (generic & melonds_remote::adapter::GenericButton_DpadUp) ds |= melonds_remote::DSButton_Up;
-+    if (generic & melonds_remote::adapter::GenericButton_DpadDown) ds |= melonds_remote::DSButton_Down;
-+    if (generic & melonds_remote::adapter::GenericButton_DpadLeft) ds |= melonds_remote::DSButton_Left;
-+    if (generic & melonds_remote::adapter::GenericButton_DpadRight) ds |= melonds_remote::DSButton_Right;
-+    if (generic & melonds_remote::adapter::GenericButton_L1) ds |= melonds_remote::DSButton_L;
-+    if (generic & melonds_remote::adapter::GenericButton_R1) ds |= melonds_remote::DSButton_R;
-+    if (generic & melonds_remote::adapter::GenericButton_Start) ds |= melonds_remote::DSButton_Start;
-+    if (generic & melonds_remote::adapter::GenericButton_Select) ds |= melonds_remote::DSButton_Select;
++    if (generic & dualdeck::adapter::GenericButton_South) ds |= dualdeck::DSButton_A;
++    if (generic & dualdeck::adapter::GenericButton_East) ds |= dualdeck::DSButton_B;
++    if (generic & dualdeck::adapter::GenericButton_West) ds |= dualdeck::DSButton_X;
++    if (generic & dualdeck::adapter::GenericButton_North) ds |= dualdeck::DSButton_Y;
++    if (generic & dualdeck::adapter::GenericButton_DpadUp) ds |= dualdeck::DSButton_Up;
++    if (generic & dualdeck::adapter::GenericButton_DpadDown) ds |= dualdeck::DSButton_Down;
++    if (generic & dualdeck::adapter::GenericButton_DpadLeft) ds |= dualdeck::DSButton_Left;
++    if (generic & dualdeck::adapter::GenericButton_DpadRight) ds |= dualdeck::DSButton_Right;
++    if (generic & dualdeck::adapter::GenericButton_L1) ds |= dualdeck::DSButton_L;
++    if (generic & dualdeck::adapter::GenericButton_R1) ds |= dualdeck::DSButton_R;
++    if (generic & dualdeck::adapter::GenericButton_Start) ds |= dualdeck::DSButton_Start;
++    if (generic & dualdeck::adapter::GenericButton_Select) ds |= dualdeck::DSButton_Select;
 +    return ds;
 +}
 +
 +} // namespace
 +
-+melonds_remote::adapter::AdapterCapabilities MelonDSAdapter::capabilities() const {
-+    static const melonds_remote::adapter::AdapterCapabilities caps = buildCapabilities();
++dualdeck::adapter::AdapterCapabilities MelonDSAdapter::capabilities() const {
++    static const dualdeck::adapter::AdapterCapabilities caps = buildCapabilities();
 +    return caps;
 +}
 +
-+melonds_remote::adapter::SessionState MelonDSAdapter::currentState() const {
++dualdeck::adapter::SessionState MelonDSAdapter::currentState() const {
 +    // host::AdapterBridge (the only consumer of this adapter today)
 +    // never calls currentState() -- melonDS's own session concept (ROM
 +    // loaded, running, paused) isn't tracked at this layer yet, so this
 +    // is a fixed placeholder rather than a real state machine. Revisit
 +    // if/when a Host Service actually consults this.
-+    return melonds_remote::adapter::SessionState::Running;
++    return dualdeck::adapter::SessionState::Running;
 +}
 +
-+void MelonDSAdapter::applyGenericInput(const melonds_remote::adapter::GenericInputState& state) {
-+    melonds_remote::ControllerState cs;
++void MelonDSAdapter::applyGenericInput(const dualdeck::adapter::GenericInputState& state) {
++    dualdeck::ControllerState cs;
 +    cs.sequence = state.sequence;
 +    cs.clientTimestampUs = state.clientTimestampUs;
 +    cs.dsButtons = genericButtonsToDsButtons(state.buttons);
@@ -1674,7 +1674,7 @@ index 0000000..cecf7b6
 +    inputSink_.releaseAll();
 +}
 +
-+bool MelonDSAdapter::latestFrame(const std::string& surfaceId, melonds_remote::adapter::SurfaceFrame& outFrame) {
++bool MelonDSAdapter::latestFrame(const std::string& surfaceId, dualdeck::adapter::SurfaceFrame& outFrame) {
 +    if (surfaceId != kBottomSurfaceId) return false;
 +    std::vector<uint8_t> frame;
 +    uint64_t frameIndex = 0;
@@ -1700,11 +1700,11 @@ index 0000000..cecf7b6
 +    frameSource_.pushFrame(bgraData, sizeBytes, width, height);
 +}
 +
-+melonds_remote::ControllerState MelonDSAdapter::latestControllerState() const {
++dualdeck::ControllerState MelonDSAdapter::latestControllerState() const {
 +    return inputSink_.latestState();
 +}
 +
-+} // namespace melonds_remote_bridge
++} // namespace dualdeck_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSAdapter.h b/src/frontend/qt_sdl/remote_server/MelonDSAdapter.h
 new file mode 100644
 index 0000000..8a646ae
@@ -1713,7 +1713,7 @@ index 0000000..8a646ae
 @@ -0,0 +1,47 @@
 +#pragma once
 +
-+// melonDS's implementation of melonds_remote::adapter::IEmulatorAdapter
++// melonDS's implementation of dualdeck::adapter::IEmulatorAdapter
 +// (GitHub issue #28) -- the "reference implementation" the ADR
 +// (docs/adr/0001-host-service-and-adapter-architecture.md) describes.
 +// Wraps the same MelonDSInputSink/MelonDSFrameSource this patch already
@@ -1732,17 +1732,17 @@ index 0000000..8a646ae
 +
 +#include "MelonDSFrameSource.h"
 +#include "MelonDSInputSink.h"
-+#include "melonds_remote/adapter/adapter_contract.h"
++#include "dualdeck/adapter/adapter_contract.h"
 +
-+namespace melonds_remote_bridge {
++namespace dualdeck_bridge {
 +
-+class MelonDSAdapter : public melonds_remote::adapter::IEmulatorAdapter {
++class MelonDSAdapter : public dualdeck::adapter::IEmulatorAdapter {
 +public:
-+    melonds_remote::adapter::AdapterCapabilities capabilities() const override;
-+    melonds_remote::adapter::SessionState currentState() const override;
-+    void applyGenericInput(const melonds_remote::adapter::GenericInputState& state) override;
++    dualdeck::adapter::AdapterCapabilities capabilities() const override;
++    dualdeck::adapter::SessionState currentState() const override;
++    void applyGenericInput(const dualdeck::adapter::GenericInputState& state) override;
 +    void releaseAllInputs() override;
-+    bool latestFrame(const std::string& surfaceId, melonds_remote::adapter::SurfaceFrame& outFrame) override;
++    bool latestFrame(const std::string& surfaceId, dualdeck::adapter::SurfaceFrame& outFrame) override;
 +
 +    // Non-contract pass-throughs RemoteServerBridge calls directly (the
 +    // adapter contract itself has no "push a frame in" or "read the
@@ -1750,14 +1750,14 @@ index 0000000..8a646ae
 +    // the same shape they were before this class existed, see
 +    // MelonDSFrameSource::pushFrame()/MelonDSInputSink::latestState()).
 +    void pushFrame(const void* bgraData, size_t sizeBytes, uint16_t width, uint16_t height);
-+    melonds_remote::ControllerState latestControllerState() const;
++    dualdeck::ControllerState latestControllerState() const;
 +
 +private:
 +    MelonDSInputSink inputSink_;
 +    MelonDSFrameSource frameSource_;
 +};
 +
-+} // namespace melonds_remote_bridge
++} // namespace dualdeck_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.cpp b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.cpp
 new file mode 100644
 index 0000000..0806357
@@ -1768,7 +1768,7 @@ index 0000000..0806357
 +
 +#include <cstring>
 +
-+namespace melonds_remote_bridge {
++namespace dualdeck_bridge {
 +
 +void MelonDSFrameSource::pushFrame(const void* bgraData, size_t sizeBytes, uint16_t width,
 +                                    uint16_t height) {
@@ -1799,7 +1799,7 @@ index 0000000..0806357
 +    return true;
 +}
 +
-+} // namespace melonds_remote_bridge
++} // namespace dualdeck_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.h b/src/frontend/qt_sdl/remote_server/MelonDSFrameSource.h
 new file mode 100644
 index 0000000..d43e29a
@@ -1824,9 +1824,9 @@ index 0000000..d43e29a
 +
 +#include "host/frame_source.h"
 +
-+namespace melonds_remote_bridge {
++namespace dualdeck_bridge {
 +
-+class MelonDSFrameSource : public melonds_remote::host::IFrameSource {
++class MelonDSFrameSource : public dualdeck::host::IFrameSource {
 +public:
 +    // Copies `sizeBytes` bytes from `bgraData` into the single-slot
 +    // buffer, tagged with this frame's actual width/height. Silently
@@ -1835,7 +1835,7 @@ index 0000000..d43e29a
 +    // OpenGL renderer's capture can be any resolution melonDS's own 3D
 +    // upscale setting produces (see GLBottomScreenCapture), so this
 +    // checks the actual claimed size rather than assuming
-+    // melonds_remote::host::kFrameSizeBytes the way it used to when
++    // dualdeck::host::kFrameSizeBytes the way it used to when
 +    // every pushed frame was native resolution.
 +    void pushFrame(const void* bgraData, size_t sizeBytes, uint16_t width, uint16_t height);
 +
@@ -1845,13 +1845,13 @@ index 0000000..d43e29a
 +private:
 +    std::mutex mutex_;
 +    std::vector<uint8_t> latestFrame_;
-+    uint16_t width_ = static_cast<uint16_t>(melonds_remote::host::kFrameWidth);
-+    uint16_t height_ = static_cast<uint16_t>(melonds_remote::host::kFrameHeight);
++    uint16_t width_ = static_cast<uint16_t>(dualdeck::host::kFrameWidth);
++    uint16_t height_ = static_cast<uint16_t>(dualdeck::host::kFrameHeight);
 +    uint64_t frameIndex_ = 0;
 +    bool hasFrame_ = false;
 +};
 +
-+} // namespace melonds_remote_bridge
++} // namespace dualdeck_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSInputSink.cpp b/src/frontend/qt_sdl/remote_server/MelonDSInputSink.cpp
 new file mode 100644
 index 0000000..998c1e0
@@ -1860,26 +1860,26 @@ index 0000000..998c1e0
 @@ -0,0 +1,22 @@
 +#include "MelonDSInputSink.h"
 +
-+#include "melonds_remote/input_state_tracker.h"
++#include "dualdeck/input_state_tracker.h"
 +
-+namespace melonds_remote_bridge {
++namespace dualdeck_bridge {
 +
-+void MelonDSInputSink::applyControllerState(const melonds_remote::ControllerState& state) {
++void MelonDSInputSink::applyControllerState(const dualdeck::ControllerState& state) {
 +    std::lock_guard<std::mutex> lock(mutex_);
 +    state_ = state;
 +}
 +
 +void MelonDSInputSink::releaseAll() {
 +    std::lock_guard<std::mutex> lock(mutex_);
-+    state_ = melonds_remote::InputStateTracker::releasedState();
++    state_ = dualdeck::InputStateTracker::releasedState();
 +}
 +
-+melonds_remote::ControllerState MelonDSInputSink::latestState() const {
++dualdeck::ControllerState MelonDSInputSink::latestState() const {
 +    std::lock_guard<std::mutex> lock(mutex_);
 +    return state_;
 +}
 +
-+} // namespace melonds_remote_bridge
++} // namespace dualdeck_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSInputSink.h b/src/frontend/qt_sdl/remote_server/MelonDSInputSink.h
 new file mode 100644
 index 0000000..05308c9
@@ -1898,21 +1898,21 @@ index 0000000..05308c9
 +
 +#include "host/emulator_input_sink.h"
 +
-+namespace melonds_remote_bridge {
++namespace dualdeck_bridge {
 +
-+class MelonDSInputSink : public melonds_remote::host::IEmulatorInputSink {
++class MelonDSInputSink : public dualdeck::host::IEmulatorInputSink {
 +public:
-+    void applyControllerState(const melonds_remote::ControllerState& state) override;
++    void applyControllerState(const dualdeck::ControllerState& state) override;
 +    void releaseAll() override;
 +
-+    melonds_remote::ControllerState latestState() const;
++    dualdeck::ControllerState latestState() const;
 +
 +private:
 +    mutable std::mutex mutex_;
-+    melonds_remote::ControllerState state_;
++    dualdeck::ControllerState state_;
 +};
 +
-+} // namespace melonds_remote_bridge
++} // namespace dualdeck_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.cpp b/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.cpp
 new file mode 100644
 index 0000000..b5d8d9b
@@ -1924,7 +1924,7 @@ index 0000000..b5d8d9b
 +#include <algorithm>
 +#include <chrono>
 +
-+namespace melonds_remote_bridge {
++namespace dualdeck_bridge {
 +
 +namespace {
 +uint64_t nowMicros() {
@@ -1934,7 +1934,7 @@ index 0000000..b5d8d9b
 +}
 +} // namespace
 +
-+void MelonDSMicAudioSink::applyMicAudio(const melonds_remote::MicAudioFramePayload& frame) {
++void MelonDSMicAudioSink::applyMicAudio(const dualdeck::MicAudioFramePayload& frame) {
 +    std::lock_guard<std::mutex> lock(mutex_);
 +    pending_.insert(pending_.end(), frame.samples.begin(), frame.samples.end());
 +    if (pending_.size() > kMaxPendingSamples) {
@@ -1962,7 +1962,7 @@ index 0000000..b5d8d9b
 +    return (nowUs - lastPacketTimeUs_) < timeoutUs;
 +}
 +
-+} // namespace melonds_remote_bridge
++} // namespace dualdeck_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.h b/src/frontend/qt_sdl/remote_server/MelonDSMicAudioSink.h
 new file mode 100644
 index 0000000..a00f345
@@ -1986,11 +1986,11 @@ index 0000000..a00f345
 +
 +#include "host/mic_audio_sink.h"
 +
-+namespace melonds_remote_bridge {
++namespace dualdeck_bridge {
 +
-+class MelonDSMicAudioSink : public melonds_remote::host::IMicAudioSink {
++class MelonDSMicAudioSink : public dualdeck::host::IMicAudioSink {
 +public:
-+    void applyMicAudio(const melonds_remote::MicAudioFramePayload& frame) override;
++    void applyMicAudio(const dualdeck::MicAudioFramePayload& frame) override;
 +    void releaseAudio() override;
 +
 +    // Drains all samples queued since the last call, appending them to
@@ -2025,7 +2025,7 @@ index 0000000..a00f345
 +    uint64_t lastPacketTimeUs_ = 0; // 0 means "never received a packet"
 +};
 +
-+} // namespace melonds_remote_bridge
++} // namespace dualdeck_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.cpp
 new file mode 100644
 index 0000000..79c4660
@@ -2047,7 +2047,7 @@ index 0000000..79c4660
 +// "${CMAKE_CURRENT_SOURCE_DIR}")`).
 +#include "version.h"
 +
-+namespace melonds_remote_bridge {
++namespace dualdeck_bridge {
 +
 +namespace {
 +uint64_t nowMicros() {
@@ -2060,12 +2060,12 @@ index 0000000..79c4660
 +RemoteServerBridge::RemoteServerBridge(
 +    std::string bindAddress, uint16_t controlPort, uint16_t inputPort, uint16_t videoPort,
 +    std::string authToken, std::string approvalStateFilePath,
-+    std::function<void(std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest>)>
++    std::function<void(std::vector<dualdeck::host::DeviceApprovalManager::PendingRequest>)>
 +        onPendingRequestsChanged,
 +    bool discoveryEnabled, uint16_t discoveryPort, std::string hostName,
 +    std::function<void(bool)> onClientConnectionChanged, std::string appVersion, uint16_t audioPort) {
-+    bridge_ = std::make_unique<melonds_remote::host::AdapterBridge>(adapter_);
-+    melonds_remote::host::NetServerConfig config;
++    bridge_ = std::make_unique<dualdeck::host::AdapterBridge>(adapter_);
++    dualdeck::host::NetServerConfig config;
 +    config.bindAddress = std::move(bindAddress);
 +    config.controlPort = controlPort;
 +    config.inputPort = inputPort;
@@ -2089,14 +2089,14 @@ index 0000000..79c4660
 +    // one-line override in its own constructor with its own values,
 +    // rather than this becoming a widely-threaded parameter (see
 +    // docs/architecture.md's "Emulator identity model" section).
-+    config.systemIdentity = melonds_remote::SystemIdentity{"nds", "Nintendo DS"};
++    config.systemIdentity = dualdeck::SystemIdentity{"nds", "Nintendo DS"};
 +    config.adapterIdentity =
-+        melonds_remote::AdapterIdentity{"melonds", "melonDS", MELONDS_VERSION};
-+    server_ = std::make_unique<melonds_remote::host::NetServer>(config, *bridge_, *bridge_, micSink_);
++        dualdeck::AdapterIdentity{"melonds", "melonDS", MELONDS_VERSION};
++    server_ = std::make_unique<dualdeck::host::NetServer>(config, *bridge_, *bridge_, micSink_);
 +}
 +
 +RemoteServerBridge::RemoteServerBridge(std::string adapterSocketPath) {
-+    ipcClient_ = std::make_unique<melonds_remote::adapter::ipc::AdapterIpcClient>(
++    ipcClient_ = std::make_unique<dualdeck::adapter::ipc::AdapterIpcClient>(
 +        adapter_, std::move(adapterSocketPath));
 +}
 +
@@ -2159,7 +2159,7 @@ index 0000000..79c4660
 +    adapter_.pushFrame(bgraData, sizeBytes, width, height);
 +}
 +
-+melonds_remote::ControllerState RemoteServerBridge::latestControllerState() const {
++dualdeck::ControllerState RemoteServerBridge::latestControllerState() const {
 +    return adapter_.latestControllerState();
 +}
 +
@@ -2184,7 +2184,7 @@ index 0000000..79c4660
 +    return false;
 +}
 +
-+} // namespace melonds_remote_bridge
++} // namespace dualdeck_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h b/src/frontend/qt_sdl/remote_server/RemoteServerBridge.h
 new file mode 100644
 index 0000000..31f3fc1
@@ -2217,9 +2217,9 @@ index 0000000..31f3fc1
 +#include "MelonDSMicAudioSink.h"
 +#include "host/adapter_bridge.h"
 +#include "host/net_server.h"
-+#include "melonds_remote/adapter/ipc/adapter_ipc_client.h"
++#include "dualdeck/adapter/ipc/adapter_ipc_client.h"
 +
-+namespace melonds_remote_bridge {
++namespace dualdeck_bridge {
 +
 +class RemoteServerBridge {
 +public:
@@ -2253,7 +2253,7 @@ index 0000000..31f3fc1
 +    RemoteServerBridge(
 +        std::string bindAddress, uint16_t controlPort, uint16_t inputPort, uint16_t videoPort,
 +        std::string authToken, std::string approvalStateFilePath = {},
-+        std::function<void(std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest>)>
++        std::function<void(std::vector<dualdeck::host::DeviceApprovalManager::PendingRequest>)>
 +            onPendingRequestsChanged = {},
 +        bool discoveryEnabled = true, uint16_t discoveryPort = 8763, std::string hostName = {},
 +        std::function<void(bool)> onClientConnectionChanged = {}, std::string appVersion = {},
@@ -2268,7 +2268,7 @@ index 0000000..31f3fc1
 +    // same class the in-process constructor above uses) is wrapped in an
 +    // AdapterIpcClient and driven entirely by that external process.
 +    // `adapterSocketPath` empty uses
-+    // melonds_remote::adapter::ipc::defaultAdapterSocketPath(), matching
++    // dualdeck::adapter::ipc::defaultAdapterSocketPath(), matching
 +    // the standalone host's own --adapter-socket default.
 +    //
 +    // Real, deliberate limitations of this mode, not yet solved (see
@@ -2307,7 +2307,7 @@ index 0000000..31f3fc1
 +
 +    // Called by EmuInstance::inputProcess() once per frame to read the
 +    // latest remote controller/touch/action state to merge in.
-+    melonds_remote::ControllerState latestControllerState() const;
++    dualdeck::ControllerState latestControllerState() const;
 +
 +    // Called by EmuInstance::inputProcess() once per frame (GitHub issue
 +    // #2): drains whatever mic samples have arrived since the last call,
@@ -2353,14 +2353,14 @@ index 0000000..31f3fc1
 +    // at all -- only start()/stop()/approveDevice()/denyDevice() do.
 +    MelonDSAdapter adapter_;
 +    MelonDSMicAudioSink micSink_;
-+    std::unique_ptr<melonds_remote::host::AdapterBridge> bridge_;
-+    std::unique_ptr<melonds_remote::host::NetServer> server_;
-+    std::unique_ptr<melonds_remote::adapter::ipc::AdapterIpcClient> ipcClient_;
++    std::unique_ptr<dualdeck::host::AdapterBridge> bridge_;
++    std::unique_ptr<dualdeck::host::NetServer> server_;
++    std::unique_ptr<dualdeck::adapter::ipc::AdapterIpcClient> ipcClient_;
 +    std::thread reconnectThread_;
 +    std::atomic<bool> stopRequested_{false};
 +};
 +
-+} // namespace melonds_remote_bridge
++} // namespace dualdeck_bridge
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.cpp b/src/frontend/qt_sdl/remote_server/host/net_server.cpp
 new file mode 100644
 index 0000000..2abf61f
@@ -2387,9 +2387,9 @@ index 0000000..2abf61f
 +#include <optional>
 +#include <utility>
 +
-+#include "melonds_remote/protocol.h"
++#include "dualdeck/protocol.h"
 +
-+namespace melonds_remote::host {
++namespace dualdeck::host {
 +
 +namespace {
 +
@@ -3676,7 +3676,7 @@ index 0000000..2abf61f
 +    }
 +}
 +
-+} // namespace melonds_remote::host
++} // namespace dualdeck::host
 diff --git a/src/frontend/qt_sdl/remote_server/host/net_server.h b/src/frontend/qt_sdl/remote_server/host/net_server.h
 new file mode 100644
 index 0000000..632e3d2
@@ -3724,10 +3724,10 @@ index 0000000..632e3d2
 +#include "host/emulator_input_sink.h"
 +#include "host/frame_source.h"
 +#include "host/mic_audio_sink.h"
-+#include "melonds_remote/input_state_tracker.h"
-+#include "melonds_remote/rate_limiter.h"
++#include "dualdeck/input_state_tracker.h"
++#include "dualdeck/rate_limiter.h"
 +
-+namespace melonds_remote::host {
++namespace dualdeck::host {
 +
 +struct NetServerConfig {
 +    // See the file-level "Security posture" comment above for why this
@@ -3909,7 +3909,7 @@ index 0000000..632e3d2
 +    // Emulator-independent identity (GitHub issue #28's architecture
 +    // foundation milestone: decouple DualDeck from melonDS), sent back
 +    // in every HelloAck and DiscoveryResponse -- see
-+    // melonds_remote::SystemIdentity/AdapterIdentity in protocol.h for
++    // dualdeck::SystemIdentity/AdapterIdentity in protocol.h for
 +    // the field-by-field meaning. Defaults to a clearly-labeled
 +    // synthetic/test identity rather than empty strings, so a host that
 +    // never overrides this (the standalone host/remote-server binary
@@ -4124,4 +4124,4 @@ index 0000000..632e3d2
 +    std::atomic<int> currentVideoQuality_{80};
 +};
 +
-+} // namespace melonds_remote::host
++} // namespace dualdeck::host

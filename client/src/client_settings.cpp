@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <string>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 namespace {
 
@@ -153,4 +153,4 @@ bool saveClientSettings(const std::string& settingsPath, const ClientSettings& s
     return true;
 }
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

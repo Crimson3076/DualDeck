@@ -30,7 +30,7 @@
 #include "host/wayland_screen_capture.h"
 #include "host/x11_screen_capture.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 // Pure description of "what should currently be held" on the virtual
 // gamepad, derived from a ControllerState -- deliberately has no I/O of
@@ -327,4 +327,4 @@ private:
     uint16_t targetDisplayHeight_ = 0;
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

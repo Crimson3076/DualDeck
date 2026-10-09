@@ -9,7 +9,7 @@
 
 #include <string>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 // $HOME/.config/dualdeck-client/setup_complete.txt, or empty if
 // $HOME isn't set (persistence then silently unavailable -- the wizard
@@ -20,4 +20,4 @@ std::string defaultWizardStatePath();
 bool isSetupComplete(const std::string& statePath);
 void markSetupComplete(const std::string& statePath);
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

@@ -27,7 +27,7 @@ import sys
 import time
 
 MAGIC = 0x444D5231
-# Kept in sync with protocol/include/melonds_remote/protocol.h's
+# Kept in sync with protocol/include/dualdeck/protocol.h's
 # kProtocolVersion by hand (this test has no build step that could read
 # the live header directly) -- a stale value here doesn't fail loudly on
 # its own: every Hello this script sends gets rejected as

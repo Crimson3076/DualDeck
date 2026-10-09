@@ -10,7 +10,7 @@
 
 #include "net_client.h"
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 // Orchestrates the whole wizard as an explicit step state machine. Returns
 // true if the user reached the end (Done), false if they exited entirely
@@ -21,4 +21,4 @@ bool runSetupWizard(SDL_Window* window, SDL_Renderer* renderer, SDL_Texture* tex
                     uint16_t discoveryPort, NetClientConfig baseNetConfig,
                     const std::string& discoveryStorePath);
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

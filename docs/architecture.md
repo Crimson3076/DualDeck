@@ -24,7 +24,7 @@ adapter-sdk/         The versioned Emulator Adapter Contract (GitHub issue
                       process synthetic adapter. See "Emulator identity
                       model" below for the (already-live) identity slice of
                       this same issue, and the ADR for everything else.
-                      - include/melonds_remote/adapter/
+                      - include/dualdeck/adapter/
                           session_state.h    lifecycle enum + isValidTransition()
                           video_surface.h    VideoSurfaceDescriptor, SurfaceRole, PixelFormat
                           generic_input.h    GenericInputState, TouchContact, GenericButton/Action
@@ -70,7 +70,7 @@ host/melonds-patches/ 0001-remote-server-integration.patch: implements the
                       MelonDSMicAudioSink (unchanged low-level sinks) and
                       MelonDSAdapter (GitHub issue #28 Phase 2 -- wraps
                       those sinks and implements
-                      melonds_remote::adapter::IEmulatorAdapter, the
+                      dualdeck::adapter::IEmulatorAdapter, the
                       generic contract's "reference implementation").
                       RemoteServerBridge wires MelonDSAdapter through the
                       same host::AdapterBridge host/remote-server's
@@ -250,8 +250,8 @@ Host Service extraction, generic input/video-surface model, or 3DS/Wii U
 adapters the rest of the issue describes -- those remain future work (see
 "What issue #28 still needs" below).
 
-**The types** (`melonds_remote::SystemIdentity`/`AdapterIdentity` in
-`protocol/include/melonds_remote/protocol.h`):
+**The types** (`dualdeck::SystemIdentity`/`AdapterIdentity` in
+`protocol/include/dualdeck/protocol.h`):
 
 ```cpp
 struct SystemIdentity {

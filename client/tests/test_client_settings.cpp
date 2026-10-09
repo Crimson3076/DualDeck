@@ -6,7 +6,7 @@
 #include <fstream>
 #include <string>
 
-using namespace melonds_remote::client;
+using namespace dualdeck::client;
 
 namespace {
 

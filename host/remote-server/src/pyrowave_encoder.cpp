@@ -22,7 +22,7 @@ typedef VkQueueGlobalPriorityKHR VkQueueGlobalPriority;
 
 #include "host/yuv_conversion.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 namespace {
 
@@ -216,11 +216,11 @@ bool PyroWaveEncoder::encodeFrame(const uint8_t* bgra, int width, int height, By
     return true;
 }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host
 
 #else // !DUALDECK_HAVE_PYROWAVE
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 // Built without PyroWave (see host/remote-server/CMakeLists.txt's
 // optional detection) -- same "always compiled, real work stubbed out"
@@ -234,6 +234,6 @@ bool PyroWaveEncoder::isAvailable() { return false; }
 bool PyroWaveEncoder::initialize(int, int, size_t) { return false; }
 bool PyroWaveEncoder::encodeFrame(const uint8_t*, int, int, ByteBuffer&) { return false; }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host
 
 #endif // DUALDECK_HAVE_PYROWAVE

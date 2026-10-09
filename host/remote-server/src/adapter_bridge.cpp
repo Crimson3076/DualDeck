@@ -1,10 +1,10 @@
 #include "host/adapter_bridge.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 namespace {
 
-std::string pickTargetSurface(const melonds_remote::adapter::AdapterCapabilities& caps) {
+std::string pickTargetSurface(const dualdeck::adapter::AdapterCapabilities& caps) {
     for (const auto& s : caps.surfaces) {
         if (s.remotelyDisplayed) return s.surfaceId;
     }
@@ -16,7 +16,7 @@ std::string pickTargetSurface(const melonds_remote::adapter::AdapterCapabilities
 // falling back to DS's native 256x192 only if it's genuinely not found
 // (e.g. an adapter with zero surfaces) -- never silently assumes DS for
 // an adapter that clearly declared something else.
-void lookupTargetDimensions(const melonds_remote::adapter::AdapterCapabilities& caps,
+void lookupTargetDimensions(const dualdeck::adapter::AdapterCapabilities& caps,
                             const std::string& targetId, uint16_t& outWidth, uint16_t& outHeight) {
     for (const auto& s : caps.surfaces) {
         if (s.surfaceId == targetId) {
@@ -40,18 +40,18 @@ void lookupTargetDimensions(const melonds_remote::adapter::AdapterCapabilities& 
 // explicitly rather than "optimized" into a shift/mask trick.
 uint32_t dsButtonsToGenericButtons(uint16_t dsButtons) {
     uint32_t generic = 0;
-    if (dsButtons & melonds_remote::DSButton_A) generic |= melonds_remote::adapter::GenericButton_South;
-    if (dsButtons & melonds_remote::DSButton_B) generic |= melonds_remote::adapter::GenericButton_East;
-    if (dsButtons & melonds_remote::DSButton_X) generic |= melonds_remote::adapter::GenericButton_West;
-    if (dsButtons & melonds_remote::DSButton_Y) generic |= melonds_remote::adapter::GenericButton_North;
-    if (dsButtons & melonds_remote::DSButton_Up) generic |= melonds_remote::adapter::GenericButton_DpadUp;
-    if (dsButtons & melonds_remote::DSButton_Down) generic |= melonds_remote::adapter::GenericButton_DpadDown;
-    if (dsButtons & melonds_remote::DSButton_Left) generic |= melonds_remote::adapter::GenericButton_DpadLeft;
-    if (dsButtons & melonds_remote::DSButton_Right) generic |= melonds_remote::adapter::GenericButton_DpadRight;
-    if (dsButtons & melonds_remote::DSButton_L) generic |= melonds_remote::adapter::GenericButton_L1;
-    if (dsButtons & melonds_remote::DSButton_R) generic |= melonds_remote::adapter::GenericButton_R1;
-    if (dsButtons & melonds_remote::DSButton_Start) generic |= melonds_remote::adapter::GenericButton_Start;
-    if (dsButtons & melonds_remote::DSButton_Select) generic |= melonds_remote::adapter::GenericButton_Select;
+    if (dsButtons & dualdeck::DSButton_A) generic |= dualdeck::adapter::GenericButton_South;
+    if (dsButtons & dualdeck::DSButton_B) generic |= dualdeck::adapter::GenericButton_East;
+    if (dsButtons & dualdeck::DSButton_X) generic |= dualdeck::adapter::GenericButton_West;
+    if (dsButtons & dualdeck::DSButton_Y) generic |= dualdeck::adapter::GenericButton_North;
+    if (dsButtons & dualdeck::DSButton_Up) generic |= dualdeck::adapter::GenericButton_DpadUp;
+    if (dsButtons & dualdeck::DSButton_Down) generic |= dualdeck::adapter::GenericButton_DpadDown;
+    if (dsButtons & dualdeck::DSButton_Left) generic |= dualdeck::adapter::GenericButton_DpadLeft;
+    if (dsButtons & dualdeck::DSButton_Right) generic |= dualdeck::adapter::GenericButton_DpadRight;
+    if (dsButtons & dualdeck::DSButton_L) generic |= dualdeck::adapter::GenericButton_L1;
+    if (dsButtons & dualdeck::DSButton_R) generic |= dualdeck::adapter::GenericButton_R1;
+    if (dsButtons & dualdeck::DSButton_Start) generic |= dualdeck::adapter::GenericButton_Start;
+    if (dsButtons & dualdeck::DSButton_Select) generic |= dualdeck::adapter::GenericButton_Select;
     return generic;
 }
 
@@ -65,8 +65,8 @@ uint32_t dsButtonsToGenericButtons(uint16_t dsButtons) {
 // whether the wire carried real data (it didn't, before v12).
 uint32_t extraButtonsToGenericButtons(uint8_t extraButtons) {
     uint32_t generic = 0;
-    if (extraButtons & melonds_remote::ExtraButton_ThumbLeft) generic |= melonds_remote::adapter::GenericButton_L3;
-    if (extraButtons & melonds_remote::ExtraButton_ThumbRight) generic |= melonds_remote::adapter::GenericButton_R3;
+    if (extraButtons & dualdeck::ExtraButton_ThumbLeft) generic |= dualdeck::adapter::GenericButton_L3;
+    if (extraButtons & dualdeck::ExtraButton_ThumbRight) generic |= dualdeck::adapter::GenericButton_R3;
     return generic;
 }
 
@@ -77,7 +77,7 @@ std::string AdapterBridge::targetSurfaceId() const {
 }
 
 void AdapterBridge::applyControllerState(const ControllerState& state) {
-    melonds_remote::adapter::GenericInputState generic;
+    dualdeck::adapter::GenericInputState generic;
     generic.sequence = state.sequence;
     generic.clientTimestampUs = state.clientTimestampUs;
     generic.buttons = dsButtonsToGenericButtons(state.dsButtons) | extraButtonsToGenericButtons(state.extraButtons);
@@ -92,7 +92,7 @@ void AdapterBridge::applyControllerState(const ControllerState& state) {
     generic.rightTrigger = state.rightTrigger;
     if (state.touchActive) {
         generic.touches.push_back(
-            melonds_remote::adapter::TouchContact{targetSurfaceId(), state.touchX, state.touchY});
+            dualdeck::adapter::TouchContact{targetSurfaceId(), state.touchX, state.touchY});
     }
     // Bit layout is intentionally identical between EmulatorAction
     // (protocol.h) and GenericEmulatorAction (generic_input.h) -- see
@@ -108,7 +108,7 @@ void AdapterBridge::releaseAll() {
 
 bool AdapterBridge::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
                                    uint16_t& outWidth, uint16_t& outHeight) {
-    melonds_remote::adapter::SurfaceFrame frame;
+    dualdeck::adapter::SurfaceFrame frame;
     if (!adapter_.latestFrame(targetSurfaceId(), frame)) {
         return false;
     }
@@ -142,4 +142,4 @@ void AdapterBridge::frameDimensions(uint16_t& outWidth, uint16_t& outHeight) con
     lookupTargetDimensions(caps, pickTargetSurface(caps), outWidth, outHeight);
 }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

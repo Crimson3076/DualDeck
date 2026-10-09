@@ -1,29 +1,29 @@
-add_executable(melonds_remote_client_settings_tests
+add_executable(dualdeck_client_settings_tests
     main.cpp
     test_client_settings.cpp
     ../src/client_settings.cpp
 )
 
-target_include_directories(melonds_remote_client_settings_tests PRIVATE
+target_include_directories(dualdeck_client_settings_tests PRIVATE
     ../src
     ../../protocol/tests
 )
-target_compile_features(melonds_remote_client_settings_tests PRIVATE cxx_std_20)
+target_compile_features(dualdeck_client_settings_tests PRIVATE cxx_std_20)
 
 if(DUALDECK_ENABLE_WARNINGS)
-    target_compile_options(melonds_remote_client_settings_tests PRIVATE
+    target_compile_options(dualdeck_client_settings_tests PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow
     )
 endif()
 
-add_test(NAME client_settings_tests COMMAND melonds_remote_client_settings_tests)
+add_test(NAME client_settings_tests COMMAND dualdeck_client_settings_tests)
 
 # net_client.cpp is pure sockets + protocol/, no SDL (see net_client.h's
 # top-of-file comment), so it -- and a real host::NetServer to connect it
 # to -- can be tested directly without any of the windowing/SDL machinery
 # the rest of client/ needs. GitHub issue #4 Phase E's control-channel
 # read loop is what this target exists to cover.
-add_executable(melonds_remote_net_client_tests
+add_executable(dualdeck_net_client_tests
     main.cpp
     test_net_client.cpp
     test_h264_decoder.cpp
@@ -35,16 +35,16 @@ add_executable(melonds_remote_net_client_tests
     ../src/yuv_conversion.cpp
 )
 
-target_include_directories(melonds_remote_net_client_tests PRIVATE
+target_include_directories(dualdeck_net_client_tests PRIVATE
     ../src
     ../../protocol/tests
 )
 
-target_link_libraries(melonds_remote_net_client_tests PRIVATE dualdeck_host)
-target_compile_features(melonds_remote_net_client_tests PRIVATE cxx_std_20)
+target_link_libraries(dualdeck_net_client_tests PRIVATE dualdeck_host)
+target_compile_features(dualdeck_net_client_tests PRIVATE cxx_std_20)
 
 if(DUALDECK_ENABLE_WARNINGS)
-    target_compile_options(melonds_remote_net_client_tests PRIVATE
+    target_compile_options(dualdeck_net_client_tests PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow
     )
 endif()
@@ -71,10 +71,10 @@ if(PkgConfig_FOUND)
     pkg_check_modules(OPENH264 openh264)
 endif()
 if(OPENH264_FOUND)
-    target_compile_definitions(melonds_remote_net_client_tests PRIVATE DUALDECK_HAVE_OPENH264)
-    target_link_libraries(melonds_remote_net_client_tests PRIVATE ${OPENH264_LIBRARIES})
-    target_include_directories(melonds_remote_net_client_tests SYSTEM PRIVATE ${OPENH264_INCLUDE_DIRS})
-    target_link_directories(melonds_remote_net_client_tests PRIVATE ${OPENH264_LIBRARY_DIRS})
+    target_compile_definitions(dualdeck_net_client_tests PRIVATE DUALDECK_HAVE_OPENH264)
+    target_link_libraries(dualdeck_net_client_tests PRIVATE ${OPENH264_LIBRARIES})
+    target_include_directories(dualdeck_net_client_tests SYSTEM PRIVATE ${OPENH264_INCLUDE_DIRS})
+    target_link_directories(dualdeck_net_client_tests PRIVATE ${OPENH264_LIBRARY_DIRS})
 endif()
 
 # PyroWave decode (pyrowave_decoder.cpp, compiled directly above). Already
@@ -83,7 +83,7 @@ endif()
 # target compiles the client's own decoder source itself -- same
 # reasoning as OpenH264 just above.
 if(DUALDECK_PYROWAVE_FOUND)
-    target_link_libraries(melonds_remote_net_client_tests PRIVATE PyroWave::PyroWave)
+    target_link_libraries(dualdeck_net_client_tests PRIVATE PyroWave::PyroWave)
 endif()
 
 # SIMD I420->BGRA conversion for yuv_conversion.cpp's i420ToBgra() -- see
@@ -92,11 +92,11 @@ endif()
 # source list above), so it needs both the compile definition and the
 # link, same as client/CMakeLists.txt's dualdeck-client target.
 if((OPENH264_FOUND OR DUALDECK_PYROWAVE_FOUND) AND DUALDECK_LIBYUV_FOUND)
-    target_compile_definitions(melonds_remote_net_client_tests PRIVATE DUALDECK_HAVE_LIBYUV)
-    target_link_libraries(melonds_remote_net_client_tests PRIVATE LibYuv::LibYuv)
+    target_compile_definitions(dualdeck_net_client_tests PRIVATE DUALDECK_HAVE_LIBYUV)
+    target_link_libraries(dualdeck_net_client_tests PRIVATE LibYuv::LibYuv)
 endif()
 
-add_test(NAME net_client_tests COMMAND melonds_remote_net_client_tests)
+add_test(NAME net_client_tests COMMAND dualdeck_net_client_tests)
 
 # Covers the melonDS-Remote -> DualDeck config-dir migration added to
 # each of these four files' defaultXPath() functions -- pure filesystem

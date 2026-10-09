@@ -1,7 +1,7 @@
-#include "melonds_remote/touch_mapping.h"
+#include "dualdeck/touch_mapping.h"
 #include "test_framework.h"
 
-using namespace melonds_remote;
+using namespace dualdeck;
 
 MDR_TEST(aspect_fit_rect_wide_surface) {
     // Steam Deck panel: 1280x800. Widescreen surface -> height-limited fit.

@@ -57,7 +57,7 @@ button stuck.
 | 31     | 2    | `mouseDeltaY`      | Signed, protocol v11+. Same as `mouseDeltaX`. |
 | 33     | 1    | `mouseButtons`     | Bitmask, protocol v11+, 1 = held. Bit 0 = left click, bit 1 = right click. See `MouseButton` in `protocol.h`. |
 
-`kControllerStateWireSize` in `protocol/include/melonds_remote/protocol.h`
+`kControllerStateWireSize` in `protocol/include/dualdeck/protocol.h`
 is defined as this same sum (34 bytes) and is checked by
 `protocol_tests` (`test_controller_state.cpp`); treat the header as the
 source of truth if this document and the code ever disagree.
@@ -357,8 +357,8 @@ hardcode assumptions -- see `docs/architecture.md`'s "Emulator identity
 model" section for the full design rationale (why two separate structs,
 who sets them, and what issue #28 still needs beyond this milestone).
 
-Two small structs, `melonds_remote::SystemIdentity`/`AdapterIdentity`
-(`protocol/include/melonds_remote/protocol.h`), each serialized as a
+Two small structs, `dualdeck::SystemIdentity`/`AdapterIdentity`
+(`protocol/include/dualdeck/protocol.h`), each serialized as a
 fixed sequence of length-prefixed strings (same encoding as every other
 string field in this document -- a `u16` byte count followed by that many
 bytes, capped at `kMaxProtocolStringLength` like everything else):
@@ -506,7 +506,7 @@ characters, `client/src/device_identity.h`) and sends the *same* value in
 `Hello.authToken` on every connection attempt, to every host, forever --
 there is no code typed on the client, ever. The host maintains a set of
 approved device identities plus a queue of pending (not yet approved)
-ones (`melonds_remote::host::DeviceApprovalManager`,
+ones (`dualdeck::host::DeviceApprovalManager`,
 `host/remote-server/include/host/device_approval_manager.h`). For each
 `Hello`:
 
@@ -613,7 +613,7 @@ instead).
 ## Rate limiting
 
 The host tracks control-connection attempts per source IP address in a
-sliding window (`ConnectionRateLimiter`, `protocol/include/melonds_remote/rate_limiter.h`):
+sliding window (`ConnectionRateLimiter`, `protocol/include/dualdeck/rate_limiter.h`):
 by default at most 5 attempts per 10 seconds per address. An attempt over
 the limit is closed immediately, before any handshake bytes are read, and
 still counts against the client's budget (so hammering the endpoint

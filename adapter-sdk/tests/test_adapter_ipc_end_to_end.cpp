@@ -16,17 +16,17 @@
 #include <thread>
 #include <unistd.h>
 
-#include "melonds_remote/adapter/fake/fake_3ds_adapter.h"
-#include "melonds_remote/adapter/fake/fake_ds_adapter.h"
-#include "melonds_remote/adapter/ipc/adapter_ipc_client.h"
-#include "melonds_remote/adapter/ipc/adapter_ipc_server.h"
-#include "melonds_remote/adapter/ipc/ipc_protocol.h"
+#include "dualdeck/adapter/fake/fake_3ds_adapter.h"
+#include "dualdeck/adapter/fake/fake_ds_adapter.h"
+#include "dualdeck/adapter/ipc/adapter_ipc_client.h"
+#include "dualdeck/adapter/ipc/adapter_ipc_server.h"
+#include "dualdeck/adapter/ipc/ipc_protocol.h"
 #include "test_framework.h"
 
-using namespace melonds_remote;
-using namespace melonds_remote::adapter;
-using namespace melonds_remote::adapter::fake;
-using namespace melonds_remote::adapter::ipc;
+using namespace dualdeck;
+using namespace dualdeck::adapter;
+using namespace dualdeck::adapter::fake;
+using namespace dualdeck::adapter::ipc;
 
 namespace {
 

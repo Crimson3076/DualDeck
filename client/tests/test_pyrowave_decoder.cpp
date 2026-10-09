@@ -21,8 +21,8 @@
 #include <cstdlib>
 #include <vector>
 
-using namespace melonds_remote;
-using namespace melonds_remote::client;
+using namespace dualdeck;
+using namespace dualdeck::client;
 
 namespace {
 

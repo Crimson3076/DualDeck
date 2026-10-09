@@ -2,7 +2,7 @@
 
 // Microphone capture for the client side of GitHub issue #2 ("Allow use
 // for microphone"): enumerates recording devices, opens a chosen one at
-// the fixed protocol format (mono 16-bit PCM @ melonds_remote::
+// the fixed protocol format (mono 16-bit PCM @ dualdeck::
 // kMicAudioSampleRate -- see protocol.h), and exposes a poll-once-per-
 // frame interface so main.cpp's existing frame loop can pull captured
 // samples the same way it already pulls gamepad/touch state, without
@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 struct MicDeviceInfo {
     SDL_AudioDeviceID id = 0;
@@ -64,4 +64,4 @@ private:
     SDL_AudioStream* stream_ = nullptr;
 };
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

@@ -13,9 +13,9 @@
 #include <thread>
 #include <vector>
 
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 struct NetClientConfig {
     std::string hostAddress = "127.0.0.1";
@@ -39,7 +39,7 @@ struct NetClientConfig {
     std::string authToken;
 
     // This client's own release version string (e.g. "v0.1.24"), sent to
-    // the host in Hello. See melonds_remote::HelloPayload::appVersion for
+    // the host in Hello. See dualdeck::HelloPayload::appVersion for
     // the full explanation; empty (the default) means "unknown/dev
     // build", which disables the app-version check on the host side for
     // this connection regardless of what the host itself is running.
@@ -47,7 +47,7 @@ struct NetClientConfig {
 
     // JPEG quality (1-100) to request for this session's video, or 0 to
     // defer to the host's own configured default. See
-    // melonds_remote::HelloPayload::videoQuality's comment; set from
+    // dualdeck::HelloPayload::videoQuality's comment; set from
     // ClientSettings::videoQuality in main.cpp.
     uint8_t videoQuality = 0;
 
@@ -354,4 +354,4 @@ private:
     AdapterIdentity hostAdapterIdentity_;
 };
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

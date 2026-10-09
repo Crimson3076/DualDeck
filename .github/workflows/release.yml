@@ -157,7 +157,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .release-work/azahar-src
-          key: azahar-75134fca82eab4e1a86dca0aaa4a188cefff5469-${{ hashFiles('host/azahar-patches/0001-remote-server-integration.patch', 'host/azahar-patches/shared-files.txt', 'adapter-sdk/include/**', 'adapter-sdk/ipc/include/**', 'adapter-sdk/ipc/src/**', 'adapter-sdk/src/**', 'protocol/include/melonds_remote/protocol.h', 'protocol/src/protocol.cpp') }}-${{ runner.os }}-v2
+          key: azahar-75134fca82eab4e1a86dca0aaa4a188cefff5469-${{ hashFiles('host/azahar-patches/0001-remote-server-integration.patch', 'host/azahar-patches/shared-files.txt', 'adapter-sdk/include/**', 'adapter-sdk/ipc/include/**', 'adapter-sdk/ipc/src/**', 'adapter-sdk/src/**', 'protocol/include/dualdeck/protocol.h', 'protocol/src/protocol.cpp') }}-${{ runner.os }}-v2
 
       # Cemu (Nintendo Wii U) is the heaviest of the three emulator builds
       # (its own vcpkg submodule resolves to roughly 108 packages) --
@@ -191,7 +191,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .release-work/cemu-src
-          key: cemu-a6fb0a48eb437a8a41c13b782ac8ae0433bf8f98-${{ hashFiles('host/cemu-patches/0001-remote-server-integration.patch', 'host/cemu-patches/shared-files.txt', 'adapter-sdk/include/**', 'adapter-sdk/ipc/include/**', 'adapter-sdk/ipc/src/**', 'adapter-sdk/src/**', 'protocol/include/melonds_remote/protocol.h', 'protocol/src/protocol.cpp') }}-${{ runner.os }}-v2
+          key: cemu-a6fb0a48eb437a8a41c13b782ac8ae0433bf8f98-${{ hashFiles('host/cemu-patches/0001-remote-server-integration.patch', 'host/cemu-patches/shared-files.txt', 'adapter-sdk/include/**', 'adapter-sdk/ipc/include/**', 'adapter-sdk/ipc/src/**', 'adapter-sdk/src/**', 'protocol/include/dualdeck/protocol.h', 'protocol/src/protocol.cpp') }}-${{ runner.os }}-v2
 
       - name: Build release package
         env:

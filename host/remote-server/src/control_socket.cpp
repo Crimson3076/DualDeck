@@ -14,9 +14,9 @@
 
 #include "host/mode_coordinator.h"
 #include "host/net_server.h"
-#include "melonds_remote/adapter/ipc/socket_path.h"
+#include "dualdeck/adapter/ipc/socket_path.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 namespace {
 
@@ -228,4 +228,4 @@ void ControlSocketServer::serveClient(int clientFd) {
     }
 }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

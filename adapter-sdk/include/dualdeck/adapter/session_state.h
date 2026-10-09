@@ -6,7 +6,7 @@
 // see docs/adr/0001-host-service-and-adapter-architecture.md for why
 // this exists before the Host Service itself is extracted (Phase 2).
 
-namespace melonds_remote::adapter {
+namespace dualdeck::adapter {
 
 enum class SessionState {
     Available,  // adapter registered, no active emulation session
@@ -32,4 +32,4 @@ const char* toString(SessionState state);
 // other's types.
 bool isValidTransition(SessionState from, SessionState to);
 
-} // namespace melonds_remote::adapter
+} // namespace dualdeck::adapter

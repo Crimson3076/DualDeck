@@ -4,7 +4,7 @@
 integration against upstream Cemu (github.com/cemu-project/Cemu) tag
 `v2.6` (commit `a6fb0a48eb437a8a41c13b782ac8ae0433bf8f98`), the latest
 stable release as of this writing, adding a third real
-`IEmulatorAdapter` implementation (`melonds_remote::adapter::IEmulatorAdapter`,
+`IEmulatorAdapter` implementation (`dualdeck::adapter::IEmulatorAdapter`,
 the same contract melonDS's `MelonDSAdapter` and Azahar's `AzaharAdapter`
 both implement) for the Nintendo Wii U.
 
@@ -184,7 +184,7 @@ normal, unrestricted-network runner.
 `src/Cafe/CMakeLists.txt`+`CafeSystem.cpp` -- `CafeSystem.cpp` (compiled
 as part of the `CemuCafe` library) `#include`s
 `remote_server/RemoteServerBridge.h`, which pulls in the vendored
-`melonds_remote/adapter/...` headers; those don't live under the plain
+`dualdeck/adapter/...` headers; those don't live under the plain
 `"../"` (src/) include root every other cross-module include in this
 codebase resolves through (e.g. `"input/InputManager.h"` needs no extra
 include dir), since `adapter_sdk/` is vendored a level deeper, under

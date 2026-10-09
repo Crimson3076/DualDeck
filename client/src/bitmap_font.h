@@ -20,7 +20,7 @@
 #include <cstdint>
 #include <string>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 constexpr int kFontGlyphWidth = 5;
 constexpr int kFontGlyphHeight = 7;
@@ -36,4 +36,4 @@ int renderBitmapText(SDL_Renderer* renderer, const std::string& text, float x, f
 // occupy, without actually drawing anything (for layout/centering).
 int measureBitmapText(const std::string& text, int pixelSize);
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

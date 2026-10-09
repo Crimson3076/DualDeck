@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-namespace melonds_remote {
+namespace dualdeck {
 
 // Bumped whenever the wire format changes incompatibly.
 //
@@ -320,7 +320,7 @@ struct AdapterIdentity {
 // capability_bridge.h, the one layer that can depend on both) converts
 // between the two shapes.
 
-// Mirrors melonds_remote::adapter::SurfaceRole. Keeps the existing
+// Mirrors dualdeck::adapter::SurfaceRole. Keeps the existing
 // Nintendo-hardware-flavored values (Top/Bottom/Tv/GamePad) rather than
 // renaming them -- renaming would force a matching change in every
 // already-shipped adapter's own capabilities() for no functional gain --
@@ -915,4 +915,4 @@ std::optional<ClientLogPayload> parseClientLogPayload(const uint8_t* data, size_
 // Builds a complete ClientLog packet (header + serialized body).
 ByteBuffer buildClientLogPacket(const ClientLogPayload& log);
 
-} // namespace melonds_remote
+} // namespace dualdeck

@@ -13,7 +13,7 @@
 #include <memory>
 #include <vector>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 class H264Decoder {
 public:
@@ -54,4 +54,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

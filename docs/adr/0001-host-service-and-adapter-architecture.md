@@ -63,7 +63,7 @@ Two concepts, matching issue #28's proposal:
 
 ### 2. The contract is a versioned in-process C++ interface today
 
-`adapter-sdk/include/melonds_remote/adapter/adapter_contract.h` defines
+`adapter-sdk/include/dualdeck/adapter/adapter_contract.h` defines
 `IEmulatorAdapter`, versioned by `kAdapterContractVersion` (independent
 of `kProtocolVersion` and `AdapterIdentity::adapterVersion` -- three
 separate axes of "what version is this," matching the reasoning
@@ -202,7 +202,7 @@ these explicitly"), the chosen option is:
 **Implemented** (`host/remote-server/src/adapter_bridge.{h,cpp}`,
 GitHub issue #28 Phase 2): `AdapterBridge` implements the existing
 `host::IEmulatorInputSink`/`host::IFrameSource` interfaces by
-translating to/from `melonds_remote::adapter::IEmulatorAdapter` --
+translating to/from `dualdeck::adapter::IEmulatorAdapter` --
 exactly the compatibility adapter this section describes. It picks one
 target surface at construction time (preferring the first
 `remotelyDisplayed` surface, falling back to the first declared one),
@@ -272,7 +272,7 @@ GitHub issue #28 Phase 2 continuation): melonDS's DS-specific input/video
 handling goes through the generic adapter contract now, fulfilling
 section 1's "melonDS's `RemoteServerBridge` is the reference
 implementation-to-be" line. A new `MelonDSAdapter` class implements
-`melonds_remote::adapter::IEmulatorAdapter` -- it wraps the same
+`dualdeck::adapter::IEmulatorAdapter` -- it wraps the same
 `MelonDSInputSink`/`MelonDSFrameSource` this patch already used
 (unchanged internally), translating `GenericInputState` back to a wire
 `ControllerState` via the exact inverse of `host::AdapterBridge`'s

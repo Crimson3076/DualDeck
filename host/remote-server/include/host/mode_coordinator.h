@@ -14,9 +14,9 @@
 
 #include "host/host_session_state.h"
 #include "host/net_server.h"
-#include "melonds_remote/adapter/ipc/adapter_ipc_server.h"
+#include "dualdeck/adapter/ipc/adapter_ipc_server.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 // Fixed identity reported while HostMode::HostControl is active -- no
 // emulator is running, so there's no real SystemIdentity/AdapterIdentity
@@ -45,7 +45,7 @@ HostMode computeDesiredMode(bool adapterConnected, bool manualHostControlOverrid
 // gone -- computeDesiredHostSessionState() ignores adapterState entirely
 // once adapterConnected is false, rather than trusting that stale value.
 HostSessionState computeDesiredHostSessionState(bool adapterConnected,
-                                                 melonds_remote::adapter::SessionState adapterState,
+                                                 dualdeck::adapter::SessionState adapterState,
                                                  bool manualHostControlOverride);
 
 class ModeCoordinator {
@@ -59,7 +59,7 @@ public:
     // and the fallback identities mirror main.cpp's existing
     // --system-id/--adapter-id CLI-override logic: when explicit, they
     // win over whatever a connected adapter reports for itself.
-    ModeCoordinator(NetServer& server, melonds_remote::adapter::ipc::AdapterIpcServer& adapterServer,
+    ModeCoordinator(NetServer& server, dualdeck::adapter::ipc::AdapterIpcServer& adapterServer,
                      IEmulatorInputSink& emulationInputSink, IFrameSource& emulationFrameSource,
                      IEmulatorInputSink& hostControlInputSink, IFrameSource& hostControlFrameSource,
                      bool systemIdentityExplicit, bool adapterIdentityExplicit,
@@ -101,7 +101,7 @@ private:
     void applyMode(HostMode mode);
 
     NetServer& server_;
-    melonds_remote::adapter::ipc::AdapterIpcServer& adapterServer_;
+    dualdeck::adapter::ipc::AdapterIpcServer& adapterServer_;
     IEmulatorInputSink& emulationInputSink_;
     IFrameSource& emulationFrameSource_;
     IEmulatorInputSink& hostControlInputSink_;
@@ -116,4 +116,4 @@ private:
     std::thread pollThread_;
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

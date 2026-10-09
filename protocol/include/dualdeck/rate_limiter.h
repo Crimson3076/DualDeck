@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace melonds_remote {
+namespace dualdeck {
 
 class ConnectionRateLimiter {
 public:
@@ -40,4 +40,4 @@ private:
     std::unordered_map<std::string, Entry> entries_;
 };
 
-} // namespace melonds_remote
+} // namespace dualdeck

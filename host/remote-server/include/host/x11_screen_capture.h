@@ -31,7 +31,7 @@
 #include <memory>
 #include <vector>
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 class X11ScreenCapture {
 public:
@@ -75,4 +75,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

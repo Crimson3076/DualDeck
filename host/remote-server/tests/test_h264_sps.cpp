@@ -32,8 +32,8 @@
 
 #ifdef DUALDECK_HAVE_OPENH264
 
-using namespace melonds_remote;
-using namespace melonds_remote::host;
+using namespace dualdeck;
+using namespace dualdeck::host;
 
 namespace {
 
@@ -413,7 +413,7 @@ MDR_TEST(h264_sps_test_skipped_without_openh264) {
     // just keeps this file from being an empty translation unit when
     // OpenH264 isn't available, matching every other H.264 test file's
     // convention in this project.
-    MDR_CHECK(!melonds_remote::host::H264Encoder::isAvailable());
+    MDR_CHECK(!dualdeck::host::H264Encoder::isAvailable());
 }
 
 #endif // DUALDECK_HAVE_OPENH264

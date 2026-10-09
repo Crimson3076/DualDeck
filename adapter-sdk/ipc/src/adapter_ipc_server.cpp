@@ -1,4 +1,4 @@
-#include "melonds_remote/adapter/ipc/adapter_ipc_server.h"
+#include "dualdeck/adapter/ipc/adapter_ipc_server.h"
 
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -12,10 +12,10 @@
 #include <thread>
 #include <utility>
 
-#include "melonds_remote/adapter/ipc/ipc_protocol.h"
-#include "melonds_remote/adapter/ipc/socket_path.h"
+#include "dualdeck/adapter/ipc/ipc_protocol.h"
+#include "dualdeck/adapter/ipc/socket_path.h"
 
-namespace melonds_remote::adapter::ipc {
+namespace dualdeck::adapter::ipc {
 
 namespace {
 
@@ -48,8 +48,8 @@ bool sendAll(int fd, const uint8_t* data, size_t size) {
     return true;
 }
 
-bool sendMessage(int fd, IpcMessageType type, const melonds_remote::ByteBuffer& payload) {
-    melonds_remote::ByteBuffer packet = buildIpcMessage(type, payload);
+bool sendMessage(int fd, IpcMessageType type, const dualdeck::ByteBuffer& payload) {
+    dualdeck::ByteBuffer packet = buildIpcMessage(type, payload);
     return sendAll(fd, packet.data(), packet.size());
 }
 
@@ -58,7 +58,7 @@ bool sendMessage(int fd, IpcMessageType type, const melonds_remote::ByteBuffer& 
 // caller treats any of those as "this connection is over," matching
 // NetServer::controlLoop()'s existing "malformed control packet ->
 // drop the connection" policy rather than trying to resync a stream.
-std::optional<std::pair<IpcHeader, melonds_remote::ByteBuffer>> recvMessage(int fd) {
+std::optional<std::pair<IpcHeader, dualdeck::ByteBuffer>> recvMessage(int fd) {
     uint8_t headerBuf[kIpcHeaderWireSize];
     ssize_t n = ::recv(fd, headerBuf, sizeof(headerBuf), MSG_WAITALL);
     if (n != static_cast<ssize_t>(sizeof(headerBuf))) return std::nullopt;
@@ -72,7 +72,7 @@ std::optional<std::pair<IpcHeader, melonds_remote::ByteBuffer>> recvMessage(int 
     constexpr uint32_t kMaxPayloadSize = kMaxIpcFramePixelBytes + 256;
     if (header->payloadSize > kMaxPayloadSize) return std::nullopt;
 
-    melonds_remote::ByteBuffer payload(header->payloadSize);
+    dualdeck::ByteBuffer payload(header->payloadSize);
     if (!payload.empty()) {
         ssize_t got = ::recv(fd, payload.data(), payload.size(), MSG_WAITALL);
         if (got != static_cast<ssize_t>(payload.size())) return std::nullopt;
@@ -221,7 +221,7 @@ void AdapterIpcServer::serveConnection(int clientFd) {
     AdapterHelloAckPayload ack;
     ack.accepted = handshakeOk ? 1 : 0;
     ack.reason = handshakeOk ? AdapterHelloAckReason::None : rejectReason;
-    melonds_remote::ByteBuffer ackPayload;
+    dualdeck::ByteBuffer ackPayload;
     serializeAdapterHelloAckPayload(ackPayload, ack);
     sendMessage(clientFd, IpcMessageType::HelloAck, ackPayload);
 
@@ -251,7 +251,7 @@ void AdapterIpcServer::serveConnection(int clientFd) {
     // saved_layout) should reflect reality from the moment it's ready to
     // receive messages, not assume a default.
     {
-        melonds_remote::ByteBuffer payload;
+        dualdeck::ByteBuffer payload;
         serializeClientConnectionChanged(payload, clientAlreadyConnected);
         std::lock_guard<std::mutex> lock(writeMutex_);
         sendMessage(clientFd, IpcMessageType::ClientConnectionChanged, payload);
@@ -356,7 +356,7 @@ SessionState AdapterIpcServer::currentState() const {
 void AdapterIpcServer::applyGenericInput(const GenericInputState& state) {
     int fd = clientFd_.load();
     if (fd < 0) return; // no adapter connected -- safe no-op, matches NetClient::sendControllerState()
-    melonds_remote::ByteBuffer payload;
+    dualdeck::ByteBuffer payload;
     serializeGenericInputState(payload, state);
     std::lock_guard<std::mutex> lock(writeMutex_);
     sendMessage(fd, IpcMessageType::InputState, payload);
@@ -380,7 +380,7 @@ void AdapterIpcServer::notifyClientConnectionChanged(bool connected) {
     }
     int fd = clientFd_.load();
     if (fd < 0) return; // no adapter connected -- safe no-op, matches releaseAllInputs()'s same pattern
-    melonds_remote::ByteBuffer payload;
+    dualdeck::ByteBuffer payload;
     serializeClientConnectionChanged(payload, connected);
     std::lock_guard<std::mutex> lock(writeMutex_);
     sendMessage(fd, IpcMessageType::ClientConnectionChanged, payload);
@@ -394,4 +394,4 @@ bool AdapterIpcServer::latestFrame(const std::string& surfaceId, SurfaceFrame& o
     return true;
 }
 
-} // namespace melonds_remote::adapter::ipc
+} // namespace dualdeck::adapter::ipc

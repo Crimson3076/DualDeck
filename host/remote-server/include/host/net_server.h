@@ -39,10 +39,10 @@
 #include "host/emulator_input_sink.h"
 #include "host/frame_source.h"
 #include "host/mic_audio_sink.h"
-#include "melonds_remote/input_state_tracker.h"
-#include "melonds_remote/rate_limiter.h"
+#include "dualdeck/input_state_tracker.h"
+#include "dualdeck/rate_limiter.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 struct NetServerConfig {
     // See the file-level "Security posture" comment above for why this
@@ -224,7 +224,7 @@ struct NetServerConfig {
     // Emulator-independent identity (GitHub issue #28's architecture
     // foundation milestone: decouple DualDeck from melonDS), sent back
     // in every HelloAck and DiscoveryResponse -- see
-    // melonds_remote::SystemIdentity/AdapterIdentity in protocol.h for
+    // dualdeck::SystemIdentity/AdapterIdentity in protocol.h for
     // the field-by-field meaning. Defaults to a clearly-labeled
     // synthetic/test identity rather than empty strings, so a host that
     // never overrides this (the standalone host/remote-server binary
@@ -484,4 +484,4 @@ private:
     std::atomic<VideoCodec> currentVideoCodec_{VideoCodec::Jpeg};
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

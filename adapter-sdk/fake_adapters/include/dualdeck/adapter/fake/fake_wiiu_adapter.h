@@ -9,13 +9,13 @@
 // contract handles a TV+GamePad pair distinct from DS/3DS's top+bottom
 // pair (different SurfaceRole values, much larger TV resolution).
 
-#include "melonds_remote/adapter/fake/fake_adapter_base.h"
+#include "dualdeck/adapter/fake/fake_adapter_base.h"
 
-namespace melonds_remote::adapter::fake {
+namespace dualdeck::adapter::fake {
 
 class FakeWiiUAdapter : public FakeAdapterBase {
 public:
     FakeWiiUAdapter();
 };
 
-} // namespace melonds_remote::adapter::fake
+} // namespace dualdeck::adapter::fake

@@ -7,9 +7,9 @@
 #include "host/capability_bridge.h"
 #include "test_framework.h"
 
-using namespace melonds_remote;
-using namespace melonds_remote::host;
-using namespace melonds_remote::adapter;
+using namespace dualdeck;
+using namespace dualdeck::host;
+using namespace dualdeck::adapter;
 
 MDR_TEST(capability_bridge_translates_every_surface_role) {
     MDR_CHECK(toWireDisplayRole(SurfaceRole::Top) == WireDisplayRole::Top);
