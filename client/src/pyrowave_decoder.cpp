@@ -23,6 +23,7 @@ struct SequenceHeader {
     int width = 0;
     int height = 0;
     bool chroma444 = false;
+    uint32_t totalBlocks = 0;
 };
 
 uint32_t readU32Le(const uint8_t* p) {
@@ -52,6 +53,7 @@ bool parseSequenceHeader(const uint8_t* data, size_t size, SequenceHeader& out) 
     out.width = static_cast<int>(w0 & 0x3FFFu) + 1;
     out.height = static_cast<int>((w0 >> 14) & 0x3FFFu) + 1;
     out.chroma444 = ((w1 >> 26) & 1u) != 0;
+    out.totalBlocks = w1 & 0xFFFFFFu;
     return true;
 }
 
@@ -121,6 +123,31 @@ bool PyroWaveDecoder::decodeFrame(const uint8_t* data, size_t size, std::vector<
         return false;
     }
 
+    const size_t lumaStride = static_cast<size_t>(header.width);
+    const size_t chromaStride = lumaStride / 2;
+    const size_t chromaRows = static_cast<size_t>(header.height) / 2;
+
+    // A frame declaring zero coefficient blocks (a perfectly flat
+    // mid-level image can quantize to this) has an output the bitstream
+    // spec fully defines: every coefficient is 0, so after the DC shift
+    // every sample is mid-scale. Produced directly rather than through
+    // the GPU because real drivers disagreed on it -- real report,
+    // 2026-10-09: lavapipe decoded such a frame to flat mid-gray, but on
+    // a Radeon GPU the result wasn't gray (most likely the readback
+    // planes were never written when there was nothing to decode, though
+    // that wasn't confirmed), which would show stale/garbage pixels.
+    if (header.totalBlocks == 0) {
+        impl_->yPlane.assign(lumaStride * static_cast<size_t>(header.height), 128);
+        impl_->uPlane.assign(chromaStride * chromaRows, 128);
+        impl_->vPlane.assign(chromaStride * chromaRows, 128);
+        i420ToBgra(impl_->yPlane.data(), static_cast<int>(lumaStride), impl_->uPlane.data(), impl_->vPlane.data(),
+                   static_cast<int>(chromaStride), header.width, header.height, outBgra);
+        outWidth = header.width;
+        outHeight = header.height;
+        outHasFrame = true;
+        return true;
+    }
+
     if (!impl_->device && pyrowave_create_default_device(&impl_->device) != PYROWAVE_SUCCESS) {
         impl_->device = nullptr;
         return false;
@@ -151,9 +178,6 @@ bool PyroWaveDecoder::decodeFrame(const uint8_t* data, size_t size, std::vector<
         return true;
     }
 
-    const size_t lumaStride = static_cast<size_t>(impl_->width);
-    const size_t chromaStride = lumaStride / 2;
-    const size_t chromaRows = static_cast<size_t>(impl_->height) / 2;
     impl_->yPlane.resize(lumaStride * static_cast<size_t>(impl_->height));
     impl_->uPlane.resize(chromaStride * chromaRows);
     impl_->vPlane.resize(chromaStride * chromaRows);

@@ -142,9 +142,20 @@ ensure_packages "azahar build" \
 # is not verified yet" section (this project's sandbox cannot reach the
 # hosts Cemu's vcpkg-based dependency graph needs, so this whole step
 # has only ever been reasoned through, never actually run here).
+# zlib-ng-compat-static (dnf only): real Fedora 44 build failure,
+# 2026-10-09 -- Fedora's zlib-ng-compat-devel ships a ZLIBConfig.cmake
+# whose ZLIB::ZLIBSTATIC imported target points at /usr/lib64/libz.a,
+# but that file is only in the separate -static package, so vcpkg's
+# tiff port (and anything else whose find_package(ZLIB) lands on that
+# config) failed to configure with "references the file libz.a but this
+# file does not exist." Debian/Arch don't split it this way.
+# libpng-static: identical failure one step later, in Cemu's own
+# find_package(PNG) -- Fedora's PNGConfig.cmake declares
+# PNG::png_static pointing at /usr/lib64/libpng16.a, only shipped in
+# libpng-static.
 ensure_packages "cemu build" \
     "freeglut3-dev libbluetooth-dev libgcrypt20-dev libglm-dev libgtk-3-dev libpulse-dev libsecret-1-dev libsystemd-dev libtool nasm libusb-1.0-0-dev" \
-    "freeglut-devel bluez-libs-devel libgcrypt-devel glm-devel gtk3-devel pulseaudio-libs-devel libsecret-devel systemd-devel libtool nasm libusb1-devel perl-IPC-Cmd" \
+    "freeglut-devel bluez-libs-devel libgcrypt-devel glm-devel gtk3-devel pulseaudio-libs-devel libsecret-devel systemd-devel libtool nasm libusb1-devel perl-IPC-Cmd zlib-ng-compat-static libpng-static" \
     "freeglut bluez-libs libgcrypt glm gtk3 libpulse libsecret systemd libtool nasm libusb"
 
 # sccache (github.com/mozilla/sccache), if present on PATH -- installed
@@ -192,6 +203,11 @@ echo "== [1/6] SDL3 (${SDL3_TAG}) =="
 # also bump release.yml's cache key, this check still catches the
 # mismatch and rebuilds for real, rather than silently trusting a
 # same-named-but-wrong-tag cached directory.
+# -DCMAKE_INSTALL_LIBDIR=lib below: real Fedora 44 report, 2026-10-09 --
+# GNUInstallDirs defaults to lib64/ on Fedora, so the cache check here
+# (and the packaging step's `cp ${sdl3_install}/lib/libSDL3.so*`) only
+# ever looked in lib/, rebuilding SDL3 on every run and failing at
+# packaging. Pinning the libdir keeps every distro on the same layout.
 sdl3_tag_marker="${sdl3_install}/.dualdeck-sdl3-tag"
 if [[ -f "${sdl3_install}/lib/cmake/SDL3/SDL3Config.cmake" ]] && \
    [[ "$(cat "${sdl3_tag_marker}" 2>/dev/null)" == "${SDL3_TAG}" ]]; then
@@ -201,6 +217,7 @@ else
     git clone --depth 1 --branch "${SDL3_TAG}" https://github.com/libsdl-org/SDL.git "${sdl3_src}"
     cmake -S "${sdl3_src}" -B "${sdl3_src}/build" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="${sdl3_install}" \
+        -DCMAKE_INSTALL_LIBDIR=lib \
         -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF \
         "${cmake_launcher_args[@]}"
     cmake --build "${sdl3_src}/build" -j"$(nproc)"
@@ -503,8 +520,12 @@ done
 
 melonds_apprun="${work_dir}/AppRun-melonds"
 generate_apprun_melonds "${melonds_apprun}" "${version_tag}"
+# dualdeck-host-service bundled too (like Azahar/Cemu below): the AppRun
+# now runs melonDS out-of-process through it by default -- see
+# generate_apprun_melonds()'s own comment.
 pack_appimage "${melonds_bin}" "${out_dir}/dualdeck-melonds-patched-linux-x86_64.AppImage" \
-    melonDS "${melonds_apprun}" "" "${qt_plugin_extra_dirs}"
+    melonDS "${melonds_apprun}" "${repo_build}/host/remote-server/dualdeck-host-service" \
+    "${qt_plugin_extra_dirs}"
 
 azahar_apprun="${work_dir}/AppRun-azahar"
 generate_apprun_out_of_process AZAHAR azahar azahar-apprun-adapter.sock "${azahar_apprun}"
@@ -1774,12 +1795,44 @@ fi
 # one.
 # shellcheck source=scripts/lib/adapter_socket_probe.sh
 source ./adapter_socket_probe.sh
-default_socket="$(default_adapter_socket_path)"
-if is_adapter_socket_live "${default_socket}"; then
-    echo "DualDeck: found a running Host Control daemon -- melonDS will connect to" >&2
-    echo "it out-of-process instead of running its own in-process remote server." >&2
-    export MELONDS_REMOTE_OUT_OF_PROCESS=1
-    export MELONDS_REMOTE_ADAPTER_SOCKET="${default_socket}"
+# 2026-10-09: no longer only when the daemon happens to be running --
+# melonDS now always goes out-of-process through dualdeck-host-service
+# (the daemon if it's up, otherwise a private one for this session, the
+# same probe_or_spawn_adapter_socket() Azahar/Cemu use), because
+# melonDS's in-process server is a frozen, vendored NetServer copy that
+# never gained H.264/PyroWave. Falls back to that in-process server if
+# the host service is missing or dies on startup;
+# DUALDECK_MELONDS_IN_PROCESS=1 forces the fallback outright. See
+# scripts/lib/apprun_templates.sh's generate_apprun_melonds() for the
+# AppImage launch path's identical logic.
+HOST_SERVICE_PID=""
+if [[ "${DUALDECK_MELONDS_IN_PROCESS:-0}" != "1" && -x "${host_root}/internal/dualdeck-host-service" ]]; then
+    auth_token_args=()
+    if [[ -n "${MELONDS_REMOTE_AUTH_TOKEN:-}" ]]; then
+        auth_token_args=(--auth-token "${MELONDS_REMOTE_AUTH_TOKEN}")
+    fi
+    probe_or_spawn_adapter_socket "${HOME}/.config/dualdeck/run/melonds-adapter.sock" \
+        "${host_root}/internal/dualdeck-host-service" "${HOME}/.config/melonds-remote" \
+        "${MELONDS_REMOTE_VERSION}" ${auth_token_args[@]+"${auth_token_args[@]}"}
+    if [[ -n "${HOST_SERVICE_PID}" ]]; then
+        for _ in $(seq 1 30); do
+            [[ -S "${ADAPTER_SOCKET}" ]] && break
+            kill -0 "${HOST_SERVICE_PID}" 2>/dev/null || break
+            sleep 0.1
+        done
+        if ! kill -0 "${HOST_SERVICE_PID}" 2>/dev/null || [[ ! -S "${ADAPTER_SOCKET}" ]]; then
+            echo "DualDeck: host service failed to start -- using melonDS's built-in server instead" >&2
+            kill "${HOST_SERVICE_PID}" 2>/dev/null || true
+            HOST_SERVICE_PID=""
+            ADAPTER_SOCKET=""
+        else
+            trap 'kill "${HOST_SERVICE_PID}" 2>/dev/null || true' EXIT
+        fi
+    fi
+    if [[ -n "${ADAPTER_SOCKET:-}" ]]; then
+        export MELONDS_REMOTE_OUT_OF_PROCESS=1
+        export MELONDS_REMOTE_ADAPTER_SOCKET="${ADAPTER_SOCKET}"
+    fi
 fi
 
 melonds_args=("$@")
@@ -1794,7 +1847,13 @@ if [[ "${DUALDECK_MELONDS_WINDOWED:-0}" != "1" ]]; then
         melonds_args+=(--fullscreen)
     fi
 fi
-exec "${host_root}/melonDS" ${melonds_args[@]+"${melonds_args[@]}"}
+if [[ -n "${HOST_SERVICE_PID}" ]]; then
+    # Not exec'd, so the EXIT trap above still stops the private host
+    # service once melonDS exits.
+    "${host_root}/melonDS" ${melonds_args[@]+"${melonds_args[@]}"}
+else
+    exec "${host_root}/melonDS" ${melonds_args[@]+"${melonds_args[@]}"}
+fi
 WRAP
 chmod +x "${pkg_dir}/host/internal/run-host.sh"
 
@@ -3863,6 +3922,21 @@ echo "Installing..."
 # the download afterward, which exec'ing over this process would skip.
 "${extracted_dir}/host/internal/install-steam-shortcut.sh" --force
 
+# Each DualDeck-patched emulator AppImage carries its own copy of
+# dualdeck-host-service (see apprun_templates.sh), which the install
+# step above never touches -- real report, 2026-10-09: after updating,
+# Cemu kept running the old host service and PyroWave silently fell back
+# to JPEG. Re-patch only the emulators DualDeck already patched (see
+# emudeck-replace-in-place.sh's --refresh-installed). Non-fatal:
+# the DualDeck update itself already succeeded, and a stale emulator is
+# recoverable later from the host menu's EmuDeck integration entry.
+refresh_tool="${extracted_dir}/host/emudeck-integration/scripts/emudeck-replace-in-place.sh"
+if [[ -x "${refresh_tool}" ]]; then
+    echo "Refreshing DualDeck-patched emulators..."
+    "${refresh_tool}" --refresh-installed ||
+        echo "warning: couldn't refresh patched emulator AppImages -- re-run the EmuDeck integration from the host menu" >&2
+fi
+
 if [[ "${daemon_was_active}" -eq 1 ]]; then
     echo "Restarting the Host Control daemon to pick up the update..."
     if ! systemctl --user restart dualdeck-host-control.service 2>/dev/null; then
@@ -4006,6 +4080,22 @@ echo "Installing..."
 # Only recorded once the staged swap above has actually completed.
 dualdeck_branch_record_installed "${branch}" "${resolved_sha}" "${resolved_tag}"
 echo "Installed ${resolved_tag} (branch ${branch}, commit ${resolved_sha:0:7})."
+
+# Each DualDeck-patched emulator AppImage carries its own copy of
+# dualdeck-host-service (see apprun_templates.sh), which the install
+# step above never touches -- real report, 2026-10-09: after updating,
+# Cemu kept running the old host service and PyroWave silently fell back
+# to JPEG. Re-patch only the emulators DualDeck already patched (see
+# emudeck-replace-in-place.sh's --refresh-installed), from this
+# same branch release rather than the latest one. Non-fatal:
+# the DualDeck update itself already succeeded, and a stale emulator is
+# recoverable later from the host menu's EmuDeck integration entry.
+refresh_tool="${extracted_dir}/host/emudeck-integration/scripts/emudeck-replace-in-place.sh"
+if [[ -x "${refresh_tool}" ]]; then
+    echo "Refreshing DualDeck-patched emulators..."
+    DUALDECK_REPLACE_DOWNLOAD_BASE="${download_base}" "${refresh_tool}" --refresh-installed ||
+        echo "warning: couldn't refresh patched emulator AppImages -- re-run the EmuDeck integration from the host menu" >&2
+fi
 
 if [[ "${daemon_was_active}" -eq 1 ]]; then
     echo "Restarting the Host Control daemon to pick up the update..."

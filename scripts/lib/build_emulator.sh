@@ -153,9 +153,21 @@ build_cemu() {
         if [[ -n "${version_major}" && -n "${version_minor}" ]]; then
             version_args=(-DEMULATOR_VERSION_MAJOR="${version_major}" -DEMULATOR_VERSION_MINOR="${version_minor}")
         fi
+        # CMAKE_POLICY_VERSION_MINIMUM=3.5: real Fedora 44 build failure,
+        # 2026-10-09 -- CMake 4.x (Fedora 44 ships 4.3) dropped
+        # compatibility with cmake_minimum_required() < 3.5 outright, and
+        # several of Cemu's pinned vcpkg ports (hidapi 0.14.0 first) still
+        # declare older minimums, so their configure step fails instantly
+        # ("Compatibility with CMake < 3.5 has been removed"). CMake 4
+        # reads this as an environment variable too, and vcpkg doesn't
+        # scrub the environment on Linux, so setting it here reaches every
+        # port's own configure. CMake 3.x ignores it entirely. Set only on
+        # these two commands, not exported, so nothing else in the release
+        # build is affected.
+        CMAKE_POLICY_VERSION_MINIMUM=3.5 \
         cmake -S "${cemu_src}" -B "${cemu_src}/build" -DCMAKE_BUILD_TYPE=release -G Ninja \
             "${version_args[@]}" "${cmake_launcher_args[@]}"
-        cmake --build "${cemu_src}/build" -j"$(nproc)"
+        CMAKE_POLICY_VERSION_MINIMUM=3.5 cmake --build "${cemu_src}/build" -j"$(nproc)"
         echo "${cemu_requested_version_flags}" > "${cemu_version_marker}"
     fi
 

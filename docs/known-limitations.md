@@ -12514,7 +12514,7 @@ simulated failed action, backing out of both submenus, and a full
 Advanced install both succeeding and failing on a bad checksum) before
 either automated test was written.
 
-## 2026-10-08: PyroWave as a third, opt-in video codec (experimental, encoder not yet run on real hardware)
+## 2026-10-08: PyroWave as a third, opt-in video codec (experimental; verified on real hardware 2026-10-09)
 
 User request: "integrate the new PyroWave video codec into the app."
 [PyroWave](https://github.com/Themaister/pyrowave) (MIT) is an intra-only
@@ -12594,6 +12594,59 @@ device; run `ctest` (and `dualdeck-codec-benchmark`) on a machine with a
 real GPU to exercise them before relying on it, then try a real session
 on a Deck with VIDEO CODEC set to PYROWAVE over a wired or strong 5 GHz
 link.
+
+## 2026-10-09: PyroWave verified on real hardware, plus three gaps it exposed
+
+**Verified**: on a Fedora 44 host (Ryzen 9800X3D, Radeon GPU) the
+PyroWave encoder ran for the first time -- all of
+`test_pyrowave_encoder.cpp` and the full encode -> decode round trip in
+`test_pyrowave_decoder.cpp` passed -- and a real Cemu session to a Steam
+Deck negotiated `CODEC: PYROWAVE` and, per the user, "works great."
+
+**Gap 1 -- host updates never refreshed the patched emulator AppImages.**
+Each DualDeck-patched AppImage carries its own copy of
+`dualdeck-host-service` (`scripts/lib/apprun_templates.sh`), and the
+host's `apply-update.sh`/`install-branch.sh` only ever updated DualDeck's
+own files. After updating to the PyroWave release, Cemu kept running its
+old bundled host service, which can't encode PyroWave, so the session
+silently negotiated JPEG until the AppImage was re-patched by hand. Fixed:
+`emudeck-replace-in-place.sh --refresh-installed` re-patches only
+emulators that already carry a DualDeck manifest from a different
+DualDeck version (never installs new ones, never prompts, never touches
+the firewall), and both host update paths now run it after installing.
+Exercised against a fake `~/Applications` (stale patched Cemu refreshed
+with its stock backup preserved, unpatched Azahar untouched, second run a
+no-op); not yet run on a real EmuDeck/RetroDECK host.
+
+**Gap 2 -- melonDS used a frozen copy of the server.** melonDS's default
+in-process remote server is a vendored `NetServer` snapshot inside
+`host/melonds-patches/` that predates even H.264 negotiation, so a melonDS
+session could only ever be JPEG. Both melonDS launch paths (the host
+menu's `run-host.sh` and the patched AppImage's AppRun, which now bundles
+`dualdeck-host-service` like Azahar's/Cemu's) now run melonDS
+out-of-process through the shared host service by default: the
+persistent daemon if it's running, otherwise a private one for the
+session, stopped when melonDS exits. If the host service is missing or
+dies on startup, melonDS falls back to its in-process server;
+`DUALDECK_MELONDS_IN_PROCESS=1` forces that fallback. The out-of-process
+path itself is the one melonDS has used whenever the daemon was running
+since 2026-08-01; what's new is using it by default. Launcher logic
+exercised with stub binaries (spawn, daemon present, host service dying,
+forced fallback, no leaked process); not yet run against a real melonDS
+session.
+
+**Gap 3 -- the release build didn't build on Fedora 44.** Fixed on the
+way (`scripts/lib/build_emulator.sh`, `scripts/build-release.sh`):
+`CMAKE_POLICY_VERSION_MINIMUM=3.5` for Cemu's vcpkg ports under CMake 4,
+Fedora's `zlib-ng-compat-static`/`libpng-static` (their -devel packages'
+CMake configs reference static archives only those packages ship), and
+SDL3 pinned to `lib/` so Fedora's `lib64/` default stops breaking the
+SDL3 cache check and packaging. Two test assumptions also didn't hold on
+real hardware: `test_host_control_adapter.cpp` now only expects
+`/dev/uinput` to be unavailable when it actually is, and
+`PyroWaveDecoder` resolves a zero-block frame (fully defined by the
+bitstream spec as flat mid-level) on the CPU, since a Radeon GPU's
+output for it wasn't gray where lavapipe's was.
 
 ## Things intentionally out of scope for v0.1
 

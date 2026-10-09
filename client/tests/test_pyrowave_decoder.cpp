@@ -2,8 +2,10 @@
 // Vulkan devices than its encoder does (any subgroup size from wave4 to
 // wave128, so Mesa's software lavapipe works) -- the decoder-only tests
 // here feed it hand-built frames straight from PyroWave's frozen
-// bitstream v1 spec, so they exercise real GPU decode even on a GPU-less
-// CI runner with lavapipe installed. The full round trip through this
+// bitstream v1 spec. Those frames carry zero coefficient blocks, which
+// PyroWaveDecoder now resolves on the CPU (see decodeFrame()'s own
+// comment for why), so they cover header parsing, resizing and the
+// I420->BGRA output path, not GPU decode itself. The full round trip through this
 // project's own host::PyroWaveEncoder additionally needs an encoder-
 // capable device, so it checks for one at runtime and passes trivially
 // otherwise (same convention as host/remote-server/tests/
