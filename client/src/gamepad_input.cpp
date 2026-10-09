@@ -1,6 +1,7 @@
 #include "gamepad_input.h"
 
 #include <cstdint>
+#include <cstdlib>
 
 #include "client_log.h"
 #include "dualdeck/protocol.h"
@@ -171,6 +172,66 @@ void logGamepadTouchpadDiagnostics(SDL_Gamepad* gamepad) {
     for (int tp = 0; tp < numTouchpads; ++tp) {
         logLine("[input]   touchpad %d: %d finger slot(s)\n", tp, SDL_GetNumGamepadTouchpadFingers(gamepad, tp));
     }
+}
+
+
+MenuAction menuActionForButton(uint8_t button) {
+    switch (button) {
+        case SDL_GAMEPAD_BUTTON_DPAD_UP: return MenuAction::Up;
+        case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return MenuAction::Down;
+        case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return MenuAction::Left;
+        case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return MenuAction::Right;
+        case SDL_GAMEPAD_BUTTON_SOUTH: return MenuAction::Select;
+        case SDL_GAMEPAD_BUTTON_EAST: return MenuAction::Back;
+        default: return MenuAction::None;
+    }
+}
+
+MenuAction menuActionForKey(SDL_Keycode key) {
+    switch (key) {
+        case SDLK_UP: return MenuAction::Up;
+        case SDLK_DOWN: return MenuAction::Down;
+        case SDLK_LEFT: return MenuAction::Left;
+        case SDLK_RIGHT: return MenuAction::Right;
+        case SDLK_RETURN:
+        case SDLK_KP_ENTER: return MenuAction::Select;
+        case SDLK_BACKSPACE: return MenuAction::Back;
+        default: return MenuAction::None;
+    }
+}
+
+MenuAction pollMenuStick(SDL_Gamepad* gamepad, MenuStickState& state, uint64_t nowUs) {
+    constexpr int kThreshold = 20000;  // ~60% of full tilt
+    constexpr uint64_t kFirstRepeatUs = 400'000;
+    constexpr uint64_t kRepeatUs = 130'000;
+
+    MenuAction direction = MenuAction::None;
+    if (gamepad) {
+        const int x = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX);
+        const int y = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY);
+        if (std::abs(y) >= std::abs(x)) {
+            if (y <= -kThreshold) direction = MenuAction::Up;
+            if (y >= kThreshold) direction = MenuAction::Down;
+        } else {
+            if (x <= -kThreshold) direction = MenuAction::Left;
+            if (x >= kThreshold) direction = MenuAction::Right;
+        }
+    }
+
+    if (direction == MenuAction::None) {
+        state.held = MenuAction::None;
+        return MenuAction::None;
+    }
+    if (direction != state.held) {
+        state.held = direction;
+        state.nextRepeatUs = nowUs + kFirstRepeatUs;
+        return direction;
+    }
+    if (nowUs >= state.nextRepeatUs) {
+        state.nextRepeatUs = nowUs + kRepeatUs;
+        return direction;
+    }
+    return MenuAction::None;
 }
 
 } // namespace dualdeck::client

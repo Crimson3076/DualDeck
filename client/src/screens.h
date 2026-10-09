@@ -36,8 +36,19 @@ void renderConnecting(SDL_Renderer* renderer, const std::string& hostAddress);
 void renderHostControlScreen(SDL_Renderer* renderer, const std::string& identity);
 void renderDiscoveryList(SDL_Renderer* renderer, const std::vector<DiscoveredHost>& hosts,
                           int selectedIndex, const std::string& clientVersion);
+// One "[BUTTON] ACTION" entry in a screen's footer.
+struct ButtonHint {
+    std::string button;
+    std::string action;
+};
+// Draws the footer row of button hints, centered near the bottom edge.
+void renderButtonHints(SDL_Renderer* renderer, const std::vector<ButtonHint>& hints);
+// D-PAD MOVE, A SELECT, B BACK.
+const std::vector<ButtonHint>& defaultMenuHints();
+
 void renderPauseMenu(SDL_Renderer* renderer, const std::vector<std::string>& items, int selectedIndex,
                      const std::string& title = "MENU", const std::string& statusLine = "",
-                     float micLevel = -1.0f, const std::string& subtitle = "");
+                     float micLevel = -1.0f, const std::string& subtitle = "",
+                     const std::vector<ButtonHint>& hints = defaultMenuHints());
 
 } // namespace dualdeck::client

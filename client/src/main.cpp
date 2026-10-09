@@ -845,7 +845,7 @@ int main(int argc, char** argv) {
         // reconnectRequested's own comment, near the outer loop, for the
         // real user report this fixes and why the reconnect itself is
         // deferred to Settings-exit rather than firing immediately here.
-        auto cycleVideoQuality = [&]() {
+        auto cycleVideoQuality = [&](int direction) {
             static constexpr int kPresets[] = {0, 40, 65, 85, 100};
             constexpr int kPresetCount = static_cast<int>(sizeof(kPresets) / sizeof(kPresets[0]));
             int currentIndex = 0;
@@ -855,7 +855,7 @@ int main(int argc, char** argv) {
                     break;
                 }
             }
-            clientSettings.videoQuality = kPresets[(currentIndex + 1) % kPresetCount];
+            clientSettings.videoQuality = kPresets[(currentIndex + kPresetCount + direction) % kPresetCount];
             settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
             reconnectRequested = true;
         };
@@ -866,16 +866,14 @@ int main(int argc, char** argv) {
         // connection" limitation and the same reconnectRequested fix as
         // cycleVideoQuality() above -- codec preference is negotiated
         // once, in Hello, same as videoQuality.
-        auto toggleVideoCodec = [&]() {
-            if (clientSettings.videoCodecPyroWaveExperimental) {
-                clientSettings.videoCodecPyroWaveExperimental = false;
-                clientSettings.videoCodecH264Experimental = false;
-            } else if (clientSettings.videoCodecH264Experimental) {
-                clientSettings.videoCodecH264Experimental = false;
-                clientSettings.videoCodecPyroWaveExperimental = true;
-            } else {
-                clientSettings.videoCodecH264Experimental = true;
-            }
+        auto toggleVideoCodec = [&](int direction) {
+            // 0 = JPEG, 1 = H264, 2 = PYROWAVE.
+            int current = clientSettings.videoCodecPyroWaveExperimental ? 2
+                          : clientSettings.videoCodecH264Experimental  ? 1
+                                                                       : 0;
+            int next = (current + 3 + direction) % 3;
+            clientSettings.videoCodecH264Experimental = next == 1;
+            clientSettings.videoCodecPyroWaveExperimental = next == 2;
             settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
             reconnectRequested = true;
         };
@@ -884,7 +882,7 @@ int main(int argc, char** argv) {
         // and reopens capture on the new device. Shared by the keyboard
         // and gamepad settings handlers below, same as the inline
         // AUTO UPDATE ON LAUNCH toggle they already duplicate.
-        auto cycleMicDevice = [&]() {
+        auto cycleMicDevice = [&](int direction) {
             auto devices = dualdeck::client::listMicDevices();
             size_t currentIndex = 0;
             for (size_t i = 0; i < devices.size(); ++i) {
@@ -893,7 +891,8 @@ int main(int argc, char** argv) {
                     break;
                 }
             }
-            size_t nextIndex = (currentIndex + 1) % devices.size();
+            size_t nextIndex = (direction < 0 ? currentIndex + devices.size() - 1 : currentIndex + 1) %
+                               devices.size();
             // "SYSTEM DEFAULT" is stored as an empty name (see
             // ClientSettings::micDeviceName's comment), never the literal
             // label -- so a later SDL enumeration change can't strand a
@@ -934,6 +933,119 @@ int main(int argc, char** argv) {
         bool setupWizardRequested = false;
 
         bool runningInner = true;
+
+        // Leaving Settings applies any change that needs a fresh
+        // connection (see reconnectRequested).
+        auto closeSettings = [&](bool reopenMenu) {
+            settingsActive = false;
+            menuActive = reopenMenu;
+            if (reconnectRequested) runningInner = false;
+        };
+        // direction: +1 / -1 from D-pad right / left, 0 from A. A steps
+        // a value forward, the same as right.
+        auto applySetting = [&](const std::string& picked, int direction) {
+            const int step = direction == 0 ? 1 : direction;
+            if (picked.rfind("AUTO UPDATE ON LAUNCH:", 0) == 0) {
+                clientSettings.autoUpdateOnLaunch = !clientSettings.autoUpdateOnLaunch;
+                settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
+            } else if (picked.rfind("VIDEO QUALITY:", 0) == 0) {
+                cycleVideoQuality(step);
+            } else if (picked.rfind("TRACKPAD AS NATIVE INPUT", 0) == 0) {
+                toggleTrackpadExperiment();
+            } else if (picked.rfind("MIRROR HOST SCREEN", 0) == 0) {
+                clientSettings.mirrorHostScreen = !clientSettings.mirrorHostScreen;
+                settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
+            } else if (picked.rfind("VIDEO CODEC", 0) == 0) {
+                toggleVideoCodec(step);
+            } else if (picked.rfind("DEBUG OVERLAY:", 0) == 0) {
+                clientSettings.debugOverlayEnabled = !clientSettings.debugOverlayEnabled;
+                settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
+            } else if (picked.rfind("MICROPHONE:", 0) == 0) {
+                cycleMicDevice(step);
+            } else if (picked.rfind("MIC:", 0) == 0) {
+                clientSettings.micMuted = !clientSettings.micMuted;
+                settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
+            } else if (direction == 0 && picked == "RUN SETUP WIZARD") {
+                setupWizardRequested = true;
+                runningInner = false;
+            } else if (direction == 0 && picked == "BACK") {
+                closeSettings(true);
+            }
+        };
+        auto moveSelection = [](int& index, int count, MenuAction action) {
+            if (count <= 0) return;
+            if (action == MenuAction::Up) index = (index + count - 1) % count;
+            if (action == MenuAction::Down) index = (index + 1) % count;
+        };
+        // One handler for keyboard and gamepad menu input (see
+        // menuActionForKey()/menuActionForButton()). Does nothing while
+        // no menu is open, so gameplay presses fall straight through.
+        auto handleMenuAction = [&](MenuAction action) {
+            if (action == MenuAction::None) return;
+            if (settingsActive) {
+                const std::vector<std::string> items = settingsMenuItems();
+                // The list can shrink while open (the mic rows go away if
+                // the host drops), so keep the selection in range.
+                settingsSelectedIndex = std::min(settingsSelectedIndex, static_cast<int>(items.size()) - 1);
+                const std::string& picked = items[static_cast<size_t>(settingsSelectedIndex)];
+                switch (action) {
+                    case MenuAction::Up:
+                    case MenuAction::Down:
+                        moveSelection(settingsSelectedIndex, static_cast<int>(items.size()), action);
+                        break;
+                    case MenuAction::Left: applySetting(picked, -1); break;
+                    case MenuAction::Right: applySetting(picked, 1); break;
+                    case MenuAction::Select: applySetting(picked, 0); break;
+                    case MenuAction::Back: closeSettings(true); break;
+                    case MenuAction::None: break;
+                }
+            } else if (menuActive && exitEmulationConfirm) {
+                const std::vector<std::string> items = exitEmulationItems();
+                if (action == MenuAction::Up || action == MenuAction::Down) {
+                    moveSelection(exitEmulationSelectedIndex, static_cast<int>(items.size()), action);
+                } else if (action == MenuAction::Back) {
+                    exitEmulationConfirm = false; // back to the main menu, no action taken
+                } else if (action == MenuAction::Select) {
+                    const std::string& picked = items[static_cast<size_t>(exitEmulationSelectedIndex)];
+                    if (picked == "CANCEL") {
+                        exitEmulationConfirm = false;
+                    } else {
+                        pendingEmulatorAction =
+                            (picked == "EXIT ROM") ? EmulatorAction_QuitSession : EmulatorAction_QuitApplication;
+                        pendingEmulatorActionUntilUs = SDL_GetTicksNS() / 1000 + kPendingEmulatorActionUs;
+                        exitEmulationConfirm = false;
+                        menuActive = false;
+                    }
+                }
+            } else if (menuActive) {
+                if (action == MenuAction::Up || action == MenuAction::Down) {
+                    moveSelection(menuSelectedIndex, static_cast<int>(menuItems.size()), action);
+                } else if (action == MenuAction::Back) {
+                    menuActive = false; // back/cancel, no action taken
+                } else if (action == MenuAction::Select) {
+                    const std::string& picked = menuItems[static_cast<size_t>(menuSelectedIndex)];
+                    if (picked == "RESUME") {
+                        menuActive = false;
+                    } else if (picked == "CHANGE HOST") {
+                        changeHostRequested = true;
+                        runningInner = false;
+                    } else if (picked == "SETTINGS") {
+                        menuActive = false;
+                        settingsActive = true;
+                        settingsSelectedIndex = 0;
+                        refreshTrackpadExperimentStatus();
+                    } else if (picked == "EXIT EMULATION") {
+                        exitEmulationConfirm = true;
+                        exitEmulationSelectedIndex = 0;
+                    } else if (picked == "EXIT") {
+                        quitApp = true;
+                        runningInner = false;
+                    }
+                }
+            }
+        };
+        MenuStickState menuStick;
+
         while (runningInner) {
             // Use the connected host's actual reported aspect ratio, not the
             // DS/3DS-only 4:3 default -- textureWidth/textureHeight are
@@ -1136,195 +1248,19 @@ int main(int argc, char** argv) {
                         // chord can open the menu.
                         if (!gamepad && event.key.key == SDLK_ESCAPE) {
                             if (settingsActive) {
-                                settingsActive = false;
-                                menuActive = true;
-                                if (reconnectRequested) runningInner = false;
+                                closeSettings(true);
                             } else {
                                 menuActive = !menuActive;
                                 menuSelectedIndex = 0;
                                 exitEmulationConfirm = false;
                             }
-                        } else if (settingsActive && event.key.key == SDLK_UP) {
-                            int count = static_cast<int>(settingsMenuItems().size());
-                            settingsSelectedIndex = (settingsSelectedIndex + count - 1) % count;
-                        } else if (settingsActive && event.key.key == SDLK_DOWN) {
-                            int count = static_cast<int>(settingsMenuItems().size());
-                            settingsSelectedIndex = (settingsSelectedIndex + 1) % count;
-                        } else if (settingsActive && event.key.key == SDLK_RETURN) {
-                            const std::string picked =
-                                settingsMenuItems()[static_cast<size_t>(settingsSelectedIndex)];
-                            if (picked.rfind("AUTO UPDATE ON LAUNCH:", 0) == 0) {
-                                clientSettings.autoUpdateOnLaunch = !clientSettings.autoUpdateOnLaunch;
-                                settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
-                            } else if (picked.rfind("VIDEO QUALITY:", 0) == 0) {
-                                cycleVideoQuality();
-                            } else if (picked.rfind("TRACKPAD AS NATIVE INPUT", 0) == 0) {
-                                toggleTrackpadExperiment();
-                            } else if (picked.rfind("MIRROR HOST SCREEN", 0) == 0) {
-                                clientSettings.mirrorHostScreen = !clientSettings.mirrorHostScreen;
-                                settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
-                            } else if (picked.rfind("VIDEO CODEC", 0) == 0) {
-                                toggleVideoCodec();
-                            } else if (picked.rfind("DEBUG OVERLAY:", 0) == 0) {
-                                clientSettings.debugOverlayEnabled = !clientSettings.debugOverlayEnabled;
-                                settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
-                            } else if (picked == "RUN SETUP WIZARD") {
-                                setupWizardRequested = true;
-                                runningInner = false;
-                            } else if (picked.rfind("MICROPHONE:", 0) == 0) {
-                                cycleMicDevice();
-                            } else if (picked.rfind("MIC:", 0) == 0) {
-                                clientSettings.micMuted = !clientSettings.micMuted;
-                                settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
-                            } else if (picked == "BACK") {
-                                settingsActive = false;
-                                menuActive = true;
-                                if (reconnectRequested) runningInner = false;
-                            }
-                        } else if (menuActive && exitEmulationConfirm) {
-                            int subCount = static_cast<int>(exitEmulationItems().size());
-                            if (event.key.key == SDLK_UP) {
-                                exitEmulationSelectedIndex = (exitEmulationSelectedIndex + subCount - 1) % subCount;
-                            } else if (event.key.key == SDLK_DOWN) {
-                                exitEmulationSelectedIndex = (exitEmulationSelectedIndex + 1) % subCount;
-                            } else if (event.key.key == SDLK_RETURN) {
-                                const std::string picked =
-                                    exitEmulationItems()[static_cast<size_t>(exitEmulationSelectedIndex)];
-                                if (picked == "CANCEL") {
-                                    exitEmulationConfirm = false;
-                                } else {
-                                    pendingEmulatorAction = (picked == "EXIT ROM")
-                                                                 ? EmulatorAction_QuitSession
-                                                                 : EmulatorAction_QuitApplication;
-                                    pendingEmulatorActionUntilUs =
-                                        SDL_GetTicksNS() / 1000 + kPendingEmulatorActionUs;
-                                    exitEmulationConfirm = false;
-                                    menuActive = false;
-                                }
-                            }
-                        } else if (menuActive && event.key.key == SDLK_UP) {
-                            int count = static_cast<int>(menuItems.size());
-                            menuSelectedIndex = (menuSelectedIndex + count - 1) % count;
-                        } else if (menuActive && event.key.key == SDLK_DOWN) {
-                            int count = static_cast<int>(menuItems.size());
-                            menuSelectedIndex = (menuSelectedIndex + 1) % count;
-                        } else if (menuActive && event.key.key == SDLK_RETURN) {
-                            const std::string& picked = menuItems[static_cast<size_t>(menuSelectedIndex)];
-                            if (picked == "RESUME") {
-                                menuActive = false;
-                            } else if (picked == "CHANGE HOST") {
-                                changeHostRequested = true;
-                                runningInner = false;
-                            } else if (picked == "SETTINGS") {
-                                menuActive = false;
-                                settingsActive = true;
-                                settingsSelectedIndex = 0;
-                                refreshTrackpadExperimentStatus();
-                            } else if (picked == "EXIT EMULATION") {
-                                exitEmulationConfirm = true;
-                                exitEmulationSelectedIndex = 0;
-                            } else if (picked == "EXIT") {
-                                quitApp = true;
-                                runningInner = false;
-                            }
+                        } else {
+                            handleMenuAction(menuActionForKey(event.key.key));
                         }
                         break;
                     }
                     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-                        if (settingsActive) {
-                            int count = static_cast<int>(settingsMenuItems().size());
-                            if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP) {
-                                settingsSelectedIndex = (settingsSelectedIndex + count - 1) % count;
-                            } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_DOWN) {
-                                settingsSelectedIndex = (settingsSelectedIndex + 1) % count;
-                            } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH) {
-                                const std::string picked =
-                                    settingsMenuItems()[static_cast<size_t>(settingsSelectedIndex)];
-                                if (picked.rfind("AUTO UPDATE ON LAUNCH:", 0) == 0) {
-                                    clientSettings.autoUpdateOnLaunch = !clientSettings.autoUpdateOnLaunch;
-                                    settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
-                                } else if (picked.rfind("VIDEO QUALITY:", 0) == 0) {
-                                    cycleVideoQuality();
-                                } else if (picked.rfind("TRACKPAD AS NATIVE INPUT", 0) == 0) {
-                                    toggleTrackpadExperiment();
-                                } else if (picked.rfind("MIRROR HOST SCREEN", 0) == 0) {
-                                    clientSettings.mirrorHostScreen = !clientSettings.mirrorHostScreen;
-                                    settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
-                                } else if (picked.rfind("VIDEO CODEC", 0) == 0) {
-                                    toggleVideoCodec();
-                                } else if (picked.rfind("DEBUG OVERLAY:", 0) == 0) {
-                                    clientSettings.debugOverlayEnabled = !clientSettings.debugOverlayEnabled;
-                                    settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
-                                } else if (picked == "RUN SETUP WIZARD") {
-                                    setupWizardRequested = true;
-                                    runningInner = false;
-                                } else if (picked.rfind("MICROPHONE:", 0) == 0) {
-                                    cycleMicDevice();
-                                } else if (picked.rfind("MIC:", 0) == 0) {
-                                    clientSettings.micMuted = !clientSettings.micMuted;
-                                    settingsSaveFailed = !saveClientSettings(clientSettingsPath, clientSettings);
-                                } else if (picked == "BACK") {
-                                    settingsActive = false;
-                                    menuActive = true;
-                                    if (reconnectRequested) runningInner = false;
-                                }
-                            } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_EAST) {
-                                settingsActive = false;
-                                menuActive = true;
-                                if (reconnectRequested) runningInner = false;
-                            }
-                        } else if (menuActive && exitEmulationConfirm) {
-                            int subCount = static_cast<int>(exitEmulationItems().size());
-                            if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP) {
-                                exitEmulationSelectedIndex = (exitEmulationSelectedIndex + subCount - 1) % subCount;
-                            } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_DOWN) {
-                                exitEmulationSelectedIndex = (exitEmulationSelectedIndex + 1) % subCount;
-                            } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH) {
-                                const std::string picked =
-                                    exitEmulationItems()[static_cast<size_t>(exitEmulationSelectedIndex)];
-                                if (picked == "CANCEL") {
-                                    exitEmulationConfirm = false;
-                                } else {
-                                    pendingEmulatorAction = (picked == "EXIT ROM")
-                                                                 ? EmulatorAction_QuitSession
-                                                                 : EmulatorAction_QuitApplication;
-                                    pendingEmulatorActionUntilUs =
-                                        SDL_GetTicksNS() / 1000 + kPendingEmulatorActionUs;
-                                    exitEmulationConfirm = false;
-                                    menuActive = false;
-                                }
-                            } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_EAST) {
-                                exitEmulationConfirm = false; // back to the main menu, no action taken
-                            }
-                        } else if (menuActive) {
-                            int count = static_cast<int>(menuItems.size());
-                            if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP) {
-                                menuSelectedIndex = (menuSelectedIndex + count - 1) % count;
-                            } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_DOWN) {
-                                menuSelectedIndex = (menuSelectedIndex + 1) % count;
-                            } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH) {
-                                const std::string& picked = menuItems[static_cast<size_t>(menuSelectedIndex)];
-                                if (picked == "RESUME") {
-                                    menuActive = false;
-                                } else if (picked == "CHANGE HOST") {
-                                    changeHostRequested = true;
-                                    runningInner = false;
-                                } else if (picked == "SETTINGS") {
-                                    menuActive = false;
-                                    settingsActive = true;
-                                    settingsSelectedIndex = 0;
-                                    refreshTrackpadExperimentStatus();
-                                } else if (picked == "EXIT EMULATION") {
-                                    exitEmulationConfirm = true;
-                                    exitEmulationSelectedIndex = 0;
-                                } else if (picked == "EXIT") {
-                                    quitApp = true;
-                                    runningInner = false;
-                                }
-                            } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_EAST) {
-                                menuActive = false; // back/cancel, no action taken
-                            }
-                        }
+                        handleMenuAction(menuActionForButton(event.gbutton.button));
                         break;
                     default:
                         break;
@@ -1344,9 +1280,7 @@ int main(int argc, char** argv) {
                 if (menuChordSinceUs == 0) menuChordSinceUs = nowForChordUs;
                 if (!menuChordFired && nowForChordUs - menuChordSinceUs >= kMenuChordHoldUs) {
                     if (settingsActive) {
-                        settingsActive = false;
-                        menuActive = false;
-                        if (reconnectRequested) runningInner = false;
+                        closeSettings(false);
                     } else {
                         menuActive = !menuActive;
                         menuSelectedIndex = 0;
@@ -1357,6 +1291,9 @@ int main(int argc, char** argv) {
             } else {
                 menuChordSinceUs = 0;
                 menuChordFired = false;
+            }
+            if (menuActive || settingsActive) {
+                handleMenuAction(pollMenuStick(gamepad, menuStick, nowForChordUs));
             }
 
             // Refresh the identity line from the real HelloAck the moment
@@ -1473,7 +1410,8 @@ int main(int argc, char** argv) {
             if (settingsActive) {
                 renderPauseMenu(renderer, settingsMenuItems(), settingsSelectedIndex, "SETTINGS",
                                 settingsSaveFailed ? "COULD NOT SAVE SETTINGS" : "",
-                                net.hostMicSupported() ? micLevel : -1.0f);
+                                net.hostMicSupported() ? micLevel : -1.0f, "",
+                                {{"D-PAD", "MOVE"}, {"LEFT/RIGHT", "CHANGE"}, {"A", "SELECT"}, {"B", "BACK"}});
                 continue;
             }
 
@@ -1481,7 +1419,8 @@ int main(int argc, char** argv) {
                 if (exitEmulationConfirm) {
                     renderPauseMenu(renderer, exitEmulationItems(), exitEmulationSelectedIndex, "EXIT EMULATION");
                 } else {
-                    renderPauseMenu(renderer, menuItems, menuSelectedIndex, "MENU", "", -1.0f, identityLine());
+                    renderPauseMenu(renderer, menuItems, menuSelectedIndex, "MENU", "", -1.0f, identityLine(),
+                                    {{"D-PAD", "MOVE"}, {"A", "SELECT"}, {"B", "CLOSE"}});
                 }
                 continue;
             }
