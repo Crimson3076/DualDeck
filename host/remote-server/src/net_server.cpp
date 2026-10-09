@@ -261,41 +261,42 @@ void NetServer::stop() {
     controlListenFd_ = videoListenFd_ = inputFd_ = discoveryFd_ = audioFd_ = -1;
 }
 
+std::optional<size_t> NetServer::receiveSessionPacket(int fd, ByteBuffer& buf, PacketType type,
+                                                     uint64_t NetServerStats::*malformed) {
+    sockaddr_in fromAddr{};
+    socklen_t fromLen = sizeof(fromAddr);
+    ssize_t n = ::recvfrom(fd, buf.data(), buf.size(), 0, reinterpret_cast<sockaddr*>(&fromAddr), &fromLen);
+    if (n <= 0) return std::nullopt;
+
+    if (!clientAuthenticated_.load() || fromAddr.sin_addr.s_addr != authenticatedClientAddr_.load()) {
+        return std::nullopt; // no authenticated session, or packet from an unrelated address
+    }
+
+    auto header = parseHeader(buf.data(), static_cast<size_t>(n));
+    size_t payloadSize = static_cast<size_t>(n) - kPacketHeaderWireSize;
+    if (!header || header->protocolVersion != kProtocolVersion || header->type != type ||
+        payloadSize != header->payloadSize) {
+        std::lock_guard<std::mutex> lock(statsMutex_);
+        ++(stats_.*malformed);
+        return std::nullopt; // reject malformed / mismatched packet, stay up
+    }
+    return payloadSize;
+}
+
 void NetServer::inputLoop() {
     ByteBuffer buf(kPacketHeaderWireSize + kControllerStateWireSize);
 
     while (running_.load()) {
-        sockaddr_in fromAddr{};
-        socklen_t fromLen = sizeof(fromAddr);
-        ssize_t n = ::recvfrom(inputFd_, buf.data(), buf.size(), 0,
-                                reinterpret_cast<sockaddr*>(&fromAddr), &fromLen);
-        if (n <= 0) {
-            if (!running_.load()) break;
-            continue;
-        }
-
-        if (!clientAuthenticated_.load() ||
-            fromAddr.sin_addr.s_addr != authenticatedClientAddr_.load()) {
-            continue; // no authenticated session, or packet from an unrelated address
-        }
-
-        auto header = parseHeader(buf.data(), static_cast<size_t>(n));
-        if (!header || header->protocolVersion != kProtocolVersion ||
-            header->type != PacketType::ControllerState) {
-            std::lock_guard<std::mutex> lock(statsMutex_);
-            ++stats_.inputPacketsMalformed;
-            continue; // reject malformed / mismatched packet, stay up
-        }
-
-        size_t payloadOffset = kPacketHeaderWireSize;
-        size_t payloadSize = static_cast<size_t>(n) - payloadOffset;
-        if (payloadSize != header->payloadSize || payloadSize != kControllerStateWireSize) {
+        auto payloadSize = receiveSessionPacket(inputFd_, buf, PacketType::ControllerState,
+                                                &NetServerStats::inputPacketsMalformed);
+        if (!payloadSize) continue;
+        if (*payloadSize != kControllerStateWireSize) {
             std::lock_guard<std::mutex> lock(statsMutex_);
             ++stats_.inputPacketsMalformed;
             continue;
         }
 
-        auto state = parseControllerState(buf.data() + payloadOffset, payloadSize);
+        auto state = parseControllerState(buf.data() + kPacketHeaderWireSize, *payloadSize);
         if (!state) {
             std::lock_guard<std::mutex> lock(statsMutex_);
             ++stats_.inputPacketsMalformed;
@@ -346,37 +347,11 @@ void NetServer::audioLoop() {
                    static_cast<size_t>(kMicAudioSamplesPerPacket) * 2);
 
     while (running_.load()) {
-        sockaddr_in fromAddr{};
-        socklen_t fromLen = sizeof(fromAddr);
-        ssize_t n = ::recvfrom(audioFd_, buf.data(), buf.size(), 0,
-                                reinterpret_cast<sockaddr*>(&fromAddr), &fromLen);
-        if (n <= 0) {
-            if (!running_.load()) break;
-            continue;
-        }
+        auto payloadSize = receiveSessionPacket(audioFd_, buf, PacketType::MicAudioFrame,
+                                                &NetServerStats::micPacketsMalformed);
+        if (!payloadSize) continue;
 
-        if (!clientAuthenticated_.load() ||
-            fromAddr.sin_addr.s_addr != authenticatedClientAddr_.load()) {
-            continue; // no authenticated session, or packet from an unrelated address
-        }
-
-        auto header = parseHeader(buf.data(), static_cast<size_t>(n));
-        if (!header || header->protocolVersion != kProtocolVersion ||
-            header->type != PacketType::MicAudioFrame) {
-            std::lock_guard<std::mutex> lock(statsMutex_);
-            ++stats_.micPacketsMalformed;
-            continue; // reject malformed / mismatched packet, stay up
-        }
-
-        size_t payloadOffset = kPacketHeaderWireSize;
-        size_t payloadSize = static_cast<size_t>(n) - payloadOffset;
-        if (payloadSize != header->payloadSize) {
-            std::lock_guard<std::mutex> lock(statsMutex_);
-            ++stats_.micPacketsMalformed;
-            continue;
-        }
-
-        auto frame = parseMicAudioFramePayload(buf.data() + payloadOffset, payloadSize);
+        auto frame = parseMicAudioFramePayload(buf.data() + kPacketHeaderWireSize, *payloadSize);
         if (!frame) {
             std::lock_guard<std::mutex> lock(statsMutex_);
             ++stats_.micPacketsMalformed;
