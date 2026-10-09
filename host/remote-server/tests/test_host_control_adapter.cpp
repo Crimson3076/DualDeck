@@ -233,8 +233,13 @@ MDR_TEST(host_control_adapter_degrades_gracefully_without_uinput_access) {
     }
     // Same expectation, same sandbox limitation, for the separate virtual
     // mouse device -- see isMouseDeviceReady()'s own comment on why it's
-    // independent of isDeviceReady() above.
-    MDR_CHECK(!adapter.isMouseDeviceReady());
+    // independent of isDeviceReady() above. Only asserted when /dev/uinput
+    // really isn't writable: real report, 2026-10-09, this failed on a
+    // Fedora dev machine whose user can write /dev/uinput, contradicting
+    // the "no separate assertion needed" intent the comment below states.
+    if (::access("/dev/uinput", W_OK) != 0) {
+        MDR_CHECK(!adapter.isMouseDeviceReady());
+    }
     // If this ever runs somewhere uinput *is* available (a real Linux
     // dev machine with the right permissions, not this sandbox/CI), the
     // same calls above still must not crash -- no separate assertion
@@ -317,7 +322,10 @@ MDR_TEST(host_control_adapter_touchpad_opt_in_degrades_gracefully_without_uinput
     ::setenv("DUALDECK_HOSTCONTROL_STEAM_TOUCHPAD", "1", 1);
     HostControlAdapter adapter;
     ::unsetenv("DUALDECK_HOSTCONTROL_STEAM_TOUCHPAD");
-    MDR_CHECK(!adapter.isTouchpadReady());
+    // Same /dev/uinput-writable guard as the test above.
+    if (::access("/dev/uinput", W_OK) != 0) {
+        MDR_CHECK(!adapter.isTouchpadReady());
+    }
     if (!adapter.isDeviceReady()) {
         ControllerState state;
         state.mouseDeltaX = 5;
