@@ -66,6 +66,8 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # shellcheck source=scripts/lib/pinned_commits.sh
 source "${repo_root}/scripts/lib/pinned_commits.sh"
+# shellcheck source=scripts/lib/emulator_patch.sh
+source "${repo_root}/scripts/lib/emulator_patch.sh"
 
 system=""
 source_dir=""
@@ -111,7 +113,7 @@ fi
 
 case "${system}" in
     ds)
-        patch_file="${repo_root}/host/melonds-patches/0001-remote-server-integration.patch"
+        patch_dir="${repo_root}/host/melonds-patches"
         pinned_commit="${MELONDS_COMMIT}"
         emulator_name="melonDS"
         # This one is stable and load-bearing: host/melonds-patches/README.md
@@ -120,7 +122,7 @@ case "${system}" in
         binary_hint="build/melonDS"
         ;;
     3ds)
-        patch_file="${repo_root}/host/azahar-patches/0001-remote-server-integration.patch"
+        patch_dir="${repo_root}/host/azahar-patches"
         pinned_commit="${AZAHAR_COMMIT}"
         emulator_name="Azahar"
         # CMAKE_RUNTIME_OUTPUT_DIRECTORY is ${PROJECT_BINARY_DIR}/bin/$<CONFIG>
@@ -132,7 +134,7 @@ case "${system}" in
         binary_hint="build/bin/Release/azahar"
         ;;
     wiiu)
-        patch_file="${repo_root}/host/cemu-patches/0001-remote-server-integration.patch"
+        patch_dir="${repo_root}/host/cemu-patches"
         pinned_commit="${CEMU_COMMIT}"
         emulator_name="Cemu"
         # Cemu's own top-level CMakeLists.txt sets RUNTIME_OUTPUT_DIRECTORY
@@ -162,6 +164,7 @@ elif [[ "${system}" == "wiiu" ]]; then
     cemu_version_args=(-DEMULATOR_VERSION_MAJOR="${CEMU_VERSION_MAJOR}" -DEMULATOR_VERSION_MINOR="${CEMU_VERSION_MINOR}")
 fi
 
+patch_file="${patch_dir}/0001-remote-server-integration.patch"
 if [[ ! -f "${patch_file}" ]]; then
     echo "error: ${patch_file} not found -- is this the full DualDeck repo checkout?" >&2
     exit 1
@@ -192,9 +195,12 @@ fi
 
 if git -C "${source_dir}" apply --check "${patch_file}" 2>/dev/null; then
     echo "Applying the DualDeck remote-server integration patch to ${source_dir} ..."
-    git -C "${source_dir}" apply "${patch_file}"
+    apply_dualdeck_patch "${patch_dir}" "${source_dir}" "${repo_root}"
 elif git -C "${source_dir}" apply --reverse --check "${patch_file}" 2>/dev/null; then
-    echo "Patch already applied to ${source_dir} -- nothing to do."
+    # The shared sources (shared-files.txt) aren't part of the patch, so
+    # they can be out of date even when the patch itself is applied.
+    echo "Patch already applied to ${source_dir} -- refreshing the shared DualDeck sources only."
+    install_dualdeck_shared_files "${patch_dir}" "${source_dir}" "${repo_root}"
 else
     echo "error: the patch does not apply cleanly to ${source_dir} (see git apply's" >&2
     echo "own error above, if any). This usually means the checkout is at a" >&2

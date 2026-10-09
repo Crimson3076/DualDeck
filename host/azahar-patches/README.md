@@ -12,6 +12,21 @@ investigation this patch is based on, and
 `docs/adr/0001-host-service-and-adapter-architecture.md` section 11 for
 the architectural writeup.
 
+## Shared DualDeck sources
+
+The patch does not carry its own copy of the shared DualDeck code it
+compiles (`adapter-sdk/`, `protocol/`). `shared-files.txt` lists those
+files and where they go in the emulator's tree, and
+`scripts/lib/emulator_patch.sh` copies them in from this repository right
+after `git apply` (used by `scripts/lib/build_emulator.sh` and
+`scripts/patch-existing-emulator.sh`). There is one copy of each file,
+the live one, so the patch can no longer drift behind it (see
+`docs/known-limitations.md`'s 2026-08-01 "frozen protocol copy" entry).
+
+When regenerating the patch, leave the files `shared-files.txt` lists out
+of the diff. `scripts/check-patch-protocol-sync.sh` (run in CI) fails if
+the patch adds any of them again.
+
 ## What the patch does
 
 1. `src/citra_qt/remote_server/AzaharAdapter.{h,cpp}` (new) --
@@ -47,12 +62,13 @@ the architectural writeup.
    set in the environment); `ShutdownGame()` tears it down first, before
    any other emulation-shutdown work, mirroring melonDS's
    `EmuInstance` constructor/destructor lifecycle hook points.
-4. `src/citra_qt/CMakeLists.txt` -- adds the new sources and a vendored
+4. `src/citra_qt/CMakeLists.txt` -- adds the new sources and an
    `adapter_sdk/` subset (`protocol.h/.cpp`, `adapter_contract.h`,
    `generic_input.h`, `session_state.h/.cpp`, `video_surface.h`,
    `ipc/adapter_ipc_client.h/.cpp`, `ipc/ipc_protocol.h/.cpp`,
-   `ipc/socket_path.h/.cpp`) copied byte-for-byte from this repository's
-   `adapter-sdk/` and `protocol/`, plus the matching include path.
+   `ipc/socket_path.h/.cpp`) copied from this repository's `adapter-sdk/`
+   and `protocol/` at apply time (see "Shared DualDeck sources" above),
+   plus the matching include path.
 
 ## A deliberate departure from melonDS's integration: no in-process mode
 

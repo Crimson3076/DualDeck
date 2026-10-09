@@ -1,0 +1,34 @@
+# Shared DualDeck sources this emulator's integration needs, copied from
+# this repository into the emulator's source tree right after
+# 0001-remote-server-integration.patch is applied (see
+# scripts/lib/emulator_patch.sh). The patch itself no longer carries its
+# own vendored copy of these files, so there is exactly one copy of each:
+# the live one in this repository.
+#
+# Format: <path in this repo> <path in the emulator's source tree>
+adapter-sdk/include/melonds_remote/adapter/adapter_contract.h src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/adapter_contract.h
+adapter-sdk/include/melonds_remote/adapter/generic_input.h src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/generic_input.h
+adapter-sdk/include/melonds_remote/adapter/session_state.h src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/session_state.h
+adapter-sdk/include/melonds_remote/adapter/video_surface.h src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/video_surface.h
+adapter-sdk/ipc/include/melonds_remote/adapter/ipc/adapter_ipc_client.h src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/adapter_ipc_client.h
+adapter-sdk/ipc/include/melonds_remote/adapter/ipc/ipc_protocol.h src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/ipc_protocol.h
+adapter-sdk/ipc/include/melonds_remote/adapter/ipc/socket_path.h src/frontend/qt_sdl/remote_server/adapter_sdk/include/melonds_remote/adapter/ipc/socket_path.h
+adapter-sdk/ipc/src/adapter_ipc_client.cpp src/frontend/qt_sdl/remote_server/adapter_sdk/src/adapter_ipc_client.cpp
+adapter-sdk/ipc/src/ipc_protocol.cpp src/frontend/qt_sdl/remote_server/adapter_sdk/src/ipc_protocol.cpp
+adapter-sdk/ipc/src/socket_path.cpp src/frontend/qt_sdl/remote_server/adapter_sdk/src/socket_path.cpp
+adapter-sdk/src/session_state.cpp src/frontend/qt_sdl/remote_server/adapter_sdk/src/session_state.cpp
+host/remote-server/include/host/adapter_bridge.h src/frontend/qt_sdl/remote_server/host/adapter_bridge.h
+host/remote-server/include/host/device_approval_manager.h src/frontend/qt_sdl/remote_server/host/device_approval_manager.h
+host/remote-server/include/host/emulator_input_sink.h src/frontend/qt_sdl/remote_server/host/emulator_input_sink.h
+host/remote-server/include/host/frame_source.h src/frontend/qt_sdl/remote_server/host/frame_source.h
+host/remote-server/include/host/mic_audio_sink.h src/frontend/qt_sdl/remote_server/host/mic_audio_sink.h
+host/remote-server/src/adapter_bridge.cpp src/frontend/qt_sdl/remote_server/host/adapter_bridge.cpp
+host/remote-server/src/device_approval_manager.cpp src/frontend/qt_sdl/remote_server/host/device_approval_manager.cpp
+protocol/include/melonds_remote/input_state_tracker.h src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/input_state_tracker.h
+protocol/include/melonds_remote/protocol.h src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/protocol.h
+protocol/include/melonds_remote/rate_limiter.h src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/rate_limiter.h
+protocol/include/melonds_remote/touch_mapping.h src/frontend/qt_sdl/remote_server/protocol/include/melonds_remote/touch_mapping.h
+protocol/src/input_state_tracker.cpp src/frontend/qt_sdl/remote_server/protocol/src/input_state_tracker.cpp
+protocol/src/protocol.cpp src/frontend/qt_sdl/remote_server/protocol/src/protocol.cpp
+protocol/src/rate_limiter.cpp src/frontend/qt_sdl/remote_server/protocol/src/rate_limiter.cpp
+protocol/src/touch_mapping.cpp src/frontend/qt_sdl/remote_server/protocol/src/touch_mapping.cpp
