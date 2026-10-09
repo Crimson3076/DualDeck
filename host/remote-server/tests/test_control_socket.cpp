@@ -6,8 +6,10 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 
 #include "host/control_socket.h"
@@ -22,19 +24,27 @@ using namespace melonds_remote::host;
 
 namespace {
 
+// A socket path inside a fresh private directory (mkdtemp creates it
+// 0700), under a "sub" directory the server must create itself. Empty if
+// the directory can't be made, which makes start() fail the test.
 std::string tempSocketPath() {
-    char dirTemplate[] = "/tmp/dualdeck-control-test-XXXXXX";
-    const char* dir = ::mkdtemp(dirTemplate);
-    return std::string(dir ? dir : "/tmp") + "/sub/host-control.sock";
+    std::string dir = (std::filesystem::temp_directory_path() / "dualdeck-control-test-XXXXXX").string();
+    if (::mkdtemp(dir.data()) == nullptr) return {};
+    return dir + "/sub/host-control.sock";
+}
+
+sockaddr_un unixAddress(const std::string& path) {
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::memcpy(addr.sun_path, path.data(), std::min(path.size(), sizeof(addr.sun_path) - 1));
+    return addr;
 }
 
 // Connects, sends `request` (one or more newline-terminated lines), and
 // reads until `expectedLines` replies have arrived or the server closes.
 std::string roundTrip(const std::string& socketPath, const std::string& request, int expectedLines) {
     int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    std::strncpy(addr.sun_path, socketPath.c_str(), sizeof(addr.sun_path) - 1);
+    sockaddr_un addr = unixAddress(socketPath);
     if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
         ::close(fd);
         return "<connect failed>";
@@ -87,9 +97,7 @@ MDR_TEST(control_socket_replaces_a_stale_socket_but_not_a_live_one) {
     // Simulate a killed process: the file stays but nothing listens.
     first.stop();
     int staleFd = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+    sockaddr_un addr = unixAddress(path);
     MDR_CHECK(::bind(staleFd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
     ::close(staleFd);
 
