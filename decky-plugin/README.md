@@ -20,7 +20,10 @@ The panel has two sections:
 socket (`host/remote-server/include/host/control_socket.h`). It looks
 for the socket at `$XDG_RUNTIME_DIR/dualdeck/host-control.sock`, then
 `/run/user/<uid>/...`, then `~/.cache/dualdeck/...`. The panel re-reads
-it every two seconds while it's open. There is nothing to configure.
+it every two seconds while it's open. While it's closed, the plugin still
+checks every three seconds and raises a Steam notification for each
+new connection request, so you hear about it mid-game. There is nothing
+to configure.
 
 `tests/decky_host_control_test.py` runs `main.py`'s host-side calls
 against the real `dualdeck-host-service` in CI, using a stand-in for

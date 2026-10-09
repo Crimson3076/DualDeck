@@ -15,7 +15,7 @@ import {
   TextField,
   staticClasses,
 } from "@decky/ui";
-import { callable, definePlugin } from "@decky/api";
+import { callable, definePlugin, toaster, useQuickAccessVisible } from "@decky/api";
 import { useEffect, useState } from "react";
 import { FaGamepad } from "react-icons/fa";
 
@@ -55,6 +55,38 @@ const setHostControl = callable<[force: boolean], string>("set_host_control");
 // a device asking to connect shows up without pressing anything.
 const kLocalHostPollMs = 2000;
 
+// While the panel is closed (in a game, say), the plugin still checks for
+// new connection requests this often and raises a Steam toast for each.
+const kBackgroundPollMs = 3000;
+
+// Starts the background check; returns a function that stops it. Each
+// request is announced once, when it first appears.
+function watchForConnectionRequests(): () => void {
+  const announced = new Set<string>();
+  const timer = setInterval(async () => {
+    let host: LocalHost;
+    try {
+      host = await getLocalHost();
+    } catch {
+      return; // backend not ready yet; try again next tick
+    }
+    const pending = host.pending ?? [];
+    for (const device of pending) {
+      if (announced.has(device.id)) continue;
+      announced.add(device.id);
+      toaster.toast({
+        title: "DualDeck",
+        body: `${device.name || "A device"} wants to connect. Open DualDeck to approve or deny.`,
+        critical: true,
+      });
+    }
+    // Forget answered requests, so a device that asks again is announced again.
+    const stillPending = new Set(pending.map((d) => d.id));
+    for (const id of announced) if (!stillPending.has(id)) announced.delete(id);
+  }, kBackgroundPollMs);
+  return () => clearInterval(timer);
+}
+
 // Shown only when this machine is itself running the DualDeck host
 // service: approve or deny devices asking to connect, and switch Host
 // Control mode, from Big Picture instead of the desktop popup.
@@ -63,13 +95,16 @@ function LocalHostSection() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const visible = useQuickAccessVisible();
+
   const refresh = async () => setHost(await getLocalHost());
 
   useEffect(() => {
+    if (!visible) return;
     refresh();
     const timer = setInterval(refresh, kLocalHostPollMs);
     return () => clearInterval(timer);
-  }, []);
+  }, [visible]);
 
   const run = async (action: () => Promise<string>) => {
     setBusy(true);
@@ -205,11 +240,14 @@ function Content() {
 }
 
 export default definePlugin(() => {
+  const stopWatching = watchForConnectionRequests();
   return {
     name: "DualDeck",
     titleView: <div className={staticClasses.Title}>DualDeck</div>,
     content: <Content />,
     icon: <FaGamepad />,
-    onDismount() {},
+    onDismount() {
+      stopWatching();
+    },
   };
 });
