@@ -86,7 +86,8 @@ case "${type}" in
         # device-approval dialog, same as the bundled host/melonDS) --
         # no Host Service to start here.
         export MELONDS_REMOTE_ENABLE=1
-        export MELONDS_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+        MELONDS_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+        export MELONDS_REMOTE_VERSION
         exec "${path}" "$@"
         ;;
     n3ds)
@@ -100,7 +101,9 @@ case "${type}" in
         adapter_socket="${run_dir}/custom-adapter.sock"
         rm -f "${adapter_socket}"
 
-        export AZAHAR_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+        AZAHAR_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+
+        export AZAHAR_REMOTE_VERSION
         # No --auth-token by default: an unrecognized device pops the same
         # zero-typing kdialog Yes/No approval prompt melonDS's in-process
         # dialog gives you (see kdialog_approval_prompt.h). ${token:-} only
@@ -141,7 +144,9 @@ case "${type}" in
         adapter_socket="${run_dir}/custom-adapter.sock"
         rm -f "${adapter_socket}"
 
-        export CEMU_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+        CEMU_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+
+        export CEMU_REMOTE_VERSION
         # Same zero-typing kdialog approval as the n3ds case above --
         # see that case's identical comment.
         auth_token_args=()

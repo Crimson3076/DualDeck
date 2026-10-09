@@ -14,7 +14,7 @@ on_error() {
     mkdir -p "$(dirname "${error_log}")"
     echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") install-host-control-daemon.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
 }
-trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
+trap 'on_error "$?" "${LINENO}" "${BASH_COMMAND}"' ERR
 
 # Real Bazzite hardware report, 2026-08-02: this daemon used to refuse
 # to install at all on immutable/rpm-ostree systems here, on the same

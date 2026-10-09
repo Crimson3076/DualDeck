@@ -106,7 +106,7 @@ if [[ -n "${rom}" ]]; then
     cmd+=(--boot always "${rom}")
 fi
 
-printf 'exec:' >> "${log}"; printf ' %q' "${cmd[@]}" >> "${log}"; echo >> "${log}"
+{ printf 'exec:'; printf ' %q' "${cmd[@]}"; echo; } >> "${log}"
 
 # Escape hatch for the launcher-translation tests (and for anyone
 # debugging a shortcut by hand): print the command that would run and

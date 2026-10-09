@@ -55,7 +55,8 @@ export MELONDS_REMOTE_ENABLE=1
 # protocol.h's HelloPayload::appVersion. dirname(host_root) is the
 # archive root (or the central install directory's parent), matching
 # check-for-updates.sh's own VERSION lookup.
-export MELONDS_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+MELONDS_REMOTE_VERSION="$(cat "$(dirname "${host_root}")/VERSION" 2>/dev/null || true)"
+export MELONDS_REMOTE_VERSION
 
 # Host-control mode (GitHub issue #4, experimental): set by
 # ../dualdeck-host.sh's "Host control only -- no emulator" menu choice,

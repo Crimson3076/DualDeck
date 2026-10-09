@@ -118,6 +118,7 @@ fi
 # failing tool invocation would skip straight past the pause below
 # instead of leaving the error visible, defeating the entire point.
 run_wrapper="$(mktemp --suffix=.sh)"
+# shellcheck disable=SC2016 # these lines are the wrapper's own source and expand when it runs
 {
     echo '#!/usr/bin/env bash'
     printf '%q ' "${tool}" "${emulator_args[@]}"
