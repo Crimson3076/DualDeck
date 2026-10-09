@@ -25,13 +25,23 @@ using namespace melonds_remote::host;
 namespace {
 
 // A socket path inside a fresh private directory (mkdtemp creates it
-// 0700), under a "sub" directory the server must create itself. Empty if
-// the directory can't be made, which makes start() fail the test.
+// 0700) under the test's working directory -- relative, so it stays well
+// inside sun_path's limit however deep the build tree is -- and under a
+// "sub" directory the server must create itself. Empty if the directory
+// can't be made, which makes start() fail the test.
 std::string tempSocketPath() {
-    std::string dir = (std::filesystem::temp_directory_path() / "dualdeck-control-test-XXXXXX").string();
+    std::string dir = "control-socket-test-XXXXXX";
     if (::mkdtemp(dir.data()) == nullptr) return {};
     return dir + "/sub/host-control.sock";
 }
+
+// Removes tempSocketPath()'s directory when the test ends.
+struct TempSocket {
+    std::string path = tempSocketPath();
+    ~TempSocket() {
+        if (!path.empty()) std::filesystem::remove_all(path.substr(0, path.find('/')));
+    }
+};
 
 sockaddr_un unixAddress(const std::string& path) {
     sockaddr_un addr{};
@@ -71,7 +81,8 @@ std::string roundTrip(const std::string& socketPath, const std::string& request,
 } // namespace
 
 MDR_TEST(control_socket_round_trips_each_line_through_the_handler) {
-    const std::string path = tempSocketPath();
+    const TempSocket temp;
+    const std::string& path = temp.path;
     ControlSocketServer server(path, [](const std::string& line) { return "echo:" + line; });
     MDR_CHECK(server.start());
 
@@ -86,7 +97,8 @@ MDR_TEST(control_socket_round_trips_each_line_through_the_handler) {
 }
 
 MDR_TEST(control_socket_replaces_a_stale_socket_but_not_a_live_one) {
-    const std::string path = tempSocketPath();
+    const TempSocket temp;
+    const std::string& path = temp.path;
     ControlSocketServer first(path, [](const std::string&) { return std::string("first"); });
     MDR_CHECK(first.start());
 
@@ -107,7 +119,8 @@ MDR_TEST(control_socket_replaces_a_stale_socket_but_not_a_live_one) {
 }
 
 MDR_TEST(control_socket_rejects_an_overlong_line) {
-    const std::string path = tempSocketPath();
+    const TempSocket temp;
+    const std::string& path = temp.path;
     ControlSocketServer server(path, [](const std::string&) { return std::string("ok"); });
     MDR_CHECK(server.start());
     std::string reply = roundTrip(path, std::string(4096, 'a'), 1);
