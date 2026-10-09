@@ -756,12 +756,23 @@ void NetClient::videoReceiveLoop() {
         // sanity ceiling against a corrupt/bogus size field, not a tight
         // expected-size check like before compression (payload size now
         // varies frame to frame with scene content).
-        const uint32_t rawFrameBytes =
-            static_cast<uint32_t>(hostNativeWidth_.load()) * hostNativeHeight_.load() * 4u +
+        //
+        // Real report, 2026-10-09 (PyroWave in Host Control): that size is
+        // only the last one this client knew, and the next frame can be
+        // far bigger -- Host Control's screen mirror reports 256x192 in
+        // HelloAck until its capture is ready, and a mid-session switch
+        // from an emulator to the desktop mirror changes size without a
+        // new HelloAck. PyroWave's large frames tripped this and closed
+        // the connection. So the ceiling never drops below
+        // kMinVideoPayloadCeiling, enough for a raw 4K BGRA frame.
+        constexpr uint64_t kMinVideoPayloadCeiling = 64ull * 1024 * 1024;
+        const uint64_t rawFrameBytes =
+            static_cast<uint64_t>(hostNativeWidth_.load()) * hostNativeHeight_.load() * 4u +
             kVideoFrameTimestampWireSize;
+        const uint64_t payloadCeiling = std::max(rawFrameBytes, kMinVideoPayloadCeiling);
         auto header = parseHeader(headerBuf.data(), headerBuf.size());
         if (!header || header->type != PacketType::VideoFrame || header->payloadSize == 0 ||
-            header->payloadSize > rawFrameBytes) {
+            header->payloadSize > payloadCeiling) {
             logLine("video: dropping unexpected packet, closing connection\n");
             break;
         }
