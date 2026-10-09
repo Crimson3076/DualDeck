@@ -12721,6 +12721,28 @@ noticeably less traffic than in-game. Four causes, all host side:
 
 Not yet verified on real hardware.
 
+## 2026-10-09: STREAM FPS setting, Host Control at 60fps with lower latency
+
+Real report: Host Control at 30fps felt low and laggy. Changes:
+
+- **STREAM FPS client setting** (DEFAULT/30/45/60/90/120), sent as
+  `HelloPayload.maxFrameRate` (protocol v15). Host Control's desktop
+  mirror honors it; emulator streams keep their game's/patch's own rate.
+  `DEFAULT` is now 60fps for Host Control (`DUALDECK_HOSTCONTROL_MIRROR_FPS`
+  still changes the host-side default, now 1-240).
+- **Mirror capture runs on its own thread** instead of inside NetServer's
+  video loop, so capture + downscale of frame N+1 overlaps encode/send of
+  frame N rather than adding to it. It idles when nothing has polled for a
+  second.
+- **H.264 knows the real frame rate.** The encoder used to assume 30fps
+  for every source, which mis-sized per-frame bit budgets at 60fps. It now
+  uses the source's `nominalFrameRate()` when known.
+- **Multi-threaded H.264 encode**: one slice per encoder thread (up to 4).
+  Measured 8.1ms -> 4.8ms per 1280x800 frame, straight off the
+  capture-to-screen latency.
+
+Not yet verified on real hardware.
+
 ## Things intentionally out of scope for v0.1
 
 Per `SPEC.md` section 21 (explicit non-goals): ROM transfer, cloud saves,

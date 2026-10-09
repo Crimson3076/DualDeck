@@ -12,6 +12,7 @@ MDR_TEST(hello_payload_round_trip) {
     hello.authToken = "s3cr3t";
     hello.appVersion = "v0.1.24";
     hello.supportedVideoCodecs = kVideoCodecBit_Jpeg | kVideoCodecBit_H264;
+    hello.maxFrameRate = 60;
 
     ByteBuffer buf;
     serializeHelloPayload(buf, hello);
@@ -25,6 +26,7 @@ MDR_TEST(hello_payload_round_trip) {
     MDR_CHECK(parsed->authToken == hello.authToken);
     MDR_CHECK(parsed->appVersion == hello.appVersion);
     MDR_CHECK_EQ(parsed->supportedVideoCodecs, hello.supportedVideoCodecs);
+    MDR_CHECK_EQ(parsed->maxFrameRate, hello.maxFrameRate);
 }
 
 MDR_TEST(hello_payload_supported_video_codecs_defaults_to_jpeg_only) {

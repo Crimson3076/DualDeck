@@ -506,6 +506,7 @@ int main(int argc, char** argv) {
         // SettingsMenu::cycleVideoQuality() for how clientSettings.
         // videoQuality gets changed.
         netConfig.videoQuality = static_cast<uint8_t>(clientSettings.videoQuality);
+        netConfig.maxFrameRate = static_cast<uint8_t>(clientSettings.streamFps);
         // Same "read fresh on every (re)construction" reasoning as
         // videoQuality above -- see NetClientConfig::preferH264's own
         // comment for why the host still gets the final say either way.

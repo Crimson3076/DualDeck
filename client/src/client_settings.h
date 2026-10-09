@@ -34,6 +34,12 @@ struct ClientSettings {
     // per client rather than being stuck with one host-wide value.
     int videoQuality = 0;
 
+    // Capture rate requested from the host (protocol v15,
+    // HelloPayload::maxFrameRate), or 0 for the host's default. Only Host
+    // Control's desktop mirror honors it today; emulators stream at their
+    // game's own rate.
+    int streamFps = 0;
+
     // Real user request, 2026-08-03: "add an option to the client's
     // host control to mirror the screen." Purely a local rendering
     // choice -- the host already sends real video during Host Control
