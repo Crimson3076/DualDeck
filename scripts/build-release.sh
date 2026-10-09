@@ -520,8 +520,12 @@ done
 
 melonds_apprun="${work_dir}/AppRun-melonds"
 generate_apprun_melonds "${melonds_apprun}" "${version_tag}"
+# dualdeck-host-service bundled too (like Azahar/Cemu below): the AppRun
+# now runs melonDS out-of-process through it by default -- see
+# generate_apprun_melonds()'s own comment.
 pack_appimage "${melonds_bin}" "${out_dir}/dualdeck-melonds-patched-linux-x86_64.AppImage" \
-    melonDS "${melonds_apprun}" "" "${qt_plugin_extra_dirs}"
+    melonDS "${melonds_apprun}" "${repo_build}/host/remote-server/dualdeck-host-service" \
+    "${qt_plugin_extra_dirs}"
 
 azahar_apprun="${work_dir}/AppRun-azahar"
 generate_apprun_out_of_process AZAHAR azahar azahar-apprun-adapter.sock "${azahar_apprun}"
@@ -1791,12 +1795,44 @@ fi
 # one.
 # shellcheck source=scripts/lib/adapter_socket_probe.sh
 source ./adapter_socket_probe.sh
-default_socket="$(default_adapter_socket_path)"
-if is_adapter_socket_live "${default_socket}"; then
-    echo "DualDeck: found a running Host Control daemon -- melonDS will connect to" >&2
-    echo "it out-of-process instead of running its own in-process remote server." >&2
-    export MELONDS_REMOTE_OUT_OF_PROCESS=1
-    export MELONDS_REMOTE_ADAPTER_SOCKET="${default_socket}"
+# 2026-10-09: no longer only when the daemon happens to be running --
+# melonDS now always goes out-of-process through dualdeck-host-service
+# (the daemon if it's up, otherwise a private one for this session, the
+# same probe_or_spawn_adapter_socket() Azahar/Cemu use), because
+# melonDS's in-process server is a frozen, vendored NetServer copy that
+# never gained H.264/PyroWave. Falls back to that in-process server if
+# the host service is missing or dies on startup;
+# DUALDECK_MELONDS_IN_PROCESS=1 forces the fallback outright. See
+# scripts/lib/apprun_templates.sh's generate_apprun_melonds() for the
+# AppImage launch path's identical logic.
+HOST_SERVICE_PID=""
+if [[ "${DUALDECK_MELONDS_IN_PROCESS:-0}" != "1" && -x "${host_root}/internal/dualdeck-host-service" ]]; then
+    auth_token_args=()
+    if [[ -n "${MELONDS_REMOTE_AUTH_TOKEN:-}" ]]; then
+        auth_token_args=(--auth-token "${MELONDS_REMOTE_AUTH_TOKEN}")
+    fi
+    probe_or_spawn_adapter_socket "${HOME}/.config/dualdeck/run/melonds-adapter.sock" \
+        "${host_root}/internal/dualdeck-host-service" "${HOME}/.config/melonds-remote" \
+        "${MELONDS_REMOTE_VERSION}" ${auth_token_args[@]+"${auth_token_args[@]}"}
+    if [[ -n "${HOST_SERVICE_PID}" ]]; then
+        for _ in $(seq 1 30); do
+            [[ -S "${ADAPTER_SOCKET}" ]] && break
+            kill -0 "${HOST_SERVICE_PID}" 2>/dev/null || break
+            sleep 0.1
+        done
+        if ! kill -0 "${HOST_SERVICE_PID}" 2>/dev/null || [[ ! -S "${ADAPTER_SOCKET}" ]]; then
+            echo "DualDeck: host service failed to start -- using melonDS's built-in server instead" >&2
+            kill "${HOST_SERVICE_PID}" 2>/dev/null || true
+            HOST_SERVICE_PID=""
+            ADAPTER_SOCKET=""
+        else
+            trap 'kill "${HOST_SERVICE_PID}" 2>/dev/null || true' EXIT
+        fi
+    fi
+    if [[ -n "${ADAPTER_SOCKET:-}" ]]; then
+        export MELONDS_REMOTE_OUT_OF_PROCESS=1
+        export MELONDS_REMOTE_ADAPTER_SOCKET="${ADAPTER_SOCKET}"
+    fi
 fi
 
 melonds_args=("$@")
@@ -1811,7 +1847,13 @@ if [[ "${DUALDECK_MELONDS_WINDOWED:-0}" != "1" ]]; then
         melonds_args+=(--fullscreen)
     fi
 fi
-exec "${host_root}/melonDS" ${melonds_args[@]+"${melonds_args[@]}"}
+if [[ -n "${HOST_SERVICE_PID}" ]]; then
+    # Not exec'd, so the EXIT trap above still stops the private host
+    # service once melonDS exits.
+    "${host_root}/melonDS" ${melonds_args[@]+"${melonds_args[@]}"}
+else
+    exec "${host_root}/melonDS" ${melonds_args[@]+"${melonds_args[@]}"}
+fi
 WRAP
 chmod +x "${pkg_dir}/host/internal/run-host.sh"
 

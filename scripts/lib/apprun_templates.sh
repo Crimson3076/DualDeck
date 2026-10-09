@@ -61,8 +61,79 @@ bundled_lib_path="\${HERE}/usr/lib"
 export QT_PLUGIN_PATH="\${HERE}/usr/bin"
 export MELONDS_REMOTE_ENABLE=1
 export MELONDS_REMOTE_VERSION="${dualdeck_version_arg}"
-exec env LD_LIBRARY_PATH="\${bundled_lib_path}\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}" \\
-    "\${HERE}/usr/bin/melonDS" "\$@"
+
+# Out-of-process by default (2026-10-09), same probe-or-spawn shape as
+# generate_apprun_out_of_process() below: connect to the persistent Host
+# Control daemon if it's running, otherwise start a private
+# dualdeck-host-service for this session. melonDS's in-process server is
+# a frozen, vendored copy of NetServer (see host/melonds-patches/) that
+# never gained H.264/PyroWave, so routing through the shared host service
+# gives melonDS every codec Azahar/Cemu already have. Falls back to the
+# in-process server if the host service is missing or dies on startup;
+# DUALDECK_MELONDS_IN_PROCESS=1 forces that fallback outright.
+host_service_pid=""
+if [[ "\${DUALDECK_MELONDS_IN_PROCESS:-0}" != "1" && -x "\${HERE}/usr/bin/dualdeck-host-service" ]]; then
+    default_socket="\${XDG_RUNTIME_DIR:-}/dualdeck/adapter.sock"
+    if [[ -z "\${XDG_RUNTIME_DIR:-}" ]]; then
+        default_socket="\${HOME}/.cache/dualdeck/adapter.sock"
+    fi
+    if [[ -S "\${default_socket}" ]] && python3 -c '
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(1)
+try:
+    s.connect(sys.argv[1])
+    sys.exit(0)
+except OSError:
+    sys.exit(1)
+' "\${default_socket}" 2>/dev/null; then
+        echo "DualDeck: found a running host service at \${default_socket}, connecting to it" >&2
+        export MELONDS_REMOTE_OUT_OF_PROCESS=1
+        export MELONDS_REMOTE_ADAPTER_SOCKET="\${default_socket}"
+    else
+        run_dir="\${HOME}/.config/dualdeck/run"
+        mkdir -p "\${run_dir}"
+        adapter_socket="\${run_dir}/melonds-apprun-adapter.sock"
+        rm -f "\${adapter_socket}"
+        auth_token_args=()
+        if [[ -n "\${MELONDS_REMOTE_AUTH_TOKEN:-}" ]]; then
+            auth_token_args=(--auth-token "\${MELONDS_REMOTE_AUTH_TOKEN}")
+        fi
+        env LD_LIBRARY_PATH="\${bundled_lib_path}\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}" \\
+            "\${HERE}/usr/bin/dualdeck-host-service" --adapter-ipc --adapter-socket "\${adapter_socket}" \\
+            --state-dir "\${HOME}/.config/melonds-remote" --app-version "\${MELONDS_REMOTE_VERSION}" \\
+            \${auth_token_args[@]+"\${auth_token_args[@]}"} &
+        host_service_pid=\$!
+        # Wait (up to ~3s) for the listener rather than a fixed sleep, so a
+        # slow start isn't mistaken for a failed one.
+        for _ in \$(seq 1 30); do
+            [[ -S "\${adapter_socket}" ]] && break
+            kill -0 "\${host_service_pid}" 2>/dev/null || break
+            sleep 0.1
+        done
+        if kill -0 "\${host_service_pid}" 2>/dev/null && [[ -S "\${adapter_socket}" ]]; then
+            echo "DualDeck: started a private host service for this session" >&2
+            trap 'kill "\${host_service_pid}" 2>/dev/null || true' EXIT
+            export MELONDS_REMOTE_OUT_OF_PROCESS=1
+            export MELONDS_REMOTE_ADAPTER_SOCKET="\${adapter_socket}"
+        else
+            echo "DualDeck: host service failed to start -- using melonDS's built-in server instead" >&2
+            kill "\${host_service_pid}" 2>/dev/null || true
+            host_service_pid=""
+        fi
+    fi
+fi
+
+if [[ -n "\${host_service_pid}" ]]; then
+    # Not exec'd: the EXIT trap above must still fire to stop the private
+    # host service once melonDS exits (see generate_apprun_out_of_process()'s
+    # own comment on exec skipping traps).
+    env LD_LIBRARY_PATH="\${bundled_lib_path}\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}" \\
+        "\${HERE}/usr/bin/melonDS" "\$@"
+else
+    exec env LD_LIBRARY_PATH="\${bundled_lib_path}\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}" \\
+        "\${HERE}/usr/bin/melonDS" "\$@"
+fi
 EOF
     chmod +x "${output_path}"
 }
