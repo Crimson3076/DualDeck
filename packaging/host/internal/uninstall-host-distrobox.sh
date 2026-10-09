@@ -24,7 +24,7 @@ removed_anything=0
 # for why that combination silently reports "not found" under pipefail.
 # An uninstaller that quietly skips removing the container is precisely
 # the bug that pattern produces here.
-distrobox_containers="$(command -v distrobox >/dev/null 2>&1 && distrobox list 2>/dev/null || true)"
+distrobox_containers="$(if command -v distrobox >/dev/null 2>&1; then distrobox list 2>/dev/null || true; fi)"
 if grep -qw "${container_name}" <<<"${distrobox_containers}"; then
     echo "Removing Distrobox container \"${container_name}\" ..."
     distrobox rm "${container_name}" --force

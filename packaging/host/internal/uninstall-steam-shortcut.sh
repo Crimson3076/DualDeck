@@ -109,7 +109,7 @@ if [[ "${dry_run}" -eq 0 ]]; then
     # under pipefail can report "not found" for a container that is
     # plainly there, which in an uninstaller means silently leaving it
     # behind.
-    distrobox_containers="$(command -v distrobox >/dev/null 2>&1 && distrobox list 2>/dev/null || true)"
+    distrobox_containers="$(if command -v distrobox >/dev/null 2>&1; then distrobox list 2>/dev/null || true; fi)"
     if grep -qw "${container_name}" <<<"${distrobox_containers}"; then
         echo "Removing Distrobox container \"${container_name}\" ..."
         distrobox rm "${container_name}" --force
