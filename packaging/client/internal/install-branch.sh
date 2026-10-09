@@ -32,10 +32,6 @@ if ! command -v curl >/dev/null 2>&1; then
     echo "error: curl is required -- install it and try again." >&2
     exit 1
 fi
-if ! command -v sha256sum >/dev/null 2>&1; then
-    echo "error: sha256sum is required to verify the download -- install coreutils and try again." >&2
-    exit 1
-fi
 
 export DUALDECK_BRANCH_CONFIG_DIR="${HOME}/.config/dualdeck-client"
 # shellcheck source=scripts/lib/dualdeck_branch.sh
@@ -50,7 +46,7 @@ work_dir="$(mktemp -d)"
 trap 'rm -rf "${work_dir}"' EXIT
 
 echo "Downloading ${resolved_tag} (branch ${branch}, commit ${resolved_sha:0:7})..."
-dualdeck_fetch_release "${download_base}" "${work_dir}" 1
+dualdeck_fetch_release "${download_base}" "${work_dir}"
 
 echo "Installing..."
 "${extracted_dir}/client/internal/install-steam-shortcut.sh" --force

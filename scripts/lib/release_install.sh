@@ -76,24 +76,26 @@ dualdeck_resolve_selected_branch() {
     resolved_tag="$(printf '%s' "${resolved}" | cut -f2)"
 }
 
-# dualdeck_fetch_release <download base URL> <work dir> <verify: 0|1>
+# dualdeck_fetch_release <download base URL> <work dir>
 #
 # Downloads the release archive from <download base URL> into <work dir>,
-# optionally checks it against the release's SHA256SUMS, and extracts it.
-# Sets `extracted_dir` to the extracted release folder, or prints why
-# not and exits 1. Nothing outside <work dir> is touched.
+# checks it against the release's SHA256SUMS, and extracts it. Sets
+# `extracted_dir` to the extracted release folder, or prints why not and
+# exits 1. Nothing outside <work dir> is touched.
 dualdeck_fetch_release() {
-    local download_base="$1" work_dir="$2" verify="$3"
+    local download_base="$1" work_dir="$2"
     local archive_name="melonds-remote-linux-x86_64.tar.gz"
 
+    if ! command -v sha256sum >/dev/null 2>&1; then
+        echo "error: sha256sum is required to verify the download -- install coreutils and try again." >&2
+        exit 1
+    fi
     curl --proto =https -fsSL --max-time 180 -o "${work_dir}/${archive_name}" "${download_base}/${archive_name}"
-    if [[ "${verify}" -eq 1 ]]; then
-        curl --proto =https -fsSL --max-time 30 -o "${work_dir}/SHA256SUMS" "${download_base}/SHA256SUMS"
-        echo "Verifying download integrity..."
-        if ! (cd "${work_dir}" && sha256sum -c --ignore-missing SHA256SUMS) >/dev/null 2>&1; then
-            echo "error: checksum verification failed -- refusing to install an unverified download. Nothing changed." >&2
-            exit 1
-        fi
+    curl --proto =https -fsSL --max-time 30 -o "${work_dir}/SHA256SUMS" "${download_base}/SHA256SUMS"
+    echo "Verifying download integrity..."
+    if ! (cd "${work_dir}" && sha256sum -c --ignore-missing SHA256SUMS) >/dev/null 2>&1; then
+        echo "error: checksum verification failed -- refusing to install an unverified download. Nothing changed." >&2
+        exit 1
     fi
 
     echo "Extracting..."
