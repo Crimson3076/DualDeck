@@ -85,3 +85,27 @@ MDR_TEST(settings_menu_back_wizard_and_wraparound) {
     MDR_CHECK(menu.handle(MenuAction::Right, false, nullptr) == SettingsMenu::Result::Stay);
     MDR_CHECK(menu.handle(MenuAction::Select, false, nullptr) == SettingsMenu::Result::RunSetupWizard);
 }
+
+MDR_TEST(settings_menu_video_codec_cycles_through_auto) {
+    auto path = temporarySettingsPath("codec");
+    ClientSettings settings;
+    SettingsMenu menu(settings, path.string(), true);
+    MDR_CHECK(menu.items(false)[4] == "VIDEO CODEC: AUTO");
+
+    for (int i = 0; i < 4; ++i) menu.handle(MenuAction::Down, false, nullptr);
+    menu.handle(MenuAction::Right, false, nullptr);
+    MDR_CHECK(menu.items(false)[4] == "VIDEO CODEC: JPEG");
+    MDR_CHECK(!loadClientSettings(path.string()).videoCodecAuto);
+    menu.handle(MenuAction::Right, false, nullptr);
+    MDR_CHECK(menu.items(false)[4] == "VIDEO CODEC: H264");
+    menu.handle(MenuAction::Right, false, nullptr);
+    MDR_CHECK(menu.items(false)[4] == "VIDEO CODEC: PYROWAVE");
+    menu.handle(MenuAction::Right, false, nullptr);
+    MDR_CHECK(menu.items(false)[4] == "VIDEO CODEC: AUTO");
+    MDR_CHECK(!settings.videoCodecH264Experimental && !settings.videoCodecPyroWaveExperimental);
+    // Left from AUTO wraps to PYROWAVE.
+    menu.handle(MenuAction::Left, false, nullptr);
+    MDR_CHECK(settings.videoCodecPyroWaveExperimental && !settings.videoCodecAuto);
+    MDR_CHECK(menu.takeReconnectRequest());
+    removeSettingsDir(path);
+}

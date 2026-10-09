@@ -96,10 +96,11 @@ std::vector<std::string> SettingsMenu::items(bool showMic) const {
         std::string("VIDEO QUALITY: ") + videoQualityLabel(settings_.videoQuality),
         std::string("TRACKPAD AS NATIVE INPUT (EXPERIMENTAL): ") + (trackpadExperimentEnabled_ ? "ON" : "OFF"),
         std::string("MIRROR HOST SCREEN (EXPERIMENTAL): ") + (settings_.mirrorHostScreen ? "ON" : "OFF"),
-        std::string("VIDEO CODEC (EXPERIMENTAL): ") +
-            (settings_.videoCodecPyroWaveExperimental ? "PYROWAVE"
-             : settings_.videoCodecH264Experimental  ? "H264"
-                                                     : "JPEG"),
+        std::string("VIDEO CODEC: ") +
+            (settings_.videoCodecAuto                   ? "AUTO"
+             : settings_.videoCodecPyroWaveExperimental ? "PYROWAVE"
+             : settings_.videoCodecH264Experimental     ? "H264"
+                                                        : "JPEG"),
         std::string("DEBUG OVERLAY: ") + (settings_.debugOverlayEnabled ? "ON" : "OFF"),
     };
     if (offerSetupWizard_) items.push_back("RUN SETUP WIZARD");
@@ -198,11 +199,15 @@ void SettingsMenu::cycleVideoQuality(int direction) {
 // (see the latter's comment for why it's two flags). Negotiated once, in
 // Hello, so it needs a reconnect the same as cycleVideoQuality().
 void SettingsMenu::cycleVideoCodec(int direction) {
-    // 0 = JPEG, 1 = H264, 2 = PYROWAVE.
-    int current = settings_.videoCodecPyroWaveExperimental ? 2 : settings_.videoCodecH264Experimental ? 1 : 0;
-    int next = (current + 3 + direction) % 3;
-    settings_.videoCodecH264Experimental = next == 1;
-    settings_.videoCodecPyroWaveExperimental = next == 2;
+    // 0 = AUTO, 1 = JPEG, 2 = H264, 3 = PYROWAVE.
+    int current = settings_.videoCodecAuto                   ? 0
+                  : settings_.videoCodecPyroWaveExperimental ? 3
+                  : settings_.videoCodecH264Experimental     ? 2
+                                                             : 1;
+    int next = (current + 4 + direction) % 4;
+    settings_.videoCodecAuto = next == 0;
+    settings_.videoCodecH264Experimental = next == 2;
+    settings_.videoCodecPyroWaveExperimental = next == 3;
     save();
     reconnectRequested_ = true;
 }

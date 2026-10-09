@@ -511,6 +511,7 @@ int main(int argc, char** argv) {
         // comment for why the host still gets the final say either way.
         netConfig.preferH264 = clientSettings.videoCodecH264Experimental;
         netConfig.preferPyroWave = clientSettings.videoCodecPyroWaveExperimental;
+        netConfig.autoVideoCodec = clientSettings.videoCodecAuto;
         NetClient net(netConfig);
 
         // Forwards every logLine() call to the host as a ClientLog packet

@@ -12,10 +12,13 @@ add_executable(dualdeck_host_tests
     test_h264_encoder.cpp
     test_pyrowave_encoder.cpp
     test_h264_sps.cpp
+    test_auto_video_codec.cpp
 )
 
 target_include_directories(dualdeck_host_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../protocol/tests
+    # net_server_internal.h, for test_auto_video_codec.cpp.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
 
 target_link_libraries(dualdeck_host_tests PRIVATE

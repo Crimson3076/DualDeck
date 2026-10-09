@@ -80,6 +80,12 @@ void renderDebugOverlay(SDL_Renderer* renderer, NetClient& net, int requestedVid
     const VideoCodec codec = net.negotiatedVideoCodec();
     line(std::string("CODEC: ") +
          (codec == VideoCodec::PyroWave ? "PYROWAVE" : codec == VideoCodec::H264 ? "H264" : "JPEG"));
+    // Only measured when VIDEO CODEC is AUTO (see NetClient::
+    // measuredBandwidthKbps()).
+    if (net.measuredBandwidthKbps() > 0) {
+        std::snprintf(buf, sizeof(buf), "LINK: %u MBIT/S", static_cast<unsigned>(net.measuredBandwidthKbps() / 1000));
+        line(buf);
+    }
 
     // Shows the raw requested quality number (0 = AUTO) rather than
     // settingsMenuItems()' preset names.

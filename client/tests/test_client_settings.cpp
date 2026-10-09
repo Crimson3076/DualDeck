@@ -205,3 +205,43 @@ MDR_TEST(client_settings_round_trip_debug_overlay_enabled) {
     std::error_code ec;
     std::filesystem::remove_all(path.parent_path(), ec);
 }
+
+MDR_TEST(client_settings_video_codec_auto_is_the_default_and_round_trips) {
+    auto path = temporarySettingsPath("video-codec-auto");
+    MDR_CHECK(loadClientSettings(path.string()).videoCodecAuto);
+
+    ClientSettings settings;
+    settings.videoCodecAuto = false;
+    MDR_CHECK(saveClientSettings(path.string(), settings));
+    MDR_CHECK(!loadClientSettings(path.string()).videoCodecAuto);
+
+    settings.videoCodecAuto = true;
+    MDR_CHECK(saveClientSettings(path.string(), settings));
+    MDR_CHECK(loadClientSettings(path.string()).videoCodecAuto);
+
+    std::error_code ec;
+    std::filesystem::remove_all(path.parent_path(), ec);
+}
+
+// A settings file from before AUTO existed: an explicit H.264/PyroWave
+// pick survives, the untouched JPEG default becomes AUTO.
+MDR_TEST(client_settings_pre_auto_file_keeps_an_explicit_codec_choice) {
+    auto path = temporarySettingsPath("video-codec-pre-auto");
+    std::filesystem::create_directories(path.parent_path());
+    {
+        std::ofstream out(path);
+        out << "video_codec_h264_experimental=1\nvideo_codec_pyrowave_experimental=0\n";
+    }
+    ClientSettings loaded = loadClientSettings(path.string());
+    MDR_CHECK(!loaded.videoCodecAuto);
+    MDR_CHECK(loaded.videoCodecH264Experimental);
+
+    {
+        std::ofstream out(path, std::ios::trunc);
+        out << "video_codec_h264_experimental=0\nvideo_codec_pyrowave_experimental=0\n";
+    }
+    MDR_CHECK(loadClientSettings(path.string()).videoCodecAuto);
+
+    std::error_code ec;
+    std::filesystem::remove_all(path.parent_path(), ec);
+}

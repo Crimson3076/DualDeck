@@ -36,4 +36,19 @@ int h264TargetBitrateBps(int quality, uint16_t width, uint16_t height, int fps);
 
 size_t pyrowaveMaxFrameBytes(int quality, uint16_t width, uint16_t height);
 
+// What a PyroWave stream needs at its per-frame byte ceiling and 60fps,
+// in kbit/s -- the worst case, since real frames come in under the cap.
+uint32_t pyrowavePeakKbps(int quality, uint16_t width, uint16_t height);
+
+// The codec for a client whose VIDEO CODEC setting is AUTO (it set
+// kVideoCodecFlag_Auto). PyroWave when both sides can run it, the
+// session is an emulator (not Host Control), and the measured link has
+// at least kAutoPyroWaveHeadroom times pyrowavePeakKbps(); otherwise
+// H.264 when both sides have it; otherwise JPEG. measuredKbps 0 means
+// the link speed is unknown, which never picks PyroWave.
+inline constexpr double kAutoPyroWaveHeadroom = 1.25;
+VideoCodec chooseAutoVideoCodec(uint8_t clientSupportedCodecs, bool hostHasH264, bool hostHasPyroWave,
+                                HostMode mode, int quality, uint16_t width, uint16_t height,
+                                uint32_t measuredKbps);
+
 } // namespace dualdeck::host::net_detail

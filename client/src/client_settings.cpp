@@ -40,6 +40,7 @@ ClientSettings loadClientSettings(const std::string& settingsPath) {
 
     std::ifstream in(settingsPath);
     std::string line;
+    bool sawVideoCodecAuto = false;
     while (std::getline(in, line)) {
         constexpr const char* kAutoUpdatePrefix = "auto_update_on_launch=";
         constexpr const char* kMicDevicePrefix = "mic_device_name=";
@@ -49,6 +50,7 @@ ClientSettings loadClientSettings(const std::string& settingsPath) {
         constexpr const char* kVideoCodecH264Prefix = "video_codec_h264_experimental=";
         constexpr const char* kVideoCodecPyroWavePrefix = "video_codec_pyrowave_experimental=";
         constexpr const char* kDebugOverlayPrefix = "debug_overlay_enabled=";
+        constexpr const char* kVideoCodecAutoPrefix = "video_codec_auto=";
 
         if (line.rfind(kAutoUpdatePrefix, 0) == 0) {
             std::string value = line.substr(std::char_traits<char>::length(kAutoUpdatePrefix));
@@ -100,6 +102,15 @@ ClientSettings loadClientSettings(const std::string& settingsPath) {
             } else if (value == "0" || value == "false" || value == "off") {
                 settings.videoCodecPyroWaveExperimental = false;
             }
+        } else if (line.rfind(kVideoCodecAutoPrefix, 0) == 0) {
+            std::string value = line.substr(std::char_traits<char>::length(kVideoCodecAutoPrefix));
+            if (value == "1" || value == "true" || value == "on") {
+                settings.videoCodecAuto = true;
+                sawVideoCodecAuto = true;
+            } else if (value == "0" || value == "false" || value == "off") {
+                settings.videoCodecAuto = false;
+                sawVideoCodecAuto = true;
+            }
         } else if (line.rfind(kDebugOverlayPrefix, 0) == 0) {
             std::string value = line.substr(std::char_traits<char>::length(kDebugOverlayPrefix));
             if (value == "1" || value == "true" || value == "on") {
@@ -108,6 +119,12 @@ ClientSettings loadClientSettings(const std::string& settingsPath) {
                 settings.debugOverlayEnabled = false;
             }
         }
+    }
+    // Written before AUTO existed: someone who picked H.264 or PyroWave
+    // keeps it. JPEG was only ever the untouched default, so it moves to
+    // AUTO like a fresh install.
+    if (!sawVideoCodecAuto && (settings.videoCodecH264Experimental || settings.videoCodecPyroWaveExperimental)) {
+        settings.videoCodecAuto = false;
     }
     return settings;
 }
@@ -135,6 +152,7 @@ bool saveClientSettings(const std::string& settingsPath, const ClientSettings& s
         out << "video_codec_h264_experimental=" << (settings.videoCodecH264Experimental ? "1" : "0") << '\n';
         out << "video_codec_pyrowave_experimental=" << (settings.videoCodecPyroWaveExperimental ? "1" : "0")
             << '\n';
+        out << "video_codec_auto=" << (settings.videoCodecAuto ? "1" : "0") << '\n';
         out << "debug_overlay_enabled=" << (settings.debugOverlayEnabled ? "1" : "0") << '\n';
         if (!out.good()) {
             out.close();

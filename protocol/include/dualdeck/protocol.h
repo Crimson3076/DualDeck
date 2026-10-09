@@ -159,6 +159,16 @@ enum class PacketType : uint16_t {
     // no existing struct's shape changed, so this doesn't need a
     // kProtocolVersion bump either.
     ClientLog = 12,
+    // Automatic codec choice's link-speed test (see kVideoCodecFlag_Auto
+    // below). Only ever sent on the control channel between Hello and
+    // HelloAck, and only when the client set kVideoCodecFlag_Auto, so an
+    // older peer never sees either one -- no kProtocolVersion bump, same
+    // reasoning as ModeChanged/ClientLog above.
+    //
+    // host -> client: a chunk of filler bytes (BandwidthProbePayload).
+    BandwidthProbe = 13,
+    // client -> host: how fast the probe arrived (BandwidthReportPayload).
+    BandwidthReport = 14,
 };
 
 // Which of two states the host is currently in (GitHub issue #4): a live
@@ -441,6 +451,13 @@ enum class VideoCodec : uint8_t {
 inline constexpr uint8_t kVideoCodecBit_Jpeg = 1u << 0;
 inline constexpr uint8_t kVideoCodecBit_H264 = 1u << 1;
 inline constexpr uint8_t kVideoCodecBit_PyroWave = 1u << 2;
+// Not a codec: set alongside the codec bits when the client's VIDEO CODEC
+// setting is AUTO. Asks the host to pick the codec itself, from the
+// session's frame size and mode and a short link-speed test it runs
+// before HelloAck (PacketType::BandwidthProbe/BandwidthReport). Without
+// it the host picks the best codec the client advertised, as before. An
+// older host masks it off like any other bit it doesn't know.
+inline constexpr uint8_t kVideoCodecFlag_Auto = 1u << 7;
 
 struct HelloPayload {
     std::string clientName;    // up to kMaxProtocolStringLength bytes
@@ -767,6 +784,25 @@ struct ModeChangedPayload {
 // something huge -- deliberately distinct from kMaxProtocolStringLength
 // above, which exists for short identity/name fields, not a nearly-
 // freeform diagnostic string.
+// BandwidthProbe (host -> client) payload: one flag byte, then filler
+// whose only purpose is its size. The host sends chunks until it has
+// sent kBandwidthProbeMaxBytes or kBandwidthProbeMaxDurationUs has passed,
+// and marks the final chunk `last`. The client times from the end of the
+// first chunk to the end of the last one.
+inline constexpr size_t kBandwidthProbeChunkBytes = 32 * 1024;
+inline constexpr size_t kBandwidthProbeMaxBytes = 2 * 1024 * 1024;
+inline constexpr uint64_t kBandwidthProbeMaxDurationUs = 300'000;
+struct BandwidthProbePayload {
+    uint8_t last = 0; // 0 or 1
+    uint32_t fillerBytes = 0;
+};
+
+// BandwidthReport (client -> host) payload: the measured rate, or 0 if
+// the client couldn't measure it.
+struct BandwidthReportPayload {
+    uint32_t measuredKbps = 0;
+};
+
 inline constexpr size_t kMaxClientLogLineLength = 512;
 
 // ClientLog (client -> host) payload: a single already-formatted log
@@ -914,5 +950,13 @@ std::optional<ClientLogPayload> parseClientLogPayload(const uint8_t* data, size_
 
 // Builds a complete ClientLog packet (header + serialized body).
 ByteBuffer buildClientLogPacket(const ClientLogPayload& log);
+
+// BandwidthProbe/BandwidthReport (see PacketType::BandwidthProbe).
+// The probe's filler is zeros; parseBandwidthProbePayload() only reads
+// the flag byte and reports the filler's length.
+ByteBuffer buildBandwidthProbePacket(const BandwidthProbePayload& probe);
+std::optional<BandwidthProbePayload> parseBandwidthProbePayload(const uint8_t* data, size_t size);
+ByteBuffer buildBandwidthReportPacket(const BandwidthReportPayload& report);
+std::optional<BandwidthReportPayload> parseBandwidthReportPayload(const uint8_t* data, size_t size);
 
 } // namespace dualdeck

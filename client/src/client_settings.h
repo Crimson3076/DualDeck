@@ -80,6 +80,13 @@ struct ClientSettings {
     // pick given both bits anyway -- see NetServer::selectVideoCodec()).
     bool videoCodecPyroWaveExperimental = false;
 
+    // VIDEO CODEC: AUTO -- the host picks the codec after a short
+    // link-speed test (see NetClientConfig::autoVideoCodec). The default,
+    // and it takes precedence over the two flags above. A settings file
+    // from before AUTO existed that turned on H.264 or PyroWave keeps
+    // that choice (see loadClientSettings()).
+    bool videoCodecAuto = true;
+
     // Real user request, 2026-08-26: "some sort of way to show the user
     // what resolution is being streamed, what fps, codec, etc as a debug
     // overlay for the client." Purely a local rendering choice, like

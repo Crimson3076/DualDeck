@@ -592,4 +592,40 @@ ByteBuffer buildClientLogPacket(const ClientLogPayload& log) {
     return buildPacket(PacketType::ClientLog, payload);
 }
 
+ByteBuffer buildBandwidthProbePacket(const BandwidthProbePayload& probe) {
+    ByteBuffer payload;
+    payload.reserve(1 + probe.fillerBytes);
+    payload.push_back(probe.last ? 1 : 0);
+    payload.resize(1 + static_cast<size_t>(probe.fillerBytes), 0);
+    return buildPacket(PacketType::BandwidthProbe, payload);
+}
+
+std::optional<BandwidthProbePayload> parseBandwidthProbePayload(const uint8_t* data, size_t size) {
+    if (data == nullptr || size < 1 || size > 1 + kBandwidthProbeChunkBytes) {
+        return std::nullopt;
+    }
+    if (data[0] != 0 && data[0] != 1) {
+        return std::nullopt;
+    }
+    BandwidthProbePayload probe;
+    probe.last = data[0];
+    probe.fillerBytes = static_cast<uint32_t>(size - 1);
+    return probe;
+}
+
+ByteBuffer buildBandwidthReportPacket(const BandwidthReportPayload& report) {
+    ByteBuffer payload;
+    appendU32(payload, report.measuredKbps);
+    return buildPacket(PacketType::BandwidthReport, payload);
+}
+
+std::optional<BandwidthReportPayload> parseBandwidthReportPayload(const uint8_t* data, size_t size) {
+    if (data == nullptr || size != 4) {
+        return std::nullopt;
+    }
+    BandwidthReportPayload report;
+    report.measuredKbps = readU32(data, 0);
+    return report;
+}
+
 } // namespace dualdeck

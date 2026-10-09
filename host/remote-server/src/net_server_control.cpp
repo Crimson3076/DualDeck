@@ -1,6 +1,8 @@
 #include "host/net_server.h"
 
 #include "net_server_internal.h"
+#include "host/h264_encoder.h"
+#include "host/pyrowave_encoder.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -71,6 +73,55 @@ void runSelfUpdateCommand(const std::string& command) {
         std::fprintf(stderr, "NetServer: failed to launch self-update command (%s)\n", command.c_str());
     }
 }
+
+// runBandwidthProbe <clientFd>
+//
+// The link-speed test for a client whose VIDEO CODEC setting is AUTO
+// (kVideoCodecFlag_Auto): sends BandwidthProbe chunks until
+// kBandwidthProbeMaxBytes or kBandwidthProbeMaxDurationUs, then a final
+// empty chunk marked `last`, and returns the rate the client reports
+// back in kbit/s (0 if it doesn't). Only runs for an already-accepted
+// client, so it can't be used to make the host send data to anyone it
+// hasn't approved.
+//
+// Over the control connection's TCP stream: it measures the same path
+// the video takes, needs no extra port, and a peer can't spoof it. The
+// send buffer is capped first so the host's own kernel buffering can't
+// make a slow link look like it took the whole probe in at once; the
+// control channel only carries small packets afterward, so the cap
+// costs nothing later.
+uint32_t runBandwidthProbe(int clientFd) {
+    int sendBuffer = 256 * 1024;
+    ::setsockopt(clientFd, SOL_SOCKET, SO_SNDBUF, &sendBuffer, sizeof(sendBuffer));
+
+    BandwidthProbePayload chunk;
+    chunk.fillerBytes = static_cast<uint32_t>(kBandwidthProbeChunkBytes - 1);
+    const ByteBuffer chunkPacket = buildBandwidthProbePacket(chunk);
+    const uint64_t startUs = nowMicros();
+    size_t sent = 0;
+    while (sent < kBandwidthProbeMaxBytes && nowMicros() - startUs < kBandwidthProbeMaxDurationUs) {
+        if (!sendAll(clientFd, chunkPacket.data(), chunkPacket.size())) return 0;
+        sent += chunkPacket.size();
+    }
+    BandwidthProbePayload last;
+    last.last = 1;
+    const ByteBuffer lastPacket = buildBandwidthProbePacket(last);
+    if (!sendAll(clientFd, lastPacket.data(), lastPacket.size())) return 0;
+
+    uint8_t headerBuf[kPacketHeaderWireSize];
+    if (::recv(clientFd, headerBuf, sizeof(headerBuf), MSG_WAITALL) != static_cast<ssize_t>(sizeof(headerBuf))) {
+        return 0;
+    }
+    auto header = parseHeader(headerBuf, sizeof(headerBuf));
+    if (!header || header->type != PacketType::BandwidthReport || header->payloadSize != 4) return 0;
+    uint8_t payload[4];
+    if (::recv(clientFd, payload, sizeof(payload), MSG_WAITALL) != static_cast<ssize_t>(sizeof(payload))) {
+        return 0;
+    }
+    auto report = parseBandwidthReportPayload(payload, sizeof(payload));
+    return report ? report->measuredKbps : 0;
+}
+
 } // namespace
 
 void NetServer::controlLoop() {
@@ -129,6 +180,11 @@ void NetServer::controlLoop() {
         // clientDisplayWidth/Height above -- see selectVideoCodec()'s own
         // comment for how this gets computed.
         VideoCodec selectedVideoCodec = VideoCodec::Jpeg;
+        // Set when the client's VIDEO CODEC setting is AUTO: the codec is
+        // then chosen below, once the frame size is known, after a
+        // link-speed test (runBandwidthProbe()).
+        bool autoVideoCodec = false;
+        uint8_t clientSupportedCodecs = kVideoCodecBit_Jpeg;
 
         uint8_t headerBuf[kPacketHeaderWireSize];
         ssize_t n = ::recv(clientFd, headerBuf, sizeof(headerBuf), MSG_WAITALL);
@@ -250,8 +306,12 @@ void NetServer::controlLoop() {
                             currentVideoQuality_ = hello->videoQuality;
                             clientRequestedExplicitVideoQuality = true;
                         }
-                        selectedVideoCodec = selectVideoCodec(hello->supportedVideoCodecs);
-                        currentVideoCodec_ = selectedVideoCodec;
+                        clientSupportedCodecs = hello->supportedVideoCodecs;
+                        autoVideoCodec = (hello->supportedVideoCodecs & kVideoCodecFlag_Auto) != 0;
+                        if (!autoVideoCodec) {
+                            selectedVideoCodec = selectVideoCodec(hello->supportedVideoCodecs);
+                            currentVideoCodec_ = selectedVideoCodec;
+                        }
                     }
                 } else {
                     std::fprintf(stderr, "NetServer: rejecting handshake (short Hello payload)\n");
@@ -279,7 +339,6 @@ void NetServer::controlLoop() {
             ack.system = currentSystemIdentity_;
             ack.adapter = currentAdapterIdentity_;
             ack.mode = currentMode_;
-            ack.selectedVideoCodec = selectedVideoCodec;
             // See IFrameSource::setTargetDisplaySize()'s own comment --
             // only for an actually-accepted handshake, so a rejected/
             // malformed connection's reported size (clientDisplayWidth/
@@ -301,6 +360,29 @@ void NetServer::controlLoop() {
             currentVideoQuality_ =
                 defaultVideoQualityForFrameSize(config_.videoJpegQuality, ack.nativeWidth, ack.nativeHeight);
         }
+        if (handshakeOk && autoVideoCodec) {
+            const uint32_t measuredKbps = runBandwidthProbe(clientFd);
+            // PyroWaveEncoder::isAvailable() probes for a Vulkan device, so
+            // only ask when the client could use it.
+            const bool hostHasPyroWave =
+                (clientSupportedCodecs & kVideoCodecBit_PyroWave) && PyroWaveEncoder::isAvailable();
+            selectedVideoCodec = chooseAutoVideoCodec(clientSupportedCodecs, H264Encoder::isAvailable(),
+                                                      hostHasPyroWave, ack.mode, currentVideoQuality_.load(),
+                                                      ack.nativeWidth, ack.nativeHeight, measuredKbps);
+            currentVideoCodec_ = selectedVideoCodec;
+            std::fprintf(stderr,
+                          "NetServer: auto codec for %s: link %u kbit/s, PyroWave needs %u kbit/s at %ux%u -- "
+                          "using %s\n",
+                          ipStr, measuredKbps,
+                          static_cast<unsigned>(kAutoPyroWaveHeadroom *
+                                                pyrowavePeakKbps(currentVideoQuality_.load(), ack.nativeWidth,
+                                                                 ack.nativeHeight)),
+                          static_cast<unsigned>(ack.nativeWidth), static_cast<unsigned>(ack.nativeHeight),
+                          selectedVideoCodec == VideoCodec::PyroWave ? "PyroWave"
+                          : selectedVideoCodec == VideoCodec::H264   ? "H.264"
+                                                                     : "JPEG");
+        }
+        ack.selectedVideoCodec = selectedVideoCodec;
         // Protocol v14: taken as close to the actual send below as
         // possible (same nowMicrosEpoch() clock VideoFramePayload::
         // captureTimestampUs already uses) -- see kProtocolVersion's v14
