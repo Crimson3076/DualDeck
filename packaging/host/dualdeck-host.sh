@@ -37,19 +37,9 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 unset LD_PRELOAD LD_LIBRARY_PATH
 
 error_log="${HOME}/.config/dualdeck/install.log"
-on_error() {
-    local exit_code="$1" line_no="$2" failing_cmd="$3"
-    mkdir -p "$(dirname "${error_log}")"
-    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") dualdeck-host.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
-    if command -v kdialog >/dev/null 2>&1; then
-        kdialog --title "DualDeck Host" --error "Something went wrong: ${failing_cmd}
-(exit code ${exit_code})
-
-Details logged to:
-${error_log}" 2>/dev/null || true
-    fi
-}
-trap 'on_error "$?" "${LINENO}" "${BASH_COMMAND}"' ERR
+# shellcheck source=scripts/lib/release_install.sh
+source ./internal/release_install.sh
+dualdeck_trap_errors "DualDeck Host" "Something went wrong"
 
 # Advanced -> Installation branch. Own config dir, own cache, own
 # selection -- see internal/dualdeck_branch.sh's own header comment for
@@ -314,7 +304,7 @@ choose_emulator() {
 # branch below) breaks out: everything else -- a completed action, a
 # failed one (each internal/ script already shows its own error dialog
 # and returns non-zero rather than propagating a set -e exit -- see
-# on_error's ERR trap above, which only fires for a genuinely unexpected
+# the dualdeck_trap_errors ERR trap above, which only fires for a genuinely unexpected
 # failure, not a handled one), or backing out of a submenu -- falls
 # through to the bottom of the loop and redisplays this same menu.
 while true; do

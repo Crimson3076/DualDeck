@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
+# Real user request, 2026-08-01: "Host control should be a constant
+# server from the host, being toggled via the eventual decky menu
+# plugin or the DualDeck Host GUI. Steam should not keep registering it
+# as a game running in the background." Today's "Host control only"
+# menu choice (run-host.sh's DUALDECK_HOST_CONTROL branch) execs
+# straight into dualdeck-host-service as the literal foreground process
+# of whatever launched it (a Steam shortcut, or this menu script) --
+# Steam's own "is this game still running" tracking watches that exact
+# process, with no separate PID/session layer to decouple from. A
+# systemd --user service is a completely independent process tree Steam
+# never launches and never tracks at all, closing that gap directly
+# rather than trying to make Steam stop noticing a process it's already
+# watching.
+#
 # The actual command the persistent Host Control systemd --user service
 # (dualdeck-host-control.service, installed by
 # install-host-control-daemon.sh) runs. A thin wrapper, not the unit's

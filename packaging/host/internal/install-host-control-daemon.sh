@@ -9,12 +9,9 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 error_log="${HOME}/.config/dualdeck/install.log"
-on_error() {
-    local exit_code="$1" line_no="$2" failing_cmd="$3"
-    mkdir -p "$(dirname "${error_log}")"
-    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") install-host-control-daemon.sh line ${line_no}: \`${failing_cmd}\` failed (exit ${exit_code})" >> "${error_log}"
-}
-trap 'on_error "$?" "${LINENO}" "${BASH_COMMAND}"' ERR
+# shellcheck source=scripts/lib/release_install.sh
+source ./release_install.sh
+dualdeck_trap_errors "" ""
 
 # Real Bazzite hardware report, 2026-08-02: this daemon used to refuse
 # to install at all on immutable/rpm-ostree systems here, on the same
