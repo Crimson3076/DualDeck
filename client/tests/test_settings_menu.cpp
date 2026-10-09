@@ -30,13 +30,13 @@ MDR_TEST(settings_menu_rows_follow_wizard_and_mic_flags) {
     SettingsMenu withoutWizard(settings, "", false);
 
     const auto full = withWizard.items(true);
-    MDR_CHECK(full.size() == 10);
-    MDR_CHECK(full[6] == "RUN SETUP WIZARD");
-    MDR_CHECK(full[7] == "MICROPHONE: SYSTEM DEFAULT");
+    MDR_CHECK(full.size() == 11);
+    MDR_CHECK(full[7] == "RUN SETUP WIZARD");
+    MDR_CHECK(full[8] == "MICROPHONE: SYSTEM DEFAULT");
     MDR_CHECK(full.back() == "BACK");
 
     const auto minimal = withoutWizard.items(false);
-    MDR_CHECK(minimal.size() == 7);
+    MDR_CHECK(minimal.size() == 8);
     MDR_CHECK(minimal.back() == "BACK");
 }
 
@@ -90,22 +90,41 @@ MDR_TEST(settings_menu_video_codec_cycles_through_auto) {
     auto path = temporarySettingsPath("codec");
     ClientSettings settings;
     SettingsMenu menu(settings, path.string(), true);
-    MDR_CHECK(menu.items(false)[4] == "VIDEO CODEC: AUTO");
+    MDR_CHECK(menu.items(false)[5] == "VIDEO CODEC: AUTO");
 
-    for (int i = 0; i < 4; ++i) menu.handle(MenuAction::Down, false, nullptr);
+    for (int i = 0; i < 5; ++i) menu.handle(MenuAction::Down, false, nullptr);
     menu.handle(MenuAction::Right, false, nullptr);
-    MDR_CHECK(menu.items(false)[4] == "VIDEO CODEC: JPEG");
+    MDR_CHECK(menu.items(false)[5] == "VIDEO CODEC: JPEG");
     MDR_CHECK(!loadClientSettings(path.string()).videoCodecAuto);
     menu.handle(MenuAction::Right, false, nullptr);
-    MDR_CHECK(menu.items(false)[4] == "VIDEO CODEC: H264");
+    MDR_CHECK(menu.items(false)[5] == "VIDEO CODEC: H264");
     menu.handle(MenuAction::Right, false, nullptr);
-    MDR_CHECK(menu.items(false)[4] == "VIDEO CODEC: PYROWAVE");
+    MDR_CHECK(menu.items(false)[5] == "VIDEO CODEC: PYROWAVE");
     menu.handle(MenuAction::Right, false, nullptr);
-    MDR_CHECK(menu.items(false)[4] == "VIDEO CODEC: AUTO");
+    MDR_CHECK(menu.items(false)[5] == "VIDEO CODEC: AUTO");
     MDR_CHECK(!settings.videoCodecH264Experimental && !settings.videoCodecPyroWaveExperimental);
     // Left from AUTO wraps to PYROWAVE.
     menu.handle(MenuAction::Left, false, nullptr);
     MDR_CHECK(settings.videoCodecPyroWaveExperimental && !settings.videoCodecAuto);
     MDR_CHECK(menu.takeReconnectRequest());
+    removeSettingsDir(path);
+}
+
+MDR_TEST(settings_menu_stream_fps_cycles_and_asks_for_reconnect) {
+    auto path = temporarySettingsPath("stream-fps");
+    ClientSettings settings;
+    SettingsMenu menu(settings, path.string(), true);
+    MDR_CHECK(menu.items(false)[2] == "STREAM FPS: DEFAULT");
+
+    for (int i = 0; i < 2; ++i) menu.handle(MenuAction::Down, false, nullptr);
+    menu.handle(MenuAction::Right, false, nullptr);
+    MDR_CHECK(menu.items(false)[2] == "STREAM FPS: 30");
+    MDR_CHECK(loadClientSettings(path.string()).streamFps == 30);
+    MDR_CHECK(menu.takeReconnectRequest());
+    // Left from 30 back to DEFAULT, then wraps to 120.
+    menu.handle(MenuAction::Left, false, nullptr);
+    MDR_CHECK(settings.streamFps == 0);
+    menu.handle(MenuAction::Left, false, nullptr);
+    MDR_CHECK(settings.streamFps == 120);
     removeSettingsDir(path);
 }
