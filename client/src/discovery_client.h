@@ -7,7 +7,7 @@
 // (or the user picks from a short list) melonds-remote host on the LAN.
 //
 // A single call is a one-shot blocking operation -- no long-lived socket
-// of its own. main.cpp's discoverAndSelectHost() calls this repeatedly
+// of its own. host_picker.cpp's discoverAndSelectHost() calls this repeatedly
 // on a dedicated background thread (not the render/input thread) for as
 // long as the host-picker screen is shown, so the picker keeps
 // refreshing without ever blocking event/frame handling; see

@@ -1,6 +1,6 @@
 #pragma once
 
-// Remembers whether the first-run setup wizard (main.cpp's
+// Remembers whether the first-run setup wizard (setup_wizard.cpp's
 // runSetupWizard()) has already completed successfully, so it only runs
 // automatically once -- later launches go straight to the normal
 // discovery/connect flow, and the wizard is only reachable again by opening
