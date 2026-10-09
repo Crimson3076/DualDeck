@@ -131,6 +131,11 @@ jobs:
       - name: Run update checksum test
         run: python3 tests/apply_update_test.py
 
+      # dualdeck-host.sh's side of the host window protocol, against a
+      # stand-in window (the real one is tested in the client job).
+      - name: Run host window script test
+        run: python3 tests/host_ui_script_test.py
+
   decky-plugin-frontend:
     name: Build the Decky plugin frontend
     runs-on: ubuntu-latest
@@ -230,7 +235,7 @@ jobs:
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja \
-            -DDUALDECK_BUILD_CLIENT=ON -DDUALDECK_BUILD_HOST=ON \
+            -DDUALDECK_BUILD_CLIENT=ON -DDUALDECK_BUILD_HOST=ON -DDUALDECK_BUILD_HOST_UI=ON \
             -DCMAKE_PREFIX_PATH="${{ runner.temp }}/sdl3-install" \
             -DCMAKE_CXX_FLAGS="-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror"
 
@@ -244,6 +249,11 @@ jobs:
       # UI change can be reviewed without a Steam Deck.
       - name: Render UI previews
         run: SDL_VIDEO_DRIVER=dummy ./build/client/dualdeck-ui-preview ui-preview
+
+      # The real host window driven over its protocol, plus a PNG of
+      # each host screen in the same downloadable artifact.
+      - name: Run host window test
+        run: python3 tests/host_ui_window_test.py build/host/ui/dualdeck-host-ui ui-preview/host
 
       - name: Upload UI previews
         uses: actions/upload-artifact@v4
