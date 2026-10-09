@@ -99,12 +99,12 @@ export AZAHAR_REMOTE_ADAPTER_SOCKET="${adapter_socket}"
 # `AZAHAR_REMOTE_CAPTURE_SCALE=2 ./dualdeck-host.sh` for 640x480. Not
 # needed just to match Azahar's own "Internal Resolution" graphics
 # setting -- the stream already follows that automatically now (see
-# docs/known-limitations.md's capture-scale-follows-resolution-factor
+# docs/history.md's capture-scale-follows-resolution-factor
 # entry); only set this to stream at a different resolution than what's
 # configured there, e.g. a sharper local picture than is worth sending
 # over a particular link.
 # Already inherited by the exec below with no extra wiring needed --
-# see docs/known-limitations.md's performance-tuning entry.
+# see docs/history.md's performance-tuning entry.
 
 # Works around a known class of Qt6-on-Linux crash (reported for many
 # Qt6 apps, not specific to Azahar): a GTK3 platform-theme bug in

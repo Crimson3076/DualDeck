@@ -29,7 +29,7 @@ namespace {
 // VideoFramePayload::captureTimestampUs (protocol v10), which is also
 // wall-clock, not steady_clock. Same "assumes synced clocks" caveat as
 // ControllerState::clientTimestampUs already documents (see
-// docs/known-limitations.md); duplicated here rather than shared with
+// docs/history.md); duplicated here rather than shared with
 // main.cpp's own wallClockNowUs() (internal linkage, file-local), same
 // as net_server.cpp's nowMicrosEpoch() already duplicates it host-side.
 uint64_t wallClockNowUs() {

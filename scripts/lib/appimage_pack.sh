@@ -275,7 +275,7 @@ bundle_library_dependencies() {
 # directory). `pack_appimage()` previously copied only the raw binary,
 # silently dropping both directories -- Cemu can't fully initialize its
 # GUI without them (no window ever appears, no error printed; see
-# docs/known-limitations.md's entry on this for the real-hardware
+# docs/history.md's entry on this for the real-hardware
 # repro). melonDS/Azahar need no extra directories.
 #
 # Uses a placeholder 1x1 PNG icon (appimagetool requires SOME icon file to

@@ -290,7 +290,7 @@ int main(int argc, char** argv) {
                 "and address -- type 'approve <id>', 'deny <id>', or 'list' and press\n"
                 "Enter. No code is ever typed on the client (spec section 13's later\n"
                 "pairing options, adapted since Steam Input's virtual keyboard doesn't\n"
-                "reliably come up in Gaming Mode -- see docs/known-limitations.md).\n"
+                "reliably come up in Gaming Mode -- see docs/history.md).\n"
                 "Once approved, that same device reconnects silently forever, no\n"
                 "reprompting, unless the host's approved-device state is deleted.\n"
                 "The same request also pops a kdialog Yes/No prompt on this host's own\n"

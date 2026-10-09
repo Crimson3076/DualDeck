@@ -6,7 +6,7 @@ hardware once** -- controls and touch input worked, but that first pass
 also surfaced two real bugs (the menu opening on a single button instead
 of a deliberate hold, and no video reaching the client because the host
 was using melonDS's OpenGL 3D renderer) which are now fixed; see
-`docs/known-limitations.md` and `docs/troubleshooting.md` for the
+`docs/history.md` and `docs/troubleshooting.md` for the
 specifics, and correct this file further as more real-hardware runs turn
 up issues.
 
@@ -24,7 +24,7 @@ automatically once; open **Settings > Run Setup Wizard** from the L3+R3
 pause menu to run it again later (e.g. after switching to a different
 host). The same Settings screen lets you turn automatic update checks on
 launch on or off. See
-`docs/known-limitations.md`'s "First-run setup wizard" entry for what it
+`docs/history.md`'s "First-run setup wizard" entry for what it
 does and doesn't cover -- in particular, it has not yet been run on real
 Steam Deck hardware, only built and exercised in this project's own
 sandbox.
@@ -109,7 +109,7 @@ See `docs/building.md` for the actual CMake invocation either way.
    at the host to approve. No typing is needed anywhere (this
    deliberately doesn't rely on Steam Input's virtual keyboard, which
    doesn't reliably come up in Gaming Mode -- see
-   `docs/known-limitations.md`): on the standalone host, type
+   `docs/history.md`): on the standalone host, type
    `approve <device-id-prefix>` at its console (the pending-request log
    line shows the exact command to use); on the melonDS-integrated host,
    a window pops up asking "Allow ... to connect?" with Approve/Deny
@@ -211,7 +211,7 @@ program files, which are safe to replace while Steam and the client are
 both running. The client also checks automatically every time it
 launches -- including from the Steam shortcut itself -- and installs a
 newer version silently if one's found, no confirmation needed; see
-`docs/known-limitations.md`'s "Client auto-update on launch" entry for
+`docs/history.md`'s "Client auto-update on launch" entry for
 the tradeoff (a slow connection can add up to about three minutes the
 first time it finds one).
 
@@ -265,7 +265,7 @@ the DS for as long as the menu is open. This used to be the Start+Select
 chord, changed to L3+R3 because Start+Select held together is also Steam
 Input's own default chord for switching a game's active action set on
 Steam Deck, which could intercept the hold before this app ever saw it
-(see `docs/known-limitations.md`). A
+(see `docs/history.md`). A
 trackpad configured as a mouse (or an actual touchscreen, or a real
 mouse in Desktop Mode) also works as an alternative way to touch the
 bottom screen -- left click/drag maps the same way a finger touch does
@@ -283,7 +283,7 @@ screen (pause menu -> Settings) has an opt-in "TRACKPAD AS NATIVE INPUT
 shortcut to fix it -- reachable from Gaming Mode, unlike
 `dualdeck-client.sh`'s own outer menu, which has the same toggle but is
 only reachable by double-clicking it manually in Desktop Mode. See
-`docs/known-limitations.md`'s 2026-08-02 entries for why disabling
+`docs/history.md`'s 2026-08-02 entries for why disabling
 Steam Input is the actual fix rather than a custom Controller Layout,
 and `docs/troubleshooting.md` if it doesn't help.
 

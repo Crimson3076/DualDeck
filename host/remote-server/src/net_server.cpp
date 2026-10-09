@@ -75,7 +75,7 @@ int makeTcpListener(const std::string& bindAddress, uint16_t port) {
         // these exact same default client-facing ports -- melonDS isn't
         // wired into the shared-daemon/adapter-IPC model Azahar/Cemu use
         // (a known, deliberately-deferred larger rework, see
-        // docs/known-limitations.md), so nothing today stops both from
+        // docs/history.md), so nothing today stops both from
         // trying to claim the same port at once. When that happens here,
         // this melonDS instance silently never starts a server at all
         // while the client, upon connecting, reaches whichever one *did*
@@ -245,7 +245,7 @@ VideoCodec selectVideoCodec(uint8_t clientSupportedCodecs) {
 // that's actually needed. Maps the quality scale onto roughly
 // 0.05-0.30 bits/pixel/frame (a plausible middle-ground range for H.264
 // at real-time/low-latency tuning, not empirically measured against
-// this project's actual video content yet -- see docs/known-limitations.md's
+// this project's actual video content yet -- see docs/history.md's
 // 2026-08-25 H.264 entries) and scales by resolution and frame rate to
 // get a target bits-per-second the encoder's RC_BITRATE_MODE rate
 // control aims for.
@@ -1365,7 +1365,7 @@ void NetServer::videoLoop() {
                     // h264InitializedWidth/Height reset above), or a real
                     // mid-session resolution change -- Cemu's own
                     // per-title GamePad size already did this for real,
-                    // see docs/known-limitations.md's "sheared/torn"
+                    // see docs/history.md's "sheared/torn"
                     // entry. Either way the next encodeFrame() call below
                     // naturally produces a fresh IDR, which is exactly
                     // what a client with no prior decoder state (or a
@@ -1373,7 +1373,7 @@ void NetServer::videoLoop() {
                     // resolution) needs.
                     // Deliberately NOT config_.videoSendFps: since the
                     // "Latency: tightened the two cheap-to-poll relay
-                    // stages" pass (docs/known-limitations.md), that
+                    // stages" pass (docs/history.md), that
                     // value is a polling-responsiveness tick rate (240
                     // by default) this loop's own outer interval uses,
                     // not a real content frame rate -- no adapter

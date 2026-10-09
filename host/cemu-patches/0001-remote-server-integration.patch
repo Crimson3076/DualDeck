@@ -309,7 +309,7 @@ index 77d588b..244f956 100644
 +	// CEMU_REMOTE_CAPTURE_FPS=1 (nearly eliminating those stalls)
 +	// restored native performance, conclusively identifying the
 +	// synchronous wait itself as the bottleneck rather than the capture
-+	// work's own GPU/CPU cost. See docs/known-limitations.md's matching
++	// work's own GPU/CPU cost. See docs/history.md's matching
 +	// entry for the full writeup.
 +	//
 +	// CemuAdapter::onSurfaceRendered() (remote_server/CemuAdapter.cpp)
@@ -677,7 +677,7 @@ index 4ff2faa..f355ccc 100644
 +	}
 +
 +	// DualDeck: real bug, found while diagnosing the Wind Waker HD
-+	// 14-20fps regression (docs/known-limitations.md) -- this used to
++	// 14-20fps regression (docs/history.md) -- this used to
 +	// read `GetCurrentCommandBufferId()` *after* SubmitCommandBuffer()
 +	// below, which returns m_numSubmittedCmdBuffers -- already
 +	// incremented by that submit, i.e. the ID the *next* (still-empty)
@@ -780,7 +780,7 @@ index 4ff2faa..f355ccc 100644
 +// DualDeck (github.com/crimson3076/DualDeck): non-blocking replacement
 +// for the always-synchronous CaptureSurfaceBGRA() above -- see Renderer.h's
 +// comment on this method (and its four siblings below) for the contract,
-+// and docs/known-limitations.md's Wind Waker HD entry for the real
++// and docs/history.md's Wind Waker HD entry for the real
 +// 14-20fps-instead-of-30 regression this exists to fix.
 +//
 +// This function's own body is CaptureSurfaceBGRA()'s recording half,
@@ -1681,7 +1681,7 @@ index 0000000..63f64f4
 +
 +// Off by default. Real, measured waste, found while diagnosing the Wind
 +// Waker HD 14-20fps regression (see this file's own onSurfaceRendered()
-+// comment and docs/known-limitations.md): CemuAdapter::capabilities()
++// comment and docs/history.md): CemuAdapter::capabilities()
 +// below reports the TV surface with remotelyDisplayed=false (its role is
 +// the host's own local screen only -- see that method's own comment),
 +// and NetServer's video loop (host/remote-server/src/net_server.cpp)
@@ -2075,7 +2075,7 @@ index 0000000..63f64f4
 +}
 +
 +void CemuAdapter::onSurfaceRendered(LatteTextureView* texView, bool isPadView) {
-+    // Step 1 (per this feature's own design doc, docs/known-limitations.md):
++    // Step 1 (per this feature's own design doc, docs/history.md):
 +    // ignore the TV surface unless DualDeck explicitly needs it. See
 +    // captureTvWanted()'s own comment -- this surface is never actually
 +    // sent to any client today, so capturing it is 100% wasted work.
@@ -2302,7 +2302,7 @@ index 0000000..fc708e0
 +//     Laptop GPU, Bazzite/RX 7900 XTX) to run Wind Waker HD at ~14-20fps
 +//     instead of its native 30, with CEMU_REMOTE_CAPTURE_FPS=1 (nearly
 +//     eliminating the stalls) restoring full speed -- see
-+//     docs/known-limitations.md's matching entry for the full
++//     docs/history.md's matching entry for the full
 +//     before/after writeup. onSurfaceRendered() (below) now schedules a
 +//     capture via Renderer::ScheduleCaptureSurfaceBGRA() (Vulkan only;
 +//     see Renderer.h's own comment) into one of a small, fixed pool of
@@ -2502,7 +2502,7 @@ index 0000000..fc708e0
 +    // it into the right CapturedSurface, and frees the slot. Doing this
 +    // here, on the same render thread that owns all the relevant Vulkan/
 +    // Cemu state, rather than on a dedicated worker thread, is
-+    // deliberate -- see docs/known-limitations.md's design writeup for
++    // deliberate -- see docs/history.md's design writeup for
 +    // why a separate completion thread was considered and rejected (it
 +    // would need its own synchronization around state this render thread
 +    // already owns exclusively, for no real latency benefit given this
@@ -2648,7 +2648,7 @@ index 0000000..1af7065
 +// four face buttons -- real user report, 2026-08-04. So each label is
 +// mapped to the XInput bit Cemu's table turns *into* that same Nintendo
 +// button: South ("A") -> kButton13, which its table reads as Wii U A.
-+// See docs/known-limitations.md's 2026-08-04 entries.
++// See docs/history.md's 2026-08-04 entries.
 +//
 +//   client GenericButton --(this file, real-XInput-bit-position)-->
 +//   Buttons2 --(VPADController's DualDeckRemote case, reusing the

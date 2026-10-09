@@ -5,7 +5,7 @@
 // (open("/dev/uinput"), the UI_DEV_SETUP/UI_ABS_SETUP/UI_DEV_CREATE
 // ioctls) is exercised only by compiling clean and by
 // isDeviceReady()-gated manual testing on a real Linux host with uinput
-// access -- see docs/known-limitations.md's Phase C entry.
+// access -- see docs/history.md's Phase C entry.
 
 #include "host/host_control_adapter.h"
 #include "test_framework.h"

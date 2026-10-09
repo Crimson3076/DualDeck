@@ -78,7 +78,7 @@ namespace melonds_remote {
 //
 // v10: VideoFrame's payload gained an 8-byte host wall-clock capture
 // timestamp prepended before the JPEG bytes (see "video-latency
-// instrumentation" -- docs/known-limitations.md), so the client can
+// instrumentation" -- docs/history.md), so the client can
 // measure real glass-to-glass-ish latency (network + encode + queue
 // time) instead of only ever having a number for the input path
 // (ControllerState.clientTimestampUs). A genuine payload-shape change
@@ -129,7 +129,7 @@ enum class PacketType : uint16_t {
     // (GitHub issue #2). Only sent when HelloAckPayload::micSupported was
     // true and the user hasn't muted -- absence of packets is the "no
     // audio" state, matching how melonDS's own Mic input already treats
-    // silence (see docs/known-limitations.md's microphone section).
+    // silence (see docs/history.md's microphone section).
     MicAudioFrame = 10,
     // host -> client, control channel, unsolicited notification that the
     // host switched which mode/adapter is driving the session (GitHub
@@ -308,7 +308,7 @@ struct AdapterIdentity {
 // them. Defined now as a stable shape a future negotiation phase can
 // extend Hello/HelloAck into, so that phase is a pure additive field-add
 // (plus one kProtocolVersion bump) rather than also having to invent
-// this data model under time pressure. See docs/known-limitations.md for
+// this data model under time pressure. See docs/history.md for
 // the full design this is the foundation of.
 //
 // Deliberately self-contained here, not #include-ing adapter-sdk's
@@ -351,7 +351,7 @@ enum class WirePixelFormat : uint8_t {
 // codec actually exists. Only Jpeg is implemented anywhere in this
 // codebase today (protocol v8's existing VideoFrame payload); the rest
 // are reserved names for a future IStreamingBackend
-// (docs/known-limitations.md).
+// (docs/history.md).
 enum WireCodec : uint32_t {
     WireCodec_Jpeg = 1u << 0,
     WireCodec_H264 = 1u << 1,
@@ -695,7 +695,7 @@ inline constexpr size_t kVideoFrameTimestampWireSize = 8;
 // wall-clock receipt time gives an estimate of network + encode + send-
 // queue latency for the video path, the same "assumes synced clocks"
 // caveat the existing input-latency stat already documents (see
-// docs/known-limitations.md) applies here too. `jpeg` is exactly what
+// docs/history.md) applies here too. `jpeg` is exactly what
 // protocol v8 already sent -- this only adds the timestamp in front of
 // it, nothing about the JPEG encoding itself changed.
 struct VideoFramePayload {
@@ -740,7 +740,7 @@ inline constexpr uint16_t kMicAudioSamplesPerPacket = 480;
 // `sequence`/`clientTimestampUs` mirror ControllerState's fields (same
 // purpose: host-side ordering/staleness checks), even though, unlike
 // controller input, losing one audio packet is not silently self-healing
-// -- see docs/known-limitations.md for the resulting audible-gap
+// -- see docs/history.md for the resulting audible-gap
 // tradeoff of sending raw PCM over UDP with no forward-error-correction.
 struct MicAudioFramePayload {
     uint32_t sequence = 0;

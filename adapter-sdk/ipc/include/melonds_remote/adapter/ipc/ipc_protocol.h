@@ -101,12 +101,12 @@ melonds_remote::ByteBuffer buildIpcMessage(IpcMessageType type, const melonds_re
 // after a fresh handshake succeeded, producing a client that looked
 // like it was rapidly bouncing between Emulation and HostControl mode
 // forever, indistinguishable at a glance from a genuinely flaky
-// connection (see docs/known-limitations.md's matching entry). The same
+// connection (see docs/history.md's matching entry). The same
 // class of bug applies to AzaharAdapter now that its capture scale
 // auto-follows Settings::values.resolution_factor (up to 10x native
 // 400x240 = 4000x2400x4 = 38,400,000 bytes, also over the old cap) --
 // see the 2026-07-23 "Azahar capture scale now follows resolution_factor
-// automatically" entry in known-limitations.md. 128 MiB comfortably
+// automatically" entry in history.md. 128 MiB comfortably
 // covers even an 8K TV surface (7680x4320x4 = 132,710,400 bytes is the
 // one real case this doesn't cover; 128 MiB was chosen to stay a round
 // number rather than chase that specific figure, and nothing this

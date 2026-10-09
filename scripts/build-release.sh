@@ -53,7 +53,7 @@ echo "== [0/6] Checking build dependencies =="
 # missing here for a while (the apt/dnf lists had silently drifted
 # apart), confirmed by a real Fedora build failing to configure Azahar
 # ("Failed to find required Qt component GuiPrivate") until this was
-# added. See docs/known-limitations.md's real-world verification entry.
+# added. See docs/history.md's real-world verification entry.
 # qt6-wayland/qt6-qtwayland: real user report, 2026-08-01 -- neither
 # melonDS nor Azahar (both Qt6 apps) could start at all on a real
 # Bazzite/Fedora HTPC with no system Qt6 GUI stack installed
@@ -77,7 +77,7 @@ echo "== [0/6] Checking build dependencies =="
 # dependency package for XTEST"), where 3.2.16 built fine without it.
 # libopenh264-dev/openh264-devel/openh264 (protocol v13's optional H.264
 # video codec, host/remote-server/src/h264_encoder.cpp -- see
-# docs/known-limitations.md's 2026-08-25 video-codec-negotiation entry):
+# docs/history.md's 2026-08-25 video-codec-negotiation entry):
 # purely opt-in at configure time, same as X11/Wayland above, never
 # FATAL_ERROR like TurboJPEG -- a build without it just never gets H.264
 # capability, every session still runs JPEG. apt's name is confirmed
@@ -126,7 +126,7 @@ ensure_packages "build" \
 # docs/azahar-integration-analysis.md for why (real 3D rendering, unlike
 # the DS's largely-2D workload). Debian package names verified against
 # this exact sandbox; Fedora/Arch names are best-effort and unverified
-# (see docs/known-limitations.md's AzaharAdapter entry).
+# (see docs/history.md's AzaharAdapter entry).
 ensure_packages "azahar build" \
     "libvulkan-dev libboost-dev libboost-iostreams-dev libboost-thread-dev libpulse-dev libasound2-dev" \
     "vulkan-loader-devel vulkan-headers boost-devel pulseaudio-libs-devel alsa-lib-devel" \
@@ -298,7 +298,7 @@ echo "== [3/6] Patched Azahar host (Nintendo 3DS, commit ${AZAHAR_COMMIT}) =="
 build_azahar azahar_bin "${work_dir}" "${repo_root}" "${AZAHAR_COMMIT}"
 
 echo "== [4/6] Patched Cemu host (Nintendo Wii U, commit ${CEMU_COMMIT}) =="
-# See host/cemu-patches/README.md and docs/known-limitations.md's
+# See host/cemu-patches/README.md and docs/history.md's
 # 2026-07-22 Cemu entry for what this patch does and, importantly, what
 # has and hasn't been verified -- this patch was written entirely from
 # reading Cemu's source, never compiled in this project's own
@@ -383,7 +383,7 @@ ldd "${cemu_bin}" | awk '{print $1}' | sort -u \
 # (`${cemu_src}/bin`, from build_cemu()) still has both as siblings at
 # this point, so they're copied from there, not re-derived. See
 # pack_appimage()'s matching fix (extra_dirs) for the AppImage path
-# below, and docs/known-limitations.md for the real-hardware repro that
+# below, and docs/history.md for the real-hardware repro that
 # caught this being silently dropped everywhere Cemu was packaged.
 cemu_bin_dir="$(dirname "${cemu_bin}")"
 cp -a "${cemu_bin_dir}/resources" "${pkg_dir}/host/resources"
@@ -425,7 +425,7 @@ bundle_library_dependencies "${pkg_dir}/host/internal/dualdeck-host-service" "${
 
 # Prebuilt, patched, self-contained AppImages for
 # emudeck-replace-in-place.sh to download and drop straight into an
-# existing EmuDeck install (see docs/known-limitations.md's 2026-08-01
+# existing EmuDeck install (see docs/history.md's 2026-08-01
 # "prebuilt AppImages" entry for the full story). This tool used to
 # clone/patch/compile melonDS/Azahar/Cemu on the *user's own machine*
 # on every run -- Distrobox, vcpkg, and glibc/Qt ABI mismatches between
@@ -745,7 +745,7 @@ chmod +x "${pkg_dir}/host/internal/install-steam-shortcut.sh"
 # restructuring had install-steam-shortcut.sh directly at host/, and
 # those releases' own host/apply-update.sh hardcodes exactly that path
 # when it downloads and invokes a newer release's copy (see
-# docs/known-limitations.md). That already-installed
+# docs/history.md). That already-installed
 # old script can't be changed retroactively, so a real user on one of
 # those versions hit exactly this: "Check for updates" downloads this
 # new, restructured release fine, then fails with exit 127 trying to
@@ -764,7 +764,8 @@ chmod +x "${pkg_dir}/host/internal/uninstall-steam-shortcut.sh"
 
 cp "${repo_root}/docs/building.md" "${repo_root}/docs/steam-deck-setup.md" \
    "${repo_root}/docs/bazzite-host-setup.md" "${repo_root}/docs/troubleshooting.md" \
-   "${repo_root}/docs/known-limitations.md" "${repo_root}/docs/protocol.md" \
+   "${repo_root}/docs/known-limitations.md" "${repo_root}/docs/history.md" \
+   "${repo_root}/docs/protocol.md" \
    "${pkg_dir}/docs/"
 cp "${repo_root}/LICENSE" "${pkg_dir}/"
 cp "${repo_root}/docs/release-readme.md" "${pkg_dir}/README.md"
@@ -861,7 +862,7 @@ unpatched copy of each emulator inside its own Flatpak sandbox, but its
 ES-DE-based game launcher already checks that exact host path first and
 only falls back to its own bundled copy if nothing is there (confirmed
 directly against RetroDECK's own source, not assumed -- see
-\`docs/known-limitations.md\`'s 2026-08-28 "RetroDECK" entry) -- so
+\`docs/history.md\`'s 2026-08-28 "RetroDECK" entry) -- so
 installing here is picked up automatically, no RetroDECK-specific setup
 needed. One real caveat: RetroDECK's Nintendo DS system defaults to a
 RetroArch core, not standalone melonDS, so you'll need to switch it to
@@ -876,7 +877,7 @@ anything -- no build toolchain, no Distrobox, nothing to compile.
 
 Confirmed working end to end on real hardware (all three emulators
 launching via their existing EmuDeck/Steam shortcuts) -- see
-\`docs/known-limitations.md\`'s 2026-08-01 entries for the full
+\`docs/history.md\`'s 2026-08-01 entries for the full
 verification history and what's still outstanding. The RetroDECK/fresh-
 install path is new and not yet confirmed against a real RetroDECK
 install (see that same 2026-08-28 entry).
@@ -902,7 +903,7 @@ This also opens this host's firewall for DualDeck's ports (via
 \`firewall-cmd\`/\`ufw\`, whichever is present -- may prompt for your
 password) the first time it actually installs something, so the client
 can reach the private host-service each patched AppImage starts on its
-own when launched -- see \`docs/known-limitations.md\`'s "client hangs
+own when launched -- see \`docs/history.md\`'s "client hangs
 on connecting" entry for why this matters.
 
 To check later whether EmuDeck's own updater has silently replaced an

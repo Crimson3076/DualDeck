@@ -154,7 +154,7 @@ is additive work, not a rearchitecture.
 - `RequestScreenshot`'s actual runtime cost at real framerates against a
   real running game was not measured (no game/ROM available in this
   sandbox to test with, same category of limitation
-  `docs/known-limitations.md` already records for melonDS's own
+  `docs/history.md` already records for melonDS's own
   real-hardware-only gaps).
 - Save-states, fast-forward, and other emulator-action equivalents
   (mirroring melonDS's `EmulatorAction` bitmask -- `EmulatorAction_SaveState`,

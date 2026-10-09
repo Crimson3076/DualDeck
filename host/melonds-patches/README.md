@@ -49,7 +49,7 @@ follows the patch boundary proposed in
    defaults to EmuDeck's standard NDS ROM directory
    (`~/Emulation/roms/nds`) the first time it's opened, if that directory
    exists and melonDS hasn't already remembered a `LastROMFolder`. A
-   small, host-local convenience -- see `docs/known-limitations.md` for
+   small, host-local convenience -- see `docs/history.md` for
    why this doesn't cross into the client-facing ROM browsing spec
    section 13 forbids.
 
@@ -77,7 +77,7 @@ files and where they go in the emulator's tree, and
 after `git apply` (used by `scripts/lib/build_emulator.sh` and
 `scripts/patch-existing-emulator.sh`). There is one copy of each file,
 the live one, so the patch can no longer drift behind it (see
-`docs/known-limitations.md`'s 2026-08-01 "frozen protocol copy" entry).
+`docs/history.md`'s 2026-08-01 "frozen protocol copy" entry).
 
 When regenerating the patch, leave the files `shared-files.txt` lists out
 of the diff. `scripts/check-patch-protocol-sync.sh` (run in CI) fails if
@@ -169,7 +169,7 @@ Qt6, SDL2, GCC 13) — not just written and assumed correct:
 7. **Sustained-session stability** (SPEC.md section 20 criterion (12)):
    `tests/homebrew-test-rom/stability_test.py` was run against the live
    patched binary with continuous ~120Hz input traffic and continuous
-   video draining; see `docs/known-limitations.md` for the duration
+   video draining; see `docs/history.md` for the duration
    actually achieved and the frame-count/RSS/error results in this
    sandboxed environment.
 8. **(Historical, superseded) Pairing-code flow, real host + real SDL3
@@ -266,7 +266,7 @@ Qt6, SDL2, GCC 13) — not just written and assumed correct:
     for when `GPU::GetFramebuffers()` returns false/no bottom buffer
     while `remoteServer` is active, printing a specific one-time message
     telling the host operator to switch the 3D renderer to Software (see
-    `docs/known-limitations.md`'s "round 2" real-usage entry and
+    `docs/history.md`'s "round 2" real-usage entry and
     `docs/troubleshooting.md`). Verified end-to-end against this exact
     patched binary + the real homebrew test ROM + the real SDL3 client
     under Xvfb: with the software renderer (this sandbox's default), the
@@ -288,7 +288,7 @@ Qt6, SDL2, GCC 13) — not just written and assumed correct:
     stays fixed at native 256x192). `EmuThread.cpp`'s `else` branch from
     item 14 now tries this first, keeping the diagnostic log as a
     fallback for whatever it doesn't cover. See
-    `docs/known-limitations.md`'s "OpenGL/OpenGLCompute 3D renderer"
+    `docs/history.md`'s "OpenGL/OpenGLCompute 3D renderer"
     section for the full account -- **verified end-to-end** against this
     exact patched binary + the real homebrew test ROM + the real SDL3
     client, under Xvfb with Mesa's software GL rasterizer
@@ -359,7 +359,7 @@ Qt6, SDL2, GCC 13) — not just written and assumed correct:
     same cleanup path as a graceful disconnect), then a second
     `ENABLE`/idempotent-re-`ENABLE`/`STATUS` cycle, confirming the
     remote server can be stopped and restarted repeatedly within one
-    process. See `docs/known-limitations.md`'s "Live-toggle" section and
+    process. See `docs/history.md`'s "Live-toggle" section and
     `decky-plugin/README.md` for the Decky plugin side, including the
     boundary between what's verified there and what's an unverified
     best-effort match to the official plugin template (no real Decky
@@ -374,7 +374,7 @@ Switched those two log lines to `std::fprintf(stderr, ...)`, matching
 `NetServer`'s own convention for exactly this reason. The client
 (`client/src/main.cpp`) had the identical latent issue for its own
 informational log messages and was fixed the same way -- see
-`docs/known-limitations.md`'s "Real-usage bug fixes" section.
+`docs/history.md`'s "Real-usage bug fixes" section.
 
 Two real things were caught and fixed during this verification, not
 assumed correct from review:
@@ -516,7 +516,7 @@ one-client-at-a-time v0.1 scope.
   whole state file.
 - Session IDs are generated and returned in `HelloAck` but not yet
   validated on any later packet (matches the standalone prototype's
-  current scope, see `docs/known-limitations.md`).
+  current scope, see `docs/history.md`).
 
 ## Silent remote-server bind failures now surfaced (2026-08-01)
 
@@ -530,7 +530,7 @@ a Steam/EmuDeck shortcut.
 
 Most likely trigger for this specific report: a leftover
 `dualdeck-host-service` process (from before the AppRun `exec`/trap fix
-elsewhere in `docs/known-limitations.md`) still bound to the same
+elsewhere in `docs/history.md`) still bound to the same
 default ports (8760-8765) melonDS's own in-process `NetServer` also
 tries to bind -- a real port conflict, not a melonDS-specific defect.
 

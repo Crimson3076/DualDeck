@@ -30,7 +30,7 @@ namespace {
 // wizard_state.h) and is reachable again afterward from the Settings screen
 // in main()'s pause menu.
 //
-// Deliberately out of scope, documented in docs/known-limitations.md
+// Deliberately out of scope, documented in docs/history.md
 // rather than silently skipped: audio/microphone testing (this project has
 // no audio feature at all yet), host-side UI changes (would require
 // patching real melonDS Qt source, a separate undertaking), distinguishing
@@ -194,7 +194,7 @@ WizardStepResult wizardChooseMethod(SDL_Renderer* renderer, SDL_Gamepad*& gamepa
 
 // Steam Input doesn't reliably bring up a virtual keyboard in Gaming Mode
 // (the same limitation that killed the old 6-digit pairing-code entry
-// screen -- see docs/known-limitations.md); this screen works fine with a
+// screen -- see docs/history.md); this screen works fine with a
 // physical/Bluetooth keyboard but a Gaming-Mode user with only a
 // controller may have no way to type here. Documented, not solved.
 // Returns std::nullopt if the user cancelled (Escape/window close) --

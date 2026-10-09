@@ -88,18 +88,18 @@ bool GLRenderer::GetFramebuffers(void** top, void** bottom)
   used to end with "a follow-up patch would add an async PBO readback
   for the OpenGL path once the software path is proven"). That follow-up
   landed after real Steam Deck hardware testing hit exactly this gap
-  (see `docs/known-limitations.md`'s "Real-usage bug fixes, round 2"):
+  (see `docs/history.md`'s "Real-usage bug fixes, round 2"):
   `GLBottomScreenCapture` (`src/frontend/qt_sdl/remote_server/GLBottomScreenCapture.{h,cpp}`
   in the patch) reads `FPOutputTex[frontbuf]` layer 1 (bottom screen)
   back with a synchronous `glReadPixels(..., GL_BGRA, GL_UNSIGNED_BYTE, ...)`
   each frame, at `3D.GL.ScaleFactor`'s actual resolution (the wire
   protocol/host/client are all resolution-agnostic per-frame -- see
-  `docs/known-limitations.md`'s 2026-08-28 "bottom screen upscale" entry)
+  `docs/history.md`'s 2026-08-28 "bottom screen upscale" entry)
   -- downscaling via `glBlitFramebuffer` only once the scale factor
   exceeds `GLBottomScreenCapture`'s own capture cap (4x/1024x768, well
   past melonDS's full 16x range but still real-time-streamable). This is
   the simple synchronous version, not the async double-buffered PBO
-  readback originally envisioned here -- see `docs/known-limitations.md`'s
+  readback originally envisioned here -- see `docs/history.md`'s
   "OpenGL/OpenGLCompute 3D renderer" section for exactly what was
   verified (sustained ~58fps in this project's sandbox using Mesa
   software GL rendering) and what wasn't (a PBO-based async version
@@ -253,7 +253,7 @@ Section 24, item 10 of `SPEC.md`.
   (`GLBottomScreenCapture`, added after real Steam Deck hardware testing
   hit this gap) -- but only via a synchronous `glReadPixels` each frame,
   not the async/PBO design originally envisioned here. See
-  `docs/known-limitations.md`'s "OpenGL/OpenGLCompute 3D renderer"
+  `docs/history.md`'s "OpenGL/OpenGLCompute 3D renderer"
   section for what was and wasn't verified.
 - DSi-specific paths (microphone, camera, NAND) were not investigated
   since they are explicit non-goals for v0.1 (`SPEC.md` §21).
@@ -331,7 +331,7 @@ which:
 
 A sustained-session stability run (`tests/homebrew-test-rom/stability_test.py`,
 SPEC.md section 20 criterion (12)) was also carried out against the live
-patched binary; see `docs/known-limitations.md` for the duration achieved
+patched binary; see `docs/history.md` for the duration achieved
 and results.
 
 **What's still open, honestly**: booting to the system menu (needs real
@@ -340,7 +340,7 @@ firmware, deliberately not sought out) and a commercial-cart-style ROM
 this project deliberately does not include or seek out. Real Steam Deck
 hardware, a physical gamepad, and a real commercial game are still
 outside what this sandboxed environment can provide; see
-`docs/known-limitations.md` for the precise, current list.
+`docs/history.md` for the precise, current list.
 
 **Follow-up pass -- pairing codes and an EmuDeck-aware ROM default**:
 implements two of SPEC.md section 13's "later pairing options" (six-digit

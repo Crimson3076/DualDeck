@@ -3,7 +3,7 @@
 section 13, `host/remote-server/include/host/device_approval_manager.h`).
 Replaces the earlier 6-digit-pairing-code flow, which required typing a
 code on the client -- unworkable since Steam Input doesn't reliably bring
-up a virtual keyboard in Gaming Mode (see docs/known-limitations.md).
+up a virtual keyboard in Gaming Mode (see docs/history.md).
 
 Starts the real `dualdeck-host-service` binary with NO `--auth-token`
 (device-approval mode, the default), then exercises the same state

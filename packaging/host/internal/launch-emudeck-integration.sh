@@ -3,7 +3,7 @@
 # installed emulators" menu choice -- runs the bundled
 # emudeck-integration/scripts/emudeck-replace-in-place.sh (see
 # scripts/build-release.sh's "Bundling EmuDeck integration tool" step in
-# the DualDeck repository, and docs/known-limitations.md's Phase A and
+# the DualDeck repository, and docs/history.md's Phase A and
 # 2026-08-28 "RetroDECK" entries there for the full design).
 #
 # Despite the directory/tool name (kept as-is to avoid churning every

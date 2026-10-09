@@ -2,7 +2,7 @@
 # AppRun script generators for the patched melonDS/Azahar/Cemu AppImages,
 # meant to be `source`d (not executed directly). Used by build-release.sh
 # to produce the prebuilt, patched AppImages published as release assets
-# (see docs/known-limitations.md's 2026-08-01 "prebuilt AppImages" entry
+# (see docs/history.md's 2026-08-01 "prebuilt AppImages" entry
 # for why these are built once in CI rather than compiled on every user's
 # own machine by emudeck-replace-in-place.sh, which used to own these
 # functions and now just downloads the result).
@@ -12,7 +12,7 @@
 # checkbox (MelonDSRemote.Enable / the "Enable melonDS Remote" setting) or
 # MELONDS_REMOTE_ENABLE, and runs its server IN-PROCESS by default -- no
 # out-of-process Host Service is needed for it to work at all (see
-# docs/known-limitations.md's "Config/UI toggle" entry). Every OTHER
+# docs/history.md's "Config/UI toggle" entry). Every OTHER
 # melonDS launch path in this codebase (run-host.sh, launch-custom-
 # emulator.sh, the Distrobox exec in install-host-distrobox.sh) exports
 # MELONDS_REMOTE_ENABLE=1 explicitly -- this one didn't, a real bug
@@ -27,7 +27,7 @@
 # AppImage -- the entire point of "replace in place." Making melonDS
 # default to out-of-process instead is separate, larger Phase B work
 # (a bigger change to melonDS's own patch), not this fix's scope -- see
-# docs/known-limitations.md's Phase A entry.
+# docs/history.md's Phase A entry.
 generate_apprun_melonds() {
     local output_path="$1" dualdeck_version_arg="$2"
     cat > "${output_path}" <<EOF
@@ -252,7 +252,7 @@ export QT_QPA_PLATFORMTHEME=""
 # what looked like "Host Control always running" and (per
 # host_control_adapter.h's getLatestFrame(), hard-coded to return false
 # -- there is no host-desktop screen-capture code yet, see
-# docs/known-limitations.md's Phase C2 entries) also explains why
+# docs/history.md's Phase C2 entries) also explains why
 # connecting to it got stuck: a real, accepted connection into a mode
 # that structurally never sends a video frame.
 #

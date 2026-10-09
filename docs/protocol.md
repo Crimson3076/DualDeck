@@ -110,7 +110,7 @@ shape). Added for video-latency instrumentation: the client compares
 this against its own wall-clock receipt time to estimate network +
 encode + send-queue latency for the video path, the same "assumes
 synced clocks" caveat `ControllerState.clientTimestampUs`'s existing
-input-latency estimate already carries (see `docs/known-limitations.md`).
+input-latency estimate already carries (see `docs/history.md`).
 The timestamp is taken host-side (`net_server.cpp`'s `videoLoop()`)
 immediately before this frame's JPEG encoding begins, so the client-
 computed latency includes encode time, not just network transit. This
@@ -149,7 +149,7 @@ red, 3 = unused/alpha) -- matching melonDS's software renderer output
 directly. Fine for DS's 256x192 or 3DS's 320x240 surfaces, but
 increasingly unworkable for anything larger (Cemu's 854x480 GamePad
 surface needs ~788 Mbps uncompressed at 60fps) on a real, bandwidth-
-constrained link -- see `docs/known-limitations.md`'s 2026-07-22 JPEG
+constrained link -- see `docs/history.md`'s 2026-07-22 JPEG
 compression entry for the full story. `NetServer::videoLoop()`
 (`host/remote-server/src/net_server.cpp`) compresses every frame with
 this B,G,R,X-ordered raw buffer as turbojpeg's `TJPF_BGRA` input, and
@@ -253,7 +253,7 @@ rate (`kMicAudioSampleRate` = 48000 Hz) rather than negotiated per
 client -- this matches melonDS's own default local-microphone capture
 rate, so the host side can resample it into the DS's actual mic
 consumption rate using melonDS's existing local-mic pipeline, not a
-separate one (see `docs/known-limitations.md`'s microphone section for
+separate one (see `docs/history.md`'s microphone section for
 why). `kMicAudioSamplesPerPacket` (480, i.e. 10ms per packet) bounds how
 many samples one packet may declare -- a well-behaved client always
 sends exactly this many except possibly a shorter final packet right
@@ -279,7 +279,7 @@ session, sent to an already-connected, already-authenticated client on
 the TCP control channel. Exists so a client can stay connected across
 an emulator starting or exiting instead of having to reconnect --
 `host/remote-server`'s `NetServer::setTarget()` is what triggers this
-(see `docs/known-limitations.md`'s matching entry and
+(see `docs/history.md`'s matching entry and
 `docs/adr/0001-host-service-and-adapter-architecture.md` section 6).
 
 Unlike most other packet types in this document (see also `ClientLog`
@@ -313,7 +313,7 @@ A Phase-E-or-later client build (see `HelloAck payload` above for how it
 learns the *initial* mode before any `ModeChanged` could ever arrive)
 reads this packet via `NetClient::controlReceiveLoop()` and shows a
 distinct "WAITING FOR EMULATOR" screen in place of the video texture
-while `mode == HostControl` -- see `docs/known-limitations.md`'s
+while `mode == HostControl` -- see `docs/history.md`'s
 matching entry for what that UI does and doesn't do.
 
 ## ClientLog payload

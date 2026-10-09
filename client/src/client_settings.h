@@ -54,7 +54,7 @@ struct ClientSettings {
     // Protocol v13: whether this client advertises VideoCodecBit_H264
     // (in addition to the always-advertised VideoCodecBit_Jpeg) in
     // HelloPayload.supportedVideoCodecs -- see
-    // docs/known-limitations.md's 2026-08-25 video-codec-negotiation
+    // docs/history.md's 2026-08-25 video-codec-negotiation
     // entries for the full design. Defaults off, same "opt-in
     // experimental feature" convention as mirrorHostScreen above: the
     // decoder is real and tested (client/src/h264_decoder.h), but has

@@ -69,7 +69,7 @@ This has been verified to work: building SDL3 3.2.16 from source this way
 and configuring against it produces a `dualdeck-client` that
 compiles cleanly and has been run successfully (real handshake, real
 sustained video/input traffic) against both the standalone host prototype
-and the actual patched melonDS host -- see `docs/known-limitations.md`.
+and the actual patched melonDS host -- see `docs/history.md`.
 Not yet tested: real Steam Deck hardware/gamepad (this was verified in a
 headless, gamepad-less environment).
 
@@ -126,7 +126,7 @@ client-side to pause for -- so it recovers automatically once the host
 approves it, restarts, or a network interruption clears (spec section
 7.2). This reconnect behavior, and the device-approval flow above, have
 been exercised against a real host process with the real client binary
-in this sandbox (see `docs/known-limitations.md`) but not yet against
+in this sandbox (see `docs/history.md`) but not yet against
 real Steam Deck hardware/gamepad.
 
 ## Building the full release package yourself

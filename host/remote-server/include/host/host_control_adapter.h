@@ -36,7 +36,7 @@ namespace melonds_remote::host {
 // gamepad, derived from a ControllerState -- deliberately has no I/O of
 // its own so the DSButton -> gamepad mapping can be unit-tested without
 // a real /dev/uinput node (this sandbox has none; see
-// docs/known-limitations.md's Phase C entry). Field names follow
+// docs/history.md's Phase C entry). Field names follow
 // standard Xbox-controller ABXY naming (south=A, east=B, west=X,
 // north=Y), matching the exact same physical-button meaning
 // host::AdapterBridge's dsButtonsToGenericButtons table already
@@ -228,7 +228,7 @@ public:
     // user report, 2026-08-03: both of the user's actual test machines
     // turned out to be Wayland sessions, where X11ScreenCapture
     // "succeeds" against XWayland's own empty compositing root (a
-    // uniform grey, not a crash -- see docs/known-limitations.md) --
+    // uniform grey, not a crash -- see docs/history.md) --
     // tried first anyway since it's cheaper/simpler when it does apply
     // (a real X11 desktop session), with WaylandScreenCapture's
     // portal+PipeWire path as the fallback that actually matters on

@@ -32,7 +32,7 @@
 //  - Implements device-approval authentication (spec section 13,
 //    replacing an earlier 6-digit-code-entry screen that required typing
 //    on the client -- unworkable since Steam Input doesn't reliably bring
-//    up a virtual keyboard in Gaming Mode, see docs/known-limitations.md):
+//    up a virtual keyboard in Gaming Mode, see docs/history.md):
 //    sends a persistent, self-generated device identity on every Hello; a
 //    human at the host approves or denies it, no typing anywhere.
 
@@ -90,7 +90,7 @@ uint64_t wallClockNowUs() {
 // runCaptureStdout <command>
 //
 // Real user report, 2026-08-02: the trackpad-experiment toggle
-// (docs/known-limitations.md's entry of the same date) originally only
+// (docs/history.md's entry of the same date) originally only
 // lived in dualdeck-client.sh's outer shell menu, which is unreachable
 // from Gaming Mode (the Steam shortcut execs run-client.sh directly,
 // bypassing that menu). Moved into this Settings screen instead, which
@@ -156,7 +156,7 @@ int main(int argc, char** argv) {
     // against and why. This is this client binary's own env var, not
     // the one the patched melonDS/Azahar reads for the same purpose on
     // the host side (MELONDS_REMOTE_VERSION/AZAHAR_REMOTE_VERSION,
-    // deliberately left alone -- see docs/known-limitations.md's
+    // deliberately left alone -- see docs/history.md's
     // rebrand section for why those stay as-is). Empty (unset) disables
     // the version-mismatch check for this connection, e.g. for a
     // from-source dev build run directly, not via run-client.sh.
@@ -633,7 +633,7 @@ int main(int argc, char** argv) {
         // normalized 0..1 range) covers roughly a third of the 1280px-wide
         // client window's worth of cursor travel -- arbitrary but usable;
         // no real-hardware feel testing has tuned this yet (see
-        // docs/known-limitations.md).
+        // docs/history.md).
         constexpr float kTouchpadMouseSensitivity = 900.0f;
         std::optional<std::pair<float, float>>
             lastTouchpadPos[kMaxTrackedTouchpads][kMaxTrackedFingersPerTouchpad];

@@ -6,7 +6,7 @@ specifically, the client's touchpads only forwarded raw touch
 while the STEAM button was held, because Steam Input's own action-set
 layer was the only place a Trackpad-type binding existed for the
 DualDeck Client's auto-picked, unconfigured Controller Layout (see
-docs/known-limitations.md's 2026-08-02 touchpad entry).
+docs/history.md's 2026-08-02 touchpad entry).
 
 Writing a *custom* Steam Input Controller Layout (a reverse-engineered,
 undocumented per-controller-type binary/text VDF schema) was the first
@@ -55,7 +55,7 @@ mapping table), not anything Steam Input would otherwise be providing --
 but this has not been confirmed against real Steam Deck hardware, only
 against real, independent research (SDL's own Steam Controller touchpad
 PR discussion; RPCS3's shipped implementation). The 2026-08-02
-known-limitations.md entry for this experiment states this plainly.
+history.md entry for this experiment states this plainly.
 """
 import argparse
 import glob

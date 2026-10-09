@@ -83,7 +83,7 @@ host/melonds-patches/ 0001-remote-server-integration.patch: implements the
                       path, and real button-driven input have all been
                       verified end-to-end against the running patched
                       binary -- see host/melonds-patches/README.md and
-                      docs/known-limitations.md.
+                      docs/history.md.
 
 client/               Steam Deck client (SDL3). Depends on protocol/ only.
                       - net_client.h/.cpp      control/input/video sockets
@@ -394,7 +394,7 @@ selecting adapters independently (coordinated with issue #26) -- issue
 - Video transport is raw B,G,R,A bytes-in-memory over TCP (Stage 1 per
   spec section 8.4); no compression yet. On the client this must be
   `SDL_PIXELFORMAT_BGRA32`, not `SDL_PIXELFORMAT_BGRA8888` -- see
-  `docs/known-limitations.md`'s "Real-usage bug fixes" section for why
+  `docs/history.md`'s "Real-usage bug fixes" section for why
   those aren't the same thing on a little-endian machine.
 - The host defaults melonDS's own window to showing only the top screen
   while a client is actively streaming the bottom one (matching SPEC.md's
@@ -412,7 +412,7 @@ selecting adapters independently (coordinated with issue #26) -- issue
   standalone host prototype and the actual patched melonDS host,
   including the auto-reconnect thread and the device-approval flow.
   Not yet tested: real Steam Deck hardware/gamepad (see
-  `docs/known-limitations.md`).
+  `docs/history.md`).
 - Latency instrumentation assumes client and host clocks are reasonably
   synced (e.g. NTP) -- there's no protocol-level clock-offset negotiation,
   so on an unsynced pair the latency numbers are meaningless (the host

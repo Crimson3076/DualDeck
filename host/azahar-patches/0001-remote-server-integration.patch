@@ -129,7 +129,7 @@ index f08a7ea2f..87fd4feba 100644
 +    // where the platform-theme-supplied icon provider triggers KIO's
 +    // thumbnail generation (KIO::FilePreviewJob) and crashes inside
 +    // Qt's OpenSSL-backed QCryptographicHash. See DualDeck's
-+    // docs/known-limitations.md for the diagnosis -- setting
++    // docs/history.md for the diagnosis -- setting
 +    // QT_QPA_PLATFORMTHEME did not avoid this, and neither did the
 +    // first attempt at this fix (setIconProvider() alone): constructing
 +    // a QFileDialog object directly, without also setting
@@ -285,7 +285,7 @@ index 000000000..6a8439675
 +constexpr const char* kInputEngineName = "melonds_remote";
 +
 +// Defaults to 60fps (up from an earlier, untested-on-real-hardware 30fps
-+// guess -- see docs/known-limitations.md's performance-tuning entry in
++// guess -- see docs/history.md's performance-tuning entry in
 +// the DualDeck repo this was vendored from): real playtest data showed
 +// zero RequestScreenshot() timeouts at 30fps with plenty of headroom, so
 +// 60 was the obvious next thing to try. Overridable via
@@ -365,7 +365,7 @@ index 000000000..6a8439675
 +// were flipped, exactly because melonDS has no table like this and
 +// Azahar did. Fixing it upstream also retires the old tradeoff, where
 +// anyone without that Steam Input quirk saw X/Y wrong the other way.
-+// See docs/known-limitations.md's 2026-08-03 and 2026-08-04 entries.
++// See docs/history.md's 2026-08-03 and 2026-08-04 entries.
 +constexpr std::array<uint32_t, 12> kNativeButtonToGenericBit = {
 +    melonds_remote::adapter::GenericButton_South,     // A
 +    melonds_remote::adapter::GenericButton_East,      // B
@@ -1069,7 +1069,7 @@ index 000000000..e4dde1cb5
 +// NetServer + device-approval). See AzaharAdapter.h's top comment for
 +// why: reimplementing NetServer's device-approval Qt dialog a second
 +// time for a second emulator wasn't worth it for a first integration --
-+// see docs/known-limitations.md's AzaharAdapter entry.
++// see docs/history.md's AzaharAdapter entry.
 +
 +#include <atomic>
 +#include <memory>
