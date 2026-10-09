@@ -600,8 +600,8 @@ MDR_TEST(net_client_drops_a_log_line_when_not_connected) {
 // on a codec both sides can run. Loopback is far faster than any
 // PyroWave need, so PyroWave wins whenever both sides have it.
 MDR_TEST(net_client_auto_codec_measures_the_link_and_picks_a_codec) {
-    ServerFixture fixture;
     SizedFrameSource dsFrame(256, 192);
+    ServerFixture fixture;
     fixture.server.setTarget(fixture.sinkA, dsFrame, HostMode::Emulation, SystemIdentity{"nds", "Nintendo DS"},
                               AdapterIdentity{"melonds", "melonDS", "1.0"});
 
@@ -631,5 +631,69 @@ MDR_TEST(net_client_without_auto_codec_skips_the_link_test) {
     MDR_CHECK(client.connect());
     MDR_CHECK_EQ(client.measuredBandwidthKbps(), 0u);
     MDR_CHECK(client.negotiatedVideoCodec() == VideoCodec::Jpeg);
+    client.disconnect();
+}
+
+namespace {
+// Announces DS size in HelloAck but then hands out a much larger frame,
+// like Host Control's screen mirror (HelloAck's size comes from
+// HostControlAdapter::frameDimensions(), 256x192 until the capture is
+// ready) or a mid-session switch from melonDS to Host Control.
+class GrowingFrameSource : public IFrameSource {
+public:
+    GrowingFrameSource(uint16_t width, uint16_t height, std::vector<uint8_t> frame)
+        : width_(width), height_(height), frame_(std::move(frame)) {}
+
+    void frameDimensions(uint16_t& outWidth, uint16_t& outHeight) const override {
+        outWidth = 256;
+        outHeight = 192;
+    }
+
+    bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex, uint16_t& outWidth,
+                        uint16_t& outHeight) override {
+        outFrame = frame_;
+        outFrameIndex = 0;
+        outWidth = width_;
+        outHeight = height_;
+        return true;
+    }
+
+private:
+    uint16_t width_;
+    uint16_t height_;
+    std::vector<uint8_t> frame_;
+};
+} // namespace
+
+// Real report, 2026-10-09: PyroWave didn't work in Host Control. The
+// client capped every video payload at the raw size of the last frame
+// size it knew (256x192x4, ~196 KB, from HelloAck), so the first mirrored
+// desktop frame bigger than that closed the connection. JPEG and H.264
+// desktop frames usually stayed under it; PyroWave's are several times
+// larger. Noise at quality 100 makes the JPEG frame here big enough to
+// hit the same cap.
+MDR_TEST(net_client_accepts_a_frame_larger_than_the_handshake_size) {
+    constexpr uint16_t kWidth = 1280;
+    constexpr uint16_t kHeight = 800;
+    std::vector<uint8_t> noise(static_cast<size_t>(kWidth) * kHeight * 4);
+    uint32_t seed = 12345;
+    for (auto& byte : noise) {
+        seed = seed * 1103515245u + 12345u;
+        byte = static_cast<uint8_t>(seed >> 24);
+    }
+    GrowingFrameSource source(kWidth, kHeight, std::move(noise));
+    // After the source, so the server (and its video thread) stops first.
+    ServerFixture fixture;
+    fixture.server.setTarget(fixture.sinkA, source, HostMode::HostControl, SystemIdentity{}, AdapterIdentity{});
+
+    NetClientConfig clientConfig = fixture.clientConfig();
+    clientConfig.videoQuality = 100;
+    NetClient client(clientConfig);
+    MDR_CHECK(client.connect());
+
+    std::vector<uint8_t> received;
+    MDR_CHECK(waitUntil([&] { return client.getLatestFrame(received); }, 5000));
+    MDR_CHECK(client.hostNativeWidth() == kWidth);
+    MDR_CHECK(client.isConnected());
     client.disconnect();
 }
