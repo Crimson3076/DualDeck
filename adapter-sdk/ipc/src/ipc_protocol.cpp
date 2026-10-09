@@ -1,20 +1,20 @@
-#include "melonds_remote/adapter/ipc/ipc_protocol.h"
+#include "dualdeck/adapter/ipc/ipc_protocol.h"
 
-using melonds_remote::ByteBuffer;
-using melonds_remote::appendAdapterIdentity;
-using melonds_remote::appendString;
-using melonds_remote::appendSystemIdentity;
-using melonds_remote::appendU16;
-using melonds_remote::appendU32;
-using melonds_remote::appendU64;
-using melonds_remote::readAdapterIdentity;
-using melonds_remote::readString;
-using melonds_remote::readSystemIdentity;
-using melonds_remote::readU16;
-using melonds_remote::readU32;
-using melonds_remote::readU64;
+using dualdeck::ByteBuffer;
+using dualdeck::appendAdapterIdentity;
+using dualdeck::appendString;
+using dualdeck::appendSystemIdentity;
+using dualdeck::appendU16;
+using dualdeck::appendU32;
+using dualdeck::appendU64;
+using dualdeck::readAdapterIdentity;
+using dualdeck::readString;
+using dualdeck::readSystemIdentity;
+using dualdeck::readU16;
+using dualdeck::readU32;
+using dualdeck::readU64;
 
-namespace melonds_remote::adapter::ipc {
+namespace dualdeck::adapter::ipc {
 
 namespace {
 void appendI16(ByteBuffer& out, int16_t v) {
@@ -334,4 +334,4 @@ std::optional<bool> parseClientConnectionChanged(const uint8_t* data, size_t siz
     return data[0] != 0;
 }
 
-} // namespace melonds_remote::adapter::ipc
+} // namespace dualdeck::adapter::ipc

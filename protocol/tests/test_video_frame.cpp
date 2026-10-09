@@ -1,9 +1,9 @@
 #include <vector>
 
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 #include "test_framework.h"
 
-using namespace melonds_remote;
+using namespace dualdeck;
 
 MDR_TEST(video_frame_payload_round_trip) {
     VideoFramePayload payload;

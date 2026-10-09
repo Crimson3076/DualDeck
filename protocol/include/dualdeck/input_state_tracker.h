@@ -9,9 +9,9 @@
 #include <cstdint>
 #include <optional>
 
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 
-namespace melonds_remote {
+namespace dualdeck {
 
 class InputStateTracker {
 public:
@@ -61,4 +61,4 @@ private:
     bool hasReceivedAnyPacket_ = false;
 };
 
-} // namespace melonds_remote
+} // namespace dualdeck

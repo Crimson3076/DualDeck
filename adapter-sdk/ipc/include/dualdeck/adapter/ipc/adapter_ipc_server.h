@@ -29,9 +29,9 @@
 #include <thread>
 #include <unordered_map>
 
-#include "melonds_remote/adapter/adapter_contract.h"
+#include "dualdeck/adapter/adapter_contract.h"
 
-namespace melonds_remote::adapter::ipc {
+namespace dualdeck::adapter::ipc {
 
 class AdapterIpcServer : public IEmulatorAdapter {
 public:
@@ -126,4 +126,4 @@ private:
     bool lastKnownClientConnected_ = false;
 };
 
-} // namespace melonds_remote::adapter::ipc
+} // namespace dualdeck::adapter::ipc

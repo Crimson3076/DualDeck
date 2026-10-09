@@ -7,7 +7,7 @@
 
 #include "bitmap_font.h"
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 void renderCenteredBitmapText(SDL_Renderer* renderer, const std::string& text, float y,
                                int pixelSize, SDL_Color color) {
@@ -314,4 +314,4 @@ void renderPauseMenu(SDL_Renderer* renderer, const std::vector<std::string>& ite
     SDL_RenderPresent(renderer);
 }
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

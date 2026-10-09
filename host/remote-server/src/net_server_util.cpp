@@ -14,7 +14,7 @@
 #include "host/h264_encoder.h"
 #include "host/pyrowave_encoder.h"
 
-namespace melonds_remote::host::net_detail {
+namespace dualdeck::host::net_detail {
 
 
 // Monotonic clock: used for timeouts and sequence-number bookkeeping,
@@ -250,4 +250,4 @@ size_t pyrowaveMaxFrameBytes(int quality, uint16_t width, uint16_t height) {
 }
 
 
-} // namespace melonds_remote::host::net_detail
+} // namespace dualdeck::host::net_detail

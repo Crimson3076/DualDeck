@@ -22,7 +22,7 @@
 
 #include <string>
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 enum class KdialogPromptResult {
     Approved,    // the user clicked Yes
@@ -42,4 +42,4 @@ KdialogPromptResult promptDeviceApprovalViaKdialog(const std::string& clientName
 // around fork()+execlp()+waitpid() calling this with the real exit status.
 KdialogPromptResult interpretKdialogExitStatus(bool exitedNormally, int exitCode);
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

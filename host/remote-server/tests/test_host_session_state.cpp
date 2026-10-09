@@ -1,7 +1,7 @@
 #include "host/host_session_state.h"
 #include "test_framework.h"
 
-using namespace melonds_remote::host;
+using namespace dualdeck::host;
 
 MDR_TEST(host_session_state_happy_path_transitions_are_valid) {
     MDR_CHECK(isValidTransition(HostSessionState::Idle, HostSessionState::Discoverable));

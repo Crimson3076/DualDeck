@@ -4,7 +4,7 @@
 // docs/adr/0001-host-service-and-adapter-architecture.md section 4:
 // translates between NetServer's existing DS-specific
 // IEmulatorInputSink/IFrameSource interfaces and a connected
-// melonds_remote::adapter::IEmulatorAdapter (in-process, or
+// dualdeck::adapter::IEmulatorAdapter (in-process, or
 // out-of-process via adapter-sdk/ipc's AdapterIpcServer -- this class
 // doesn't know or care which). This is what lets NetServer, and the
 // live client<->host wire protocol it speaks (kProtocolVersion, unchanged
@@ -53,9 +53,9 @@
 
 #include "host/emulator_input_sink.h"
 #include "host/frame_source.h"
-#include "melonds_remote/adapter/adapter_contract.h"
+#include "dualdeck/adapter/adapter_contract.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 class AdapterBridge : public IEmulatorInputSink, public IFrameSource {
 public:
@@ -64,7 +64,7 @@ public:
     // valid capabilities() by the time this constructor runs -- see the
     // class comment above for why that used to be a real, silently
     // broken precondition.
-    explicit AdapterBridge(melonds_remote::adapter::IEmulatorAdapter& adapter) : adapter_(adapter) {}
+    explicit AdapterBridge(dualdeck::adapter::IEmulatorAdapter& adapter) : adapter_(adapter) {}
 
     // IEmulatorInputSink
     void applyControllerState(const ControllerState& state) override;
@@ -86,7 +86,7 @@ public:
     std::string targetSurfaceId() const;
 
 private:
-    melonds_remote::adapter::IEmulatorAdapter& adapter_;
+    dualdeck::adapter::IEmulatorAdapter& adapter_;
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

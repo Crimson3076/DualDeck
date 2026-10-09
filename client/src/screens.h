@@ -14,7 +14,7 @@
 #include "discovery_client.h"
 #include "net_client.h"
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 inline constexpr int kWindowWidth = 1280;
 inline constexpr int kWindowHeight = 800;
@@ -40,4 +40,4 @@ void renderPauseMenu(SDL_Renderer* renderer, const std::vector<std::string>& ite
                      const std::string& title = "MENU", const std::string& statusLine = "",
                      float micLevel = -1.0f, const std::string& subtitle = "");
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

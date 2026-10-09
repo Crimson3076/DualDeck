@@ -19,7 +19,7 @@
 #include "host/h264_encoder.h"
 #include "host/pyrowave_encoder.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 using namespace net_detail;
 
@@ -380,4 +380,4 @@ void NetServer::videoLoop() {
     tjDestroy(jpegCompressor);
 }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

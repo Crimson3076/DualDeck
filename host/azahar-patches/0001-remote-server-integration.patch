@@ -26,7 +26,7 @@ index 91d8e1353..c8876b4a5 100644
 +# repository this was vendored from, and host/azahar-patches/README.md
 +# for the patch itself). Own include root so remote_server/ code
 +# includes its headers the same way the standalone DualDeck repo does
-+# (e.g. "melonds_remote/protocol.h", "melonds_remote/adapter/..."),
++# (e.g. "dualdeck/protocol.h", "dualdeck/adapter/..."),
 +# mirroring the equivalent melonDS integration's own vendoring pattern.
 +target_include_directories(citra_qt PRIVATE
 +    "${CMAKE_CURRENT_SOURCE_DIR}/remote_server/adapter_sdk/include"
@@ -70,7 +70,7 @@ index f08a7ea2f..87fd4feba 100644
 +    // see docs/azahar-integration-analysis.md in the DualDeck repo this
 +    // was vendored from). Opt-in and out-of-process only -- see
 +    // RemoteServerBridge.h's top comment. AZAHAR_REMOTE_ADAPTER_SOCKET
-+    // empty uses melonds_remote::adapter::ipc::defaultAdapterSocketPath().
++    // empty uses dualdeck::adapter::ipc::defaultAdapterSocketPath().
 +    if (std::getenv("AZAHAR_REMOTE_ENABLE") != nullptr) {
 +        const char* socket_path_env = std::getenv("AZAHAR_REMOTE_ADAPTER_SOCKET");
 +        const char* version_env = std::getenv("AZAHAR_REMOTE_VERSION");
@@ -81,7 +81,7 @@ index f08a7ea2f..87fd4feba 100644
 +        // AzaharAdapter's constructor (run synchronously just above, inside
 +        // RemoteServerBridge's own constructor) calls registerInputEngine(),
 +        // which overwrites Settings::values.current_input_profile to route
-+        // through the "melonds_remote" input engine -- but HID::Module (and
++        // through the "dualdeck" input engine -- but HID::Module (and
 +        // APT::AppletManager, IR_USER, IR_RST) already read the *old*
 +        // profile and built their Input::ButtonDevice/AnalogDevice objects
 +        // from it back when LoadROM() above powered the system on, well
@@ -282,7 +282,7 @@ index 000000000..6a8439675
 +
 +namespace {
 +
-+constexpr const char* kInputEngineName = "melonds_remote";
++constexpr const char* kInputEngineName = "dualdeck";
 +
 +// Defaults to 60fps (up from an earlier, untested-on-real-hardware 30fps
 +// guess -- see docs/history.md's performance-tuning entry in
@@ -367,18 +367,18 @@ index 000000000..6a8439675
 +// anyone without that Steam Input quirk saw X/Y wrong the other way.
 +// See docs/history.md's 2026-08-03 and 2026-08-04 entries.
 +constexpr std::array<uint32_t, 12> kNativeButtonToGenericBit = {
-+    melonds_remote::adapter::GenericButton_South,     // A
-+    melonds_remote::adapter::GenericButton_East,      // B
-+    melonds_remote::adapter::GenericButton_West,      // X (see comment above)
-+    melonds_remote::adapter::GenericButton_North,     // Y (see comment above)
-+    melonds_remote::adapter::GenericButton_DpadUp,    // Up
-+    melonds_remote::adapter::GenericButton_DpadDown,  // Down
-+    melonds_remote::adapter::GenericButton_DpadLeft,  // Left
-+    melonds_remote::adapter::GenericButton_DpadRight, // Right
-+    melonds_remote::adapter::GenericButton_L1,        // L
-+    melonds_remote::adapter::GenericButton_R1,        // R
-+    melonds_remote::adapter::GenericButton_Start,     // Start
-+    melonds_remote::adapter::GenericButton_Select,    // Select
++    dualdeck::adapter::GenericButton_South,     // A
++    dualdeck::adapter::GenericButton_East,      // B
++    dualdeck::adapter::GenericButton_West,      // X (see comment above)
++    dualdeck::adapter::GenericButton_North,     // Y (see comment above)
++    dualdeck::adapter::GenericButton_DpadUp,    // Up
++    dualdeck::adapter::GenericButton_DpadDown,  // Down
++    dualdeck::adapter::GenericButton_DpadLeft,  // Left
++    dualdeck::adapter::GenericButton_DpadRight, // Right
++    dualdeck::adapter::GenericButton_L1,        // L
++    dualdeck::adapter::GenericButton_R1,        // R
++    dualdeck::adapter::GenericButton_Start,     // Start
++    dualdeck::adapter::GenericButton_Select,    // Select
 +};
 +
 +class RemoteButtonFactory final : public Input::Factory<Input::ButtonDevice> {
@@ -479,14 +479,14 @@ index 000000000..6a8439675
 +    Input::UnregisterFactory<Input::TouchDevice>(kInputEngineName);
 +}
 +
-+melonds_remote::adapter::AdapterCapabilities AzaharAdapter::capabilities() const {
-+    melonds_remote::adapter::AdapterCapabilities caps;
-+    caps.system = melonds_remote::SystemIdentity{"3ds", "Nintendo 3DS"};
-+    caps.adapter = melonds_remote::AdapterIdentity{"azahar", "Azahar", azaharVersion_};
++dualdeck::adapter::AdapterCapabilities AzaharAdapter::capabilities() const {
++    dualdeck::adapter::AdapterCapabilities caps;
++    caps.system = dualdeck::SystemIdentity{"3ds", "Nintendo 3DS"};
++    caps.adapter = dualdeck::AdapterIdentity{"azahar", "Azahar", azaharVersion_};
 +
-+    melonds_remote::adapter::VideoSurfaceDescriptor bottom;
++    dualdeck::adapter::VideoSurfaceDescriptor bottom;
 +    bottom.surfaceId = kBottomSurfaceId;
-+    bottom.role = melonds_remote::adapter::SurfaceRole::Bottom;
++    bottom.role = dualdeck::adapter::SurfaceRole::Bottom;
 +    // Reports whatever captureLoop() actually produces (native *
 +    // captureScale_), not always the fixed native constants -- the
 +    // client already resizes its texture to whatever width/height a
@@ -495,7 +495,7 @@ index 000000000..6a8439675
 +    // resolution with no client-side change needed.
 +    bottom.width = kBottomScreenWidth * captureScale_;
 +    bottom.height = kBottomScreenHeight * captureScale_;
-+    bottom.pixelFormat = melonds_remote::adapter::PixelFormat::Bgra8888;
++    bottom.pixelFormat = dualdeck::adapter::PixelFormat::Bgra8888;
 +    bottom.touchSupported = true;
 +    // Touch precision is defined by the 3DS's own native touch-screen
 +    // coordinate space (see applyGenericInput()'s touch handling, which
@@ -515,12 +515,12 @@ index 000000000..6a8439675
 +    return caps;
 +}
 +
-+melonds_remote::adapter::SessionState AzaharAdapter::currentState() const {
-+    return running_.load() ? melonds_remote::adapter::SessionState::Running
-+                            : melonds_remote::adapter::SessionState::Stopped;
++dualdeck::adapter::SessionState AzaharAdapter::currentState() const {
++    return running_.load() ? dualdeck::adapter::SessionState::Running
++                            : dualdeck::adapter::SessionState::Stopped;
 +}
 +
-+void AzaharAdapter::applyGenericInput(const melonds_remote::adapter::GenericInputState& state) {
++void AzaharAdapter::applyGenericInput(const dualdeck::adapter::GenericInputState& state) {
 +    {
 +        std::lock_guard guard(inputStatus_->mutex);
 +        inputStatus_->buttons = state.buttons;
@@ -543,9 +543,9 @@ index 000000000..6a8439675
 +            // convention src/core/hle/service/hid/hid.cpp's touch handling
 +            // itself expects.
 +            inputStatus_->touchX =
-+                static_cast<float>(touch.x) / static_cast<float>(melonds_remote::kTouchMaxX);
++                static_cast<float>(touch.x) / static_cast<float>(dualdeck::kTouchMaxX);
 +            inputStatus_->touchY =
-+                static_cast<float>(touch.y) / static_cast<float>(melonds_remote::kTouchMaxY);
++                static_cast<float>(touch.y) / static_cast<float>(dualdeck::kTouchMaxY);
 +            inputStatus_->touchActive = true;
 +        } else {
 +            inputStatus_->touchActive = false;
@@ -566,10 +566,10 @@ index 000000000..6a8439675
 +    // thread, not Qt's UI thread -- see AzaharAdapter.h's constructor
 +    // comment and RemoteServerBridge.cpp's QMetaObject::invokeMethod use.
 +    uint32_t risingEdge = state.emulatorActions & ~lastEmulatorActions_;
-+    if ((risingEdge & melonds_remote::adapter::GenericAction_QuitSession) && onQuitSession_) {
++    if ((risingEdge & dualdeck::adapter::GenericAction_QuitSession) && onQuitSession_) {
 +        onQuitSession_();
 +    }
-+    if ((risingEdge & melonds_remote::adapter::GenericAction_QuitApplication) && onQuitApplication_) {
++    if ((risingEdge & dualdeck::adapter::GenericAction_QuitApplication) && onQuitApplication_) {
 +        onQuitApplication_();
 +    }
 +    lastEmulatorActions_ = state.emulatorActions;
@@ -586,7 +586,7 @@ index 000000000..6a8439675
 +}
 +
 +bool AzaharAdapter::latestFrame(const std::string& surfaceId,
-+                                melonds_remote::adapter::SurfaceFrame& outFrame) {
++                                dualdeck::adapter::SurfaceFrame& outFrame) {
 +    if (surfaceId != kBottomSurfaceId) {
 +        return false;
 +    }
@@ -732,7 +732,7 @@ index 000000000..b34a559c3
 +// Unlike melonDS's own default in-process RemoteServerBridge (which owns
 +// a full NetServer, discovery, and device-approval), this adapter only
 +// ever runs out-of-process: it wraps itself in an
-+// melonds_remote::adapter::ipc::AdapterIpcClient and connects out to an
++// dualdeck::adapter::ipc::AdapterIpcClient and connects out to an
 +// already-running standalone melonds-remote-server (the same Host
 +// Service GitHub issue #4's host-control mode already uses). This
 +// avoids reimplementing NetServer's device-approval Qt dialog a second
@@ -746,7 +746,7 @@ index 000000000..b34a559c3
 +//     across the software/OpenGL/Vulkan renderers -- see the analysis
 +//     doc's section 1), storing the result as this adapter's one
 +//     "bottom" surface.
-+//  2. Input: registers a custom Input::Factory engine ("melonds_remote")
++//  2. Input: registers a custom Input::Factory engine ("dualdeck")
 +//     for buttons/circle-pad/c-stick/touch, and points
 +//     Settings::values.current_input_profile at it -- see the analysis
 +//     doc's section 2 for why this is the idiomatic Azahar integration
@@ -762,7 +762,7 @@ index 000000000..b34a559c3
 +#include <vector>
 +
 +#include "core/frontend/input.h"
-+#include "melonds_remote/adapter/adapter_contract.h"
++#include "dualdeck/adapter/adapter_contract.h"
 +
 +namespace Core {
 +class System;
@@ -858,7 +858,7 @@ index 000000000..b34a559c3
 +    std::shared_ptr<RemoteInputStatus> status_;
 +};
 +
-+class AzaharAdapter final : public melonds_remote::adapter::IEmulatorAdapter {
++class AzaharAdapter final : public dualdeck::adapter::IEmulatorAdapter {
 +public:
 +    // `system` must outlive this adapter -- same lifetime contract
 +    // RemoteServerBridge.cpp gives it (constructed after a successful
@@ -879,13 +879,13 @@ index 000000000..b34a559c3
 +    AzaharAdapter(const AzaharAdapter&) = delete;
 +    AzaharAdapter& operator=(const AzaharAdapter&) = delete;
 +
-+    // melonds_remote::adapter::IEmulatorAdapter
-+    melonds_remote::adapter::AdapterCapabilities capabilities() const override;
-+    melonds_remote::adapter::SessionState currentState() const override;
-+    void applyGenericInput(const melonds_remote::adapter::GenericInputState& state) override;
++    // dualdeck::adapter::IEmulatorAdapter
++    dualdeck::adapter::AdapterCapabilities capabilities() const override;
++    dualdeck::adapter::SessionState currentState() const override;
++    void applyGenericInput(const dualdeck::adapter::GenericInputState& state) override;
 +    void releaseAllInputs() override;
 +    bool latestFrame(const std::string& surfaceId,
-+                      melonds_remote::adapter::SurfaceFrame& outFrame) override;
++                      dualdeck::adapter::SurfaceFrame& outFrame) override;
 +
 +private:
 +    void captureLoop();     // background thread: periodic RequestScreenshot
@@ -968,7 +968,7 @@ index 000000000..9d8eb24a9
 +        [mainWindow]() {
 +            if (mainWindow) QMetaObject::invokeMethod(mainWindow, "close", Qt::QueuedConnection);
 +        });
-+    ipcClient_ = std::make_unique<melonds_remote::adapter::ipc::AdapterIpcClient>(
++    ipcClient_ = std::make_unique<dualdeck::adapter::ipc::AdapterIpcClient>(
 +        *adapter_, std::move(adapterSocketPath));
 +    ipcClient_->setConnectionStateCallback([mainWindow](bool connected) {
 +        if (mainWindow) {
@@ -1076,7 +1076,7 @@ index 000000000..e4dde1cb5
 +#include <string>
 +#include <thread>
 +
-+#include "melonds_remote/adapter/ipc/adapter_ipc_client.h"
++#include "dualdeck/adapter/ipc/adapter_ipc_client.h"
 +
 +namespace Core {
 +class System;
@@ -1091,7 +1091,7 @@ index 000000000..e4dde1cb5
 +class RemoteServerBridge {
 +public:
 +    // `adapterSocketPath` empty uses
-+    // melonds_remote::adapter::ipc::defaultAdapterSocketPath(), matching
++    // dualdeck::adapter::ipc::defaultAdapterSocketPath(), matching
 +    // the standalone host's own --adapter-socket default -- same
 +    // convention melonDS's out-of-process mode already uses.
 +    // `mainWindow` must outlive this object (BootGame()'s caller, same
@@ -1113,7 +1113,7 @@ index 000000000..e4dde1cb5
 +
 +private:
 +    std::unique_ptr<AzaharAdapter> adapter_;
-+    std::unique_ptr<melonds_remote::adapter::ipc::AdapterIpcClient> ipcClient_;
++    std::unique_ptr<dualdeck::adapter::ipc::AdapterIpcClient> ipcClient_;
 +    std::thread reconnectThread_;
 +    std::atomic<bool> stopRequested_{false};
 +};

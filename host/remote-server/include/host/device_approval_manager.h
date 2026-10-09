@@ -32,7 +32,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 class DeviceApprovalManager {
 public:
@@ -147,4 +147,4 @@ private:
     std::function<void(std::vector<PendingRequest>)> onPendingRequestsChanged_;
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

@@ -1,7 +1,7 @@
-#include "melonds_remote/adapter/session_state.h"
+#include "dualdeck/adapter/session_state.h"
 #include "test_framework.h"
 
-using namespace melonds_remote::adapter;
+using namespace dualdeck::adapter;
 
 MDR_TEST(session_state_happy_path_transitions_are_valid) {
     MDR_CHECK(isValidTransition(SessionState::Available, SessionState::Starting));

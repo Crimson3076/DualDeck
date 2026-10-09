@@ -13,7 +13,7 @@
 #include <cstdint>
 #include <string>
 
-namespace melonds_remote::adapter {
+namespace dualdeck::adapter {
 
 // Semantic role a surface plays, so client-side layout code can pick a
 // sensible default (e.g. "host shows top/TV, client shows bottom/
@@ -73,4 +73,4 @@ struct VideoSurfaceDescriptor {
     uint16_t maxFps = 60;
 };
 
-} // namespace melonds_remote::adapter
+} // namespace dualdeck::adapter

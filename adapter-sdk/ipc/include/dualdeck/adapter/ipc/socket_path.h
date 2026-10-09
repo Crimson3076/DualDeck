@@ -8,7 +8,7 @@
 
 #include <string>
 
-namespace melonds_remote::adapter::ipc {
+namespace dualdeck::adapter::ipc {
 
 // Returns "$XDG_RUNTIME_DIR/dualdeck/adapter.sock", or
 // "$HOME/.cache/dualdeck/adapter.sock" if XDG_RUNTIME_DIR is unset --
@@ -27,4 +27,4 @@ std::string defaultAdapterSocketPath();
 // (caller should not attempt to bind the socket in that case).
 bool ensureSocketDirectory(const std::string& socketPath);
 
-} // namespace melonds_remote::adapter::ipc
+} // namespace dualdeck::adapter::ipc

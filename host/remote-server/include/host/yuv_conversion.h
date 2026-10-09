@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 // Writes width*height luma bytes to outY and ((width+1)/2)*((height+1)/2)
 // chroma bytes each to outU/outV (BT.601 studio range), resizing them as
@@ -19,4 +19,4 @@ namespace melonds_remote::host {
 void bgraToI420(const uint8_t* bgra, int width, int height, std::vector<uint8_t>& outY,
                  std::vector<uint8_t>& outU, std::vector<uint8_t>& outV);
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

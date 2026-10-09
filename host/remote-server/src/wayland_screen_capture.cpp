@@ -19,7 +19,7 @@
 #include <thread>
 #endif
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 #if defined(DUALDECK_HAVE_WAYLAND_SCREEN_CAPTURE)
 
@@ -727,4 +727,4 @@ bool WaylandScreenCapture::capture(std::vector<uint8_t>&, uint16_t&, uint16_t&) 
 
 #endif
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

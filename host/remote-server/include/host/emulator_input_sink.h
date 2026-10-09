@@ -9,9 +9,9 @@
 // on the emulation thread using the last state handed to it here -- never
 // directly from the network thread (spec section 16).
 
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 class IEmulatorInputSink {
 public:
@@ -31,4 +31,4 @@ public:
     virtual void releaseAll() = 0;
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

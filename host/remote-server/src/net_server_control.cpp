@@ -12,7 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 using namespace net_detail;
 
@@ -405,4 +405,4 @@ void NetServer::controlLoop() {
     }
 }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

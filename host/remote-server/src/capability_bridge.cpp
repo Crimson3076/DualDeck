@@ -1,14 +1,14 @@
 #include "host/capability_bridge.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
-WireDisplayRole toWireDisplayRole(melonds_remote::adapter::SurfaceRole role) {
+WireDisplayRole toWireDisplayRole(dualdeck::adapter::SurfaceRole role) {
     switch (role) {
-        case melonds_remote::adapter::SurfaceRole::Top:       return WireDisplayRole::Top;
-        case melonds_remote::adapter::SurfaceRole::Bottom:    return WireDisplayRole::Bottom;
-        case melonds_remote::adapter::SurfaceRole::Tv:        return WireDisplayRole::Tv;
-        case melonds_remote::adapter::SurfaceRole::GamePad:   return WireDisplayRole::GamePad;
-        case melonds_remote::adapter::SurfaceRole::Auxiliary: return WireDisplayRole::Auxiliary;
+        case dualdeck::adapter::SurfaceRole::Top:       return WireDisplayRole::Top;
+        case dualdeck::adapter::SurfaceRole::Bottom:    return WireDisplayRole::Bottom;
+        case dualdeck::adapter::SurfaceRole::Tv:        return WireDisplayRole::Tv;
+        case dualdeck::adapter::SurfaceRole::GamePad:   return WireDisplayRole::GamePad;
+        case dualdeck::adapter::SurfaceRole::Auxiliary: return WireDisplayRole::Auxiliary;
     }
     // Every adapter::SurfaceRole value is handled above (no adapter today
     // ever produces WireDisplayRole::Primary/Secondary -- those exist for
@@ -18,14 +18,14 @@ WireDisplayRole toWireDisplayRole(melonds_remote::adapter::SurfaceRole role) {
     return WireDisplayRole::Auxiliary;
 }
 
-WirePixelFormat toWirePixelFormat(melonds_remote::adapter::PixelFormat format) {
+WirePixelFormat toWirePixelFormat(dualdeck::adapter::PixelFormat format) {
     switch (format) {
-        case melonds_remote::adapter::PixelFormat::Bgra8888: return WirePixelFormat::Bgra8888;
+        case dualdeck::adapter::PixelFormat::Bgra8888: return WirePixelFormat::Bgra8888;
     }
     return WirePixelFormat::Bgra8888;
 }
 
-WireDisplayDescriptor toWireDisplayDescriptor(const melonds_remote::adapter::VideoSurfaceDescriptor& surface) {
+WireDisplayDescriptor toWireDisplayDescriptor(const dualdeck::adapter::VideoSurfaceDescriptor& surface) {
     WireDisplayDescriptor wire;
     wire.surfaceId = surface.surfaceId;
     wire.role = toWireDisplayRole(surface.role);
@@ -40,7 +40,7 @@ WireDisplayDescriptor toWireDisplayDescriptor(const melonds_remote::adapter::Vid
     return wire;
 }
 
-WireHostCapabilities toWireHostCapabilities(const melonds_remote::adapter::AdapterCapabilities& capabilities) {
+WireHostCapabilities toWireHostCapabilities(const dualdeck::adapter::AdapterCapabilities& capabilities) {
     WireHostCapabilities wire;
     wire.availableCodecs = WireCodec_Jpeg; // only codec this codebase implements today
     wire.displays.reserve(capabilities.surfaces.size());
@@ -50,4 +50,4 @@ WireHostCapabilities toWireHostCapabilities(const melonds_remote::adapter::Adapt
     return wire;
 }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

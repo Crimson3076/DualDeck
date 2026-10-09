@@ -9,10 +9,10 @@
 #include <cstdint>
 #include <vector>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 // Resizes outBgra to width*height*4 and fills it (alpha forced to 0xFF).
 void i420ToBgra(const uint8_t* y, int yStride, const uint8_t* u, const uint8_t* v, int chromaStride, int width,
                  int height, std::vector<uint8_t>& outBgra);
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

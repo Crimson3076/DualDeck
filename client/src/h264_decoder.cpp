@@ -8,7 +8,7 @@
 
 #include "yuv_conversion.h"
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 struct H264Decoder::Impl {
     ISVCDecoder* decoder = nullptr;
@@ -74,11 +74,11 @@ bool H264Decoder::decodeFrame(const uint8_t* annexB, size_t size, std::vector<ui
     return true;
 }
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client
 
 #else // !DUALDECK_HAVE_OPENH264
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 // This build was configured without OpenH264 -- every method is a
 // no-op that reports unavailable, matching h264_encoder.cpp's own
@@ -94,6 +94,6 @@ bool H264Decoder::decodeFrame(const uint8_t*, size_t, std::vector<uint8_t>&, int
     return false;
 }
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client
 
 #endif // DUALDECK_HAVE_OPENH264

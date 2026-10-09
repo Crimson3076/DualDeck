@@ -1,7 +1,7 @@
-#include "melonds_remote/input_state_tracker.h"
+#include "dualdeck/input_state_tracker.h"
 #include "test_framework.h"
 
-using namespace melonds_remote;
+using namespace dualdeck;
 
 namespace {
 ControllerState makeState(uint32_t sequence, uint16_t buttons) {

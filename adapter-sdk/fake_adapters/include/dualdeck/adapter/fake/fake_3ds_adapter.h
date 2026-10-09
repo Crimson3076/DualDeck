@@ -9,13 +9,13 @@
 // generic contract handles a real multi-surface case beyond the DS's
 // single bottom surface.
 
-#include "melonds_remote/adapter/fake/fake_adapter_base.h"
+#include "dualdeck/adapter/fake/fake_adapter_base.h"
 
-namespace melonds_remote::adapter::fake {
+namespace dualdeck::adapter::fake {
 
 class FakeThreeDsAdapter : public FakeAdapterBase {
 public:
     FakeThreeDsAdapter();
 };
 
-} // namespace melonds_remote::adapter::fake
+} // namespace dualdeck::adapter::fake

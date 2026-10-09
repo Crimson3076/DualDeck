@@ -28,7 +28,7 @@ index d51d58d..be95631 100644
  
 +# DualDeck (github.com/crimson3076/DualDeck): CafeSystem.cpp includes
 +# remote_server/RemoteServerBridge.h, which pulls in the vendored
-+# melonds_remote/adapter/... headers under
++# dualdeck/adapter/... headers under
 +# remote_server/adapter_sdk/include/ -- one level deeper than the plain
 +# "../" (src/) include root every other cross-module include here
 +# resolves through.
@@ -1842,10 +1842,10 @@ index 0000000..63f64f4
 +    }
 +}
 +
-+melonds_remote::adapter::AdapterCapabilities CemuAdapter::capabilities() const {
-+    melonds_remote::adapter::AdapterCapabilities caps;
-+    caps.system = melonds_remote::SystemIdentity{"wiiu", "Nintendo Wii U"};
-+    caps.adapter = melonds_remote::AdapterIdentity{"cemu", "Cemu", m_cemuVersion};
++dualdeck::adapter::AdapterCapabilities CemuAdapter::capabilities() const {
++    dualdeck::adapter::AdapterCapabilities caps;
++    caps.system = dualdeck::SystemIdentity{"wiiu", "Nintendo Wii U"};
++    caps.adapter = dualdeck::AdapterIdentity{"cemu", "Cemu", m_cemuVersion};
 +    caps.supportsAnalogTriggers = true;
 +
 +    // TV output: shown on the host's own display, matching this
@@ -1880,15 +1880,15 @@ index 0000000..63f64f4
 +    // resolved by the time a client's Hello arrives, since Cemu renders
 +    // continuously from title boot, well before a user gets to opening
 +    // the DualDeck client).
-+    melonds_remote::adapter::VideoSurfaceDescriptor tv;
++    dualdeck::adapter::VideoSurfaceDescriptor tv;
 +    tv.surfaceId = kTvSurfaceId;
-+    tv.role = melonds_remote::adapter::SurfaceRole::Tv;
++    tv.role = dualdeck::adapter::SurfaceRole::Tv;
 +    {
 +        std::lock_guard guard(m_tvSurface.mutex);
 +        tv.width = m_tvSurface.hasFrame ? static_cast<uint16_t>(m_tvSurface.width) : kTvDefaultWidth;
 +        tv.height = m_tvSurface.hasFrame ? static_cast<uint16_t>(m_tvSurface.height) : kTvDefaultHeight;
 +    }
-+    tv.pixelFormat = melonds_remote::adapter::PixelFormat::Bgra8888;
++    tv.pixelFormat = dualdeck::adapter::PixelFormat::Bgra8888;
 +    tv.touchSupported = false;
 +    tv.required = false;
 +    tv.locallyDisplayed = true;
@@ -1901,15 +1901,15 @@ index 0000000..63f64f4
 +    // analogue of DS/3DS's bottom screen. Touch-capable -- see
 +    // CemuAdapter.h's top comment's touch section and
 +    // applyGenericInput()'s touch handling below.
-+    melonds_remote::adapter::VideoSurfaceDescriptor gamePad;
++    dualdeck::adapter::VideoSurfaceDescriptor gamePad;
 +    gamePad.surfaceId = kGamePadSurfaceId;
-+    gamePad.role = melonds_remote::adapter::SurfaceRole::GamePad;
++    gamePad.role = dualdeck::adapter::SurfaceRole::GamePad;
 +    {
 +        std::lock_guard guard(m_gamePadSurface.mutex);
 +        gamePad.width = m_gamePadSurface.hasFrame ? static_cast<uint16_t>(m_gamePadSurface.width) : kGamePadDefaultWidth;
 +        gamePad.height = m_gamePadSurface.hasFrame ? static_cast<uint16_t>(m_gamePadSurface.height) : kGamePadDefaultHeight;
 +    }
-+    gamePad.pixelFormat = melonds_remote::adapter::PixelFormat::Bgra8888;
++    gamePad.pixelFormat = dualdeck::adapter::PixelFormat::Bgra8888;
 +    gamePad.touchSupported = true;
 +    gamePad.required = true;
 +    gamePad.locallyDisplayed = false;
@@ -1921,12 +1921,12 @@ index 0000000..63f64f4
 +    return caps;
 +}
 +
-+melonds_remote::adapter::SessionState CemuAdapter::currentState() const {
-+    return m_running.load() ? melonds_remote::adapter::SessionState::Running
-+                             : melonds_remote::adapter::SessionState::Stopped;
++dualdeck::adapter::SessionState CemuAdapter::currentState() const {
++    return m_running.load() ? dualdeck::adapter::SessionState::Running
++                             : dualdeck::adapter::SessionState::Stopped;
 +}
 +
-+void CemuAdapter::applyGenericInput(const melonds_remote::adapter::GenericInputState& state) {
++void CemuAdapter::applyGenericInput(const dualdeck::adapter::GenericInputState& state) {
 +    if (m_inputStatus) {
 +        std::lock_guard guard(m_inputStatus->mutex);
 +        m_inputStatus->buttons = state.buttons;
@@ -1941,11 +1941,11 @@ index 0000000..63f64f4
 +        // analog trigger hardware still registers a full ZL/ZR press.
 +        m_inputStatus->leftTrigger = static_cast<uint8_t>(
 +            state.leftTrigger != 0    ? state.leftTrigger
-+            : (state.buttons & melonds_remote::adapter::GenericButton_L2) ? 0xFF
++            : (state.buttons & dualdeck::adapter::GenericButton_L2) ? 0xFF
 +                                                                           : 0);
 +        m_inputStatus->rightTrigger = static_cast<uint8_t>(
 +            state.rightTrigger != 0   ? state.rightTrigger
-+            : (state.buttons & melonds_remote::adapter::GenericButton_R2) ? 0xFF
++            : (state.buttons & dualdeck::adapter::GenericButton_R2) ? 0xFF
 +                                                                           : 0);
 +
 +        // Touch: mirrors AzaharAdapter.cpp's identical normalization
@@ -1973,9 +1973,9 @@ index 0000000..63f64f4
 +            }
 +            m_inputStatus->touchActive = true;
 +            m_inputStatus->touchX =
-+                static_cast<float>(touch.x) / static_cast<float>(melonds_remote::kTouchMaxX);
++                static_cast<float>(touch.x) / static_cast<float>(dualdeck::kTouchMaxX);
 +            m_inputStatus->touchY =
-+                static_cast<float>(touch.y) / static_cast<float>(melonds_remote::kTouchMaxY);
++                static_cast<float>(touch.y) / static_cast<float>(dualdeck::kTouchMaxY);
 +            break;
 +        }
 +    }
@@ -1990,10 +1990,10 @@ index 0000000..63f64f4
 +    // GUI directly (this method runs on AdapterIpcClient's readLoop()
 +    // thread, never Cemu's own UI thread).
 +    const uint32_t risingEdge = state.emulatorActions & ~m_lastEmulatorActions;
-+    if ((risingEdge & melonds_remote::adapter::GenericAction_QuitSession) && m_onQuitSession) {
++    if ((risingEdge & dualdeck::adapter::GenericAction_QuitSession) && m_onQuitSession) {
 +        m_onQuitSession();
 +    }
-+    if ((risingEdge & melonds_remote::adapter::GenericAction_QuitApplication) && m_onQuitApplication) {
++    if ((risingEdge & dualdeck::adapter::GenericAction_QuitApplication) && m_onQuitApplication) {
 +        m_onQuitApplication();
 +    }
 +    m_lastEmulatorActions = state.emulatorActions;
@@ -2014,7 +2014,7 @@ index 0000000..63f64f4
 +    m_inputStatus->touchActive = false;
 +}
 +
-+bool CemuAdapter::latestFrame(const std::string& surfaceId, melonds_remote::adapter::SurfaceFrame& outFrame) {
++bool CemuAdapter::latestFrame(const std::string& surfaceId, dualdeck::adapter::SurfaceFrame& outFrame) {
 +    CapturedSurface* surface = nullptr;
 +    if (surfaceId == kTvSurfaceId) {
 +        surface = &m_tvSurface;
@@ -2279,7 +2279,7 @@ index 0000000..fc708e0
 +// Mirrors CitraQt::RemoteServer::AzaharAdapter's shape (see the DualDeck
 +// repo's client/src/citra_qt/remote_server/AzaharAdapter.h) as closely as
 +// Wii U's own two-screen model allows -- out-of-process only, via
-+// melonds_remote::adapter::ipc::AdapterIpcClient, connecting out to an
++// dualdeck::adapter::ipc::AdapterIpcClient, connecting out to an
 +// already-running standalone dualdeck-host-service (--adapter-ipc). See
 +// docs/adr/0001-host-service-and-adapter-architecture.md.
 +//
@@ -2387,7 +2387,7 @@ index 0000000..fc708e0
 +#include <thread>
 +#include <vector>
 +
-+#include "melonds_remote/adapter/adapter_contract.h"
++#include "dualdeck/adapter/adapter_contract.h"
 +#include "remote_server/RemoteInputStatus.h"
 +
 +class LatteTextureView;
@@ -2442,7 +2442,7 @@ index 0000000..fc708e0
 +    bool hasFrame = false;
 +};
 +
-+class CemuAdapter final : public melonds_remote::adapter::IEmulatorAdapter {
++class CemuAdapter final : public dualdeck::adapter::IEmulatorAdapter {
 +public:
 +    // `cemuVersion` is this build's own version string (for
 +    // AdapterCapabilities::adapter.adapterVersion), read once at
@@ -2458,13 +2458,13 @@ index 0000000..fc708e0
 +    CemuAdapter(const CemuAdapter&) = delete;
 +    CemuAdapter& operator=(const CemuAdapter&) = delete;
 +
-+    // melonds_remote::adapter::IEmulatorAdapter
-+    melonds_remote::adapter::AdapterCapabilities capabilities() const override;
-+    melonds_remote::adapter::SessionState currentState() const override;
-+    void applyGenericInput(const melonds_remote::adapter::GenericInputState& state) override;
++    // dualdeck::adapter::IEmulatorAdapter
++    dualdeck::adapter::AdapterCapabilities capabilities() const override;
++    dualdeck::adapter::SessionState currentState() const override;
++    void applyGenericInput(const dualdeck::adapter::GenericInputState& state) override;
 +    void releaseAllInputs() override;
 +    bool latestFrame(const std::string& surfaceId,
-+                      melonds_remote::adapter::SurfaceFrame& outFrame) override;
++                      dualdeck::adapter::SurfaceFrame& outFrame) override;
 +
 +    // Called from the patch's LatteRenderTarget.cpp hook, once per frame
 +    // per surface, immediately after Cemu's own HandleScreenshotRequest()
@@ -2625,7 +2625,7 @@ index 0000000..1af7065
 @@ -0,0 +1,123 @@
 +#include "remote_server/RemoteController.h"
 +
-+#include "melonds_remote/adapter/generic_input.h"
++#include "dualdeck/adapter/generic_input.h"
 +
 +// This file's raw_state() feeds the same Buttons2 IDs
 +// VPADController::set_default_mapping()'s InputAPI::XInput case reads
@@ -2687,20 +2687,20 @@ index 0000000..1af7065
 +namespace DualDeck::RemoteServer {
 +
 +namespace {
-+using melonds_remote::adapter::GenericButton_DpadDown;
-+using melonds_remote::adapter::GenericButton_DpadLeft;
-+using melonds_remote::adapter::GenericButton_DpadRight;
-+using melonds_remote::adapter::GenericButton_DpadUp;
-+using melonds_remote::adapter::GenericButton_East;
-+using melonds_remote::adapter::GenericButton_L1;
-+using melonds_remote::adapter::GenericButton_L3;
-+using melonds_remote::adapter::GenericButton_North;
-+using melonds_remote::adapter::GenericButton_R1;
-+using melonds_remote::adapter::GenericButton_R3;
-+using melonds_remote::adapter::GenericButton_Select;
-+using melonds_remote::adapter::GenericButton_South;
-+using melonds_remote::adapter::GenericButton_Start;
-+using melonds_remote::adapter::GenericButton_West;
++using dualdeck::adapter::GenericButton_DpadDown;
++using dualdeck::adapter::GenericButton_DpadLeft;
++using dualdeck::adapter::GenericButton_DpadRight;
++using dualdeck::adapter::GenericButton_DpadUp;
++using dualdeck::adapter::GenericButton_East;
++using dualdeck::adapter::GenericButton_L1;
++using dualdeck::adapter::GenericButton_L3;
++using dualdeck::adapter::GenericButton_North;
++using dualdeck::adapter::GenericButton_R1;
++using dualdeck::adapter::GenericButton_R3;
++using dualdeck::adapter::GenericButton_Select;
++using dualdeck::adapter::GenericButton_South;
++using dualdeck::adapter::GenericButton_Start;
++using dualdeck::adapter::GenericButton_West;
 +} // namespace
 +
 +RemoteController::RemoteController(std::shared_ptr<RemoteInputStatus> status)
@@ -3046,7 +3046,7 @@ index 0000000..e50c8e9
 +    s_currentAdapter.store(adapter_.get());
 +
 +    ipcClient_ =
-+        std::make_unique<melonds_remote::adapter::ipc::AdapterIpcClient>(*adapter_, std::move(adapterSocketPath));
++        std::make_unique<dualdeck::adapter::ipc::AdapterIpcClient>(*adapter_, std::move(adapterSocketPath));
 +
 +    // DualDeck, 2026-08-26: wires ipc_protocol.h's ClientConnectionChanged
 +    // message (already delivered here -- AdapterIpcClient::readLoop()
@@ -3176,7 +3176,7 @@ index 0000000..19291de
 +#include <string>
 +#include <thread>
 +
-+#include "melonds_remote/adapter/ipc/adapter_ipc_client.h"
++#include "dualdeck/adapter/ipc/adapter_ipc_client.h"
 +
 +class LatteTextureView;
 +
@@ -3187,7 +3187,7 @@ index 0000000..19291de
 +class RemoteServerBridge {
 +public:
 +    // `adapterSocketPath` empty uses
-+    // melonds_remote::adapter::ipc::defaultAdapterSocketPath(), matching
++    // dualdeck::adapter::ipc::defaultAdapterSocketPath(), matching
 +    // the standalone host's own --adapter-socket default.
 +    RemoteServerBridge(std::string cemuVersion, std::string adapterSocketPath);
 +    ~RemoteServerBridge();
@@ -3211,7 +3211,7 @@ index 0000000..19291de
 +
 +private:
 +    std::unique_ptr<CemuAdapter> adapter_;
-+    std::unique_ptr<melonds_remote::adapter::ipc::AdapterIpcClient> ipcClient_;
++    std::unique_ptr<dualdeck::adapter::ipc::AdapterIpcClient> ipcClient_;
 +    std::thread reconnectThread_;
 +    std::atomic<bool> stopRequested_{false};
 +};

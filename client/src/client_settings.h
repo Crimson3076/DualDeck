@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 struct ClientSettings {
     // Preserve the release launcher's existing behavior for users who do
@@ -103,4 +103,4 @@ ClientSettings loadClientSettings(const std::string& settingsPath);
 // Returns false when the directory or file could not be written.
 bool saveClientSettings(const std::string& settingsPath, const ClientSettings& settings);
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

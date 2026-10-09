@@ -46,7 +46,7 @@ endif()
 # client/CMakeLists.txt's dualdeck-client target) and links dualdeck_host,
 # whose own h264_encoder.cpp object code also calls into libyuv when
 # available (needs the link regardless, same reasoning as
-# host/remote-server/tests/CMakeLists.txt's melonds_remote_host_tests
+# host/remote-server/tests/CMakeLists.txt's dualdeck_host_tests
 # target).
 # PyroWave side of the benchmark (pyrowave_decoder.cpp above) --
 # DUALDECK_HAVE_PYROWAVE itself already arrives through dualdeck_host's

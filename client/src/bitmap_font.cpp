@@ -3,7 +3,7 @@
 #include <cctype>
 #include <unordered_map>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 namespace {
 
@@ -101,4 +101,4 @@ int renderBitmapText(SDL_Renderer* renderer, const std::string& text, float x, f
     return static_cast<int>(cursorX - x) - gap;
 }
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

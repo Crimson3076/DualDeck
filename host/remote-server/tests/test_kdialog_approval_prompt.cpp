@@ -7,7 +7,7 @@
 #include "host/kdialog_approval_prompt.h"
 #include "test_framework.h"
 
-using namespace melonds_remote::host;
+using namespace dualdeck::host;
 
 MDR_TEST(kdialog_exit_zero_is_approved) {
     MDR_CHECK(interpretKdialogExitStatus(true, 0) == KdialogPromptResult::Approved);

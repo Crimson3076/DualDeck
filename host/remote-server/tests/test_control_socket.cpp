@@ -19,8 +19,8 @@
 #include "host/synthetic_frame_source.h"
 #include "test_framework.h"
 
-using namespace melonds_remote;
-using namespace melonds_remote::host;
+using namespace dualdeck;
+using namespace dualdeck::host;
 
 namespace {
 

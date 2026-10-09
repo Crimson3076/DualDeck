@@ -22,9 +22,9 @@
 #include <mutex>
 #include <thread>
 
-#include "melonds_remote/adapter/adapter_contract.h"
+#include "dualdeck/adapter/adapter_contract.h"
 
-namespace melonds_remote::adapter::synthetic {
+namespace dualdeck::adapter::synthetic {
 
 class SyntheticEmulatorAdapter : public IEmulatorAdapter {
 public:
@@ -62,4 +62,4 @@ private:
     bool hasFrame_ = false;
 };
 
-} // namespace melonds_remote::adapter::synthetic
+} // namespace dualdeck::adapter::synthetic

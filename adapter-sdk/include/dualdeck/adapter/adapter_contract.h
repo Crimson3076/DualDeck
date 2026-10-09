@@ -18,12 +18,12 @@
 #include <string>
 #include <vector>
 
-#include "melonds_remote/adapter/generic_input.h"
-#include "melonds_remote/adapter/session_state.h"
-#include "melonds_remote/adapter/video_surface.h"
-#include "melonds_remote/protocol.h" // SystemIdentity, AdapterIdentity
+#include "dualdeck/adapter/generic_input.h"
+#include "dualdeck/adapter/session_state.h"
+#include "dualdeck/adapter/video_surface.h"
+#include "dualdeck/protocol.h" // SystemIdentity, AdapterIdentity
 
-namespace melonds_remote::adapter {
+namespace dualdeck::adapter {
 
 // Bumped whenever this contract's shape changes incompatibly -- the
 // same versioning discipline protocol.h's kProtocolVersion already
@@ -42,8 +42,8 @@ inline constexpr uint16_t kAdapterContractVersion = 2;
 // registers (issue #28: "Adapter identity and version", "Emulated
 // system identity"), not re-sent per frame/input state.
 struct AdapterCapabilities {
-    melonds_remote::SystemIdentity system;
-    melonds_remote::AdapterIdentity adapter;
+    dualdeck::SystemIdentity system;
+    dualdeck::AdapterIdentity adapter;
     std::vector<VideoSurfaceDescriptor> surfaces;
 
     // Optional capability flags (issue #28: "Optional motion,
@@ -135,4 +135,4 @@ public:
     virtual bool latestFrame(const std::string& surfaceId, SurfaceFrame& outFrame) = 0;
 };
 
-} // namespace melonds_remote::adapter
+} // namespace dualdeck::adapter

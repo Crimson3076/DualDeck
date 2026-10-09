@@ -24,7 +24,7 @@
 #include <string>
 #include <thread>
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 class NetServer;
 class ModeCoordinator;
@@ -68,4 +68,4 @@ private:
     std::thread acceptThread_;
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

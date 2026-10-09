@@ -6,7 +6,7 @@
 
 #include <algorithm>
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 // Converts one BGRA8888 frame to I420 (planar YUV 4:2:0), the pixel
 // format ISVCEncoder::EncodeFrame() requires (SSourcePicture::iColorFormat
@@ -82,4 +82,4 @@ void bgraToI420(const uint8_t* bgra, int width, int height, std::vector<uint8_t>
 #endif // DUALDECK_HAVE_LIBYUV
 }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

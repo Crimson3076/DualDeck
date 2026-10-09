@@ -4,7 +4,7 @@
 integration against upstream Azahar (github.com/azahar-emu/azahar)
 commit `75134fca82eab4e1a86dca0aaa4a188cefff5469` (master, 2026-07-18),
 adding a second real `IEmulatorAdapter` implementation
-(`melonds_remote::adapter::IEmulatorAdapter`, the same contract
+(`dualdeck::adapter::IEmulatorAdapter`, the same contract
 melonDS's own `MelonDSAdapter` implements) for the Nintendo 3DS, proving
 the contract generalizes across emulator codebases without any changes
 to it. See `docs/azahar-integration-analysis.md` for the Phase 0
@@ -39,7 +39,7 @@ the patch adds any of them again.
      the software, OpenGL, and Vulkan renderers, unlike melonDS's
      OpenGL-specific `GLBottomScreenCapture` path. Exposes exactly one
      surface, `"bottom"`, 320x240, touch-capable.
-   - **Input**: registers a `"melonds_remote"` `Input::Factory` engine
+   - **Input**: registers a `"dualdeck"` `Input::Factory` engine
      (`RemoteButtonDevice`/`RemoteAnalogDevice`/`RemoteTouchDevice`,
      mirroring the pattern Azahar's own `input_common/sdl` and
      `input_common/udp` engines use) and overwrites
@@ -96,7 +96,7 @@ host-control mode (issue #4).
   submodules, Qt6, Vulkan/OpenGL/software renderers) completes and
   produces `build/bin/Release/azahar`, a real ~57MB linked executable
   containing the new `AzaharAdapter`/`RemoteServerBridge` code and the
-  vendored `melonds_remote::` symbols (confirmed via `nm`), not just a
+  vendored `dualdeck::` symbols (confirmed via `nm`), not just a
   clean compile of the new files in isolation.
 - **Idempotency and mismatch handling**: re-running
   `patch-existing-emulator.sh` against an already-patched checkout

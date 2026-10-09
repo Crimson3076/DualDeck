@@ -8,9 +8,9 @@
 #include <cstdint>
 #include <optional>
 
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 
-namespace melonds_remote {
+namespace dualdeck {
 
 // Describes where the aspect-correct DS image rectangle sits within a
 // larger window/display surface, in the same pixel units as the raw touch
@@ -40,4 +40,4 @@ RenderRect computeAspectFitRect(double surfaceWidth, double surfaceHeight,
 std::optional<std::pair<uint16_t, uint16_t>> mapPointToDSCoords(
     double pointX, double pointY, const RenderRect& rect);
 
-} // namespace melonds_remote
+} // namespace dualdeck

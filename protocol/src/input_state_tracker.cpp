@@ -1,6 +1,6 @@
-#include "melonds_remote/input_state_tracker.h"
+#include "dualdeck/input_state_tracker.h"
 
-namespace melonds_remote {
+namespace dualdeck {
 
 bool InputStateTracker::isNewerSequence(uint32_t candidate, uint32_t last) {
     return static_cast<int32_t>(candidate - last) > 0;
@@ -46,4 +46,4 @@ void InputStateTracker::reset() {
     hasReceivedAnyPacket_ = false;
 }
 
-} // namespace melonds_remote
+} // namespace dualdeck

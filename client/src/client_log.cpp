@@ -8,7 +8,7 @@
 #include <mutex>
 #include <string>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 namespace {
 std::mutex g_logMutex;
@@ -78,4 +78,4 @@ void setLogForwardSink(std::function<void(const std::string&)> sink) {
     g_forwardSink = std::move(sink);
 }
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

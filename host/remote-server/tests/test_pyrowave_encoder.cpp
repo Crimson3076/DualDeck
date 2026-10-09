@@ -15,8 +15,8 @@
 #include <cstdio>
 #include <vector>
 
-using namespace melonds_remote;
-using namespace melonds_remote::host;
+using namespace dualdeck;
+using namespace dualdeck::host;
 
 namespace {
 

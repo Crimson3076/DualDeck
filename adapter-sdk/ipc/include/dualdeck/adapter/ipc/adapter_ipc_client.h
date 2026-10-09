@@ -21,9 +21,9 @@
 #include <thread>
 #include <unordered_map>
 
-#include "melonds_remote/adapter/adapter_contract.h"
+#include "dualdeck/adapter/adapter_contract.h"
 
-namespace melonds_remote::adapter::ipc {
+namespace dualdeck::adapter::ipc {
 
 class AdapterIpcClient {
 public:
@@ -74,4 +74,4 @@ private:
     std::function<void(bool)> connectionStateCallback_;
 };
 
-} // namespace melonds_remote::adapter::ipc
+} // namespace dualdeck::adapter::ipc

@@ -14,10 +14,10 @@
 #include <string>
 #include <vector>
 
-namespace melonds_remote::adapter {
+namespace dualdeck::adapter {
 
 // Generic gamepad button bitmask -- deliberately distinct from
-// melonds_remote::DSButton (protocol.h), which remains the DS-specific
+// dualdeck::DSButton (protocol.h), which remains the DS-specific
 // wire bitmask the live v6 protocol actually sends today. A DS adapter
 // maps between the two (see the ADR's "DS compatibility adapter"
 // decision); a 3DS/Wii U adapter would map its own native buttons
@@ -43,7 +43,7 @@ enum GenericButton : uint32_t {
 };
 
 // Versioned emulator action bitmask -- deliberately distinct from
-// melonds_remote::EmulatorAction (protocol.h), for the same reason as
+// dualdeck::EmulatorAction (protocol.h), for the same reason as
 // GenericButton above.
 enum GenericEmulatorAction : uint32_t {
     GenericAction_PauseResume     = 1u << 0,
@@ -102,4 +102,4 @@ struct GenericInputState {
     uint32_t emulatorActions = 0; // GenericEmulatorAction bitmask, 1 = active this state
 };
 
-} // namespace melonds_remote::adapter
+} // namespace dualdeck::adapter

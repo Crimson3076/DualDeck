@@ -6,14 +6,14 @@
 // AdapterBridge actually forwarded, without needing a real socket.
 
 #include "host/adapter_bridge.h"
-#include "melonds_remote/adapter/fake/fake_3ds_adapter.h"
-#include "melonds_remote/adapter/fake/fake_ds_adapter.h"
+#include "dualdeck/adapter/fake/fake_3ds_adapter.h"
+#include "dualdeck/adapter/fake/fake_ds_adapter.h"
 #include "test_framework.h"
 
-using namespace melonds_remote;
-using namespace melonds_remote::host;
-using namespace melonds_remote::adapter;
-using namespace melonds_remote::adapter::fake;
+using namespace dualdeck;
+using namespace dualdeck::host;
+using namespace dualdeck::adapter;
+using namespace dualdeck::adapter::fake;
 
 namespace {
 

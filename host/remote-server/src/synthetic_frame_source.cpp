@@ -3,7 +3,7 @@
 #include <chrono>
 #include <cmath>
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 SyntheticFrameSource::SyntheticFrameSource(int targetFps) : targetFps_(targetFps) {}
 
@@ -117,4 +117,4 @@ void SyntheticFrameSource::generatorLoop() {
     }
 }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

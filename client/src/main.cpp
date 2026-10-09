@@ -16,7 +16,7 @@
 //    (GitHub issue #23 -- e.g. a Steam Deck trackpad configured as a
 //    mouse via Steam Input's "Trackpad" binding, an alternative to an
 //    actual touchscreen), maps both through
-//    melonds_remote::computeAspectFitRect / mapPointToDSCoords, and
+//    dualdeck::computeAspectFitRect / mapPointToDSCoords, and
 //    ignores touches/clicks outside the rendered DS rectangle
 //  - Sends a full ControllerState packet at a fixed ~120Hz rate
 //    regardless of whether anything changed (spec section 6.3)
@@ -60,15 +60,15 @@
 #include "gamepad_input.h"
 #include "host_picker.h"
 #include "mic_capture.h"
-#include "melonds_remote/protocol.h"
-#include "melonds_remote/touch_mapping.h"
+#include "dualdeck/protocol.h"
+#include "dualdeck/touch_mapping.h"
 #include "net_client.h"
 #include "screens.h"
 #include "setup_wizard.h"
 #include "wizard_state.h"
 
-using namespace melonds_remote;
-using namespace melonds_remote::client;
+using namespace dualdeck;
+using namespace dualdeck::client;
 
 namespace {
 
@@ -756,7 +756,7 @@ int main(int argc, char** argv) {
         // left open across host switches. Declared before
         // settingsMenuItems/cycleMicDevice below since their `[&]`
         // lambdas can only capture names already in scope.
-        melonds_remote::client::MicCapture micCapture;
+        dualdeck::client::MicCapture micCapture;
         std::vector<int16_t> micPendingSamples;
         uint32_t micSequence = 0;
         float micLevel = 0.0f;
@@ -885,7 +885,7 @@ int main(int argc, char** argv) {
         // and gamepad settings handlers below, same as the inline
         // AUTO UPDATE ON LAUNCH toggle they already duplicate.
         auto cycleMicDevice = [&]() {
-            auto devices = melonds_remote::client::listMicDevices();
+            auto devices = dualdeck::client::listMicDevices();
             size_t currentIndex = 0;
             for (size_t i = 0; i < devices.size(); ++i) {
                 if (devices[i].name == clientSettings.micDeviceName) {

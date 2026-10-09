@@ -1,12 +1,12 @@
-#include "melonds_remote/adapter/fake/fake_ds_adapter.h"
+#include "dualdeck/adapter/fake/fake_ds_adapter.h"
 
-namespace melonds_remote::adapter::fake {
+namespace dualdeck::adapter::fake {
 
 namespace {
 AdapterCapabilities buildCapabilities() {
     AdapterCapabilities caps;
-    caps.system = melonds_remote::SystemIdentity{"nds", "Nintendo DS"};
-    caps.adapter = melonds_remote::AdapterIdentity{"fake-ds", "Fake DS Adapter (test fixture)", "0.0.1"};
+    caps.system = dualdeck::SystemIdentity{"nds", "Nintendo DS"};
+    caps.adapter = dualdeck::AdapterIdentity{"fake-ds", "Fake DS Adapter (test fixture)", "0.0.1"};
 
     VideoSurfaceDescriptor bottom;
     bottom.surfaceId = "bottom";
@@ -27,4 +27,4 @@ AdapterCapabilities buildCapabilities() {
 
 FakeDsAdapter::FakeDsAdapter() : FakeAdapterBase(buildCapabilities()) {}
 
-} // namespace melonds_remote::adapter::fake
+} // namespace dualdeck::adapter::fake

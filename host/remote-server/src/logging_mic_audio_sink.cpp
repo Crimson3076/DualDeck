@@ -3,7 +3,7 @@
 #include <cmath>
 #include <cstdio>
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 namespace {
 // Log roughly once a second at the client's ~100 packets/sec (10ms
@@ -54,4 +54,4 @@ float LoggingMicAudioSink::lastLevel() const {
     return lastLevel_;
 }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

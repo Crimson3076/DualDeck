@@ -10,7 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 // Fallback downscale target when no client has reported a real display
 // size yet (targetDisplayWidth_/Height_ still 0) -- the Steam Deck LCD's
@@ -738,4 +738,4 @@ void HostControlAdapter::setTargetDisplaySize(uint16_t width, uint16_t height) {
     targetDisplayHeight_ = height;
 }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

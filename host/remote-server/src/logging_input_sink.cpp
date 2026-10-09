@@ -2,9 +2,9 @@
 
 #include <cstdio>
 
-#include "melonds_remote/input_state_tracker.h"
+#include "dualdeck/input_state_tracker.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 void LoggingInputSink::applyControllerState(const ControllerState& state) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -22,4 +22,4 @@ ControllerState LoggingInputSink::lastState() const {
     return lastState_;
 }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

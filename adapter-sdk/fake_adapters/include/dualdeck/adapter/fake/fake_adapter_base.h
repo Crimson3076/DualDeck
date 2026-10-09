@@ -16,9 +16,9 @@
 #include <string>
 #include <unordered_map>
 
-#include "melonds_remote/adapter/adapter_contract.h"
+#include "dualdeck/adapter/adapter_contract.h"
 
-namespace melonds_remote::adapter::fake {
+namespace dualdeck::adapter::fake {
 
 class FakeAdapterBase : public IEmulatorAdapter {
 public:
@@ -75,4 +75,4 @@ private:
     std::unordered_map<std::string, uint64_t> nextFrameIndex_;
 };
 
-} // namespace melonds_remote::adapter::fake
+} // namespace dualdeck::adapter::fake

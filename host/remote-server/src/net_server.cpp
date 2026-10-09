@@ -10,11 +10,11 @@
 #include <cstdio>
 #include <utility>
 
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 
 #include "net_server_internal.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 using namespace net_detail;
 
@@ -570,4 +570,4 @@ void NetServer::discoveryLoop() {
     }
 }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

@@ -6,7 +6,7 @@
 
 #include <algorithm>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 // I420 (planar YUV 4:2:0) -> BGRA8888, the inverse of
 // host/remote-server/src/yuv_conversion.cpp's bgraToI420().
@@ -53,4 +53,4 @@ void i420ToBgra(const uint8_t* y, int yStride, const uint8_t* u, const uint8_t* 
 #endif // DUALDECK_HAVE_LIBYUV
 }
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

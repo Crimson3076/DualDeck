@@ -8,13 +8,13 @@
 // single-surface case, for comparison against the multi-surface 3DS/
 // Wii U fixtures alongside it.
 
-#include "melonds_remote/adapter/fake/fake_adapter_base.h"
+#include "dualdeck/adapter/fake/fake_adapter_base.h"
 
-namespace melonds_remote::adapter::fake {
+namespace dualdeck::adapter::fake {
 
 class FakeDsAdapter : public FakeAdapterBase {
 public:
     FakeDsAdapter();
 };
 
-} // namespace melonds_remote::adapter::fake
+} // namespace dualdeck::adapter::fake

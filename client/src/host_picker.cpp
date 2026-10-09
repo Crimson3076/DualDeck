@@ -10,7 +10,7 @@
 #include "gamepad_input.h"
 #include "screens.h"
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 namespace {
 
@@ -242,4 +242,4 @@ std::optional<DiscoveredHost> discoverAndSelectHost(SDL_Renderer* renderer, SDL_
     }
 }
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

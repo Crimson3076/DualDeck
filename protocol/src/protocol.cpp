@@ -1,8 +1,8 @@
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 
 #include <cstring>
 
-namespace melonds_remote {
+namespace dualdeck {
 
 void appendU16(ByteBuffer& out, uint16_t v) {
     out.push_back(static_cast<uint8_t>(v & 0xFF));
@@ -592,4 +592,4 @@ ByteBuffer buildClientLogPacket(const ClientLogPayload& log) {
     return buildPacket(PacketType::ClientLog, payload);
 }
 
-} // namespace melonds_remote
+} // namespace dualdeck

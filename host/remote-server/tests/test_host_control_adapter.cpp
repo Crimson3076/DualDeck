@@ -16,8 +16,8 @@
 #include <cstdlib>
 #include <string>
 
-using namespace melonds_remote;
-using namespace melonds_remote::host;
+using namespace dualdeck;
+using namespace dualdeck::host;
 
 MDR_TEST(translate_no_buttons_is_all_released) {
     ControllerState state;
