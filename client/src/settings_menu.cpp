@@ -94,6 +94,8 @@ std::vector<std::string> SettingsMenu::items(bool showMic) const {
     std::vector<std::string> items{
         std::string("AUTO UPDATE ON LAUNCH: ") + (settings_.autoUpdateOnLaunch ? "ON" : "OFF"),
         std::string("VIDEO QUALITY: ") + videoQualityLabel(settings_.videoQuality),
+        std::string("STREAM FPS: ") + (settings_.streamFps == 0 ? std::string("DEFAULT")
+                                                             : std::to_string(settings_.streamFps)),
         std::string("TRACKPAD AS NATIVE INPUT (EXPERIMENTAL): ") + (trackpadExperimentEnabled_ ? "ON" : "OFF"),
         std::string("MIRROR HOST SCREEN (EXPERIMENTAL): ") + (settings_.mirrorHostScreen ? "ON" : "OFF"),
         std::string("VIDEO CODEC: ") +
@@ -140,6 +142,8 @@ SettingsMenu::Result SettingsMenu::handle(MenuAction action, bool showMic, MicCa
         save();
     } else if (startsWith(picked, "VIDEO QUALITY:")) {
         cycleVideoQuality(step);
+    } else if (startsWith(picked, "STREAM FPS:")) {
+        cycleStreamFps(step);
     } else if (startsWith(picked, "TRACKPAD AS NATIVE INPUT")) {
         toggleTrackpadExperiment();
     } else if (startsWith(picked, "MIRROR HOST SCREEN")) {
@@ -190,6 +194,24 @@ void SettingsMenu::cycleVideoQuality(int direction) {
         }
     }
     settings_.videoQuality = kPresets[(currentIndex + kPresetCount + direction) % kPresetCount];
+    save();
+    reconnectRequested_ = true;
+}
+
+// DEFAULT lets the host pick (60fps for Host Control's desktop mirror).
+// Emulator streams run at their game's own rate whatever this says.
+// Negotiated in Hello, so it needs a reconnect like cycleVideoQuality().
+void SettingsMenu::cycleStreamFps(int direction) {
+    static constexpr int kPresets[] = {0, 30, 45, 60, 90, 120};
+    constexpr int kPresetCount = static_cast<int>(sizeof(kPresets) / sizeof(kPresets[0]));
+    int currentIndex = 0;
+    for (int i = 0; i < kPresetCount; ++i) {
+        if (kPresets[i] == settings_.streamFps) {
+            currentIndex = i;
+            break;
+        }
+    }
+    settings_.streamFps = kPresets[(currentIndex + kPresetCount + direction) % kPresetCount];
     save();
     reconnectRequested_ = true;
 }

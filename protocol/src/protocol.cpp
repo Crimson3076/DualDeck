@@ -251,6 +251,7 @@ void serializeHelloPayload(ByteBuffer& out, const HelloPayload& hello) {
     appendString(out, hello.appVersion);
     out.push_back(hello.videoQuality);
     out.push_back(hello.supportedVideoCodecs);
+    out.push_back(hello.maxFrameRate);
 }
 
 std::optional<HelloPayload> parseHelloPayload(const uint8_t* data, size_t size) {
@@ -286,6 +287,9 @@ std::optional<HelloPayload> parseHelloPayload(const uint8_t* data, size_t size) 
 
     if (offset + 1 > size) return std::nullopt;
     hello.supportedVideoCodecs = data[offset]; offset += 1;
+
+    if (offset + 1 > size) return std::nullopt;
+    hello.maxFrameRate = data[offset]; offset += 1;
 
     if (offset != size) {
         // trailing garbage: reject rather than silently ignore

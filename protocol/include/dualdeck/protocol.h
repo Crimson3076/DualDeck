@@ -22,6 +22,10 @@ namespace dualdeck {
 
 // Bumped whenever the wire format changes incompatibly.
 //
+// v15: HelloPayload gained maxFrameRate -- the client's STREAM FPS
+// setting, so the host can capture faster than its fixed default (Host
+// Control's desktop mirror was stuck at 30fps, which felt laggy).
+//
 // v14: HelloAckPayload gained hostTimeUs -- the host's own wall-clock
 // time (nowMicrosEpoch(), same clock VideoFramePayload::captureTimestampUs
 // already uses) at the moment it composed this response. Real user
@@ -106,7 +110,7 @@ namespace dualdeck {
 // negotiating an optional codec keeps both sides simple, matching how
 // every other incompatible wire-format change in this project has been
 // handled (see the mic-support v5 bump above).
-inline constexpr uint16_t kProtocolVersion = 14;
+inline constexpr uint16_t kProtocolVersion = 15;
 
 // Sentinel at the start of every packet so malformed/foreign traffic on the
 // same port can be rejected cheaply before any further parsing.
@@ -500,6 +504,13 @@ struct HelloPayload {
     // Jpeg-only. See HelloAckPayload::selectedVideoCodec for the host's
     // side of this negotiation.
     uint8_t supportedVideoCodecs = kVideoCodecBit_Jpeg;
+
+    // Frames per second the client wants the host to capture at (protocol
+    // v15), or 0 to use the host's own default. Only sources that pace
+    // their own capture honor it today (Host Control's desktop mirror);
+    // emulator adapters still run at their game's or patch's own rate.
+    // Applied once, at handshake time, like videoQuality.
+    uint8_t maxFrameRate = 0;
 };
 
 enum class HelloRejectReason : uint8_t {

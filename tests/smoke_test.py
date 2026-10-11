@@ -41,7 +41,7 @@ MAGIC = 0x444D5231
 # to 14, in the same commit that added HelloAckPayload::hostTimeUs but
 # didn't touch this file -- see do_handshake()'s own comment on the
 # matching payload-parsing fix that needed alongside it).
-VERSION = 14
+VERSION = 15
 
 PT_HELLO = 1
 PT_HELLO_ACK = 2
@@ -84,7 +84,8 @@ def hello_payload(
     # v13, VideoCodecBit_Jpeg = 1, VideoCodecBit_H264 = 2 -- defaults to
     # JPEG-only, the same as every client shipped so far; the dedicated
     # H.264-negotiation test below passes 3 to also advertise H.264
-    # support).
+    # support), then HelloPayload::maxFrameRate (protocol v15, 0 = host
+    # default).
     return (
         lp_string(name)
         + lp_string(platform)
@@ -93,6 +94,7 @@ def hello_payload(
         + lp_string(app_version)
         + struct.pack("<B", 0)
         + struct.pack("<B", video_codecs)
+        + struct.pack("<B", 0)
     )
 
 

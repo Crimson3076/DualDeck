@@ -121,6 +121,33 @@ MDR_TEST(client_settings_ignores_out_of_range_video_quality) {
     std::filesystem::remove_all(path.parent_path(), ec);
 }
 
+MDR_TEST(client_settings_round_trip_stream_fps) {
+    auto path = temporarySettingsPath("stream-fps-round-trip");
+    MDR_CHECK_EQ(loadClientSettings(path.string()).streamFps, 0);
+
+    ClientSettings settings;
+    settings.streamFps = 90;
+    MDR_CHECK(saveClientSettings(path.string(), settings));
+    MDR_CHECK_EQ(loadClientSettings(path.string()).streamFps, 90);
+
+    std::error_code ec;
+    std::filesystem::remove_all(path.parent_path(), ec);
+}
+
+MDR_TEST(client_settings_ignores_out_of_range_stream_fps) {
+    auto path = temporarySettingsPath("stream-fps-out-of-range");
+    std::filesystem::create_directories(path.parent_path());
+    {
+        std::ofstream out(path);
+        out << "stream_fps=1000\n";
+    }
+
+    MDR_CHECK_EQ(loadClientSettings(path.string()).streamFps, 0);
+
+    std::error_code ec;
+    std::filesystem::remove_all(path.parent_path(), ec);
+}
+
 MDR_TEST(client_settings_missing_file_uses_mirror_host_screen_off_default) {
     auto path = temporarySettingsPath("missing-mirror-host-screen");
     ClientSettings settings = loadClientSettings(path.string());

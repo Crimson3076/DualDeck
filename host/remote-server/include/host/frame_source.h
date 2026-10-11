@@ -85,6 +85,17 @@ public:
     // GamePad top out around 410k pixels), never large enough to need
     // downscaling.
     virtual void setTargetDisplaySize(uint16_t /*width*/, uint16_t /*height*/) {}
+
+    // The client's requested capture rate (HelloPayload::maxFrameRate,
+    // protocol v15), 0 meaning "use your default". No-op for sources that
+    // don't pace their own capture (the emulator adapters run at their
+    // game's or patch's own rate).
+    virtual void setTargetFrameRate(int /*fps*/) {}
+
+    // The rate this source actually produces frames at, for tuning the
+    // H.264 encoder's rate control, or 0 if it doesn't know (NetServer
+    // then assumes 30, the emulator adapters' usual rate).
+    virtual int nominalFrameRate() const { return 0; }
 };
 
 } // namespace dualdeck::host

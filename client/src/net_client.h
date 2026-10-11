@@ -51,6 +51,10 @@ struct NetClientConfig {
     // ClientSettings::videoQuality in main.cpp.
     uint8_t videoQuality = 0;
 
+    // Capture rate to request (HelloPayload::maxFrameRate), or 0 for the
+    // host's default; set from ClientSettings::streamFps in main.cpp.
+    uint8_t maxFrameRate = 0;
+
     // Protocol v13: whether to also advertise VideoCodecBit_H264 (in
     // addition to the always-advertised VideoCodecBit_Jpeg) in
     // HelloPayload.supportedVideoCodecs. Set from ClientSettings::

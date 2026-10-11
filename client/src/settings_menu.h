@@ -42,6 +42,7 @@ public:
 private:
     void save();
     void cycleVideoQuality(int direction);
+    void cycleStreamFps(int direction);
     void cycleVideoCodec(int direction);
     void cycleMicDevice(int direction, MicCapture* micCapture);
     void refreshTrackpadExperimentStatus();

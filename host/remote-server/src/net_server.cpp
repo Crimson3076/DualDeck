@@ -101,6 +101,7 @@ void NetServer::setTarget(IEmulatorInputSink& inputSink, IFrameSource& frameSour
         previousSink = inputSink_;
         inputSink_ = &inputSink;
         frameSource_ = &frameSource;
+        frameSource_->setTargetFrameRate(requestedFrameRate_);
         currentMode_ = mode;
         currentSystemIdentity_ = std::move(systemIdentity);
         currentAdapterIdentity_ = std::move(adapterIdentity);

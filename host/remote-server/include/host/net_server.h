@@ -490,6 +490,13 @@ private:
     // time, read by videoLoop() when a new video connection arrives"
     // convention as currentVideoQuality_ above.
     std::atomic<VideoCodec> currentVideoCodec_{VideoCodec::Jpeg};
+
+    // The most recent accepted handshake's HelloPayload::maxFrameRate
+    // (protocol v15, 0 = source default). Guarded by targetMutex_ and
+    // handed to the frame source at handshake time and again by
+    // setTarget(), so a mid-session switch into Host Control keeps the
+    // client's rate.
+    int requestedFrameRate_ = 0;
 };
 
 } // namespace dualdeck::host

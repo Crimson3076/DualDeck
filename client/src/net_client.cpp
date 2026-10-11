@@ -271,6 +271,7 @@ bool NetClient::connect() {
     helloPayload.authToken = config_.authToken;
     helloPayload.appVersion = config_.appVersion;
     helloPayload.videoQuality = config_.videoQuality;
+    helloPayload.maxFrameRate = config_.maxFrameRate;
     // VideoCodecBit_Jpeg is always advertised (no external dependency,
     // decode always available); VideoCodecBit_H264 only if config_.
     // preferH264 (ClientSettings::videoCodecH264Experimental, defaults

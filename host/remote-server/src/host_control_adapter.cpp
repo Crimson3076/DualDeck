@@ -339,7 +339,7 @@ HostControlAdapter::HostControlAdapter() {
             }
         }
 
-        // Optional override of the default 30fps capture rate (see
+        // Optional override of the default capture rate (see
         // getLatestFrame()'s comment in the header). An out-of-range or
         // unparseable value falls back to the default rather than
         // producing a nonsensical interval.
@@ -347,9 +347,13 @@ HostControlAdapter::HostControlAdapter() {
         if (fpsEnv != nullptr && fpsEnv[0] != '\0') {
             char* end = nullptr;
             long fps = std::strtol(fpsEnv, &end, 10);
-            if (end != fpsEnv && *end == '\0' && fps >= 1 && fps <= 60) {
-                mirrorCaptureInterval_ = std::chrono::microseconds(1'000'000 / fps);
+            if (end != fpsEnv && *end == '\0' && fps >= 1 && fps <= 240) {
+                mirrorDefaultIntervalUs_ = 1'000'000 / fps;
             }
+        }
+        mirrorCaptureIntervalUs_ = mirrorDefaultIntervalUs_;
+        if (isMirrorReady()) {
+            mirrorThread_ = std::thread(&HostControlAdapter::mirrorCaptureLoop, this);
         }
     }
 
@@ -541,6 +545,14 @@ HostControlAdapter::HostControlAdapter() {
 }
 
 HostControlAdapter::~HostControlAdapter() {
+    if (mirrorThread_.joinable()) {
+        {
+            std::lock_guard<std::mutex> lock(mirrorThreadMutex_);
+            mirrorStop_ = true;
+        }
+        mirrorThreadCv_.notify_all();
+        mirrorThread_.join();
+    }
     if (uinputFd_ >= 0) {
         ::ioctl(uinputFd_, UI_DEV_DESTROY);
         ::close(uinputFd_);
@@ -689,52 +701,83 @@ void HostControlAdapter::releaseAll() {
     }
 }
 
+namespace {
+
+int64_t steadyNowMicros() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+} // namespace
+
+void HostControlAdapter::mirrorCaptureLoop() {
+    // A second without anyone asking for a frame means no Host Control
+    // client is watching; check back this often until one is.
+    constexpr int64_t kIdleAfterUs = 1'000'000;
+    constexpr auto kIdlePoll = std::chrono::milliseconds(50);
+
+    auto next = std::chrono::steady_clock::now();
+    std::unique_lock<std::mutex> lock(mirrorThreadMutex_);
+    while (!mirrorThreadCv_.wait_until(lock, next, [this] { return mirrorStop_; })) {
+        lock.unlock();
+        if (steadyNowMicros() - mirrorLastPollUs_.load() > kIdleAfterUs) {
+            next = std::chrono::steady_clock::now() + kIdlePoll;
+        } else {
+            captureMirrorFrame();
+            // Step from the previous deadline so the long-run rate is the
+            // configured one; if a capture overran (or we were idle),
+            // start again from now rather than bursting to catch up.
+            const auto now = std::chrono::steady_clock::now();
+            next += std::chrono::microseconds(mirrorCaptureIntervalUs_.load());
+            if (next < now) {
+                next = now;
+            }
+        }
+        lock.lock();
+    }
+}
+
+void HostControlAdapter::captureMirrorFrame() {
+    std::vector<uint8_t> frame;
+    uint16_t width = 0;
+    uint16_t height = 0;
+    const bool captured = mirrorX11Capture_ && mirrorX11Capture_->isReady()
+                              ? mirrorX11Capture_->capture(frame, width, height)
+                              : mirrorWaylandCapture_->capture(frame, width, height);
+    if (!captured) return;
+
+    // See setTargetDisplaySize()'s own comment for the real user report
+    // this fixes. Falls back to this project's primary target device's
+    // native resolution until a real client has connected and reported
+    // its own.
+    const uint16_t requestedWidth = targetDisplayWidth_.load();
+    const uint16_t requestedHeight = targetDisplayHeight_.load();
+    const int targetWidth = requestedWidth != 0 ? requestedWidth : kFallbackTargetDisplayWidth;
+    const int targetHeight = requestedHeight != 0 ? requestedHeight : kFallbackTargetDisplayHeight;
+    int fitWidth = 0, fitHeight = 0;
+    fitDownscaleTarget(width, height, targetWidth, targetHeight, fitWidth, fitHeight);
+    if (fitWidth != width || fitHeight != height) {
+        std::vector<uint8_t> downscaled;
+        downscaleBgra8888(frame.data(), width, height, downscaled, fitWidth, fitHeight);
+        frame = std::move(downscaled);
+        width = static_cast<uint16_t>(fitWidth);
+        height = static_cast<uint16_t>(fitHeight);
+    }
+
+    std::lock_guard<std::mutex> lock(mirrorFrameMutex_);
+    mirrorLastFrame_ = std::move(frame);
+    mirrorLastWidth_ = width;
+    mirrorLastHeight_ = height;
+    mirrorLastFrameIndex_ = mirrorNextFrameIndex_++;
+}
+
 bool HostControlAdapter::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
                                         uint16_t& outWidth, uint16_t& outHeight) {
     if (!isMirrorReady()) return false;
+    mirrorLastPollUs_ = steadyNowMicros();
 
-    auto now = std::chrono::steady_clock::now();
-    if (mirrorLastFrame_.empty() || now >= mirrorNextCaptureTime_) {
-        std::vector<uint8_t> frame;
-        uint16_t width = 0;
-        uint16_t height = 0;
-        bool captured = mirrorX11Capture_ && mirrorX11Capture_->isReady()
-                             ? mirrorX11Capture_->capture(frame, width, height)
-                             : mirrorWaylandCapture_->capture(frame, width, height);
-        if (captured) {
-            // See setTargetDisplaySize()'s own comment for the real
-            // user report this fixes. Falls back to this project's
-            // primary target device's native resolution until a real
-            // client has connected and reported its own.
-            int targetWidth = targetDisplayWidth_ != 0 ? targetDisplayWidth_ : kFallbackTargetDisplayWidth;
-            int targetHeight = targetDisplayHeight_ != 0 ? targetDisplayHeight_ : kFallbackTargetDisplayHeight;
-            int fitWidth = 0, fitHeight = 0;
-            fitDownscaleTarget(width, height, targetWidth, targetHeight, fitWidth, fitHeight);
-            if (fitWidth != width || fitHeight != height) {
-                std::vector<uint8_t> downscaled;
-                downscaleBgra8888(frame.data(), width, height, downscaled, fitWidth, fitHeight);
-                mirrorLastFrame_ = std::move(downscaled);
-                width = static_cast<uint16_t>(fitWidth);
-                height = static_cast<uint16_t>(fitHeight);
-            } else {
-                mirrorLastFrame_ = std::move(frame);
-            }
-            mirrorLastWidth_ = width;
-            mirrorLastHeight_ = height;
-            mirrorLastFrameIndex_ = mirrorNextFrameIndex_++;
-        }
-        // Advance the deadline regardless of whether the capture actually
-        // succeeded this tick -- a transient capture failure should be
-        // retried at the configured rate, not on every single poll. Step
-        // from the previous deadline so the poll interval doesn't add up
-        // into a lower real rate; after a stall (or the very first
-        // capture) restart from now instead of bursting to catch up.
-        mirrorNextCaptureTime_ += mirrorCaptureInterval_;
-        if (mirrorNextCaptureTime_ <= now) {
-            mirrorNextCaptureTime_ = now + mirrorCaptureInterval_;
-        }
-    }
-
+    std::lock_guard<std::mutex> lock(mirrorFrameMutex_);
     if (mirrorLastFrame_.empty()) return false;
     outFrame = mirrorLastFrame_;
     outFrameIndex = mirrorLastFrameIndex_;
@@ -744,10 +787,20 @@ bool HostControlAdapter::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t
 }
 
 std::optional<uint64_t> HostControlAdapter::latestFrameIndex() {
-    if (!isMirrorReady() || mirrorLastFrame_.empty() || std::chrono::steady_clock::now() >= mirrorNextCaptureTime_) {
-        return std::nullopt;
-    }
+    if (!isMirrorReady()) return std::nullopt;
+    mirrorLastPollUs_ = steadyNowMicros();
+
+    std::lock_guard<std::mutex> lock(mirrorFrameMutex_);
+    if (mirrorLastFrame_.empty()) return std::nullopt;
     return mirrorLastFrameIndex_;
+}
+
+void HostControlAdapter::setTargetFrameRate(int fps) {
+    mirrorCaptureIntervalUs_ = fps >= 1 && fps <= 240 ? 1'000'000 / fps : mirrorDefaultIntervalUs_;
+}
+
+int HostControlAdapter::nominalFrameRate() const {
+    return static_cast<int>(1'000'000 / mirrorCaptureIntervalUs_.load());
 }
 
 void HostControlAdapter::frameDimensions(uint16_t& outWidth, uint16_t& outHeight) const {

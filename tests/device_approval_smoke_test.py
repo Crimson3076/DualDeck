@@ -58,7 +58,7 @@ MAGIC = 0x444D5231
 # protocol-sync.sh now checks this file's VERSION constant directly (it
 # didn't yet, the first time this drifted), so this one should be the
 # last time it goes unnoticed until CI.
-VERSION = 14
+VERSION = 15
 
 PT_HELLO = 1
 PT_HELLO_ACK = 2
@@ -84,13 +84,15 @@ def hello_payload(name: str, platform: str, width: int, height: int, device_id: 
     # Final bytes: HelloPayload::videoQuality (protocol v9) -- 0 means
     # "defer to the host's own configured default" -- followed by
     # HelloPayload::supportedVideoCodecs (protocol v13, VideoCodecBit_Jpeg
-    # = 1). Both irrelevant to what this file actually tests (device
+    # = 1), then HelloPayload::maxFrameRate (protocol v15, 0 = host
+    # default). All irrelevant to what this file actually tests (device
     # approval, not video).
     return (
         lp_string(name) + lp_string(platform) + struct.pack("<HH", width, height) + lp_string(device_id)
         + lp_string("")
         + struct.pack("<B", 0)
         + struct.pack("<B", 1)
+        + struct.pack("<B", 0)
     )
 
 

@@ -261,26 +261,22 @@ void NetServer::videoLoop() {
                     // what a client with no prior decoder state (or a
                     // decoder state that just became the wrong
                     // resolution) needs.
-                    // Deliberately NOT config_.videoSendFps: since the
-                    // "Latency: tightened the two cheap-to-poll relay
-                    // stages" pass (docs/history.md), that
-                    // value is a polling-responsiveness tick rate (240
-                    // by default) this loop's own outer interval uses,
-                    // not a real content frame rate -- no adapter
-                    // actually produces new frames anywhere near that
-                    // often (Cemu's own CEMU_REMOTE_CAPTURE_FPS default
-                    // is 30). Feeding 240 into fMaxFrameRate/uiIntraPeriod
-                    // below would badly under-tune both (a keyframe only
-                    // every ~16 real seconds at frame *count* 480, not
-                    // the intended ~2). This constant is a reasonable
-                    // assumption across today's real adapters, not a
-                    // measured value -- worth revisiting once per-adapter
-                    // real capture rate is actually plumbed through to
-                    // NetServer.
-                    constexpr int kAssumedCaptureFps = 30;
-                    if (!h264Encoder.initialize(currentFrameWidth, currentFrameHeight, kAssumedCaptureFps,
+                    // The source's real frame rate when it knows it
+                    // (Host Control's mirror runs at the client's STREAM
+                    // FPS), else 30, the emulator adapters' usual rate.
+                    // Deliberately NOT config_.videoSendFps: that's this
+                    // loop's polling rate (240 by default), not a content
+                    // frame rate, and would badly under-tune both
+                    // fMaxFrameRate and uiIntraPeriod.
+                    int sourceFps = 0;
+                    {
+                        std::lock_guard<std::mutex> lock(targetMutex_);
+                        sourceFps = frameSource_->nominalFrameRate();
+                    }
+                    const int encoderFps = sourceFps > 0 ? std::clamp(sourceFps, 1, 240) : 30;
+                    if (!h264Encoder.initialize(currentFrameWidth, currentFrameHeight, encoderFps,
                                                  h264TargetBitrateBps(currentVideoQuality_.load(), currentFrameWidth,
-                                                                       currentFrameHeight, kAssumedCaptureFps))) {
+                                                                       currentFrameHeight, encoderFps))) {
                         std::fprintf(stderr, "NetServer: H264Encoder::initialize failed (%dx%d), skipping frame\n",
                                      currentFrameWidth, currentFrameHeight);
                         h264InitializedWidth = 0;
