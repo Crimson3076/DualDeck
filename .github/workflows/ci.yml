@@ -11,14 +11,14 @@ jobs:
     name: Check host patches use the shared sources and tests use the current protocol version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: ./scripts/check-patch-protocol-sync.sh
 
   protocol-and-host:
     name: Build + test protocol/host (no SDL3, no melonDS)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libturbojpeg0-dev libopenh264-dev
@@ -58,7 +58,7 @@ jobs:
     name: Build + test protocol/host/client-tests with PyroWave (lavapipe)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build dependencies
         run: |
@@ -115,7 +115,7 @@ jobs:
     name: Host/client menu lifecycle + Installation branch selector tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Pure bash/python3 -- no build, no SDL3/melonDS. Both tests copy
       # dualdeck-host.sh/dualdeck-client.sh straight out of packaging/
@@ -143,7 +143,7 @@ jobs:
       run:
         working-directory: decky-plugin
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -166,7 +166,7 @@ jobs:
     name: Compile client net_client.cpp/device_identity.cpp standalone (no SDL3 available)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libturbojpeg0-dev
@@ -205,7 +205,7 @@ jobs:
     name: Build + test the SDL3 client
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libturbojpeg0-dev libopenh264-dev ninja-build
