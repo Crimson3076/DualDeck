@@ -3,6 +3,7 @@ add_library(dualdeck_protocol STATIC
     src/touch_mapping.cpp
     src/input_state_tracker.cpp
     src/rate_limiter.cpp
+    src/json_string.cpp
 )
 
 target_include_directories(dualdeck_protocol PUBLIC

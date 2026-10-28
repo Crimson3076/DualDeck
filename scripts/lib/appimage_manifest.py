@@ -16,7 +16,7 @@ happened. This can only ever detect drift after the fact -- if EmuDeck's
 updater runs and the user launches the game before the next drift check,
 they transiently get an unpatched emulator with no remote-server
 capability. That's an accepted, documented degrade-to-stock behavior, not a
-crash -- see docs/known-limitations.md's Phase A entry.
+crash -- see docs/history.md's Phase A entry.
 
 Both scripts/emudeck-replace-in-place.sh and scripts/emudeck-check-drift.sh
 (bash) invoke this file's CLI via subprocess rather than reimplementing

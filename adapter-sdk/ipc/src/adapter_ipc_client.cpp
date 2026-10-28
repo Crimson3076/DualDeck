@@ -1,4 +1,4 @@
-#include "melonds_remote/adapter/ipc/adapter_ipc_client.h"
+#include "dualdeck/adapter/ipc/adapter_ipc_client.h"
 
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -11,10 +11,10 @@
 #include <thread>
 #include <utility>
 
-#include "melonds_remote/adapter/ipc/ipc_protocol.h"
-#include "melonds_remote/adapter/ipc/socket_path.h"
+#include "dualdeck/adapter/ipc/ipc_protocol.h"
+#include "dualdeck/adapter/ipc/socket_path.h"
 
-namespace melonds_remote::adapter::ipc {
+namespace dualdeck::adapter::ipc {
 
 namespace {
 
@@ -44,8 +44,8 @@ bool sendAll(int fd, const uint8_t* data, size_t size) {
     return true;
 }
 
-bool sendMessage(int fd, IpcMessageType type, const melonds_remote::ByteBuffer& payload) {
-    melonds_remote::ByteBuffer packet = buildIpcMessage(type, payload);
+bool sendMessage(int fd, IpcMessageType type, const dualdeck::ByteBuffer& payload) {
+    dualdeck::ByteBuffer packet = buildIpcMessage(type, payload);
     return sendAll(fd, packet.data(), packet.size());
 }
 
@@ -58,7 +58,7 @@ bool sendMessage(int fd, IpcMessageType type, const melonds_remote::ByteBuffer& 
 // but keeping the logic duplicated once each keeps both files
 // independently readable without an extra shared internal header for
 // two ~15-line functions).
-std::optional<std::pair<IpcHeader, melonds_remote::ByteBuffer>> recvMessage(int fd) {
+std::optional<std::pair<IpcHeader, dualdeck::ByteBuffer>> recvMessage(int fd) {
     uint8_t headerBuf[kIpcHeaderWireSize];
     ssize_t n = ::recv(fd, headerBuf, sizeof(headerBuf), MSG_WAITALL);
     if (n != static_cast<ssize_t>(sizeof(headerBuf))) return std::nullopt;
@@ -69,7 +69,7 @@ std::optional<std::pair<IpcHeader, melonds_remote::ByteBuffer>> recvMessage(int 
     constexpr uint32_t kMaxPayloadSize = kMaxIpcFramePixelBytes + 256;
     if (header->payloadSize > kMaxPayloadSize) return std::nullopt;
 
-    melonds_remote::ByteBuffer payload(header->payloadSize);
+    dualdeck::ByteBuffer payload(header->payloadSize);
     if (!payload.empty()) {
         ssize_t got = ::recv(fd, payload.data(), payload.size(), MSG_WAITALL);
         if (got != static_cast<ssize_t>(payload.size())) return std::nullopt;
@@ -132,7 +132,7 @@ bool AdapterIpcClient::connect() {
     }
     setRecvTimeout(fd, kRecvTimeoutSeconds);
 
-    melonds_remote::ByteBuffer helloPayload;
+    dualdeck::ByteBuffer helloPayload;
     serializeAdapterCapabilities(helloPayload, localAdapter_.capabilities());
     if (!sendMessage(fd, IpcMessageType::Hello, helloPayload)) {
         ::close(fd);
@@ -236,9 +236,10 @@ void AdapterIpcClient::writeLoop() {
     // rates); this just governs how often writeLoop() checks whether
     // there's anything new to send, not how often frames actually
     // change. Each iteration that finds nothing new (the per-surface
-    // lastSentFrameIndex_ check below) is just a mutex-guarded
-    // struct/vector copy and comparison -- no message is sent -- so
-    // polling this often costs CPU wakeups, not bandwidth. Kept well
+    // latestFrameIndex()/lastSentFrameIndex_ check below) is just a
+    // mutex-guarded index read and comparison -- no pixels are copied
+    // and no message is sent -- so polling this often costs CPU
+    // wakeups, not bandwidth. Kept well
     // below the video-loop's own tick rate on the host side
     // (NetServerConfig::videoSendFps) so this stage is never the
     // bottleneck in the capture -> IPC -> relay -> send latency chain.
@@ -253,7 +254,7 @@ void AdapterIpcClient::writeLoop() {
 
         SessionState state = localAdapter_.currentState();
         if (state != lastSentState_) {
-            melonds_remote::ByteBuffer payload;
+            dualdeck::ByteBuffer payload;
             serializeSessionState(payload, state);
             if (!sendMessage(fd, IpcMessageType::StateChanged, payload)) {
                 connected_ = false;
@@ -264,15 +265,22 @@ void AdapterIpcClient::writeLoop() {
         }
 
         for (const auto& surface : localAdapter_.capabilities().surfaces) {
+            auto it = lastSentFrameIndex_.find(surface.surfaceId);
+            // Cheap index check first, so an unchanged frame never gets
+            // copied out of the adapter at all (see latestFrameIndex()).
+            const auto newestIndex = localAdapter_.latestFrameIndex(surface.surfaceId);
+            if (newestIndex && it != lastSentFrameIndex_.end() && it->second == *newestIndex) {
+                continue;
+            }
+
             SurfaceFrame frame;
             if (!localAdapter_.latestFrame(surface.surfaceId, frame)) continue;
 
-            auto it = lastSentFrameIndex_.find(surface.surfaceId);
             if (it != lastSentFrameIndex_.end() && it->second == frame.frameIndex) {
                 continue; // nothing new for this surface since last tick
             }
 
-            melonds_remote::ByteBuffer payload;
+            dualdeck::ByteBuffer payload;
             serializeSurfaceFrame(payload, frame);
             if (!sendMessage(fd, IpcMessageType::Frame, payload)) {
                 connected_ = false;
@@ -298,4 +306,4 @@ void AdapterIpcClient::writeLoop() {
     }
 }
 
-} // namespace melonds_remote::adapter::ipc
+} // namespace dualdeck::adapter::ipc

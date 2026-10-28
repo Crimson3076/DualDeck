@@ -27,7 +27,7 @@
 # here; today's already-working per-component install/update scripts
 # (each with their own atomic staging and update-on-launch behavior) are
 # reused as-is rather than replaced in the same change that adds this
-# entry point. See docs/known-limitations.md for the exact list of what
+# entry point. See docs/history.md for the exact list of what
 # issue #26 asks for that remains outstanding.
 set -uo pipefail
 

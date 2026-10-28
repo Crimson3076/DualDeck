@@ -1,6 +1,6 @@
-#include "melonds_remote/adapter/fake/fake_adapter_base.h"
+#include "dualdeck/adapter/fake/fake_adapter_base.h"
 
-namespace melonds_remote::adapter::fake {
+namespace dualdeck::adapter::fake {
 
 FakeAdapterBase::FakeAdapterBase(AdapterCapabilities capabilities)
     : capabilities_(std::move(capabilities)) {}
@@ -68,4 +68,4 @@ bool FakeAdapterBase::isReleased() const {
     return released_;
 }
 
-} // namespace melonds_remote::adapter::fake
+} // namespace dualdeck::adapter::fake

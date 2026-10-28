@@ -3,9 +3,9 @@
 #include <algorithm>
 #include <cmath>
 
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 std::vector<MicDeviceInfo> listMicDevices() {
     std::vector<MicDeviceInfo> devices;
@@ -47,7 +47,7 @@ bool MicCapture::open(const std::string& deviceName) {
     SDL_AudioSpec spec{};
     spec.format = SDL_AUDIO_S16;
     spec.channels = 1;
-    spec.freq = static_cast<int>(melonds_remote::kMicAudioSampleRate);
+    spec.freq = static_cast<int>(dualdeck::kMicAudioSampleRate);
 
     stream_ = SDL_OpenAudioDeviceStream(deviceId, &spec, nullptr, nullptr);
     if (!stream_) {
@@ -106,4 +106,4 @@ float MicCapture::pollSamples(std::vector<int16_t>& outSamples) {
     return static_cast<float>(std::min(rms, 1.0));
 }
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

@@ -15,8 +15,8 @@
 #include <cstdint>
 #include <vector>
 
-using namespace melonds_remote;
-using namespace melonds_remote::client;
+using namespace dualdeck;
+using namespace dualdeck::client;
 
 MDR_TEST(h264_decoder_decode_garbage_fails_cleanly) {
     H264Decoder decoder;

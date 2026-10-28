@@ -1,13 +1,13 @@
-#include "melonds_remote/adapter/fake/fake_wiiu_adapter.h"
+#include "dualdeck/adapter/fake/fake_wiiu_adapter.h"
 
-namespace melonds_remote::adapter::fake {
+namespace dualdeck::adapter::fake {
 
 namespace {
 AdapterCapabilities buildCapabilities() {
     AdapterCapabilities caps;
-    caps.system = melonds_remote::SystemIdentity{"wiiu", "Nintendo Wii U"};
+    caps.system = dualdeck::SystemIdentity{"wiiu", "Nintendo Wii U"};
     caps.adapter =
-        melonds_remote::AdapterIdentity{"fake-wiiu", "Fake Wii U Adapter (test fixture)", "0.0.1"};
+        dualdeck::AdapterIdentity{"fake-wiiu", "Fake Wii U Adapter (test fixture)", "0.0.1"};
 
     // 1080p TV output; real Wii U GamePad resolution (854x480).
     VideoSurfaceDescriptor tv;
@@ -40,4 +40,4 @@ AdapterCapabilities buildCapabilities() {
 
 FakeWiiUAdapter::FakeWiiUAdapter() : FakeAdapterBase(buildCapabilities()) {}
 
-} // namespace melonds_remote::adapter::fake
+} // namespace dualdeck::adapter::fake

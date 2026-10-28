@@ -4,7 +4,7 @@
 #include <filesystem>
 #include <fstream>
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 DeviceApprovalManager::DeviceApprovalManager(std::string stateFilePath,
                                              std::chrono::seconds pendingRequestTtl)
@@ -165,4 +165,4 @@ void DeviceApprovalManager::setOnPendingRequestsChanged(
     onPendingRequestsChanged_ = std::move(callback);
 }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

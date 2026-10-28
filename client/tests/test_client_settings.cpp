@@ -6,7 +6,7 @@
 #include <fstream>
 #include <string>
 
-using namespace melonds_remote::client;
+using namespace dualdeck::client;
 
 namespace {
 
@@ -121,6 +121,33 @@ MDR_TEST(client_settings_ignores_out_of_range_video_quality) {
     std::filesystem::remove_all(path.parent_path(), ec);
 }
 
+MDR_TEST(client_settings_round_trip_stream_fps) {
+    auto path = temporarySettingsPath("stream-fps-round-trip");
+    MDR_CHECK_EQ(loadClientSettings(path.string()).streamFps, 0);
+
+    ClientSettings settings;
+    settings.streamFps = 90;
+    MDR_CHECK(saveClientSettings(path.string(), settings));
+    MDR_CHECK_EQ(loadClientSettings(path.string()).streamFps, 90);
+
+    std::error_code ec;
+    std::filesystem::remove_all(path.parent_path(), ec);
+}
+
+MDR_TEST(client_settings_ignores_out_of_range_stream_fps) {
+    auto path = temporarySettingsPath("stream-fps-out-of-range");
+    std::filesystem::create_directories(path.parent_path());
+    {
+        std::ofstream out(path);
+        out << "stream_fps=1000\n";
+    }
+
+    MDR_CHECK_EQ(loadClientSettings(path.string()).streamFps, 0);
+
+    std::error_code ec;
+    std::filesystem::remove_all(path.parent_path(), ec);
+}
+
 MDR_TEST(client_settings_missing_file_uses_mirror_host_screen_off_default) {
     auto path = temporarySettingsPath("missing-mirror-host-screen");
     ClientSettings settings = loadClientSettings(path.string());
@@ -147,6 +174,25 @@ MDR_TEST(client_settings_missing_file_uses_video_codec_h264_off_default) {
     auto path = temporarySettingsPath("missing-video-codec-h264");
     ClientSettings settings = loadClientSettings(path.string());
     MDR_CHECK(!settings.videoCodecH264Experimental);
+}
+
+MDR_TEST(client_settings_round_trip_video_codec_pyrowave_experimental) {
+    auto path = temporarySettingsPath("video-codec-pyrowave-round-trip");
+    MDR_CHECK(!loadClientSettings(path.string()).videoCodecPyroWaveExperimental);
+
+    ClientSettings settings;
+    settings.videoCodecPyroWaveExperimental = true;
+    MDR_CHECK(saveClientSettings(path.string(), settings));
+    ClientSettings loaded = loadClientSettings(path.string());
+    MDR_CHECK(loaded.videoCodecPyroWaveExperimental);
+    MDR_CHECK(!loaded.videoCodecH264Experimental);
+
+    settings.videoCodecPyroWaveExperimental = false;
+    MDR_CHECK(saveClientSettings(path.string(), settings));
+    MDR_CHECK(!loadClientSettings(path.string()).videoCodecPyroWaveExperimental);
+
+    std::error_code ec;
+    std::filesystem::remove_all(path.parent_path(), ec);
 }
 
 MDR_TEST(client_settings_round_trip_video_codec_h264_experimental) {
@@ -182,6 +228,46 @@ MDR_TEST(client_settings_round_trip_debug_overlay_enabled) {
     settings.debugOverlayEnabled = false;
     MDR_CHECK(saveClientSettings(path.string(), settings));
     MDR_CHECK(!loadClientSettings(path.string()).debugOverlayEnabled);
+
+    std::error_code ec;
+    std::filesystem::remove_all(path.parent_path(), ec);
+}
+
+MDR_TEST(client_settings_video_codec_auto_is_the_default_and_round_trips) {
+    auto path = temporarySettingsPath("video-codec-auto");
+    MDR_CHECK(loadClientSettings(path.string()).videoCodecAuto);
+
+    ClientSettings settings;
+    settings.videoCodecAuto = false;
+    MDR_CHECK(saveClientSettings(path.string(), settings));
+    MDR_CHECK(!loadClientSettings(path.string()).videoCodecAuto);
+
+    settings.videoCodecAuto = true;
+    MDR_CHECK(saveClientSettings(path.string(), settings));
+    MDR_CHECK(loadClientSettings(path.string()).videoCodecAuto);
+
+    std::error_code ec;
+    std::filesystem::remove_all(path.parent_path(), ec);
+}
+
+// A settings file from before AUTO existed: an explicit H.264/PyroWave
+// pick survives, the untouched JPEG default becomes AUTO.
+MDR_TEST(client_settings_pre_auto_file_keeps_an_explicit_codec_choice) {
+    auto path = temporarySettingsPath("video-codec-pre-auto");
+    std::filesystem::create_directories(path.parent_path());
+    {
+        std::ofstream out(path);
+        out << "video_codec_h264_experimental=1\nvideo_codec_pyrowave_experimental=0\n";
+    }
+    ClientSettings loaded = loadClientSettings(path.string());
+    MDR_CHECK(!loaded.videoCodecAuto);
+    MDR_CHECK(loaded.videoCodecH264Experimental);
+
+    {
+        std::ofstream out(path, std::ios::trunc);
+        out << "video_codec_h264_experimental=0\nvideo_codec_pyrowave_experimental=0\n";
+    }
+    MDR_CHECK(loadClientSettings(path.string()).videoCodecAuto);
 
     std::error_code ec;
     std::filesystem::remove_all(path.parent_path(), ec);

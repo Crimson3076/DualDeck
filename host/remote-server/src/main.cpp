@@ -11,6 +11,7 @@
 #include <unordered_set>
 
 #include "host/adapter_bridge.h"
+#include "host/control_socket.h"
 #include "host/host_control_adapter.h"
 #include "host/kdialog_approval_prompt.h"
 #include "host/logging_input_sink.h"
@@ -18,7 +19,7 @@
 #include "host/mode_coordinator.h"
 #include "host/net_server.h"
 #include "host/synthetic_frame_source.h"
-#include "melonds_remote/adapter/ipc/adapter_ipc_server.h"
+#include "dualdeck/adapter/ipc/adapter_ipc_server.h"
 
 namespace {
 volatile std::sig_atomic_t g_stopRequested = 0;
@@ -38,7 +39,7 @@ void handleSignal(int) {
 // process was started without a terminal, or under CI) std::getline
 // just returns false and the thread exits on its own; there's nothing
 // to clean up, so there's no need to join it against shutdown.
-void consoleLoop(melonds_remote::host::NetServer& server, melonds_remote::host::ModeCoordinator* coordinator) {
+void consoleLoop(dualdeck::host::NetServer& server, dualdeck::host::ModeCoordinator* coordinator) {
     std::string line;
     while (std::getline(std::cin, line)) {
         std::istringstream iss(line);
@@ -76,7 +77,7 @@ void consoleLoop(melonds_remote::host::NetServer& server, melonds_remote::host::
             std::printf("[mode] override cleared -- mode now follows adapter connection state\n");
         } else if (coordinator && cmd == "mode") {
             std::printf("[mode] currently: %s%s\n",
-                        server.currentMode() == melonds_remote::HostMode::HostControl ? "host-control"
+                        server.currentMode() == dualdeck::HostMode::HostControl ? "host-control"
                                                                                         : "emulation",
                         coordinator->isOverridden() ? " (manually forced)" : "");
         } else if (!cmd.empty()) {
@@ -100,14 +101,14 @@ void consoleLoop(melonds_remote::host::NetServer& server, melonds_remote::host::
 // e.g. after a restart) gets a fresh prompt.
 class KdialogApprovalHook {
 public:
-    void setServer(melonds_remote::host::NetServer* server) {
+    void setServer(dualdeck::host::NetServer* server) {
         std::lock_guard<std::mutex> lock(mutex_);
         server_ = server;
     }
 
     void onPendingRequestsChanged(
-        std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest> pending) {
-        std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest> newlyPending;
+        std::vector<dualdeck::host::DeviceApprovalManager::PendingRequest> pending) {
+        std::vector<dualdeck::host::DeviceApprovalManager::PendingRequest> newlyPending;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             std::unordered_set<std::string> stillPending;
@@ -131,8 +132,8 @@ public:
     }
 
 private:
-    void promptAndDecide(const melonds_remote::host::DeviceApprovalManager::PendingRequest& req) {
-        auto result = melonds_remote::host::promptDeviceApprovalViaKdialog(req.clientName, req.address);
+    void promptAndDecide(const dualdeck::host::DeviceApprovalManager::PendingRequest& req) {
+        auto result = dualdeck::host::promptDeviceApprovalViaKdialog(req.clientName, req.address);
 
         // approveDevice()/denyDevice() synchronously invoke
         // DeviceApprovalManager's notifyChangedLocked(), which re-enters
@@ -140,7 +141,7 @@ private:
         // same thread -- so server_ must be read into a local and mutex_
         // released *before* calling either, or that reentrant call would
         // deadlock trying to re-lock mutex_ (a plain, non-recursive mutex).
-        melonds_remote::host::NetServer* server;
+        dualdeck::host::NetServer* server;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             server = server_;
@@ -148,9 +149,9 @@ private:
         if (server == nullptr) {
             return;
         }
-        if (result == melonds_remote::host::KdialogPromptResult::Approved) {
+        if (result == dualdeck::host::KdialogPromptResult::Approved) {
             server->approveDevice(req.deviceId);
-        } else if (result == melonds_remote::host::KdialogPromptResult::Denied) {
+        } else if (result == dualdeck::host::KdialogPromptResult::Denied) {
             server->denyDevice(req.deviceId);
         }
         // Unavailable: leave pending -- the console ("list"/"approve <id>"/
@@ -158,7 +159,7 @@ private:
     }
 
     std::mutex mutex_;
-    melonds_remote::host::NetServer* server_ = nullptr;
+    dualdeck::host::NetServer* server_ = nullptr;
     std::unordered_set<std::string> prompted_;
 };
 
@@ -166,9 +167,24 @@ private:
 // paths in main() below: starts the console loop if applicable, blocks
 // until SIGINT/SIGTERM, then returns so the caller can tear down
 // whatever sink/frame-source objects it constructed.
-void runUntilStopped(melonds_remote::host::NetServer& server, const melonds_remote::host::NetServerConfig& config,
-                      melonds_remote::host::ModeCoordinator* coordinator = nullptr) {
+void runUntilStopped(dualdeck::host::NetServer& server, const dualdeck::host::NetServerConfig& config,
+                      const std::string& controlSocketPath,
+                      dualdeck::host::ModeCoordinator* coordinator = nullptr) {
     server.start();
+
+    // Local control API (see control_socket.h). Optional: the service
+    // runs the same without it, so a failure is only logged.
+    dualdeck::host::ControlSocketServer controlSocket(
+        controlSocketPath, [&server, coordinator](const std::string& line) {
+            return dualdeck::host::handleControlCommand(line, server, coordinator);
+        });
+    if (!controlSocketPath.empty()) {
+        if (controlSocket.start()) {
+            std::printf("Control socket: %s\n", controlSocketPath.c_str());
+        } else {
+            std::fprintf(stderr, "control socket unavailable -- continuing without it\n");
+        }
+    }
 
     if (config.authToken.empty() || coordinator) {
         std::thread(consoleLoop, std::ref(server), coordinator).detach();
@@ -181,18 +197,21 @@ void runUntilStopped(melonds_remote::host::NetServer& server, const melonds_remo
     }
 
     std::printf("shutting down...\n");
+    controlSocket.stop();
     server.stop();
 }
 } // namespace
 
 int main(int argc, char** argv) {
-    melonds_remote::host::NetServerConfig config;
+    dualdeck::host::NetServerConfig config;
     // GitHub issue #28 Phase 2: when set, this process is driven by a
     // real adapter connected over the local IPC channel
     // (adapter-sdk/ipc/) instead of the built-in synthetic-stub
     // LoggingInputSink/SyntheticFrameSource pair -- see
     // docs/adr/0001-host-service-and-adapter-architecture.md section 4.
     bool useAdapterIpc = false;
+    std::string controlSocketPath = dualdeck::host::defaultControlSocketPath();
+    bool approvalPopup = true;
     std::string adapterSocketPath; // empty -> defaultAdapterSocketPath()
     // Whether --system-id/--system-name or --adapter-id/--adapter-name/
     // --adapter-version were explicitly given -- if so, they win over
@@ -265,6 +284,12 @@ int main(int argc, char** argv) {
             adapterIdentityExplicit = true;
         } else if (arg == "--adapter-ipc") {
             useAdapterIpc = true;
+        } else if (arg == "--control-socket") {
+            controlSocketPath = nextArg();
+        } else if (arg == "--no-control-socket") {
+            controlSocketPath.clear();
+        } else if (arg == "--no-approval-popup") {
+            approvalPopup = false;
         } else if (arg == "--adapter-socket") {
             adapterSocketPath = nextArg();
             useAdapterIpc = true;
@@ -277,7 +302,8 @@ int main(int argc, char** argv) {
                 "[--audio-port N] [--no-mic] [--app-version STRING] [--self-update COMMAND] "
                 "[--system-id ID] [--system-name NAME] [--adapter-id ID] "
                 "[--adapter-name NAME] [--adapter-version STRING] "
-                "[--adapter-ipc] [--adapter-socket PATH]\n"
+                "[--adapter-ipc] [--adapter-socket PATH] [--control-socket PATH] "
+                "[--no-control-socket] [--no-approval-popup]\n"
                 "\n"
                 "Phase 1 prototype: serves a synthetic 256x192 test-pattern bottom\n"
                 "screen and logs received controller/touch state. Not yet wired to\n"
@@ -290,7 +316,7 @@ int main(int argc, char** argv) {
                 "and address -- type 'approve <id>', 'deny <id>', or 'list' and press\n"
                 "Enter. No code is ever typed on the client (spec section 13's later\n"
                 "pairing options, adapted since Steam Input's virtual keyboard doesn't\n"
-                "reliably come up in Gaming Mode -- see docs/known-limitations.md).\n"
+                "reliably come up in Gaming Mode -- see docs/history.md).\n"
                 "Once approved, that same device reconnects silently forever, no\n"
                 "reprompting, unless the host's approved-device state is deleted.\n"
                 "The same request also pops a kdialog Yes/No prompt on this host's own\n"
@@ -381,6 +407,15 @@ int main(int argc, char** argv) {
                 "in this mode; only where this process gets its frames/sends its\n"
                 "input from/to internally changes.\n"
                 "\n"
+                "Local control API: a Unix socket (default\n"
+                "$XDG_RUNTIME_DIR/dualdeck/host-control.sock, --control-socket PATH to\n"
+                "move it, --no-control-socket to turn it off) answers one command per\n"
+                "line with one JSON line: 'status', 'pending', 'approve <id>',\n"
+                "'deny <id>', and with --adapter-ipc 'hostcontrol'/'resume'. It's how a\n"
+                "front end such as the Decky plugin approves devices. Pass\n"
+                "--no-approval-popup when that front end answers approvals, so the\n"
+                "kdialog popup doesn't ask the same question twice.\n"
+                "\n"
                 "GitHub issue #4 Phase D: in --adapter-ipc mode this host no longer\n"
                 "waits for an adapter before a client can connect -- it starts in\n"
                 "host-control mode (a virtual gamepad, via Linux's uinput, for\n"
@@ -405,17 +440,17 @@ int main(int argc, char** argv) {
     // giving Azahar/host-control the same zero-typing approval flow
     // melonDS's in-process Qt integration already has.
     KdialogApprovalHook approvalHook;
-    if (config.authToken.empty()) {
+    if (config.authToken.empty() && approvalPopup) {
         config.onPendingRequestsChanged =
-            [&approvalHook](std::vector<melonds_remote::host::DeviceApprovalManager::PendingRequest> pending) {
+            [&approvalHook](std::vector<dualdeck::host::DeviceApprovalManager::PendingRequest> pending) {
                 approvalHook.onPendingRequestsChanged(std::move(pending));
             };
     }
 
-    melonds_remote::host::LoggingMicAudioSink micSink; // unchanged either way -- see --help's note above
+    dualdeck::host::LoggingMicAudioSink micSink; // unchanged either way -- see --help's note above
 
     if (useAdapterIpc) {
-        melonds_remote::adapter::ipc::AdapterIpcServer adapterServer(adapterSocketPath);
+        dualdeck::adapter::ipc::AdapterIpcServer adapterServer(adapterSocketPath);
         if (!adapterServer.start()) {
             std::fprintf(stderr, "failed to start adapter IPC server -- see stderr above for why\n");
             return 1;
@@ -429,14 +464,14 @@ int main(int argc, char** argv) {
         // automatically once an adapter connects over the IPC channel,
         // swapping back on disconnect. See docs/adr/
         // 0001-host-service-and-adapter-architecture.md sections 6-8.
-        melonds_remote::host::HostControlAdapter hostControlAdapter;
+        dualdeck::host::HostControlAdapter hostControlAdapter;
         if (!hostControlAdapter.isDeviceReady()) {
             std::fprintf(stderr,
                           "warning: host-control mode's virtual gamepad is unavailable (see the "
                           "HostControlAdapter message above) -- a client can still connect, but won't "
                           "be able to navigate the host while no emulator is running.\n");
         }
-        melonds_remote::host::AdapterBridge bridge(adapterServer);
+        dualdeck::host::AdapterBridge bridge(adapterServer);
 
         // Lets an out-of-process adapter's own frontend (e.g. Azahar's Qt
         // window) mirror melonDS's in-process "show top screen only while
@@ -455,9 +490,9 @@ int main(int argc, char** argv) {
         // NetServer's actual reported identity via the same setTarget()
         // call every later mode transition uses, before any client could
         // possibly connect.
-        melonds_remote::host::NetServer server(config, hostControlAdapter, hostControlAdapter, micSink);
+        dualdeck::host::NetServer server(config, hostControlAdapter, hostControlAdapter, micSink);
         approvalHook.setServer(&server);
-        melonds_remote::host::ModeCoordinator coordinator(
+        dualdeck::host::ModeCoordinator coordinator(
             server, adapterServer, bridge, bridge, hostControlAdapter, hostControlAdapter,
             systemIdentityExplicit, adapterIdentityExplicit, config.systemIdentity, config.adapterIdentity);
         coordinator.start();
@@ -467,17 +502,17 @@ int main(int argc, char** argv) {
             "IPC channel (e.g. dualdeck-synthetic-adapter) to switch to emulation mode "
             "automatically. Type 'hostcontrol' to force host-control mode even once one "
             "connects, 'resume' to clear that override, or 'mode' to check the current mode.\n");
-        runUntilStopped(server, config, &coordinator);
+        runUntilStopped(server, config, controlSocketPath, &coordinator);
         coordinator.stop();
         adapterServer.stop();
     } else {
-        melonds_remote::host::LoggingInputSink inputSink;
-        melonds_remote::host::SyntheticFrameSource frameSource(60);
+        dualdeck::host::LoggingInputSink inputSink;
+        dualdeck::host::SyntheticFrameSource frameSource(60);
         frameSource.start();
 
-        melonds_remote::host::NetServer server(config, inputSink, frameSource, micSink);
+        dualdeck::host::NetServer server(config, inputSink, frameSource, micSink);
         approvalHook.setServer(&server);
-        runUntilStopped(server, config);
+        runUntilStopped(server, config, controlSocketPath);
         frameSource.stop();
     }
 

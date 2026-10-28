@@ -3,7 +3,7 @@
 #include <functional>
 #include <string>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 // Opens the persistent log file (~/.config/dualdeck-client/client.log,
 // truncated fresh at the start of every run) that logLine() appends to
@@ -42,4 +42,4 @@ void logLine(const char* fmt, ...)
 // never blocks or drops stderr/file output because of it.
 void setLogForwardSink(std::function<void(const std::string&)> sink);
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

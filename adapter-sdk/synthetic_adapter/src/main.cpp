@@ -17,8 +17,8 @@
 #include <string>
 #include <thread>
 
-#include "melonds_remote/adapter/ipc/adapter_ipc_client.h"
-#include "melonds_remote/adapter/synthetic/synthetic_emulator_adapter.h"
+#include "dualdeck/adapter/ipc/adapter_ipc_client.h"
+#include "dualdeck/adapter/synthetic/synthetic_emulator_adapter.h"
 
 namespace {
 volatile std::sig_atomic_t g_stopRequested = 0;
@@ -51,10 +51,10 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, handleSignal);
     std::signal(SIGTERM, handleSignal);
 
-    melonds_remote::adapter::synthetic::SyntheticEmulatorAdapter adapter;
+    dualdeck::adapter::synthetic::SyntheticEmulatorAdapter adapter;
     adapter.start();
 
-    melonds_remote::adapter::ipc::AdapterIpcClient client(adapter, socketPath);
+    dualdeck::adapter::ipc::AdapterIpcClient client(adapter, socketPath);
 
     std::printf("dualdeck-synthetic-adapter: connecting...\n");
     while (!g_stopRequested) {

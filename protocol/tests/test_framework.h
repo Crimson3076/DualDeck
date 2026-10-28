@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace melonds_remote::test {
+namespace dualdeck::test {
 
 struct TestCase {
     std::string name;
@@ -52,18 +52,18 @@ inline int runAll() {
     return g_failures == 0 ? 0 : 1;
 }
 
-} // namespace melonds_remote::test
+} // namespace dualdeck::test
 
 #define MDR_TEST(name)                                                          \
     static void mdr_test_##name();                                              \
-    static ::melonds_remote::test::Registrar mdr_registrar_##name(              \
+    static ::dualdeck::test::Registrar mdr_registrar_##name(              \
         #name, mdr_test_##name);                                                \
     static void mdr_test_##name()
 
 #define MDR_CHECK(expr)                                                          \
     do {                                                                        \
         if (!(expr)) {                                                          \
-            ::melonds_remote::test::reportFailure(__FILE__, __LINE__, #expr);    \
+            ::dualdeck::test::reportFailure(__FILE__, __LINE__, #expr);    \
         }                                                                        \
     } while (0)
 

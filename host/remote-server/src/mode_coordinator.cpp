@@ -3,7 +3,7 @@
 #include <chrono>
 #include <cstdio>
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 HostMode computeDesiredMode(bool adapterConnected, bool manualHostControlOverride) {
     if (manualHostControlOverride) return HostMode::HostControl;
@@ -11,7 +11,7 @@ HostMode computeDesiredMode(bool adapterConnected, bool manualHostControlOverrid
 }
 
 HostSessionState computeDesiredHostSessionState(bool adapterConnected,
-                                                 melonds_remote::adapter::SessionState adapterState,
+                                                 dualdeck::adapter::SessionState adapterState,
                                                  bool manualHostControlOverride) {
     // Matches computeDesiredMode()'s own override-always-wins rule.
     // CompanionModeActive (not Connected) since a forced override with
@@ -24,22 +24,22 @@ HostSessionState computeDesiredHostSessionState(bool adapterConnected,
     if (!adapterConnected) return HostSessionState::Connected;
 
     switch (adapterState) {
-        case melonds_remote::adapter::SessionState::Available: return HostSessionState::Connected;
-        case melonds_remote::adapter::SessionState::Starting:  return HostSessionState::Launching;
-        case melonds_remote::adapter::SessionState::Running:   return HostSessionState::EmulatorRunning;
+        case dualdeck::adapter::SessionState::Available: return HostSessionState::Connected;
+        case dualdeck::adapter::SessionState::Starting:  return HostSessionState::Launching;
+        case dualdeck::adapter::SessionState::Running:   return HostSessionState::EmulatorRunning;
         // No separate wire concept for "emulating but paused" yet --
         // still EmulatorRunning from the host-session perspective; the
         // adapter-level distinction stays visible via
         // AdapterIpcServer::currentState() directly for anything that
         // needs it.
-        case melonds_remote::adapter::SessionState::Paused:    return HostSessionState::EmulatorRunning;
-        case melonds_remote::adapter::SessionState::Stopped:   return HostSessionState::Connected;
-        case melonds_remote::adapter::SessionState::Error:     return HostSessionState::Error;
+        case dualdeck::adapter::SessionState::Paused:    return HostSessionState::EmulatorRunning;
+        case dualdeck::adapter::SessionState::Stopped:   return HostSessionState::Connected;
+        case dualdeck::adapter::SessionState::Error:     return HostSessionState::Error;
     }
     return HostSessionState::Error;
 }
 
-ModeCoordinator::ModeCoordinator(NetServer& server, melonds_remote::adapter::ipc::AdapterIpcServer& adapterServer,
+ModeCoordinator::ModeCoordinator(NetServer& server, dualdeck::adapter::ipc::AdapterIpcServer& adapterServer,
                                   IEmulatorInputSink& emulationInputSink, IFrameSource& emulationFrameSource,
                                   IEmulatorInputSink& hostControlInputSink, IFrameSource& hostControlFrameSource,
                                   bool systemIdentityExplicit, bool adapterIdentityExplicit,
@@ -133,4 +133,4 @@ void ModeCoordinator::applyMode(HostMode mode) {
     }
 }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

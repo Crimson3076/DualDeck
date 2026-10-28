@@ -4,7 +4,7 @@
 // docs/adr/0001-host-service-and-adapter-architecture.md section 4:
 // translates between NetServer's existing DS-specific
 // IEmulatorInputSink/IFrameSource interfaces and a connected
-// melonds_remote::adapter::IEmulatorAdapter (in-process, or
+// dualdeck::adapter::IEmulatorAdapter (in-process, or
 // out-of-process via adapter-sdk/ipc's AdapterIpcServer -- this class
 // doesn't know or care which). This is what lets NetServer, and the
 // live client<->host wire protocol it speaks (kProtocolVersion, unchanged
@@ -40,7 +40,7 @@
 // confirmed via AzaharAdapter's own capture-loop diagnostics showing
 // 100% successful captures on the Azahar side while NetServer's video
 // stats stayed at zero sent frames the entire session -- see
-// docs/known-limitations.md.
+// docs/history.md.
 //
 // Microphone audio is deliberately NOT bridged here: the generic
 // contract's GenericInputState only carries a micActive flag, not raw
@@ -53,9 +53,9 @@
 
 #include "host/emulator_input_sink.h"
 #include "host/frame_source.h"
-#include "melonds_remote/adapter/adapter_contract.h"
+#include "dualdeck/adapter/adapter_contract.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 class AdapterBridge : public IEmulatorInputSink, public IFrameSource {
 public:
@@ -64,7 +64,7 @@ public:
     // valid capabilities() by the time this constructor runs -- see the
     // class comment above for why that used to be a real, silently
     // broken precondition.
-    explicit AdapterBridge(melonds_remote::adapter::IEmulatorAdapter& adapter) : adapter_(adapter) {}
+    explicit AdapterBridge(dualdeck::adapter::IEmulatorAdapter& adapter) : adapter_(adapter) {}
 
     // IEmulatorInputSink
     void applyControllerState(const ControllerState& state) override;
@@ -73,6 +73,7 @@ public:
     // IFrameSource
     bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
                         uint16_t& outWidth, uint16_t& outHeight) override;
+    std::optional<uint64_t> latestFrameIndex() override;
     // Overrides IFrameSource's DS-sized default with the target surface's
     // actual declared width/height (from the adapter's own capabilities()
     // -- e.g. AzaharAdapter reports 320x240, not DS's 256x192).
@@ -86,7 +87,7 @@ public:
     std::string targetSurfaceId() const;
 
 private:
-    melonds_remote::adapter::IEmulatorAdapter& adapter_;
+    dualdeck::adapter::IEmulatorAdapter& adapter_;
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

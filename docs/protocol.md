@@ -13,7 +13,7 @@ same fixed-size header.
 | Offset | Size | Field            | Notes                                   |
 |-------:|-----:|------------------|------------------------------------------|
 | 0      | 4    | `magic`          | Always `0x444D5231` ("DMR1"). Packets with any other value are rejected before further parsing. |
-| 4      | 2    | `protocolVersion`| Currently `14` (bumped from `13` when `HelloAckPayload.hostTimeUs` was added for client-side clock-offset estimation, correcting `VideoFrame` latency instrumentation for host/client clocks that aren't closely synchronized -- see "HelloAck payload" below; `13` itself had bumped from `12` when `HelloPayload.supportedVideoCodecs` and `HelloAckPayload.selectedVideoCodec` were added -- video codec capability negotiation, groundwork for an optional H.264 path alongside the existing JPEG one; every client today only advertises JPEG support and every host only ever selects JPEG back, so this is a wire-shape change with no behavior change yet -- see "Hello payload"/"HelloAck payload" below; `12` itself had bumped from `11` when `ControllerState` gained `leftTrigger`/`rightTrigger`/`extraButtons` for real Wii U GamePad analog triggers and stick-click buttons -- see "ControllerState payload" below; `11` itself had bumped from `10` when `ControllerState` gained `mouseDeltaX`/`mouseDeltaY`/`mouseButtons` for host-control-mode mouse support -- see "ControllerState payload" below; `10` itself had bumped from `9` when `VideoFrame`'s payload gained an 8-byte host capture timestamp prefix for video-latency instrumentation -- see "Video payload" below; `9` itself had bumped from `8` when `HelloPayload.videoQuality` was added, letting the client request its own session's JPEG quality instead of always getting the host's one configured default -- see "Hello payload"/"Video payload" below; `8` itself had bumped from `7` when `VideoFrame`'s payload changed from a raw pixel buffer to a JPEG-compressed image -- see "Video payload" below; `7` itself had bumped from `6` when `HelloAckPayload.mode` was added, GitHub issue #4 Phase E -- see "HelloAck payload" below; `6` itself had bumped from `5` when `HelloAckPayload.system`/`.adapter` and `DiscoveryResponsePayload.system`/`.adapter` were added for the emulator identity model, GitHub issue #28 -- see "Emulator identity model" below; `5` itself had bumped from `4` when `HelloAckPayload.micSupported` and `DiscoveryResponsePayload.audioPort` were added for microphone support, GitHub issue #2 -- see "MicAudioFrame payload" below; `4` itself had bumped from `3` when `HelloPayload.appVersion`/`HelloAckPayload.appVersion` were added and `HelloRejectReason::AppVersionMismatch` was introduced -- see "App version mismatch" below; `3` itself had bumped from `2` when `HelloAckPayload.pairingToken` was removed and `HelloRejectReason::PairingRequired` was renamed to `ApprovalRequired`, moving from a typed-code pairing flow to device-approval; `2` itself had bumped from `1` when those pairing-code fields were first added). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
+| 4      | 2    | `protocolVersion`| Currently `15` (bumped from `14` when `HelloPayload.maxFrameRate` was added for the client's STREAM FPS setting -- see "Hello payload" below; `14` itself had bumped from `13` when `HelloAckPayload.hostTimeUs` was added for client-side clock-offset estimation, correcting `VideoFrame` latency instrumentation for host/client clocks that aren't closely synchronized -- see "HelloAck payload" below; `13` itself had bumped from `12` when `HelloPayload.supportedVideoCodecs` and `HelloAckPayload.selectedVideoCodec` were added -- video codec capability negotiation, groundwork for an optional H.264 path alongside the existing JPEG one; every client today only advertises JPEG support and every host only ever selects JPEG back, so this is a wire-shape change with no behavior change yet -- see "Hello payload"/"HelloAck payload" below; `12` itself had bumped from `11` when `ControllerState` gained `leftTrigger`/`rightTrigger`/`extraButtons` for real Wii U GamePad analog triggers and stick-click buttons -- see "ControllerState payload" below; `11` itself had bumped from `10` when `ControllerState` gained `mouseDeltaX`/`mouseDeltaY`/`mouseButtons` for host-control-mode mouse support -- see "ControllerState payload" below; `10` itself had bumped from `9` when `VideoFrame`'s payload gained an 8-byte host capture timestamp prefix for video-latency instrumentation -- see "Video payload" below; `9` itself had bumped from `8` when `HelloPayload.videoQuality` was added, letting the client request its own session's JPEG quality instead of always getting the host's one configured default -- see "Hello payload"/"Video payload" below; `8` itself had bumped from `7` when `VideoFrame`'s payload changed from a raw pixel buffer to a JPEG-compressed image -- see "Video payload" below; `7` itself had bumped from `6` when `HelloAckPayload.mode` was added, GitHub issue #4 Phase E -- see "HelloAck payload" below; `6` itself had bumped from `5` when `HelloAckPayload.system`/`.adapter` and `DiscoveryResponsePayload.system`/`.adapter` were added for the emulator identity model, GitHub issue #28 -- see "Emulator identity model" below; `5` itself had bumped from `4` when `HelloAckPayload.micSupported` and `DiscoveryResponsePayload.audioPort` were added for microphone support, GitHub issue #2 -- see "MicAudioFrame payload" below; `4` itself had bumped from `3` when `HelloPayload.appVersion`/`HelloAckPayload.appVersion` were added and `HelloRejectReason::AppVersionMismatch` was introduced -- see "App version mismatch" below; `3` itself had bumped from `2` when `HelloAckPayload.pairingToken` was removed and `HelloRejectReason::PairingRequired` was renamed to `ApprovalRequired`, moving from a typed-code pairing flow to device-approval; `2` itself had bumped from `1` when those pairing-code fields were first added). A mismatch is rejected by the receiver; it is not itself a fatal error for the connection. |
 | 6      | 2    | `packetType`     | See table below.                        |
 | 8      | 4    | `payloadSize`    | Size of the payload that follows, in bytes. Receivers must verify this matches the number of bytes actually available before parsing the payload. |
 
@@ -33,6 +33,8 @@ same fixed-size header.
 | 10    | `MicAudioFrame`   | client -> host  | UDP audio | see "MicAudioFrame payload" below |
 | 11    | `ModeChanged`     | host -> client  | TCP control | see "ModeChanged payload" below |
 | 12    | `ClientLog`       | client -> host  | TCP control | see "ClientLog payload" below |
+| 13    | `BandwidthProbe`  | host -> client  | TCP control | see "Automatic codec choice" below |
+| 14    | `BandwidthReport` | client -> host  | TCP control | see "Automatic codec choice" below |
 
 ## ControllerState payload (34 bytes)
 
@@ -57,7 +59,7 @@ button stuck.
 | 31     | 2    | `mouseDeltaY`      | Signed, protocol v11+. Same as `mouseDeltaX`. |
 | 33     | 1    | `mouseButtons`     | Bitmask, protocol v11+, 1 = held. Bit 0 = left click, bit 1 = right click. See `MouseButton` in `protocol.h`. |
 
-`kControllerStateWireSize` in `protocol/include/melonds_remote/protocol.h`
+`kControllerStateWireSize` in `protocol/include/dualdeck/protocol.h`
 is defined as this same sum (34 bytes) and is checked by
 `protocol_tests` (`test_controller_state.cpp`); treat the header as the
 source of truth if this document and the code ever disagree.
@@ -110,7 +112,7 @@ shape). Added for video-latency instrumentation: the client compares
 this against its own wall-clock receipt time to estimate network +
 encode + send-queue latency for the video path, the same "assumes
 synced clocks" caveat `ControllerState.clientTimestampUs`'s existing
-input-latency estimate already carries (see `docs/known-limitations.md`).
+input-latency estimate already carries (see `docs/history.md`).
 The timestamp is taken host-side (`net_server.cpp`'s `videoLoop()`)
 immediately before this frame's JPEG encoding begins, so the client-
 computed latency includes encode time, not just network transit. This
@@ -149,7 +151,7 @@ red, 3 = unused/alpha) -- matching melonDS's software renderer output
 directly. Fine for DS's 256x192 or 3DS's 320x240 surfaces, but
 increasingly unworkable for anything larger (Cemu's 854x480 GamePad
 surface needs ~788 Mbps uncompressed at 60fps) on a real, bandwidth-
-constrained link -- see `docs/known-limitations.md`'s 2026-07-22 JPEG
+constrained link -- see `docs/history.md`'s 2026-07-22 JPEG
 compression entry for the full story. `NetServer::videoLoop()`
 (`host/remote-server/src/net_server.cpp`) compresses every frame with
 this B,G,R,X-ordered raw buffer as turbojpeg's `TJPF_BGRA` input, and
@@ -194,7 +196,10 @@ touching the real ports at all.
 `DiscoveryRequest` has no payload -- the client broadcasts a bare packet
 with this type to `255.255.255.255:<discoveryPort>` and collects whatever
 `DiscoveryResponse` replies arrive within a short window (see
-`client/src/discovery_client.h`).
+`client/src/discovery_client.h`). `dualdeck-client --discover` runs one
+such scan without opening a window and prints the replies as a JSON
+array (`client/src/discovery_json.h`), for front ends like the Decky
+plugin.
 
 `DiscoveryResponse` payload (8 fixed bytes + `hostName` plus 5 more length-prefixed strings for identity):
 
@@ -253,7 +258,7 @@ rate (`kMicAudioSampleRate` = 48000 Hz) rather than negotiated per
 client -- this matches melonDS's own default local-microphone capture
 rate, so the host side can resample it into the DS's actual mic
 consumption rate using melonDS's existing local-mic pipeline, not a
-separate one (see `docs/known-limitations.md`'s microphone section for
+separate one (see `docs/history.md`'s microphone section for
 why). `kMicAudioSamplesPerPacket` (480, i.e. 10ms per packet) bounds how
 many samples one packet may declare -- a well-behaved client always
 sends exactly this many except possibly a shorter final packet right
@@ -279,7 +284,7 @@ session, sent to an already-connected, already-authenticated client on
 the TCP control channel. Exists so a client can stay connected across
 an emulator starting or exiting instead of having to reconnect --
 `host/remote-server`'s `NetServer::setTarget()` is what triggers this
-(see `docs/known-limitations.md`'s matching entry and
+(see `docs/history.md`'s matching entry and
 `docs/adr/0001-host-service-and-adapter-architecture.md` section 6).
 
 Unlike most other packet types in this document (see also `ClientLog`
@@ -313,7 +318,7 @@ A Phase-E-or-later client build (see `HelloAck payload` above for how it
 learns the *initial* mode before any `ModeChanged` could ever arrive)
 reads this packet via `NetClient::controlReceiveLoop()` and shows a
 distinct "WAITING FOR EMULATOR" screen in place of the video texture
-while `mode == HostControl` -- see `docs/known-limitations.md`'s
+while `mode == HostControl` -- see `docs/history.md`'s
 matching entry for what that UI does and doesn't do.
 
 ## ClientLog payload
@@ -357,8 +362,8 @@ hardcode assumptions -- see `docs/architecture.md`'s "Emulator identity
 model" section for the full design rationale (why two separate structs,
 who sets them, and what issue #28 still needs beyond this milestone).
 
-Two small structs, `melonds_remote::SystemIdentity`/`AdapterIdentity`
-(`protocol/include/melonds_remote/protocol.h`), each serialized as a
+Two small structs, `dualdeck::SystemIdentity`/`AdapterIdentity`
+(`protocol/include/dualdeck/protocol.h`), each serialized as a
 fixed sequence of length-prefixed strings (same encoding as every other
 string field in this document -- a `u16` byte count followed by that many
 bytes, capped at `kMaxProtocolStringLength` like everything else):
@@ -412,7 +417,9 @@ declared length that would run past the end of the received buffer.
 | `authToken`       | length-prefixed string | See "Authentication and device approval" below -- meaning depends on whether the host has a static `--auth-token` configured. |
 | `appVersion`      | length-prefixed string | This client's release version (e.g. "v0.1.24"), from `MELONDS_REMOTE_VERSION`/the archive's `VERSION` file. Distinct from `protocolVersion` above -- see "App version mismatch" below. Empty on a from-source dev build with no wrapper script setting it. |
 | `videoQuality`    | `u8`          | Added in protocol v9. JPEG quality (1-100, libjpeg-turbo's `tjCompress2` scale) this client wants its video compressed at for the session, or `0` to defer to the host's own `NetServerConfig::videoJpegQuality`. An out-of-range nonzero value is treated the same as `0`. Applied once, at handshake time -- there is no packet type for changing it without reconnecting. See "Video payload"'s JPEG-compression note for why this exists: a single host-wide default over-compressed DS/3DS, whose small frame sizes have bandwidth to spare that a Cemu-sized session over a slow link would not. |
-| `supportedVideoCodecs` | `u8` (bitmask) | Added in protocol v13. Which `VideoCodec` values (bit 0 = JPEG, bit 1 = H.264) this client can decode. Every real client sets at least the JPEG bit -- it has no external dependency and has been the only format since v8. The host intersects this against its own supported set and reports the result back as `HelloAckPayload.selectedVideoCodec` below. Today every host only ever selects JPEG regardless of what's advertised here, since no other encoder exists yet. |
+| `supportedVideoCodecs` | `u8` (bitmask) | Added in protocol v13. Which `VideoCodec` values (bit 0 = JPEG, bit 1 = H.264, bit 2 = PyroWave -- the last added later without a version bump, since a client that never sets the bit is never sent it and an older host just masks it off) this client can decode. Every real client sets at least the JPEG bit -- it has no external dependency and has been the only format since v8. The host intersects this against its own supported set and reports the result back as `HelloAckPayload.selectedVideoCodec` below. Today every host only ever selects JPEG regardless of what's advertised here, since no other encoder exists yet. |
+
+| `maxFrameRate`    | `u8`          | Added in protocol v15. Capture rate (frames per second) the client asks for, or `0` for the host's default. Honored today by Host Control's desktop mirror (host default 60fps); emulator adapters keep their own capture rate. Applied once, at handshake time. |
 
 The whole `Hello` payload is capped at 512 bytes by the host before it will
 even attempt to parse it, so a hostile `payloadSize` can't be used to make
@@ -443,7 +450,7 @@ only ever consumes what the host reports.
 | var.   | 1    | `micSupported` | 0 or 1, added in protocol v5. Whether this host build/config can accept and inject microphone audio (GitHub issue #2) -- the client should not bother opening a capture device or sending `MicAudioFrame` packets unless this is 1. Sent regardless of `accepted`/`rejectReason`, same as `appVersion`. |
 | var.   | var. | `system.systemId`, `system.systemName`, `adapter.adapterId`, `adapter.adapterName`, `adapter.adapterVersion` | Five length-prefixed strings, added in protocol v6 (GitHub issue #28) -- see "Emulator identity model" below. Sent regardless of `accepted`/`rejectReason`, same as `appVersion`/`micSupported`. |
 | var.   | 1    | `mode`         | 0 = `Emulation`, 1 = `HostControl` (`HostMode`, see "ModeChanged payload" below). Added in protocol v7, GitHub issue #4 Phase E. Sent regardless of `accepted`/`rejectReason`, same as everything above. This is what tells a client connecting (or reconnecting) *while the host is already in `HostControl` mode* that fact immediately -- `ModeChanged` is only ever sent to a client that is already connected and authenticated (see "ModeChanged payload" below), so a fresh handshake would otherwise never learn it. |
-| var.   | 1    | `selectedVideoCodec` | `VideoCodec` (0 = JPEG, 1 = H.264), added in protocol v13. Which codec this session's `VideoFrame` packets are actually encoded with, chosen by the host from `HelloPayload.supportedVideoCodecs` above. Sent regardless of `accepted`/`rejectReason`, same as everything above. Always 0 (JPEG) today. |
+| var.   | 1    | `selectedVideoCodec` | `VideoCodec` (0 = JPEG, 1 = H.264, 2 = PyroWave), added in protocol v13. For PyroWave, each `VideoFrame` payload (after the timestamp) is one complete PyroWave bitstream-v1 frame: a start-of-frame sequence header (which carries the frame's width/height) followed by every non-empty 32x32 coefficient block. Which codec this session's `VideoFrame` packets are actually encoded with, chosen by the host from `HelloPayload.supportedVideoCodecs` above. Sent regardless of `accepted`/`rejectReason`, same as everything above. Always 0 (JPEG) today. |
 | var.   | 8    | `hostTimeUs`   | The host's own wall-clock time (`nowMicrosEpoch()`, same clock `VideoFramePayload.captureTimestampUs` uses), added in protocol v14. Sent regardless of `accepted`/`rejectReason`, same as everything above. Lets the client estimate the clock offset between the two machines (standard NTP-style midpoint assumption over the `Hello`/`HelloAck` round trip -- see `NetClient::connect()`) and correct every subsequent `VideoFrame`'s latency figure for it, instead of subtracting two independent, potentially unsynchronized wall clocks directly. Real-world motivation: a client and host whose system clocks aren't closely NTP-synced could see the debug overlay's `LATENCY` reading pinned at exactly 0 for an entire session (the pre-existing "can't measure this" fallback, permanently triggered rather than occasional). |
 
 (Protocol v2 added a trailing length-prefixed `pairingToken` string here,
@@ -506,7 +513,7 @@ characters, `client/src/device_identity.h`) and sends the *same* value in
 `Hello.authToken` on every connection attempt, to every host, forever --
 there is no code typed on the client, ever. The host maintains a set of
 approved device identities plus a queue of pending (not yet approved)
-ones (`melonds_remote::host::DeviceApprovalManager`,
+ones (`dualdeck::host::DeviceApprovalManager`,
 `host/remote-server/include/host/device_approval_manager.h`). For each
 `Hello`:
 
@@ -562,6 +569,34 @@ requires no typing on either side. See git history for the removed
 `PairingManager`/`pairing_store.h` code if it's ever needed for
 reference.
 
+## Automatic codec choice
+
+A client whose VIDEO CODEC setting is AUTO sets `kVideoCodecFlag_Auto`
+(bit 7) in `HelloPayload.supportedVideoCodecs`, alongside every codec it
+can decode. Once the host has accepted the Hello, and before it sends
+`HelloAck`, it runs a short link-speed test on the control connection:
+
+1. The host sends `BandwidthProbe` chunks: a 1-byte `last` flag followed
+   by zero filler, 32 KiB per packet, until it has sent 2 MiB or 300ms
+   has passed, then one final chunk with `last=1` and no filler. Its
+   send buffer is capped at 256 KiB first so kernel buffering doesn't
+   hide a slow link.
+2. The client times the chunks from the end of the first to the end of
+   the last (leaving out the round trip and TCP start-up) and replies
+   with `BandwidthReport`: a u32 `measuredKbps` (0 if it couldn't
+   measure).
+3. The host picks PyroWave if both sides support it, the host is in
+   Emulation mode, and `measuredKbps` is at least 1.25x what PyroWave
+   needs at its per-frame byte ceiling and 60fps for this session's
+   frame size and quality. Otherwise it picks H.264 if both sides have
+   it, and JPEG if not. The result goes in `HelloAck.selectedVideoCodec`
+   as usual.
+
+A rejected Hello gets no probe. Without the flag, the host picks the
+best codec the client advertised, as before. These are new packet types
+an older peer never sends or receives, so there was no
+`protocolVersion` bump.
+
 ## Handshake (as currently implemented)
 
 1. Client opens a TCP connection to the control port and sends a `Hello`
@@ -613,7 +648,7 @@ instead).
 ## Rate limiting
 
 The host tracks control-connection attempts per source IP address in a
-sliding window (`ConnectionRateLimiter`, `protocol/include/melonds_remote/rate_limiter.h`):
+sliding window (`ConnectionRateLimiter`, `protocol/include/dualdeck/rate_limiter.h`):
 by default at most 5 attempts per 10 seconds per address. An attempt over
 the limit is closed immediately, before any handshake bytes are read, and
 still counts against the client's budget (so hammering the endpoint

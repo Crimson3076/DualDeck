@@ -5,7 +5,7 @@
 # shortcuts already point at (~/Applications/*.AppImage), backing up the
 # original first -- so an existing EmuDeck install and its Steam shortcuts
 # keep working completely unedited, just running DualDeck's remote-
-# streaming-capable binary instead of stock. See docs/known-limitations.md's
+# streaming-capable binary instead of stock. See docs/history.md's
 # 2026-08-01 "prebuilt AppImages" entry for the full design rationale
 # (in particular: EmuDeck's exact AppImage naming/glob convention has not
 # been confirmed against a real EmuDeck install from inside this repo --
@@ -36,7 +36,7 @@
 # not because EmuDeck needs it there, but because that's also exactly
 # where RetroDECK's own ES-DE fork (and EmuDeck's upstream ES-DE) checks
 # *before* falling back to RetroDECK's own bundled, unpatched copy (see
-# that function's own comment, and docs/known-limitations.md's 2026-08-28
+# that function's own comment, and docs/history.md's 2026-08-28
 # "RetroDECK" entry, for how this was actually confirmed against
 # RetroDECK's own source rather than assumed). This is a strict addition:
 # an existing EmuDeck install behaves exactly as before, nothing here
@@ -46,6 +46,7 @@
 #   ./scripts/emudeck-replace-in-place.sh [--emulator melonds|azahar|cemu]... [--yes] [--dry-run]
 #   ./scripts/emudeck-replace-in-place.sh [--emulator ...] --status
 #   ./scripts/emudeck-replace-in-place.sh [--emulator ...] --restore [--dry-run]
+#   ./scripts/emudeck-replace-in-place.sh [--emulator ...] --refresh-installed [--dry-run]
 #
 # --status  Report, per emulator, where EmuDeck's install is, whether the
 #           file there is still the one DualDeck installed (or the stock
@@ -54,6 +55,17 @@
 #           nothing. Start here when an emulator misbehaves after an
 #           update -- it answers "what am I actually running?", which
 #           a rising version number on its own does not.
+# --refresh-installed
+#           Re-patch only the emulators DualDeck already patched (a
+#           .dualdeck.json manifest sits next to the AppImage) and whose
+#           manifest records a different DualDeck version than this one.
+#           Never installs anything new, never prompts, never touches the
+#           firewall. Run automatically by the host's apply-update.sh/
+#           install-branch.sh after a DualDeck update: each patched
+#           AppImage carries its own copy of dualdeck-host-service, so
+#           without this an update silently left emulators on the old
+#           host service (real report, 2026-10-09: PyroWave negotiated
+#           JPEG on Cemu until the AppImage was re-patched by hand).
 # --restore Put the stock emulator back from the .dualdeck-original saved
 #           at patch time, and clear the manifest so a later run patches
 #           it cleanly from the original again. For melonDS this also
@@ -72,7 +84,7 @@ set -euo pipefail
 # Cheap, unconditional insurance against Steam's LD_PRELOAD/LD_LIBRARY_PATH
 # (this tool is normally launched from a Steam shortcut) leaking into any
 # child process this script spawns -- curl, sha256sum, python3. See
-# docs/known-limitations.md's 2026-08-01 entries for the real-world reports
+# docs/history.md's 2026-08-01 entries for the real-world reports
 # that motivated always stripping both unconditionally, before any child
 # process can inherit them, rather than only at whichever call site first
 # surfaces a problem.
@@ -80,6 +92,7 @@ unset LD_PRELOAD LD_LIBRARY_PATH
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="${EMUDECK_REPLACE_WORKDIR:-$(mktemp -d)}"
+# shellcheck disable=SC2154 # status is assigned inside the trap body itself
 trap '
     status=$?
     if [[ "${status}" -ne 0 ]]; then
@@ -170,6 +183,7 @@ assume_yes=0
 # the only recovery was hand-copying files.
 status_only=0
 restore_only=0
+refresh_installed=0
 # Counts real installs this run (incremented in replace_in_place_one),
 # so the firewall step at the end only runs when it might actually
 # matter -- not on a --dry-run, and not when every emulator was skipped
@@ -185,6 +199,7 @@ while [[ $# -gt 0 ]]; do
         --yes) assume_yes=1; shift ;;
         --status) status_only=1; shift ;;
         --restore) restore_only=1; shift ;;
+        --refresh-installed) refresh_installed=1; assume_yes=1; shift ;;
         -h|--help)
             # Prints the header block by finding where it actually ends
             # rather than hardcoding a line number: the previous fixed
@@ -205,7 +220,7 @@ done
 # the top of this script prints "work directory preserved for debugging"
 # on any non-zero exit, which is actively misleading for what is just a
 # bad pair of flags.
-if [[ "${status_only}" -eq 1 && "${restore_only}" -eq 1 ]]; then
+if [[ $((status_only + restore_only + refresh_installed)) -gt 1 ]]; then
     # The EXIT trap is cleared first so this exits cleanly: that trap is
     # installed before any argument parsing can have happened, and would
     # otherwise announce "work directory preserved for debugging" for
@@ -213,7 +228,7 @@ if [[ "${status_only}" -eq 1 && "${restore_only}" -eq 1 ]]; then
     # temp directory and implying something broke mid-run.
     trap - EXIT
     rm -rf "${work_dir}"
-    echo "error: --status and --restore are mutually exclusive." >&2
+    echo "error: --status, --restore and --refresh-installed are mutually exclusive." >&2
     exit 1
 fi
 
@@ -545,7 +560,7 @@ replace_in_place_one() {
                 if flatpak_id="$(find_emudeck_cemu_flatpak_id)"; then
                     echo "== cemu: found a Flatpak install (${flatpak_id}) -- replace-in-place doesn't" >&2
                     echo "   support Flatpak yet (a different, sandboxed install shape -- see" >&2
-                    echo "   docs/known-limitations.md's Phase A entry). Skipping cemu. ==" >&2
+                    echo "   docs/history.md's Phase A entry). Skipping cemu. ==" >&2
                     return 0
                 fi
                 install_fresh_standalone_appimage "cemu" "Cemu.AppImage"
@@ -717,6 +732,7 @@ install_emudeck_launcher_shims() {
         fi
 
         echo "== ${emulator}: redirecting ${target} -> ${shim} =="
+        # shellcheck disable=SC2094 # the heredoc only reads the basename of ${target}, not the file
         cat > "${target}" <<SHIM
 #!/usr/bin/env bash
 # Replaced by DualDeck (scripts/emudeck-replace-in-place.sh). The stock
@@ -890,6 +906,31 @@ if [[ "${restore_only}" -eq 1 ]]; then
     for emulator in "${emulators[@]}"; do
         restore_one "${emulator}"
     done
+    exit 0
+fi
+
+if [[ "${refresh_installed}" -eq 1 ]]; then
+    for emulator in "${emulators[@]}"; do
+        installed_path=""
+        if ! installed_path="$(resolve_installed_appimage "${emulator}")" ||
+           [[ ! -f "${installed_path}.dualdeck.json" ]]; then
+            echo "== ${emulator}: not patched by DualDeck here, leaving it alone =="
+            continue
+        fi
+        installed_version="$(python3 -c "
+import json, sys
+print(json.load(open(sys.argv[1])).get('dualdeck_version', ''))
+" "${installed_path}.dualdeck.json" 2>/dev/null || true)"
+        if [[ -n "${installed_version}" && "${installed_version}" == "${dualdeck_version}" ]]; then
+            echo "== ${emulator}: already patched by DualDeck ${dualdeck_version}, nothing to refresh =="
+            continue
+        fi
+        echo "== ${emulator}: refreshing DualDeck's patched build (${installed_version:-unknown} -> ${dualdeck_version}) =="
+        replace_in_place_one "${emulator}"
+    done
+    # Ports were opened when these were first installed; a refresh has no
+    # business prompting for sudo in the middle of an update.
+    echo "== Done refreshing patched emulators. =="
     exit 0
 fi
 

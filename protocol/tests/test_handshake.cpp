@@ -1,7 +1,7 @@
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 #include "test_framework.h"
 
-using namespace melonds_remote;
+using namespace dualdeck;
 
 MDR_TEST(hello_payload_round_trip) {
     HelloPayload hello;
@@ -12,6 +12,7 @@ MDR_TEST(hello_payload_round_trip) {
     hello.authToken = "s3cr3t";
     hello.appVersion = "v0.1.24";
     hello.supportedVideoCodecs = kVideoCodecBit_Jpeg | kVideoCodecBit_H264;
+    hello.maxFrameRate = 60;
 
     ByteBuffer buf;
     serializeHelloPayload(buf, hello);
@@ -25,6 +26,7 @@ MDR_TEST(hello_payload_round_trip) {
     MDR_CHECK(parsed->authToken == hello.authToken);
     MDR_CHECK(parsed->appVersion == hello.appVersion);
     MDR_CHECK_EQ(parsed->supportedVideoCodecs, hello.supportedVideoCodecs);
+    MDR_CHECK_EQ(parsed->maxFrameRate, hello.maxFrameRate);
 }
 
 MDR_TEST(hello_payload_supported_video_codecs_defaults_to_jpeg_only) {
@@ -169,6 +171,29 @@ MDR_TEST(hello_ack_payload_rejects_invalid_selected_video_codec) {
     buf[buf.size() - 9] = 200;
 
     MDR_CHECK(!parseHelloAckPayload(buf.data(), buf.size()).has_value());
+}
+
+MDR_TEST(hello_ack_payload_round_trips_pyrowave_codec) {
+    HelloAckPayload ack;
+    ack.accepted = 1;
+    ack.selectedVideoCodec = VideoCodec::PyroWave;
+    ByteBuffer buf;
+    serializeHelloAckPayload(buf, ack);
+
+    auto parsed = parseHelloAckPayload(buf.data(), buf.size());
+    MDR_CHECK(parsed.has_value());
+    MDR_CHECK(parsed->selectedVideoCodec == VideoCodec::PyroWave);
+}
+
+MDR_TEST(hello_payload_round_trips_pyrowave_codec_bit) {
+    HelloPayload hello;
+    hello.supportedVideoCodecs = kVideoCodecBit_Jpeg | kVideoCodecBit_PyroWave;
+    ByteBuffer buf;
+    serializeHelloPayload(buf, hello);
+
+    auto parsed = parseHelloPayload(buf.data(), buf.size());
+    MDR_CHECK(parsed.has_value());
+    MDR_CHECK_EQ(parsed->supportedVideoCodecs, hello.supportedVideoCodecs);
 }
 
 MDR_TEST(hello_ack_payload_identity_defaults_to_empty) {

@@ -1,9 +1,9 @@
-#include "melonds_remote/adapter/ipc/ipc_protocol.h"
+#include "dualdeck/adapter/ipc/ipc_protocol.h"
 #include "test_framework.h"
 
-using namespace melonds_remote;
-using namespace melonds_remote::adapter;
-using namespace melonds_remote::adapter::ipc;
+using namespace dualdeck;
+using namespace dualdeck::adapter;
+using namespace dualdeck::adapter::ipc;
 
 namespace {
 AdapterCapabilities sampleCapabilities() {
@@ -52,13 +52,13 @@ MDR_TEST(ipc_header_round_trip) {
 }
 
 MDR_TEST(ipc_header_rejects_client_host_protocol_magic) {
-    // A stray melonds_remote::PacketHeader (the client<->host wire
+    // A stray dualdeck::PacketHeader (the client<->host wire
     // protocol, "DMR1") landing on this channel by mistake must be
     // rejected outright, not misparsed as an IPC header -- the two
     // channels' magic numbers must never collide.
     ByteBuffer buf;
-    melonds_remote::PacketHeader clientHostHeader;
-    melonds_remote::serializeHeader(buf, clientHostHeader);
+    dualdeck::PacketHeader clientHostHeader;
+    dualdeck::serializeHeader(buf, clientHostHeader);
     MDR_CHECK(!parseIpcHeader(buf.data(), buf.size()).has_value());
 }
 

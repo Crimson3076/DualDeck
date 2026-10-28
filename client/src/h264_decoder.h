@@ -2,7 +2,7 @@
 
 // H.264 decoder wrapper -- the client-side counterpart to
 // host/remote-server/include/host/h264_encoder.h (see that header's own
-// comment and docs/known-limitations.md's 2026-08-25 video-codec-
+// comment and docs/history.md's 2026-08-25 video-codec-
 // negotiation entries for the full design). Backed by OpenH264 (Cisco,
 // BSD-licensed) when this client was built with it available -- see
 // client/CMakeLists.txt's/client/tests/CMakeLists.txt's optional
@@ -13,7 +13,7 @@
 #include <memory>
 #include <vector>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 class H264Decoder {
 public:
@@ -54,4 +54,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

@@ -90,7 +90,7 @@ paths end-to-end:
     engine/order this cleanly.
 - `stability_test.py` was run for a sustained period against the live
   patched melonDS process with continuous input and video traffic; see
-  `docs/known-limitations.md` for the actual duration achieved and
+  `docs/history.md` for the actual duration achieved and
   results (frame count, RSS growth, disconnects) in this sandboxed
   environment.
 

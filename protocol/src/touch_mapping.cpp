@@ -1,8 +1,8 @@
-#include "melonds_remote/touch_mapping.h"
+#include "dualdeck/touch_mapping.h"
 
 #include <algorithm>
 
-namespace melonds_remote {
+namespace dualdeck {
 
 RenderRect computeAspectFitRect(double surfaceWidth, double surfaceHeight,
                                  double contentAspect) {
@@ -52,4 +52,4 @@ std::optional<std::pair<uint16_t, uint16_t>> mapPointToDSCoords(
     return std::make_pair(static_cast<uint16_t>(dsX), static_cast<uint16_t>(dsY));
 }
 
-} // namespace melonds_remote
+} // namespace dualdeck

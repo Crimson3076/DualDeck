@@ -1,0 +1,31 @@
+name: ShellCheck
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  shellcheck:
+    name: Lint shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Every tracked *.sh file, plus any extensionless file with a sh/bash
+      # shebang (packaged launchers such as AppRun), so new scripts under
+      # scripts/ or packaging/ are picked up without editing this list.
+      - name: Run shellcheck
+        run: |
+          mapfile -t files < <(
+            {
+              git ls-files '*.sh'
+              git ls-files | grep -v '\.[^/]*$' | while read -r f; do
+                [[ -f "$f" ]] && head -n1 "$f" | grep -qE '^#!.*\b(ba)?sh\b' && echo "$f"
+              done
+            } | sort -u
+          )
+          echo "Checking ${#files[@]} files"
+          shellcheck --version
+          shellcheck -x "${files[@]}"

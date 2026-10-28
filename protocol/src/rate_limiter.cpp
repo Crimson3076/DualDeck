@@ -1,8 +1,8 @@
-#include "melonds_remote/rate_limiter.h"
+#include "dualdeck/rate_limiter.h"
 
 #include <algorithm>
 
-namespace melonds_remote {
+namespace dualdeck {
 
 ConnectionRateLimiter::ConnectionRateLimiter(int maxAttempts, uint64_t windowUs)
     : maxAttempts_(maxAttempts), windowUs_(windowUs) {}
@@ -35,4 +35,4 @@ void ConnectionRateLimiter::pruneStaleEntries(uint64_t nowUs) {
     }
 }
 
-} // namespace melonds_remote
+} // namespace dualdeck

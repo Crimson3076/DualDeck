@@ -1,6 +1,6 @@
 # DualDeck's vcpkg overlay ports for Cemu
 
-Real Fedora build failures, 2026-08-26 (see `docs/known-limitations.md`'s
+Real Fedora build failures, 2026-08-26 (see `docs/history.md`'s
 matching entry for the full writeup): building Cemu's own pinned vcpkg
 dependency graph (`ports/` at Cemu's `builtin-baseline` commit,
 `a4275b7eee79fb24ec2e135481ef5fce8b41c339`) failed on a real Fedora
@@ -70,7 +70,7 @@ unnecessary for that port.
 
 Neither fix has been built end-to-end against a real Fedora machine by
 whoever wrote this (this project's own development sandbox cannot
-compile Cemu at all -- see `docs/known-limitations.md`). The `sdl2` patch
+compile Cemu at all -- see `docs/history.md`). The `sdl2` patch
 was generated as a real, syntactically valid unified diff against the
 exact pinned SDL `release-2.30.3` source and is a minimal, well-understood
 class of fix (an explicit pointer cast PipeWire's own client code

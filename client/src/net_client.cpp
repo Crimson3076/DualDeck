@@ -2,6 +2,7 @@
 
 #include "client_log.h"
 #include "h264_decoder.h"
+#include "pyrowave_decoder.h"
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -18,9 +19,10 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <thread>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 namespace {
 
@@ -28,7 +30,7 @@ namespace {
 // VideoFramePayload::captureTimestampUs (protocol v10), which is also
 // wall-clock, not steady_clock. Same "assumes synced clocks" caveat as
 // ControllerState::clientTimestampUs already documents (see
-// docs/known-limitations.md); duplicated here rather than shared with
+// docs/history.md); duplicated here rather than shared with
 // main.cpp's own wallClockNowUs() (internal linkage, file-local), same
 // as net_server.cpp's nowMicrosEpoch() already duplicates it host-side.
 uint64_t wallClockNowUs() {
@@ -269,14 +271,25 @@ bool NetClient::connect() {
     helloPayload.authToken = config_.authToken;
     helloPayload.appVersion = config_.appVersion;
     helloPayload.videoQuality = config_.videoQuality;
+    helloPayload.maxFrameRate = config_.maxFrameRate;
     // VideoCodecBit_Jpeg is always advertised (no external dependency,
     // decode always available); VideoCodecBit_H264 only if config_.
     // preferH264 (ClientSettings::videoCodecH264Experimental, defaults
     // off -- see that field's own comment) opted in. See
     // NetServer::selectVideoCodec() for the host's side of this
     // negotiation -- it has the final say either way.
-    helloPayload.supportedVideoCodecs =
-        kVideoCodecBit_Jpeg | (config_.preferH264 ? kVideoCodecBit_H264 : 0);
+    // VideoCodecBit_PyroWave likewise only if config_.preferPyroWave
+    // opted in, and only once PyroWaveDecoder::isAvailable() has
+    // confirmed a capable Vulkan device -- see that field's own comment.
+    if (config_.autoVideoCodec) {
+        helloPayload.supportedVideoCodecs =
+            kVideoCodecBit_Jpeg | kVideoCodecFlag_Auto | (H264Decoder::isAvailable() ? kVideoCodecBit_H264 : 0) |
+            (PyroWaveDecoder::isAvailable() ? kVideoCodecBit_PyroWave : 0);
+    } else {
+        helloPayload.supportedVideoCodecs =
+            kVideoCodecBit_Jpeg | (config_.preferH264 ? kVideoCodecBit_H264 : 0) |
+            (config_.preferPyroWave && PyroWaveDecoder::isAvailable() ? kVideoCodecBit_PyroWave : 0);
+    }
     ByteBuffer hello = buildHelloPacket(helloPayload);
     // Protocol v14: the client's own half of the clock-offset estimate
     // below -- captured as close to the actual send as possible, same
@@ -288,13 +301,71 @@ bool NetClient::connect() {
         return false;
     }
 
+    // An AUTO-codec host runs its link-speed test before HelloAck: time
+    // the BandwidthProbe chunks from the end of the first to the end of
+    // the last, and report the rate back. Skipping the first chunk's own
+    // arrival leaves the round trip and TCP's start-up out of the number.
     uint8_t ackHeaderBuf[kPacketHeaderWireSize];
-    if (!recvExact(controlFd_, ackHeaderBuf, sizeof(ackHeaderBuf))) {
-        logLine("failed to receive HelloAck\n");
-        closePartialConnection();
-        return false;
+    std::optional<PacketHeader> ackHeader;
+    measuredBandwidthKbps_ = 0;
+    std::optional<std::chrono::steady_clock::time_point> probeStart;
+    uint64_t probeBytes = 0;
+    ByteBuffer probeBuf;
+    while (true) {
+        if (!recvExact(controlFd_, ackHeaderBuf, sizeof(ackHeaderBuf))) {
+            logLine("failed to receive HelloAck\n");
+            closePartialConnection();
+            return false;
+        }
+        ackHeader = parseHeader(ackHeaderBuf, sizeof(ackHeaderBuf));
+        if (!config_.autoVideoCodec || !ackHeader || ackHeader->type != PacketType::BandwidthProbe) break;
+        if (ackHeader->payloadSize > 1 + kBandwidthProbeChunkBytes) {
+            logLine("handshake rejected by host (oversized bandwidth probe)\n");
+            closePartialConnection();
+            return false;
+        }
+        probeBuf.resize(ackHeader->payloadSize);
+        if (!probeBuf.empty() && !recvExact(controlFd_, probeBuf.data(), probeBuf.size())) {
+            logLine("failed to receive bandwidth probe\n");
+            closePartialConnection();
+            return false;
+        }
+        auto probe = parseBandwidthProbePayload(probeBuf.data(), probeBuf.size());
+        if (!probe) {
+            logLine("handshake rejected by host (malformed bandwidth probe)\n");
+            closePartialConnection();
+            return false;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (!probeStart) {
+            probeStart = now;
+        } else {
+            probeBytes += kPacketHeaderWireSize + probeBuf.size();
+        }
+        if (probe->last) {
+            const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(now - *probeStart).count();
+            uint64_t kbps = 0;
+            if (probeBytes > 0) {
+                // Faster than a 1us clock can tell apart: report the cap.
+                kbps = elapsedUs > 0 ? probeBytes * 8 * 1000 / static_cast<uint64_t>(elapsedUs) : UINT32_MAX;
+            }
+            measuredBandwidthKbps_ = static_cast<uint32_t>(std::min<uint64_t>(kbps, UINT32_MAX));
+            logLine("[net] measured link speed: %u kbit/s (%llu bytes in %lld us)\n",
+                    measuredBandwidthKbps_.load(), static_cast<unsigned long long>(probeBytes),
+                    static_cast<long long>(elapsedUs));
+            BandwidthReportPayload report;
+            report.measuredKbps = measuredBandwidthKbps_.load();
+            ByteBuffer reportPacket = buildBandwidthReportPacket(report);
+            // The clock-offset estimate below assumes nothing happens
+            // between our last send and HelloAck, so restart its clock.
+            helloSendTimeUs = wallClockNowUs();
+            if (!sendAll(controlFd_, reportPacket.data(), reportPacket.size())) {
+                logLine("failed to send bandwidth report\n");
+                closePartialConnection();
+                return false;
+            }
+        }
     }
-    auto ackHeader = parseHeader(ackHeaderBuf, sizeof(ackHeaderBuf));
     if (!ackHeader || ackHeader->type != PacketType::HelloAck || ackHeader->payloadSize > 256) {
         logLine("handshake rejected by host (bad response header)\n");
         closePartialConnection();
@@ -643,6 +714,11 @@ void NetClient::videoReceiveLoop() {
     // isn't reachable from a shipped client today; this exists as the
     // building block for turning that on).
     H264Decoder h264Decoder;
+    // Same "constructed unconditionally, used only if negotiated" pattern
+    // as h264Decoder above -- PyroWaveDecoder creates no Vulkan device
+    // until its first decodeFrame() call, so this costs nothing on a
+    // JPEG/H.264 session.
+    PyroWaveDecoder pyrowaveDecoder;
 
     // Video-latency instrumentation: `networkStats` is
     // receipt-wall-clock-time minus VideoFramePayload::captureTimestampUs
@@ -681,12 +757,23 @@ void NetClient::videoReceiveLoop() {
         // sanity ceiling against a corrupt/bogus size field, not a tight
         // expected-size check like before compression (payload size now
         // varies frame to frame with scene content).
-        const uint32_t rawFrameBytes =
-            static_cast<uint32_t>(hostNativeWidth_.load()) * hostNativeHeight_.load() * 4u +
+        //
+        // Real report, 2026-10-09 (PyroWave in Host Control): that size is
+        // only the last one this client knew, and the next frame can be
+        // far bigger -- Host Control's screen mirror reports 256x192 in
+        // HelloAck until its capture is ready, and a mid-session switch
+        // from an emulator to the desktop mirror changes size without a
+        // new HelloAck. PyroWave's large frames tripped this and closed
+        // the connection. So the ceiling never drops below
+        // kMinVideoPayloadCeiling, enough for a raw 4K BGRA frame.
+        constexpr uint64_t kMinVideoPayloadCeiling = 64ull * 1024 * 1024;
+        const uint64_t rawFrameBytes =
+            static_cast<uint64_t>(hostNativeWidth_.load()) * hostNativeHeight_.load() * 4u +
             kVideoFrameTimestampWireSize;
+        const uint64_t payloadCeiling = std::max(rawFrameBytes, kMinVideoPayloadCeiling);
         auto header = parseHeader(headerBuf.data(), headerBuf.size());
         if (!header || header->type != PacketType::VideoFrame || header->payloadSize == 0 ||
-            header->payloadSize > rawFrameBytes) {
+            header->payloadSize > payloadCeiling) {
             logLine("video: dropping unexpected packet, closing connection\n");
             break;
         }
@@ -750,6 +837,9 @@ void NetClient::videoReceiveLoop() {
                 // hoping the next packet arrives soon enough.
                 decoded = h264Decoder.decodeFrame(nullptr, 0, decodedFrame, decodedWidth, decodedHeight, hasFrame);
             }
+        } else if (negotiatedVideoCodec() == VideoCodec::PyroWave) {
+            decoded = pyrowaveDecoder.decodeFrame(videoFrame->jpeg.data(), videoFrame->jpeg.size(), decodedFrame,
+                                                  decodedWidth, decodedHeight, hasFrame);
         } else {
             decoded = decompressJpegToBgra(jpegDecompressor, videoFrame->jpeg.data(), videoFrame->jpeg.size(),
                                             decodedFrame, decodedWidth, decodedHeight);
@@ -763,13 +853,14 @@ void NetClient::videoReceiveLoop() {
             break;
         }
         if (!hasFrame) {
-            // H264Decoder-only case (decompressJpegToBgra() always either
-            // fails or produces a frame) -- reached only when the drain
-            // attempt above (or JPEG's own single decode call) still
-            // didn't produce a picture: a genuine SPS/PPS-only access
-            // unit with nothing to output at all, not a deferred frame
-            // that draining could have recovered. Nothing to display yet,
-            // not an error -- wait for the next packet.
+            // H264Decoder/PyroWaveDecoder-only case (decompressJpegToBgra()
+            // always either fails or produces a frame) -- reached only
+            // when the drain attempt above still didn't produce a
+            // picture: a genuine SPS/PPS-only access unit with nothing to
+            // output at all, not a deferred frame that draining could
+            // have recovered (or, for PyroWave, a frame whose blocks
+            // didn't add up to its own header's total_blocks). Nothing to
+            // display yet, not an error -- wait for the next packet.
             continue;
         }
         // Real bug this fixes: hostNativeWidth_/hostNativeHeight_ used to
@@ -834,7 +925,7 @@ void NetClient::videoReceiveLoop() {
 
 // GitHub issue #4 Phase E: the control channel is no longer write-only
 // from the client's side. This is the client-side counterpart to the
-// host's controlLoop() (host/remote-server/src/net_server.cpp) tolerant-
+// host's controlLoop() (host/remote-server/src/net_server_control.cpp) tolerant-
 // parsing convention: keep the connection open for any recognized-but-
 // unhandled packet type, and only drop the connection on a real
 // transport failure or a header/payload that fails to parse at all
@@ -913,4 +1004,4 @@ void NetClient::controlReceiveLoop() {
     connected_ = false;
 }
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

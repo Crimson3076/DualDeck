@@ -21,16 +21,16 @@
 #include "host/logging_mic_audio_sink.h"
 #include "host/mode_coordinator.h"
 #include "host/net_server.h"
-#include "melonds_remote/adapter/ipc/adapter_ipc_client.h"
-#include "melonds_remote/adapter/ipc/adapter_ipc_server.h"
-#include "melonds_remote/adapter/synthetic/synthetic_emulator_adapter.h"
-#include "melonds_remote/protocol.h"
+#include "dualdeck/adapter/ipc/adapter_ipc_client.h"
+#include "dualdeck/adapter/ipc/adapter_ipc_server.h"
+#include "dualdeck/adapter/synthetic/synthetic_emulator_adapter.h"
+#include "dualdeck/protocol.h"
 #include "test_framework.h"
 
-using namespace melonds_remote;
-using namespace melonds_remote::host;
-using namespace melonds_remote::adapter::ipc;
-using namespace melonds_remote::adapter::synthetic;
+using namespace dualdeck;
+using namespace dualdeck::host;
+using namespace dualdeck::adapter::ipc;
+using namespace dualdeck::adapter::synthetic;
 
 namespace {
 
@@ -188,13 +188,13 @@ MDR_TEST(compute_desired_mode_override_with_no_adapter_is_still_host_control) {
 }
 
 MDR_TEST(compute_desired_host_session_state_no_adapter_no_override_is_connected) {
-    MDR_CHECK(computeDesiredHostSessionState(/*adapterConnected=*/false, melonds_remote::adapter::SessionState::Error,
+    MDR_CHECK(computeDesiredHostSessionState(/*adapterConnected=*/false, dualdeck::adapter::SessionState::Error,
                                               /*manualHostControlOverride=*/false) == HostSessionState::Connected);
 }
 
 MDR_TEST(compute_desired_host_session_state_override_wins_even_with_adapter_connected) {
     MDR_CHECK(computeDesiredHostSessionState(/*adapterConnected=*/true,
-                                              melonds_remote::adapter::SessionState::Running,
+                                              dualdeck::adapter::SessionState::Running,
                                               /*manualHostControlOverride=*/true) ==
               HostSessionState::CompanionModeActive);
 }
@@ -205,12 +205,12 @@ MDR_TEST(compute_desired_host_session_state_ignores_stale_adapter_state_once_dis
     // Running here must not leak into the result once adapterConnected
     // is false.
     MDR_CHECK(computeDesiredHostSessionState(/*adapterConnected=*/false,
-                                              melonds_remote::adapter::SessionState::Running,
+                                              dualdeck::adapter::SessionState::Running,
                                               /*manualHostControlOverride=*/false) == HostSessionState::Connected);
 }
 
 MDR_TEST(compute_desired_host_session_state_maps_every_adapter_session_state) {
-    using melonds_remote::adapter::SessionState;
+    using dualdeck::adapter::SessionState;
     MDR_CHECK(computeDesiredHostSessionState(true, SessionState::Available, false) == HostSessionState::Connected);
     MDR_CHECK(computeDesiredHostSessionState(true, SessionState::Starting, false) == HostSessionState::Launching);
     MDR_CHECK(computeDesiredHostSessionState(true, SessionState::Running, false) ==

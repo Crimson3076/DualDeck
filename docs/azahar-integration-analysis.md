@@ -78,7 +78,7 @@ register real input backends by name (an "engine" string in a
 `Common::ParamPackage`).
 
 This suggests the integration point is registering a new custom engine
-(e.g. `"engine:melonds_remote"`) that reads from a thread-safe buffer
+(e.g. `"engine:dualdeck"`) that reads from a thread-safe buffer
 this project's own bridge code fills from incoming `ControllerState`
 packets, mirroring `input_common/udp/`'s existing pattern (also a
 network-fed input source) rather than needing to touch every call site
@@ -133,7 +133,7 @@ protocol+host code) this project already built once, adapted to
 Azahar's specific hook points.
 
 Critically, **this project's existing `IEmulatorAdapter` contract
-(`adapter-sdk/include/melonds_remote/adapter/adapter_contract.h`,
+(`adapter-sdk/include/dualdeck/adapter/adapter_contract.h`,
 issue #28 Phase 1) does not need to change** to support this -- it was
 deliberately built generic (proven against fake DS/3DS/Wii U fixtures
 specifically so a real adapter could be swapped in later without
@@ -154,7 +154,7 @@ is additive work, not a rearchitecture.
 - `RequestScreenshot`'s actual runtime cost at real framerates against a
   real running game was not measured (no game/ROM available in this
   sandbox to test with, same category of limitation
-  `docs/known-limitations.md` already records for melonDS's own
+  `docs/history.md` already records for melonDS's own
   real-hardware-only gaps).
 - Save-states, fast-forward, and other emulator-action equivalents
   (mirroring melonDS's `EmulatorAction` bitmask -- `EmulatorAction_SaveState`,

@@ -11,7 +11,7 @@
 #include <optional>
 #include <string>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 // $HOME/.config/dualdeck-client/last_host.txt, or empty if $HOME
 // isn't set (persistence then silently unavailable).
@@ -20,4 +20,4 @@ std::string defaultLastHostStorePath();
 std::optional<std::string> loadLastHost(const std::string& storePath);
 void saveLastHost(const std::string& storePath, const std::string& hostAddress);
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

@@ -39,11 +39,11 @@
 #include "host/logging_input_sink.h"
 #include "host/logging_mic_audio_sink.h"
 #include "host/net_server.h"
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 #include "test_framework.h"
 
-using namespace melonds_remote;
-using namespace melonds_remote::host;
+using namespace dualdeck;
+using namespace dualdeck::host;
 
 namespace {
 

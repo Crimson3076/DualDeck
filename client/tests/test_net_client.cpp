@@ -9,7 +9,7 @@
 // updates hostMode()/hostSystemIdentity()/hostAdapterIdentity() while
 // connected, and a dead server connection is actually detected (isConnected()
 // becomes false) rather than hanging forever -- the gap this phase closed
-// (see net_client.h's hostMode() doc comment and docs/known-limitations.md).
+// (see net_client.h's hostMode() doc comment and docs/history.md).
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -25,13 +25,15 @@
 #include "host/logging_input_sink.h"
 #include "host/logging_mic_audio_sink.h"
 #include "host/net_server.h"
-#include "melonds_remote/protocol.h"
+#include "host/pyrowave_encoder.h"
+#include "dualdeck/protocol.h"
 #include "net_client.h"
+#include "pyrowave_decoder.h"
 #include "test_framework.h"
 
-using namespace melonds_remote;
-using namespace melonds_remote::host;
-using namespace melonds_remote::client;
+using namespace dualdeck;
+using namespace dualdeck::host;
+using namespace dualdeck::client;
 
 namespace {
 
@@ -392,6 +394,53 @@ MDR_TEST(net_client_receives_an_h264_video_frame_without_needing_a_second_frame)
 }
 #endif // DUALDECK_HAVE_OPENH264
 
+// NetServer::receiveSessionPacket(), the shared front half of the
+// host's input and mic loops: a packet from the authenticated client's
+// address still has to be the right type with a header that matches its
+// size before it reaches the input sink.
+MDR_TEST(net_server_applies_only_well_formed_controller_state_packets) {
+    ServerFixture fixture;
+    NetClient client(fixture.clientConfig());
+    MDR_CHECK(client.connect());
+
+    ControllerState first;
+    first.sequence = 1;
+    first.dsButtons = 0x1;
+    client.sendControllerState(first);
+    MDR_CHECK(waitUntil([&] { return fixture.sinkA.lastState().dsButtons == 0x1; }));
+
+    // Same address as the client (loopback), so only the packet checks
+    // can reject these.
+    ControllerState rejected;
+    rejected.sequence = 2;
+    rejected.dsButtons = 0x2;
+    ByteBuffer payload;
+    serializeControllerState(payload, rejected);
+    ByteBuffer wrongType = buildPacket(PacketType::MicAudioFrame, payload);
+    ByteBuffer truncated = buildControllerStatePacket(rejected);
+    truncated.pop_back();
+
+    int rawFd = ::socket(AF_INET, SOCK_DGRAM, 0);
+    sockaddr_in to{};
+    to.sin_family = AF_INET;
+    to.sin_port = htons(fixture.config.inputPort);
+    ::inet_pton(AF_INET, "127.0.0.1", &to.sin_addr);
+    for (const ByteBuffer* packet : {&wrongType, &truncated}) {
+        ::sendto(rawFd, packet->data(), packet->size(), 0, reinterpret_cast<sockaddr*>(&to), sizeof(to));
+    }
+    ::close(rawFd);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    MDR_CHECK_EQ(fixture.sinkA.lastState().dsButtons, static_cast<uint16_t>(0x1));
+
+    // The session is still live: the next good packet goes through.
+    ControllerState next;
+    next.sequence = 3;
+    next.dsButtons = 0x4;
+    client.sendControllerState(next);
+    MDR_CHECK(waitUntil([&] { return fixture.sinkA.lastState().dsButtons == 0x4; }));
+    client.disconnect();
+}
+
 MDR_TEST(net_client_detects_a_dead_server_connection) {
     ServerFixture fixture;
     NetClient client(fixture.clientConfig());
@@ -544,4 +593,107 @@ MDR_TEST(net_client_drops_a_log_line_when_not_connected) {
     client.sendClientLog("this should be dropped, not queued\n");
     // No observable effect to assert beyond "this doesn't crash or
     // block" -- there is no server to receive anything from, by design.
+}
+
+// VIDEO CODEC: AUTO end to end: the host runs its link-speed test before
+// HelloAck, the client reports a rate, and the session still connects
+// on a codec both sides can run. Loopback is far faster than any
+// PyroWave need, so PyroWave wins whenever both sides have it.
+MDR_TEST(net_client_auto_codec_measures_the_link_and_picks_a_codec) {
+    SizedFrameSource dsFrame(256, 192);
+    ServerFixture fixture;
+    fixture.server.setTarget(fixture.sinkA, dsFrame, HostMode::Emulation, SystemIdentity{"nds", "Nintendo DS"},
+                              AdapterIdentity{"melonds", "melonDS", "1.0"});
+
+    NetClientConfig clientConfig = fixture.clientConfig();
+    clientConfig.autoVideoCodec = true;
+    NetClient client(clientConfig);
+    MDR_CHECK(client.connect());
+    MDR_CHECK(client.isConnected());
+    MDR_CHECK(client.measuredBandwidthKbps() > 0);
+
+    VideoCodec expected = VideoCodec::Jpeg;
+#ifdef DUALDECK_HAVE_OPENH264
+    expected = VideoCodec::H264;
+#endif
+    if (PyroWaveDecoder::isAvailable() && dualdeck::host::PyroWaveEncoder::isAvailable()) {
+        expected = VideoCodec::PyroWave;
+    }
+    MDR_CHECK(client.negotiatedVideoCodec() == expected);
+
+    client.disconnect();
+}
+
+// Without AUTO there's no probe: nothing measured, same codec as before.
+MDR_TEST(net_client_without_auto_codec_skips_the_link_test) {
+    ServerFixture fixture;
+    NetClient client(fixture.clientConfig());
+    MDR_CHECK(client.connect());
+    MDR_CHECK_EQ(client.measuredBandwidthKbps(), 0u);
+    MDR_CHECK(client.negotiatedVideoCodec() == VideoCodec::Jpeg);
+    client.disconnect();
+}
+
+namespace {
+// Announces DS size in HelloAck but then hands out a much larger frame,
+// like Host Control's screen mirror (HelloAck's size comes from
+// HostControlAdapter::frameDimensions(), 256x192 until the capture is
+// ready) or a mid-session switch from melonDS to Host Control.
+class GrowingFrameSource : public IFrameSource {
+public:
+    GrowingFrameSource(uint16_t width, uint16_t height, std::vector<uint8_t> frame)
+        : width_(width), height_(height), frame_(std::move(frame)) {}
+
+    void frameDimensions(uint16_t& outWidth, uint16_t& outHeight) const override {
+        outWidth = 256;
+        outHeight = 192;
+    }
+
+    bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex, uint16_t& outWidth,
+                        uint16_t& outHeight) override {
+        outFrame = frame_;
+        outFrameIndex = 0;
+        outWidth = width_;
+        outHeight = height_;
+        return true;
+    }
+
+private:
+    uint16_t width_;
+    uint16_t height_;
+    std::vector<uint8_t> frame_;
+};
+} // namespace
+
+// Real report, 2026-10-09: PyroWave didn't work in Host Control. The
+// client capped every video payload at the raw size of the last frame
+// size it knew (256x192x4, ~196 KB, from HelloAck), so the first mirrored
+// desktop frame bigger than that closed the connection. JPEG and H.264
+// desktop frames usually stayed under it; PyroWave's are several times
+// larger. Noise at quality 100 makes the JPEG frame here big enough to
+// hit the same cap.
+MDR_TEST(net_client_accepts_a_frame_larger_than_the_handshake_size) {
+    constexpr uint16_t kWidth = 1280;
+    constexpr uint16_t kHeight = 800;
+    std::vector<uint8_t> noise(static_cast<size_t>(kWidth) * kHeight * 4);
+    uint32_t seed = 12345;
+    for (auto& byte : noise) {
+        seed = seed * 1103515245u + 12345u;
+        byte = static_cast<uint8_t>(seed >> 24);
+    }
+    GrowingFrameSource source(kWidth, kHeight, std::move(noise));
+    // After the source, so the server (and its video thread) stops first.
+    ServerFixture fixture;
+    fixture.server.setTarget(fixture.sinkA, source, HostMode::HostControl, SystemIdentity{}, AdapterIdentity{});
+
+    NetClientConfig clientConfig = fixture.clientConfig();
+    clientConfig.videoQuality = 100;
+    NetClient client(clientConfig);
+    MDR_CHECK(client.connect());
+
+    std::vector<uint8_t> received;
+    MDR_CHECK(waitUntil([&] { return client.getLatestFrame(received); }, 5000));
+    MDR_CHECK(client.hostNativeWidth() == kWidth);
+    MDR_CHECK(client.isConnected());
+    client.disconnect();
 }

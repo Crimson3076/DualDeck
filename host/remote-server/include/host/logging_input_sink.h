@@ -4,7 +4,7 @@
 
 #include "host/emulator_input_sink.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 // Default IEmulatorInputSink used until a real melonDS integration exists.
 // Tracks the latest state and logs transitions so the prototype's behavior
@@ -22,4 +22,4 @@ private:
     ControllerState lastState_;
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

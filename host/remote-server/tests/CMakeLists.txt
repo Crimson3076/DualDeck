@@ -1,22 +1,27 @@
-add_executable(melonds_remote_host_tests
+add_executable(dualdeck_host_tests
     main.cpp
     test_adapter_bridge.cpp
     test_net_server_mode_switch.cpp
     test_self_update_trigger.cpp
+    test_control_socket.cpp
     test_host_control_adapter.cpp
     test_mode_coordinator.cpp
     test_host_session_state.cpp
     test_capability_bridge.cpp
     test_kdialog_approval_prompt.cpp
     test_h264_encoder.cpp
+    test_pyrowave_encoder.cpp
     test_h264_sps.cpp
+    test_auto_video_codec.cpp
 )
 
-target_include_directories(melonds_remote_host_tests PRIVATE
+target_include_directories(dualdeck_host_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../protocol/tests
+    # net_server_internal.h, for test_auto_video_codec.cpp.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
 
-target_link_libraries(melonds_remote_host_tests PRIVATE
+target_link_libraries(dualdeck_host_tests PRIVATE
     dualdeck_host
     dualdeck_adapter_sdk_fakes
     dualdeck_adapter_sdk_synthetic
@@ -35,10 +40,10 @@ if(PkgConfig_FOUND)
     pkg_check_modules(OPENH264 openh264)
 endif()
 if(OPENH264_FOUND)
-    target_compile_definitions(melonds_remote_host_tests PRIVATE DUALDECK_HAVE_OPENH264)
-    target_link_libraries(melonds_remote_host_tests PRIVATE ${OPENH264_LIBRARIES})
-    target_include_directories(melonds_remote_host_tests SYSTEM PRIVATE ${OPENH264_INCLUDE_DIRS})
-    target_link_directories(melonds_remote_host_tests PRIVATE ${OPENH264_LIBRARY_DIRS})
+    target_compile_definitions(dualdeck_host_tests PRIVATE DUALDECK_HAVE_OPENH264)
+    target_link_libraries(dualdeck_host_tests PRIVATE ${OPENH264_LIBRARIES})
+    target_include_directories(dualdeck_host_tests SYSTEM PRIVATE ${OPENH264_INCLUDE_DIRS})
+    target_link_directories(dualdeck_host_tests PRIVATE ${OPENH264_LIBRARY_DIRS})
 endif()
 
 # This target doesn't compile h264_encoder.cpp itself (it links
@@ -48,16 +53,16 @@ endif()
 # (same reasoning already applied to OPENH264_LIBRARIES above). No
 # compile definition needed here -- nothing in this target's own sources
 # reads DUALDECK_HAVE_LIBYUV.
-if(OPENH264_FOUND AND DUALDECK_LIBYUV_FOUND)
-    target_link_libraries(melonds_remote_host_tests PRIVATE LibYuv::LibYuv)
+if((OPENH264_FOUND OR DUALDECK_PYROWAVE_FOUND) AND DUALDECK_LIBYUV_FOUND)
+    target_link_libraries(dualdeck_host_tests PRIVATE LibYuv::LibYuv)
 endif()
 
-target_compile_features(melonds_remote_host_tests PRIVATE cxx_std_20)
+target_compile_features(dualdeck_host_tests PRIVATE cxx_std_20)
 
 if(DUALDECK_ENABLE_WARNINGS)
-    target_compile_options(melonds_remote_host_tests PRIVATE
+    target_compile_options(dualdeck_host_tests PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow
     )
 endif()
 
-add_test(NAME host_tests COMMAND melonds_remote_host_tests)
+add_test(NAME host_tests COMMAND dualdeck_host_tests)

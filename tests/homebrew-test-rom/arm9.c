@@ -22,7 +22,7 @@
  * only one engine's DISPCNT was unreliable (captured frames stayed
  * white), while setting both consistently worked. Not fully root-caused
  * (possibly related to GPU2D's DispCntLatch being a few-frame-deep latch
- * chain); see docs/known-limitations.md.
+ * chain); see docs/history.md.
  */
 
 void _start(void)

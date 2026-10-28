@@ -1,7 +1,7 @@
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 #include "test_framework.h"
 
-using namespace melonds_remote;
+using namespace dualdeck;
 
 MDR_TEST(discovery_request_packet_has_correct_type_and_empty_payload) {
     ByteBuffer packet = buildDiscoveryRequestPacket();

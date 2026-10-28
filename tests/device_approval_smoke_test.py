@@ -3,7 +3,7 @@
 section 13, `host/remote-server/include/host/device_approval_manager.h`).
 Replaces the earlier 6-digit-pairing-code flow, which required typing a
 code on the client -- unworkable since Steam Input doesn't reliably bring
-up a virtual keyboard in Gaming Mode (see docs/known-limitations.md).
+up a virtual keyboard in Gaming Mode (see docs/history.md).
 
 Starts the real `dualdeck-host-service` binary with NO `--auth-token`
 (device-approval mode, the default), then exercises the same state
@@ -22,6 +22,8 @@ machine a real client + host operator would hit:
   6. Restarting the server with `--state-dir` pointed at the same
      directory remembers the first identity's approval across the
      restart.
+  7. The local control socket (`--control-socket`) lists a new pending
+     identity in `status`, and `approve <id>` sent there lets it connect.
 
 This is a protocol-level test (raw sockets, not the actual SDL3 client) --
 see `host/melonds-patches/README.md` for the corresponding real-client
@@ -32,6 +34,8 @@ Usage:
     python3 tests/device_approval_smoke_test.py /path/to/dualdeck-host-service
 """
 
+import json
+import os
 import re
 import secrets
 import shutil
@@ -43,7 +47,7 @@ import tempfile
 import time
 
 MAGIC = 0x444D5231
-# Kept in sync with protocol/include/melonds_remote/protocol.h's
+# Kept in sync with protocol/include/dualdeck/protocol.h's
 # kProtocolVersion by hand -- see smoke_test.py's identical constant for
 # why a stale value here fails quietly (every Hello gets rejected as a
 # protocol-version mismatch instead of exercising whatever this script
@@ -54,7 +58,7 @@ MAGIC = 0x444D5231
 # protocol-sync.sh now checks this file's VERSION constant directly (it
 # didn't yet, the first time this drifted), so this one should be the
 # last time it goes unnoticed until CI.
-VERSION = 14
+VERSION = 15
 
 PT_HELLO = 1
 PT_HELLO_ACK = 2
@@ -80,13 +84,15 @@ def hello_payload(name: str, platform: str, width: int, height: int, device_id: 
     # Final bytes: HelloPayload::videoQuality (protocol v9) -- 0 means
     # "defer to the host's own configured default" -- followed by
     # HelloPayload::supportedVideoCodecs (protocol v13, VideoCodecBit_Jpeg
-    # = 1). Both irrelevant to what this file actually tests (device
+    # = 1), then HelloPayload::maxFrameRate (protocol v15, 0 = host
+    # default). All irrelevant to what this file actually tests (device
     # approval, not video).
     return (
         lp_string(name) + lp_string(platform) + struct.pack("<HH", width, height) + lp_string(device_id)
         + lp_string("")
         + struct.pack("<B", 0)
         + struct.pack("<B", 1)
+        + struct.pack("<B", 0)
     )
 
 
@@ -142,6 +148,22 @@ def send_console_command(proc: subprocess.Popen, command: str):
     proc.stdin.flush()
 
 
+def control_socket_command(socket_path: str, command: str) -> dict:
+    """Sends one command to the host's local control socket and returns
+    its JSON reply (see host/remote-server/include/host/control_socket.h)."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(2)
+        s.connect(socket_path)
+        s.sendall((command + "\n").encode())
+        reply = b""
+        while not reply.endswith(b"\n"):
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            reply += chunk
+    return json.loads(reply)
+
+
 def start_server(server_path: str, control_port: int, input_port: int, video_port: int, state_dir: str):
     proc = subprocess.Popen(
         [
@@ -152,6 +174,7 @@ def start_server(server_path: str, control_port: int, input_port: int, video_por
             "--video-port", str(video_port),
             "--state-dir", state_dir,
             "--no-discovery",
+            "--control-socket", os.path.join(state_dir, "host-control.sock"),
         ],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -232,6 +255,22 @@ def run(server_path: str) -> int:
             accepted, reason = do_handshake(control_port, device_b)
             assert accepted == 0, "expected the denied device to still be unapproved after restart"
             print("[ok] denied device is still unapproved after a host restart")
+
+            # --- The local control socket lists and approves a pending device ---
+            device_c = random_device_id()
+            socket_path = os.path.join(state_dir, "host-control.sock")
+            accepted, reason = do_handshake(control_port, device_c)
+            assert accepted == 0 and reason == REJECT_APPROVAL_REQUIRED
+            status = control_socket_command(socket_path, "status")
+            assert status["ok"] and status["mode"] == "emulation", status
+            assert any(p["id"] == device_c for p in status["pending"]), status
+            print("[ok] control socket status lists the pending device")
+            reply = control_socket_command(socket_path, f"approve {device_c}")
+            assert reply == {"ok": True}, reply
+            time.sleep(0.2)
+            accepted, reason = do_handshake(control_port, device_c)
+            assert accepted == 1, f"expected socket-approved device to be accepted, reason={reason}"
+            print("[ok] approving via the control socket lets the device connect")
         finally:
             stop_server(proc2)
 

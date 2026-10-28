@@ -1,6 +1,6 @@
 #pragma once
 
-// Remembers whether the first-run setup wizard (main.cpp's
+// Remembers whether the first-run setup wizard (setup_wizard.cpp's
 // runSetupWizard()) has already completed successfully, so it only runs
 // automatically once -- later launches go straight to the normal
 // discovery/connect flow, and the wizard is only reachable again by opening
@@ -9,7 +9,7 @@
 
 #include <string>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 // $HOME/.config/dualdeck-client/setup_complete.txt, or empty if
 // $HOME isn't set (persistence then silently unavailable -- the wizard
@@ -20,4 +20,4 @@ std::string defaultWizardStatePath();
 bool isSetupComplete(const std::string& statePath);
 void markSetupComplete(const std::string& statePath);
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

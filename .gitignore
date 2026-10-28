@@ -9,4 +9,3 @@ __pycache__/
 *.pyc
 node_modules/
 decky-plugin/dist/
-decky-plugin/pnpm-lock.yaml

@@ -2,7 +2,7 @@
 
 // Persists this client's own persistent device identity: a random value
 // generated once and reused forever, on every Hello to every host, as the
-// authToken field (see melonds_remote::HelloPayload::authToken and
+// authToken field (see dualdeck::HelloPayload::authToken and
 // docs/protocol.md's "Authentication and device approval" section).
 //
 // Replaces the earlier per-host 6-digit pairing code / issued-token
@@ -19,7 +19,7 @@
 
 #include <string>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 // $HOME/.config/dualdeck-client/device_id.txt, or empty if $HOME
 // isn't set (persistence then silently unavailable -- a fresh random
@@ -33,4 +33,4 @@ std::string defaultDeviceIdentityStorePath();
 // isn't persisted). Always returns a non-empty identity.
 std::string loadOrCreateDeviceIdentity(const std::string& storePath);
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

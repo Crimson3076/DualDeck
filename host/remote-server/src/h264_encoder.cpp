@@ -4,92 +4,15 @@
 
 #include <wels/codec_api.h>
 
-#ifdef DUALDECK_HAVE_LIBYUV
-#include <libyuv/convert_from_argb.h>
-#endif
-
 #include <algorithm>
+#include <chrono>
 #include <cstring>
+#include <thread>
 #include <vector>
 
-namespace melonds_remote::host {
+#include "host/yuv_conversion.h"
 
-namespace {
-
-// Converts one BGRA8888 frame to I420 (planar YUV 4:2:0), the pixel
-// format ISVCEncoder::EncodeFrame() requires (SSourcePicture::iColorFormat
-// = videoFormatI420).
-//
-// DUALDECK_HAVE_LIBYUV builds use libyuv::ARGBToI420() -- SIMD-accelerated,
-// a real measured win over the hand-rolled loop below (2026-08-26 latency
-// audit: this scalar loop was 2.5-4x slower, combined with i420ToBgra()'s
-// matching decode-side loop, than libjpeg-turbo's own SIMD BGRA<->YCbCr
-// path, see tools/codec-benchmark). libyuv's "ARGB" format name is
-// confusingly unrelated to byte order at a glance -- confirmed directly
-// against its own header comments (convert.h: "ARGB little endian (bgra
-// in memory) to I420"), not assumed from the name alone -- and is exactly
-// this project's BGRA8888-everywhere convention (byte 0 is B, byte 1 is
-// G, byte 2 is R, matching the hand-rolled fallback's own `px[0]`/`px[1]`/
-// `px[2]` reads below). ARGBToI420 (not the J420 "full range" variant)
-// uses the same BT.601 studio-range (16-235) matrix the hand-rolled
-// fallback below does, so builds with and without libyuv produce visually
-// equivalent output, not just "both somehow work" -- confirmed by
-// h264_decoder_decodes_this_projects_own_encoder_output's existing
-// average-pixel-difference round-trip test passing under both configs.
-//
-// Builds without libyuv keep this plain BT.601 studio-range hand-rolled
-// version -- this project already takes the equivalent tradeoff the
-// other direction for JPEG (compressFrameBgraToJpeg() in net_server.cpp
-// lets libjpeg-turbo do BGRA->YCbCr internally, since that library needs
-// linking anyway for the codec itself; OpenH264 has no such built-in RGB
-// path, so this is the one extra step JPEG's own approach didn't need).
-void bgraToI420(const uint8_t* bgra, int width, int height, std::vector<uint8_t>& outY,
-                 std::vector<uint8_t>& outU, std::vector<uint8_t>& outV) {
-    const int chromaWidth = (width + 1) / 2;
-    const int chromaHeight = (height + 1) / 2;
-    outY.resize(static_cast<size_t>(width) * static_cast<size_t>(height));
-    outU.resize(static_cast<size_t>(chromaWidth) * static_cast<size_t>(chromaHeight));
-    outV.resize(static_cast<size_t>(chromaWidth) * static_cast<size_t>(chromaHeight));
-
-#ifdef DUALDECK_HAVE_LIBYUV
-    libyuv::ARGBToI420(bgra, width * 4, outY.data(), width, outU.data(), chromaWidth, outV.data(), chromaWidth,
-                        width, height);
-#else
-    auto pixelAt = [&](int x, int y) -> const uint8_t* {
-        return bgra + (static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)) * 4;
-    };
-
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            const uint8_t* px = pixelAt(x, y);
-            const int b = px[0], g = px[1], r = px[2];
-            const int yVal = (66 * r + 129 * g + 25 * b + 128) / 256 + 16;
-            outY[static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)] =
-                static_cast<uint8_t>(std::clamp(yVal, 0, 255));
-        }
-    }
-    for (int cy = 0; cy < chromaHeight; ++cy) {
-        for (int cx = 0; cx < chromaWidth; ++cx) {
-            // Top-left sample of each 2x2 block -- box-filtering all
-            // four would be marginally more accurate but isn't worth
-            // the extra passes on this real-time low-latency path (the
-            // libyuv path above does box-filter, at no extra cost to us
-            // since it's a real SIMD implementation, not this fallback's
-            // own concern).
-            const uint8_t* px = pixelAt(std::min(cx * 2, width - 1), std::min(cy * 2, height - 1));
-            const int b = px[0], g = px[1], r = px[2];
-            const int uVal = (-38 * r - 74 * g + 112 * b + 128) / 256 + 128;
-            const int vVal = (112 * r - 94 * g - 18 * b + 128) / 256 + 128;
-            outU[static_cast<size_t>(cy) * static_cast<size_t>(chromaWidth) + static_cast<size_t>(cx)] =
-                static_cast<uint8_t>(std::clamp(uVal, 0, 255));
-            outV[static_cast<size_t>(cy) * static_cast<size_t>(chromaWidth) + static_cast<size_t>(cx)] =
-                static_cast<uint8_t>(std::clamp(vVal, 0, 255));
-        }
-    }
-#endif // DUALDECK_HAVE_LIBYUV
-}
-
-} // namespace
+namespace dualdeck::host {
 
 struct H264Encoder::Impl {
     ISVCEncoder* encoder = nullptr;
@@ -144,22 +67,35 @@ bool H264Encoder::initialize(int width, int height, int fps, int targetBitrateBp
     // isn't stuck waiting long for a decodable frame -- requestKeyframe()
     // below covers the "right now" case explicitly.
     //
-    // bEnableFrameSkip = true: real, OpenH264-reported requirement, not
-    // a style choice -- first shipped as `false` on the (wrong) reasoning
-    // that skipping frames would hurt latency, which drew OpenH264's own
-    // runtime warning ("bitrate can't be controlled for ... RC_BITRATE_MODE
-    // ... without enabling skip frame"). Frame skip is unrelated to
-    // B-frame lookahead: it lets the encoder drop an occasional frame to
-    // stay within iTargetBitrate under sustained pressure, which is
-    // exactly the "bounded, not unbounded, added latency under a slow
-    // link" outcome this project already chose for JPEG (see net_server.cpp's
-    // SO_SNDBUF sizing) -- disabled, RC_BITRATE_MODE can't actually
-    // enforce the target bitrate at all, letting a congested link's queue
-    // grow the same unbounded way the pre-SO_SNDBUF JPEG path did.
+    // bEnableFrameSkip = false. It was true to silence OpenH264's
+    // "bitrate can't be controlled ... without enabling skip frame"
+    // warning, but with it on, any scene busier than the bitrate target
+    // makes rate control drop frames outright: measured with OpenH264
+    // 2.4 on synthetic 854x480 moving content at quality 60's target, 208-267 of
+    // 300 frames came out, i.e. a 30fps Cemu GamePad stream arrived at
+    // ~21-27fps -- the Wii U "24-25fps" report. The video loop then
+    // re-encoded the skipped frame on its next tick, so the link carried
+    // above-target bitrate anyway, just with fewer frames and more
+    // encoder time. With skip off, rate control holds the bitrate by
+    // raising QP instead (measured: same bytes on the wire, every frame
+    // delivered). A slow link is still bounded by the video socket's
+    // small SO_SNDBUF (see net_server_video.cpp), not by dropped frames.
     param.iTemporalLayerNum = 1;
     param.iSpatialLayerNum = 1;
-    param.bEnableFrameSkip = true;
+    param.bEnableFrameSkip = false;
     param.uiIntraPeriod = static_cast<unsigned int>(fps * 2);
+    // Split each frame into one slice per encoder thread so a frame
+    // encodes in parallel: measured 8.1ms -> 4.8ms per 1280x800 frame
+    // with 4 threads (OpenH264 2.4), which comes straight off Host
+    // Control's capture-to-screen latency. Any H.264 decoder handles
+    // multi-slice frames.
+    const unsigned int hardwareThreads = std::max(1u, std::thread::hardware_concurrency());
+    const int encoderThreads = static_cast<int>(std::clamp(hardwareThreads / 2, 1u, 4u));
+    param.iMultipleThreadIdc = static_cast<unsigned short>(encoderThreads);
+    if (encoderThreads > 1) {
+        param.sSpatialLayers[0].sSliceArgument.uiSliceMode = SM_FIXEDSLCNUM_SLICE;
+        param.sSpatialLayers[0].sSliceArgument.uiSliceNum = static_cast<unsigned int>(encoderThreads);
+    }
     param.eSpsPpsIdStrategy = CONSTANT_ID;
 
     if (impl_->encoder->InitializeExt(&param) != 0) {
@@ -205,6 +141,11 @@ bool H264Encoder::encodeFrame(const uint8_t* bgra, int width, int height, ByteBu
     pic.pData[0] = impl_->yPlane.data();
     pic.pData[1] = impl_->uPlane.data();
     pic.pData[2] = impl_->vPlane.data();
+    // Rate control paces itself off these (milliseconds); left at 0 it
+    // has no idea how much time passed between frames.
+    pic.uiTimeStamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now().time_since_epoch())
+                          .count();
 
     SFrameBSInfo info;
     std::memset(&info, 0, sizeof(info));
@@ -230,11 +171,11 @@ bool H264Encoder::encodeFrame(const uint8_t* bgra, int width, int height, ByteBu
     return true;
 }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host
 
 #else // !DUALDECK_HAVE_OPENH264
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 // This build was configured without OpenH264 (see host/remote-server/
 // CMakeLists.txt's optional detection) -- every method is a no-op that
@@ -251,6 +192,6 @@ bool H264Encoder::initialize(int, int, int, int) { return false; }
 void H264Encoder::requestKeyframe() {}
 bool H264Encoder::encodeFrame(const uint8_t*, int, int, ByteBuffer&, bool&) { return false; }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host
 
 #endif // DUALDECK_HAVE_OPENH264

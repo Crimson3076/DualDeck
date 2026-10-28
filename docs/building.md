@@ -69,9 +69,30 @@ This has been verified to work: building SDL3 3.2.16 from source this way
 and configuring against it produces a `dualdeck-client` that
 compiles cleanly and has been run successfully (real handshake, real
 sustained video/input traffic) against both the standalone host prototype
-and the actual patched melonDS host -- see `docs/known-limitations.md`.
+and the actual patched melonDS host -- see `docs/history.md`.
 Not yet tested: real Steam Deck hardware/gamepad (this was verified in a
 headless, gamepad-less environment).
+
+## Building the host window
+
+`dualdeck-host-ui` is the full-screen menu `packaging/host/dualdeck-host.sh`
+opens on the host (see `host/ui/src/protocol.h` for how the two talk).
+It needs SDL3, like the client:
+
+```sh
+cmake -S . -B build -DDUALDECK_BUILD_HOST_UI=ON -DCMAKE_PREFIX_PATH=/path/to/sdl3-install
+cmake --build build --target dualdeck-host-ui
+```
+
+To look at a screen without a display, pipe it requests and save a PNG:
+
+```sh
+printf 'menu\tlist\tAdvanced\t\nitem\ta\tChange branch\tPick one\tbranch\t\t\t\nend\n' |
+    ./build/host/ui/dualdeck-host-ui --screenshot advanced.png
+```
+
+`tests/host_ui_window_test.py build/host/ui/dualdeck-host-ui out/` renders
+every host screen that way (CI uploads them in the `ui-preview` artifact).
 
 ## Running the standalone host server locally
 
@@ -126,7 +147,7 @@ client-side to pause for -- so it recovers automatically once the host
 approves it, restarts, or a network interruption clears (spec section
 7.2). This reconnect behavior, and the device-approval flow above, have
 been exercised against a real host process with the real client binary
-in this sandbox (see `docs/known-limitations.md`) but not yet against
+in this sandbox (see `docs/history.md`) but not yet against
 real Steam Deck hardware/gamepad.
 
 ## Building the full release package yourself

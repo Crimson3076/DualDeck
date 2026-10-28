@@ -1,13 +1,13 @@
-#include "melonds_remote/adapter/fake/fake_3ds_adapter.h"
+#include "dualdeck/adapter/fake/fake_3ds_adapter.h"
 
-namespace melonds_remote::adapter::fake {
+namespace dualdeck::adapter::fake {
 
 namespace {
 AdapterCapabilities buildCapabilities() {
     AdapterCapabilities caps;
-    caps.system = melonds_remote::SystemIdentity{"3ds", "Nintendo 3DS"};
+    caps.system = dualdeck::SystemIdentity{"3ds", "Nintendo 3DS"};
     caps.adapter =
-        melonds_remote::AdapterIdentity{"fake-3ds", "Fake 3DS Adapter (test fixture)", "0.0.1"};
+        dualdeck::AdapterIdentity{"fake-3ds", "Fake 3DS Adapter (test fixture)", "0.0.1"};
 
     // Real 3DS top-screen resolution in non-stereoscopic mode (issue
     // #28: "Initial scope does not require stereoscopic 3D"); real
@@ -39,4 +39,4 @@ AdapterCapabilities buildCapabilities() {
 
 FakeThreeDsAdapter::FakeThreeDsAdapter() : FakeAdapterBase(buildCapabilities()) {}
 
-} // namespace melonds_remote::adapter::fake
+} // namespace dualdeck::adapter::fake

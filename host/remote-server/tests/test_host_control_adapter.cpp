@@ -5,7 +5,7 @@
 // (open("/dev/uinput"), the UI_DEV_SETUP/UI_ABS_SETUP/UI_DEV_CREATE
 // ioctls) is exercised only by compiling clean and by
 // isDeviceReady()-gated manual testing on a real Linux host with uinput
-// access -- see docs/known-limitations.md's Phase C entry.
+// access -- see docs/history.md's Phase C entry.
 
 #include "host/host_control_adapter.h"
 #include "test_framework.h"
@@ -16,8 +16,8 @@
 #include <cstdlib>
 #include <string>
 
-using namespace melonds_remote;
-using namespace melonds_remote::host;
+using namespace dualdeck;
+using namespace dualdeck::host;
 
 MDR_TEST(translate_no_buttons_is_all_released) {
     ControllerState state;
@@ -143,7 +143,7 @@ MDR_TEST(translate_left_stick_x_passes_through_y_is_renegated) {
 
 MDR_TEST(translate_left_stick_y_negation_clamps_at_int16_min) {
     // INT16_MIN negated overflows int16_t's range -- must clamp to
-    // INT16_MAX rather than wrap, matching client/src/main.cpp's own
+    // INT16_MAX rather than wrap, matching client/src/gamepad_input.cpp's own
     // negateStickAxis() behavior at this same edge case.
     ControllerState state;
     state.leftStickY = INT16_MIN;
@@ -233,8 +233,13 @@ MDR_TEST(host_control_adapter_degrades_gracefully_without_uinput_access) {
     }
     // Same expectation, same sandbox limitation, for the separate virtual
     // mouse device -- see isMouseDeviceReady()'s own comment on why it's
-    // independent of isDeviceReady() above.
-    MDR_CHECK(!adapter.isMouseDeviceReady());
+    // independent of isDeviceReady() above. Only asserted when /dev/uinput
+    // really isn't writable: real report, 2026-10-09, this failed on a
+    // Fedora dev machine whose user can write /dev/uinput, contradicting
+    // the "no separate assertion needed" intent the comment below states.
+    if (::access("/dev/uinput", W_OK) != 0) {
+        MDR_CHECK(!adapter.isMouseDeviceReady());
+    }
     // If this ever runs somewhere uinput *is* available (a real Linux
     // dev machine with the right permissions, not this sandbox/CI), the
     // same calls above still must not crash -- no separate assertion
@@ -317,7 +322,10 @@ MDR_TEST(host_control_adapter_touchpad_opt_in_degrades_gracefully_without_uinput
     ::setenv("DUALDECK_HOSTCONTROL_STEAM_TOUCHPAD", "1", 1);
     HostControlAdapter adapter;
     ::unsetenv("DUALDECK_HOSTCONTROL_STEAM_TOUCHPAD");
-    MDR_CHECK(!adapter.isTouchpadReady());
+    // Same /dev/uinput-writable guard as the test above.
+    if (::access("/dev/uinput", W_OK) != 0) {
+        MDR_CHECK(!adapter.isTouchpadReady());
+    }
     if (!adapter.isDeviceReady()) {
         ControllerState state;
         state.mouseDeltaX = 5;

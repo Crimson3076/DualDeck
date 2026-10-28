@@ -4,7 +4,7 @@ The required "Bazzite host setup instructions" deliverable (`SPEC.md`
 section 25), for the primary target platform (section 3: Bazzite,
 Fedora-based, KDE Plasma, Wayland, AMD GPU preferred). **Status: written
 from general Bazzite/Fedora Atomic knowledge, not verified on a real
-Bazzite install** -- see `docs/known-limitations.md`. This covers
+Bazzite install** -- see `docs/history.md`. This covers
 building and running the standalone `host/remote-server` prototype. A
 real melonDS integration patch now exists
 (`host/melonds-patches/0001-remote-server-integration.patch`) and has
@@ -155,7 +155,7 @@ which in turn:
 
 Picking **"Host control only"** from the same picker (or the persistent
 Host Control daemon from `dualdeck-host.sh`'s own menu -- see
-`docs/known-limitations.md`'s 2026-08-02 entry) always runs `run-host.sh`
+`docs/history.md`'s 2026-08-02 entry) always runs `run-host.sh`
 directly, on Bazzite included, never through the Distrobox container --
 unlike a real melonDS/Azahar/Cemu launch, Host Control mode needs no Qt6
 or SDL2 at all, only `dualdeck-host-service` (which ships its one real
@@ -201,7 +201,7 @@ are not exercised by this.
 
 **`install-host-distrobox.sh` itself is also not verified on a real
 Bazzite install** (no rpm-ostree/Distrobox environment in this project's
-own sandbox -- see `docs/known-limitations.md` for the honest account of
+own sandbox -- see `docs/history.md` for the honest account of
 what is and isn't confirmed here, matching this doc's own existing
 disclaimer at the top). If `distrobox` isn't installed at all (Bazzite
 ships it by default, but a different rpm-ostree derivative might not),

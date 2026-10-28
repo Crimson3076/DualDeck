@@ -39,10 +39,10 @@
 #include "host/emulator_input_sink.h"
 #include "host/frame_source.h"
 #include "host/mic_audio_sink.h"
-#include "melonds_remote/input_state_tracker.h"
-#include "melonds_remote/rate_limiter.h"
+#include "dualdeck/input_state_tracker.h"
+#include "dualdeck/rate_limiter.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 struct NetServerConfig {
     // See the file-level "Security posture" comment above for why this
@@ -96,7 +96,7 @@ struct NetServerConfig {
     // approvalStateFilePath / onPendingRequestsChanged) rather than
     // requiring a fixed secret configured and distributed by hand, or a
     // code typed on the client (which Steam Input's virtual keyboard
-    // doesn't reliably bring up -- see docs/known-limitations.md).
+    // doesn't reliably bring up -- see docs/history.md).
     std::string authToken;
 
     // Where approved device identities are persisted so an approved
@@ -213,7 +213,7 @@ struct NetServerConfig {
     // melonDS's in-process integration, which has no way to "restart
     // itself" mid-emulation without losing the user's game entirely.
     // When set, this is the full shell command run (detached, fire-and-
-    // forget -- see runSelfUpdateCommand() in net_server.cpp) the moment
+    // forget -- see runSelfUpdateCommand() in net_server_control.cpp) the moment
     // an already-approved device's Hello is rejected for a version
     // mismatch; main.cpp wires this to
     // "<host_root>/internal/apply-update.sh" (already idempotent, and
@@ -224,7 +224,7 @@ struct NetServerConfig {
     // Emulator-independent identity (GitHub issue #28's architecture
     // foundation milestone: decouple DualDeck from melonDS), sent back
     // in every HelloAck and DiscoveryResponse -- see
-    // melonds_remote::SystemIdentity/AdapterIdentity in protocol.h for
+    // dualdeck::SystemIdentity/AdapterIdentity in protocol.h for
     // the field-by-field meaning. Defaults to a clearly-labeled
     // synthetic/test identity rather than empty strings, so a host that
     // never overrides this (the standalone host/remote-server binary
@@ -374,6 +374,11 @@ public:
     // never called). Safe from any thread.
     HostMode currentMode() const;
 
+    // The system/adapter identity set alongside that mode, e.g. for the
+    // local control socket's status reply. Safe from any thread.
+    SystemIdentity currentSystemIdentity() const;
+    AdapterIdentity currentAdapterIdentity() const;
+
     // Approves/denies a pending connection request by exact device id or
     // unambiguous prefix (see DeviceApprovalManager::approve/deny).
     // Returns false if nothing pending matches. Safe to call from any
@@ -393,6 +398,14 @@ private:
     void watchdogLoop();
     void discoveryLoop();
     void audioLoop();
+    // Shared front half of inputLoop()/audioLoop(): receives one UDP
+    // packet on `fd` into `buf` and returns its payload size, or nullopt
+    // when it should be skipped (nothing received, not from the
+    // authenticated client, wrong type, or a bad header -- the last two
+    // counted in stats_.*malformed). The payload starts at
+    // kPacketHeaderWireSize.
+    std::optional<size_t> receiveSessionPacket(int fd, ByteBuffer& buf, PacketType type,
+                                               uint64_t NetServerStats::*malformed);
 
     NetServerConfig config_;
 
@@ -477,6 +490,13 @@ private:
     // time, read by videoLoop() when a new video connection arrives"
     // convention as currentVideoQuality_ above.
     std::atomic<VideoCodec> currentVideoCodec_{VideoCodec::Jpeg};
+
+    // The most recent accepted handshake's HelloPayload::maxFrameRate
+    // (protocol v15, 0 = source default). Guarded by targetMutex_ and
+    // handed to the frame source at handshake time and again by
+    // setTarget(), so a mid-session switch into Host Control keeps the
+    // client's rate.
+    int requestedFrameRate_ = 0;
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

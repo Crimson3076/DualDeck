@@ -1,6 +1,6 @@
-#include "melonds_remote/adapter/session_state.h"
+#include "dualdeck/adapter/session_state.h"
 
-namespace melonds_remote::adapter {
+namespace dualdeck::adapter {
 
 const char* toString(SessionState state) {
     switch (state) {
@@ -38,4 +38,4 @@ bool isValidTransition(SessionState from, SessionState to) {
     return false;
 }
 
-} // namespace melonds_remote::adapter
+} // namespace dualdeck::adapter

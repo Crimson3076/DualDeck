@@ -1,6 +1,6 @@
 #include "host/host_session_state.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 const char* toString(HostSessionState state) {
     switch (state) {
@@ -57,4 +57,4 @@ bool isValidTransition(HostSessionState from, HostSessionState to) {
     return false;
 }
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

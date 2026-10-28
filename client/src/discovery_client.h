@@ -7,7 +7,7 @@
 // (or the user picks from a short list) melonds-remote host on the LAN.
 //
 // A single call is a one-shot blocking operation -- no long-lived socket
-// of its own. main.cpp's discoverAndSelectHost() calls this repeatedly
+// of its own. host_picker.cpp's discoverAndSelectHost() calls this repeatedly
 // on a dedicated background thread (not the render/input thread) for as
 // long as the host-picker screen is shown, so the picker keeps
 // refreshing without ever blocking event/frame handling; see
@@ -18,9 +18,9 @@
 #include <string>
 #include <vector>
 
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 struct DiscoveredHost {
     std::string address;  // dotted-quad IPv4, e.g. "192.168.1.50"
@@ -53,4 +53,4 @@ struct DiscoveredHost {
 std::vector<DiscoveredHost> discoverHosts(uint16_t discoveryPort, int timeoutMs,
                                            const std::atomic<bool>* cancel = nullptr);
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

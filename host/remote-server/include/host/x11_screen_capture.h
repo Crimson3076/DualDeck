@@ -7,7 +7,7 @@
 // "there is no emulated screen while no emulator is running") -- true,
 // but not the whole story once the ask became "show me the host's
 // actual desktop/Big Picture," not an emulated framebuffer. This is a
-// real, deliberately narrow first version (see docs/known-limitations.md's
+// real, deliberately narrow first version (see docs/history.md's
 // 2026-08-03 entry, and the user's own explicit "quick and good enough"
 // choice over investing in a smoother capture path right away): X11
 // only, via XShm -- not Wayland. Capturing an arbitrary compositor's
@@ -31,7 +31,7 @@
 #include <memory>
 #include <vector>
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 class X11ScreenCapture {
 public:
@@ -75,4 +75,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

@@ -3,7 +3,7 @@
 // Implements device-approval authentication (replaces the earlier
 // 6-digit-pairing-code flow, which required the client to type a code --
 // unworkable on Steam Deck when Steam Input's virtual keyboard doesn't
-// come up, see docs/known-limitations.md):
+// come up, see docs/history.md):
 //
 //   1. The client generates a random, persistent device identity once
 //      (see client/src/device_identity.h) and sends the same value on
@@ -32,7 +32,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 class DeviceApprovalManager {
 public:
@@ -147,4 +147,4 @@ private:
     std::function<void(std::vector<PendingRequest>)> onPendingRequestsChanged_;
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

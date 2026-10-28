@@ -25,7 +25,7 @@ Usage:
 Requires a patched melonDS already running with test.nds direct-booted
 and MELONDS_REMOTE_ENABLE=1 (see host/melonds-patches/README.md).
 
-Confirmed result (see docs/known-limitations.md and
+Confirmed result (see docs/history.md and
 host/melonds-patches/README.md for the full account): each held button
 state produces a single, stable pixel value across 50 samples with no
 noise, and the byte order is BGRA8888 (byte0=Blue, byte1=Green,

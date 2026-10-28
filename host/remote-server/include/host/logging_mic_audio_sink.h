@@ -5,7 +5,7 @@
 
 #include "host/mic_audio_sink.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 // Default IMicAudioSink used until a real melonDS integration exists.
 // Tracks the latest frame and periodically logs an RMS level so audio
@@ -30,4 +30,4 @@ private:
     uint64_t framesReceived_ = 0;
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

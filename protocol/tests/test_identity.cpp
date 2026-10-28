@@ -6,10 +6,10 @@
 // appendSystemIdentity/readSystemIdentity/appendAdapterIdentity/
 // readAdapterIdentity helpers directly.
 
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 #include "test_framework.h"
 
-using namespace melonds_remote;
+using namespace dualdeck;
 
 MDR_TEST(system_identity_round_trip) {
     SystemIdentity id{"nds", "Nintendo DS"};

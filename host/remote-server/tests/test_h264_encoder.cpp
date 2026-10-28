@@ -24,8 +24,8 @@
 #include <wels/codec_api.h>
 #endif
 
-using namespace melonds_remote;
-using namespace melonds_remote::host;
+using namespace dualdeck;
+using namespace dualdeck::host;
 
 namespace {
 

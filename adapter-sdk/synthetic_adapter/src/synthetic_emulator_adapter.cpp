@@ -1,8 +1,8 @@
-#include "melonds_remote/adapter/synthetic/synthetic_emulator_adapter.h"
+#include "dualdeck/adapter/synthetic/synthetic_emulator_adapter.h"
 
 #include <chrono>
 
-namespace melonds_remote::adapter::synthetic {
+namespace dualdeck::adapter::synthetic {
 
 namespace {
 constexpr int kWidth = 256;
@@ -12,9 +12,9 @@ constexpr const char* kSurfaceId = "synthetic";
 
 AdapterCapabilities buildCapabilities() {
     AdapterCapabilities caps;
-    caps.system = melonds_remote::SystemIdentity{"synthetic", "Synthetic Test System"};
+    caps.system = dualdeck::SystemIdentity{"synthetic", "Synthetic Test System"};
     caps.adapter =
-        melonds_remote::AdapterIdentity{"synthetic-ipc", "Synthetic IPC Adapter (test fixture)", "0.0.1"};
+        dualdeck::AdapterIdentity{"synthetic-ipc", "Synthetic IPC Adapter (test fixture)", "0.0.1"};
 
     VideoSurfaceDescriptor surface;
     surface.surfaceId = kSurfaceId;
@@ -124,4 +124,4 @@ bool SyntheticEmulatorAdapter::latestFrame(const std::string& surfaceId, Surface
     return true;
 }
 
-} // namespace melonds_remote::adapter::synthetic
+} // namespace dualdeck::adapter::synthetic

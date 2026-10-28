@@ -14,7 +14,7 @@
 #include <cstring>
 #endif
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 #if defined(DUALDECK_HAVE_X11_SCREEN_CAPTURE)
 
@@ -246,7 +246,7 @@ bool X11ScreenCapture::capture(std::vector<uint8_t>& outFrame, uint16_t& outWidt
     // is whatever stride the X server actually used, which for a
     // 32-bit ZPixmap is virtually always exactly width*4 (no padding
     // needed at 4-byte pixels) but isn't guaranteed to be -- and
-    // net_server.cpp's compressFrameBgraToJpeg() calls tjCompress2()
+    // net_server_util.cpp's compressFrameBgraToJpeg() calls tjCompress2()
     // with pitch=0 ("tightly packed"), so a wider server-side stride
     // would silently skew every row after the first if copied verbatim.
     const size_t rowBytes = static_cast<size_t>(impl_->width) * 4;
@@ -287,4 +287,4 @@ bool X11ScreenCapture::capture(std::vector<uint8_t>&, uint16_t&, uint16_t&) { re
 
 #endif
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

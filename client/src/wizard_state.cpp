@@ -4,7 +4,7 @@
 #include <filesystem>
 #include <fstream>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 namespace {
 
@@ -52,4 +52,4 @@ void markSetupComplete(const std::string& statePath) {
     }
 }
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

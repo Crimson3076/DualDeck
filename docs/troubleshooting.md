@@ -1,7 +1,7 @@
 # Troubleshooting
 
 Practical fixes for problems you're likely to hit running this prototype.
-For "is this feature done yet" questions see `docs/known-limitations.md`
+For "is this feature done yet" questions see `docs/history.md`
 instead.
 
 ## Build problems
@@ -164,7 +164,7 @@ shutdown on the host is much faster to detect than `kill -9`.
 ### Client connects fine (controls/touch work) but the screen stays blank
 
 The 3D renderer (**Software**, **OpenGL**, or **OpenGLCompute**) is now
-captured either way (see `docs/known-limitations.md`'s
+captured either way (see `docs/history.md`'s
 "OpenGL/OpenGLCompute 3D renderer" section), so this should be rare on a
 current build. If you still hit it, check the host's log for this
 one-time line:
@@ -180,7 +180,7 @@ That means neither capture path worked -- most likely `OpenGLCompute`
 specifically hitting some renderer-internal state this project's GL
 capture code doesn't handle (it was verified against the plain
 `OpenGL` renderer, not `OpenGLCompute` -- see the caveats in
-`docs/known-limitations.md`). As a workaround, switch the host's 3D
+`docs/history.md`). As a workaround, switch the host's 3D
 renderer to **Software** or plain **OpenGL** (**Config > Emu Settings >
 Video Settings > Renderer**) and reconnect; please also report which
 renderer/GPU combination triggered it. Note that touch/controller input
@@ -222,7 +222,7 @@ combination the DS has no button for and Steam doesn't reserve.
 
 Real hardware report, 2026-08-02: the trackpads work correctly in Host
 Control mode (moving the virtual mouse on the host, see
-`docs/known-limitations.md`'s 2026-08-02 entry), but only for as long as
+`docs/history.md`'s 2026-08-02 entry), but only for as long as
 the STEAM button is held down at the same time -- not something anyone
 wants to do continuously.
 

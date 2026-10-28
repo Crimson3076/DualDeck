@@ -8,17 +8,17 @@ on:
 
 jobs:
   patch-protocol-sync:
-    name: Check host patches embed the current protocol version
+    name: Check host patches use the shared sources and tests use the current protocol version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: ./scripts/check-patch-protocol-sync.sh
 
   protocol-and-host:
     name: Build + test protocol/host (no SDL3, no melonDS)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libturbojpeg0-dev libopenh264-dev
@@ -42,15 +42,84 @@ jobs:
       - name: Run device-approval smoke test
         run: python3 tests/device_approval_smoke_test.py build/host/remote-server/dualdeck-host-service
 
+      - name: Run Decky plugin host-control test
+        run: python3 tests/decky_host_control_test.py build/host/remote-server/dualdeck-host-service
+
+  # Same build as protocol-and-host above, but WITH PyroWave (see
+  # host/remote-server/include/host/pyrowave_encoder.h) -- that job keeps
+  # covering the compiled-out stub, this one the real
+  # DUALDECK_HAVE_PYROWAVE code under -Werror. GitHub's runners have no
+  # GPU, so tests run on Mesa's software Vulkan (lavapipe): PyroWave's
+  # decoder runs there for real (test_pyrowave_decoder.cpp's hand-built-
+  # frame tests), while its encoder needs subgroup sizes lavapipe can't
+  # provide, so the encoder/round-trip tests detect that at runtime and
+  # skip -- run them on a machine with a real GPU when touching that path.
+  pyrowave:
+    name: Build + test protocol/host/client-tests with PyroWave (lavapipe)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+            libturbojpeg0-dev libopenh264-dev libvulkan-dev mesa-vulkan-drivers ninja-build
+
+      - name: Read pinned PyroWave commit
+        id: pin
+        run: |
+          source scripts/lib/pinned_commits.sh
+          echo "commit=${PYROWAVE_COMMIT}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache PyroWave build
+        id: cache-pyrowave
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/pyrowave-install
+          key: pyrowave-${{ steps.pin.outputs.commit }}-ubuntu-24.04
+
+      - name: Build PyroWave (pinned commit)
+        if: steps.cache-pyrowave.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/Themaister/pyrowave.git "${{ runner.temp }}/pyrowave-src"
+          cd "${{ runner.temp }}/pyrowave-src"
+          git checkout "${{ steps.pin.outputs.commit }}"
+          bash checkout_granite.sh
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${{ runner.temp }}/pyrowave-install" -DCMAKE_INSTALL_LIBDIR=lib
+          cmake --build build -j"$(nproc)"
+          cmake --install build
+
+      - name: Configure
+        run: |
+          PKG_CONFIG_PATH="${{ runner.temp }}/pyrowave-install/lib/pkgconfig" \
+          cmake -S . -B build \
+            -DDUALDECK_BUILD_CLIENT=OFF \
+            -DDUALDECK_BUILD_HOST=ON \
+            -DCMAKE_CXX_FLAGS="-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror" 2>&1 | tee configure.log
+          # Fail loudly rather than silently testing the stub again.
+          if grep -q "PyroWave video will be compiled out" configure.log; then
+            echo "::error::PyroWave was not detected by CMake -- see configure.log above." >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Run unit tests (lavapipe)
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
+        run: ctest --test-dir build --output-on-failure
+
   host-client-menu-and-branch-selector:
     name: Host/client menu lifecycle + Installation branch selector tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      # Pure bash/python3 -- no build, no SDL3/melonDS. Both tests extract
-      # the dualdeck-host.sh/dualdeck-client.sh heredocs straight out of
-      # scripts/build-release.sh and run them against stub internal/
+      # Pure bash/python3 -- no build, no SDL3/melonDS. Both tests copy
+      # dualdeck-host.sh/dualdeck-client.sh straight out of packaging/
+      # and run them against stub internal/
       # scripts and a fake curl fixture (no real network access), so they
       # don't need this repo's normal build dependencies either.
       - name: Run host/client menu lifecycle test
@@ -65,11 +134,45 @@ jobs:
       - name: Run RetroDECK setup script test
         run: python3 tests/retrodeck_setup_test.py
 
+      - name: Run update checksum test
+        run: python3 tests/apply_update_test.py
+
+      # dualdeck-host.sh's side of the host window protocol, against a
+      # stand-in window (the real one is tested in the client job).
+      - name: Run host window script test
+        run: python3 tests/host_ui_script_test.py
+
+  decky-plugin-frontend:
+    name: Build the Decky plugin frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: decky-plugin
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Node's bundled Corepack provides the pnpm version package.json's
+      # packageManager field pins.
+      - run: corepack enable
+
+      # The backend is tested against the real host service in the
+      # protocol-and-host job (tests/decky_host_control_test.py); this
+      # checks the React panel still type-checks and bundles. Installs
+      # exactly what pnpm-lock.yaml pins, without running packages'
+      # install scripts (the build doesn't need any).
+      - name: Install and build
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm run typecheck
+          pnpm run build
+
   net-client-compiles:
     name: Compile client net_client.cpp/device_identity.cpp standalone (no SDL3 available)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libturbojpeg0-dev
@@ -97,3 +200,69 @@ jobs:
           g++ -std=c++20 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
             -I client/src \
             -c client/src/discovery_store.cpp -o /tmp/discovery_store_test.o
+
+  # The full SDL3 client (setup wizard, host picker, menus, stream loop).
+  # The jobs above only compile the SDL-free parts of client/, so before
+  # this job a typo in main.cpp or the UI screens wasn't caught until a
+  # release or a manual build-test-client.yml run. SDL3 is built with
+  # only the dummy/offscreen video drivers: enough to compile and link
+  # the client, and quick to build once per cache key.
+  client:
+    name: Build + test the SDL3 client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libturbojpeg0-dev libopenh264-dev ninja-build
+
+      # Same tag as build-release.sh's SDL3_TAG and build-test-client.yml.
+      - name: Cache SDL3 build
+        id: sdl3-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/sdl3-install
+          key: sdl3-release-3.4.12-headless-${{ runner.os }}
+
+      - name: Build SDL3 (headless)
+        if: steps.sdl3-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch release-3.4.12 https://github.com/libsdl-org/SDL.git "${{ runner.temp }}/sdl3-src"
+          cmake -S "${{ runner.temp }}/sdl3-src" -B "${{ runner.temp }}/sdl3-src/build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="${{ runner.temp }}/sdl3-install" \
+            -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF \
+            -DSDL_UNIX_CONSOLE_BUILD=ON -DSDL_X11=OFF -DSDL_WAYLAND=OFF -DSDL_KMSDRM=OFF \
+            -DSDL_OPENGL=OFF -DSDL_OPENGLES=OFF -DSDL_VULKAN=OFF -DSDL_PIPEWIRE=OFF \
+            -DSDL_PULSEAUDIO=OFF -DSDL_ALSA=OFF -DSDL_JACK=OFF -DSDL_SNDIO=OFF \
+            -DSDL_DBUS=OFF -DSDL_IBUS=OFF
+          cmake --build "${{ runner.temp }}/sdl3-src/build" -j"$(nproc)"
+          cmake --install "${{ runner.temp }}/sdl3-src/build"
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DDUALDECK_BUILD_CLIENT=ON -DDUALDECK_BUILD_HOST=ON -DDUALDECK_BUILD_HOST_UI=ON \
+            -DCMAKE_PREFIX_PATH="${{ runner.temp }}/sdl3-install" \
+            -DCMAKE_CXX_FLAGS="-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror"
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Run unit tests
+        run: ctest --test-dir build --output-on-failure
+
+      # Every client screen as a BMP, downloadable from the run page, so a
+      # UI change can be reviewed without a Steam Deck.
+      - name: Render UI previews
+        run: SDL_VIDEO_DRIVER=dummy ./build/client/dualdeck-ui-preview ui-preview
+
+      # The real host window driven over its protocol, plus a PNG of
+      # each host screen in the same downloadable artifact.
+      - name: Run host window test
+        run: python3 tests/host_ui_window_test.py build/host/ui/dualdeck-host-ui ui-preview/host
+
+      - name: Upload UI previews
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-preview
+          path: ui-preview/

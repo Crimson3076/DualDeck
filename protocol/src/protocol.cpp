@@ -1,8 +1,8 @@
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 
 #include <cstring>
 
-namespace melonds_remote {
+namespace dualdeck {
 
 void appendU16(ByteBuffer& out, uint16_t v) {
     out.push_back(static_cast<uint8_t>(v & 0xFF));
@@ -251,6 +251,7 @@ void serializeHelloPayload(ByteBuffer& out, const HelloPayload& hello) {
     appendString(out, hello.appVersion);
     out.push_back(hello.videoQuality);
     out.push_back(hello.supportedVideoCodecs);
+    out.push_back(hello.maxFrameRate);
 }
 
 std::optional<HelloPayload> parseHelloPayload(const uint8_t* data, size_t size) {
@@ -286,6 +287,9 @@ std::optional<HelloPayload> parseHelloPayload(const uint8_t* data, size_t size) 
 
     if (offset + 1 > size) return std::nullopt;
     hello.supportedVideoCodecs = data[offset]; offset += 1;
+
+    if (offset + 1 > size) return std::nullopt;
+    hello.maxFrameRate = data[offset]; offset += 1;
 
     if (offset != size) {
         // trailing garbage: reject rather than silently ignore
@@ -378,7 +382,7 @@ std::optional<HelloAckPayload> parseHelloAckPayload(const uint8_t* data, size_t 
         return std::nullopt;
     }
     uint8_t selectedVideoCodec = data[offset]; offset += 1;
-    if (selectedVideoCodec > static_cast<uint8_t>(VideoCodec::H264)) {
+    if (selectedVideoCodec > static_cast<uint8_t>(VideoCodec::PyroWave)) {
         return std::nullopt;
     }
     ack.selectedVideoCodec = static_cast<VideoCodec>(selectedVideoCodec);
@@ -592,4 +596,40 @@ ByteBuffer buildClientLogPacket(const ClientLogPayload& log) {
     return buildPacket(PacketType::ClientLog, payload);
 }
 
-} // namespace melonds_remote
+ByteBuffer buildBandwidthProbePacket(const BandwidthProbePayload& probe) {
+    ByteBuffer payload;
+    payload.reserve(1 + probe.fillerBytes);
+    payload.push_back(probe.last ? 1 : 0);
+    payload.resize(1 + static_cast<size_t>(probe.fillerBytes), 0);
+    return buildPacket(PacketType::BandwidthProbe, payload);
+}
+
+std::optional<BandwidthProbePayload> parseBandwidthProbePayload(const uint8_t* data, size_t size) {
+    if (data == nullptr || size < 1 || size > 1 + kBandwidthProbeChunkBytes) {
+        return std::nullopt;
+    }
+    if (data[0] != 0 && data[0] != 1) {
+        return std::nullopt;
+    }
+    BandwidthProbePayload probe;
+    probe.last = data[0];
+    probe.fillerBytes = static_cast<uint32_t>(size - 1);
+    return probe;
+}
+
+ByteBuffer buildBandwidthReportPacket(const BandwidthReportPayload& report) {
+    ByteBuffer payload;
+    appendU32(payload, report.measuredKbps);
+    return buildPacket(PacketType::BandwidthReport, payload);
+}
+
+std::optional<BandwidthReportPayload> parseBandwidthReportPayload(const uint8_t* data, size_t size) {
+    if (data == nullptr || size != 4) {
+        return std::nullopt;
+    }
+    BandwidthReportPayload report;
+    report.measuredKbps = readU32(data, 0);
+    return report;
+}
+
+} // namespace dualdeck

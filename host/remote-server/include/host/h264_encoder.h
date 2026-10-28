@@ -1,7 +1,7 @@
 #pragma once
 
 // H.264 encoder wrapper (protocol v13's optional codec alongside JPEG --
-// see docs/known-limitations.md's 2026-08-25 video-codec-negotiation
+// see docs/history.md's 2026-08-25 video-codec-negotiation
 // entry, and NetServer::selectVideoCodec()'s own comment). Backed by
 // OpenH264 (Cisco, BSD-licensed) when this host was built with it
 // available -- see host/remote-server/CMakeLists.txt's optional-at-
@@ -14,9 +14,9 @@
 #include <cstdint>
 #include <memory>
 
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 class H264Encoder {
 public:
@@ -39,10 +39,10 @@ public:
     // growing unbounded, a short periodic keyframe interval) rather than
     // maximum-compression offline encoding -- matching every other
     // latency-sensitive choice already made in this project's video
-    // pipeline (see docs/known-limitations.md's latency entries).
+    // pipeline (see docs/history.md's latency entries).
     // Safe to call again with a different size -- e.g. Cemu's own
     // per-title GamePad resolution changing mid-session (see
-    // docs/known-limitations.md's Cemu "sheared/torn" entry for why
+    // docs/history.md's Cemu "sheared/torn" entry for why
     // that's a real, previously-hit case, not a hypothetical one) --
     // tears down and recreates the underlying encoder rather than
     // assuming a fixed size for this object's whole lifetime. Returns
@@ -74,4 +74,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

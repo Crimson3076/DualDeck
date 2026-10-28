@@ -4,7 +4,7 @@
 integration against upstream Cemu (github.com/cemu-project/Cemu) tag
 `v2.6` (commit `a6fb0a48eb437a8a41c13b782ac8ae0433bf8f98`), the latest
 stable release as of this writing, adding a third real
-`IEmulatorAdapter` implementation (`melonds_remote::adapter::IEmulatorAdapter`,
+`IEmulatorAdapter` implementation (`dualdeck::adapter::IEmulatorAdapter`,
 the same contract melonDS's `MelonDSAdapter` and Azahar's `AzaharAdapter`
 both implement) for the Nintendo Wii U.
 
@@ -15,6 +15,21 @@ integration's design and its first four rounds of real CI-and-hardware
 verification against that earlier dev-branch base; the rebase section
 after it covers what's different (and what still needs re-verifying)
 now that the base is v2.6.
+
+## Shared DualDeck sources
+
+The patch does not carry its own copy of the shared DualDeck code it
+compiles (`adapter-sdk/`, `protocol/`). `shared-files.txt` lists those
+files and where they go in the emulator's tree, and
+`scripts/lib/emulator_patch.sh` copies them in from this repository right
+after `git apply` (used by `scripts/lib/build_emulator.sh` and
+`scripts/patch-existing-emulator.sh`). There is one copy of each file,
+the live one, so the patch can no longer drift behind it (see
+`docs/history.md`'s 2026-08-01 "frozen protocol copy" entry).
+
+When regenerating the patch, leave the files `shared-files.txt` lists out
+of the diff. `scripts/check-patch-protocol-sync.sh` (run in CI) fails if
+the patch adds any of them again.
 
 ## What the patch does
 
@@ -122,9 +137,9 @@ now that the base is v2.6.
    `create_provider<DualDeck::RemoteServer::RemoteControllerProvider>()`
    alongside the other built-in providers.
 10. `src/CMakeLists.txt`, `src/remote_server/CMakeLists.txt` (new) -- a
-    new `CemuRemoteServer` static library (the files in 1-3 above, plus a
-    vendored `adapter_sdk/` subset copied byte-for-byte from this
-    repository's `adapter-sdk/` and `protocol/`), linked into `CemuBin`
+    new `CemuRemoteServer` static library (the files in 1-3 above, plus an
+    `adapter_sdk/` subset copied from this repository's `adapter-sdk/` and
+    `protocol/` at apply time, see "Shared DualDeck sources" above), linked into `CemuBin`
     alongside `CemuCafe`/`CemuInput`/etc.
 
 ## What has actually been verified
@@ -159,7 +174,7 @@ dependency graph resolves to ~108 vcpkg packages, the large majority of
 which require downloading prebuilt binaries or source archives from
 hosts this sandbox's network policy blocks (only apt mirrors and the
 git-protocol mirror are reliably reachable here -- see
-`docs/known-limitations.md`). Continuing to work around that
+`docs/history.md`). Continuing to work around that
 dependency-by-dependency (as was done for `vcpkg-tool` itself) was judged
 not worth it for ~100 more packages; verification for this patch instead
 happens via this project's GitHub Actions CI pipeline, which runs on a
@@ -169,7 +184,7 @@ normal, unrestricted-network runner.
 `src/Cafe/CMakeLists.txt`+`CafeSystem.cpp` -- `CafeSystem.cpp` (compiled
 as part of the `CemuCafe` library) `#include`s
 `remote_server/RemoteServerBridge.h`, which pulls in the vendored
-`melonds_remote/adapter/...` headers; those don't live under the plain
+`dualdeck/adapter/...` headers; those don't live under the plain
 `"../"` (src/) include root every other cross-module include in this
 codebase resolves through (e.g. `"input/InputManager.h"` needs no extra
 include dir), since `adapter_sdk/` is vendored a level deeper, under
@@ -229,7 +244,7 @@ Testing the successful build surfaced three issues:
 
 1. **GamePad touchscreen input doesn't register.** Expected, not a bug --
    see "No GamePad touchscreen support" above and
-   `docs/known-limitations.md`. Cemu has no touch-injection plumbing for
+   `docs/history.md`. Cemu has no touch-injection plumbing for
    any input backend today; fixing this would mean building an entirely
    new Cemu-side touch pipeline, out of scope for this pass.
 2. **Aspect ratio on the GamePad screen was wrong.** Root cause was on
@@ -635,7 +650,7 @@ This is purely local same-machine IPC between Cemu and the Host Service
 process, never sent over the network, so a generous cap costs nothing
 bandwidth-wise. The same 16 MiB cap was independently too small for
 Azahar too, once its own capture scale started auto-following
-`resolution_factor` (see `docs/known-limitations.md`'s matching entry);
+`resolution_factor` (see `docs/history.md`'s matching entry);
 `host/azahar-patches/` vendors an identical copy of the same header and
 was updated the same way.
 
@@ -752,7 +767,7 @@ Princess HD and Pokemon Rumble U before calling this resolved.
 
 Real user request, after finally getting Cemu launching via
 `emudeck-replace-in-place.sh` (see the mkdir/glibc-bundling fixes in
-`docs/known-limitations.md`): with EmuDeck's own Steam shortcut pointing
+`docs/history.md`): with EmuDeck's own Steam shortcut pointing
 at the same file path either way, there was no visible way to tell
 whether the currently-installed `Cemu.AppImage` was DualDeck's patched
 build or the original stock one it replaced.
@@ -798,7 +813,7 @@ Real user report: "Cemu works, no touch screen or controls work
 however." Two separate things bundled in that one sentence:
 
 - **Touch**: confirmed pre-existing, deliberately out-of-scope (see
-  "What the patch does" above and `docs/known-limitations.md`) -- Cemu
+  "What the patch does" above and `docs/history.md`) -- Cemu
   hard-codes GamePad touch validity to invalid regardless of controller
   (`Cafe/OS/libs/vpad/vpad.cpp`'s `VPADRead()`), so there is no existing
   input backend for this patch to hook touch into at all. Not a
@@ -945,7 +960,7 @@ rather than a global compiler flag -- see
 
 Full design writeup, the exact Vulkan API contracts this relies on (read
 directly from Cemu's pinned source, not assumed), and what's
-still-not-verified: `docs/known-limitations.md`'s 2026-08-26 entry.
+still-not-verified: `docs/history.md`'s 2026-08-26 entry.
 
 **Verified**: same double-clone technique as every other entry in this
 file -- clone pristine `v2.6`, apply the previous patch, make every

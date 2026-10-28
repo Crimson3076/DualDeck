@@ -1,6 +1,6 @@
 #pragma once
 
-// Translates between melonds_remote::adapter's capability/surface types
+// Translates between dualdeck::adapter's capability/surface types
 // (adapter_contract.h, video_surface.h) and protocol.h's Wire* mirror
 // types -- the one layer allowed to depend on both (see protocol.h's
 // "Capability negotiation data model" section for why adapter-sdk can't
@@ -16,15 +16,15 @@
 // itself is real and worth having correct and tested now rather than
 // written under time pressure once the wire format actually needs it.
 
-#include "melonds_remote/adapter/adapter_contract.h"
-#include "melonds_remote/adapter/video_surface.h"
-#include "melonds_remote/protocol.h"
+#include "dualdeck/adapter/adapter_contract.h"
+#include "dualdeck/adapter/video_surface.h"
+#include "dualdeck/protocol.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
-WireDisplayRole toWireDisplayRole(melonds_remote::adapter::SurfaceRole role);
-WirePixelFormat toWirePixelFormat(melonds_remote::adapter::PixelFormat format);
-WireDisplayDescriptor toWireDisplayDescriptor(const melonds_remote::adapter::VideoSurfaceDescriptor& surface);
-WireHostCapabilities toWireHostCapabilities(const melonds_remote::adapter::AdapterCapabilities& capabilities);
+WireDisplayRole toWireDisplayRole(dualdeck::adapter::SurfaceRole role);
+WirePixelFormat toWirePixelFormat(dualdeck::adapter::PixelFormat format);
+WireDisplayDescriptor toWireDisplayDescriptor(const dualdeck::adapter::VideoSurfaceDescriptor& surface);
+WireHostCapabilities toWireHostCapabilities(const dualdeck::adapter::AdapterCapabilities& capabilities);
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

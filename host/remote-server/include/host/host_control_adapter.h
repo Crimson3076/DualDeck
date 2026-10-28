@@ -20,9 +20,13 @@
 // button layout is just this project's one existing physical-button
 // vocabulary today.
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 #include "host/emulator_input_sink.h"
@@ -30,13 +34,13 @@
 #include "host/wayland_screen_capture.h"
 #include "host/x11_screen_capture.h"
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 // Pure description of "what should currently be held" on the virtual
 // gamepad, derived from a ControllerState -- deliberately has no I/O of
 // its own so the DSButton -> gamepad mapping can be unit-tested without
 // a real /dev/uinput node (this sandbox has none; see
-// docs/known-limitations.md's Phase C entry). Field names follow
+// docs/history.md's Phase C entry). Field names follow
 // standard Xbox-controller ABXY naming (south=A, east=B, west=X,
 // north=Y), matching the exact same physical-button meaning
 // host::AdapterBridge's dsButtonsToGenericButtons table already
@@ -137,7 +141,7 @@ public:
     // axes. It also does not replace the still-separately-needed
     // client-side fix for whatever's actually preventing
     // SDL_EVENT_GAMEPAD_TOUCHPAD_* from reaching the wire in the first
-    // place (see client/src/main.cpp's own touchpad diagnostics) -- the
+    // place (see client/src/gamepad_input.cpp's own touchpad diagnostics) -- the
     // wire-level ControllerState::mouseDeltaX/Y data this reads has to
     // originate from the client either way.
     //
@@ -187,17 +191,25 @@ public:
     // against -- see that header's own comment for the one-time
     // interactive permission prompt this involves) if X11 didn't work.
     // Either way, once ready, periodically captures the host's screen
-    // and returns it here instead of always returning false. Rate-limited internally
-    // (mirrorCaptureInterval_, default 5fps -- "a few frames per
-    // second, good enough to see settings menus," the user's own
-    // explicit choice over investing in a smoother capture path right
-    // away) rather than on every call: NetServer's videoLoop() polls
-    // this at up to videoSendFps (default 60), and a full-resolution
-    // desktop capture is real, non-negligible work worth not repeating
-    // 60 times a second for a feature whose whole point is periodic
-    // menu/setup visibility, not smooth gameplay video.
+    // and returns it here instead of always returning false. Captures run
+    // on their own thread (mirrorCaptureLoop()) at mirrorCaptureIntervalUs_
+    // -- 60fps by default, DUALDECK_HOSTCONTROL_MIRROR_FPS changes the
+    // default, and a client's STREAM FPS setting (setTargetFrameRate())
+    // overrides both for its session. Capturing on NetServer's video
+    // thread, as this used to, serialized capture + downscale + encode
+    // for every frame; on its own thread the next capture overlaps the
+    // current encode. The thread only captures while something has polled
+    // in the last second, so an idle host costs nothing.
     bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
                         uint16_t& outWidth, uint16_t& outHeight) override;
+    // The cached capture's index while it's still fresh; nullopt once
+    // the next capture is due, so the caller's getLatestFrame() takes it.
+    std::optional<uint64_t> latestFrameIndex() override;
+
+    // See IFrameSource::setTargetFrameRate(). 0 (or out of range) restores
+    // the default.
+    void setTargetFrameRate(int fps) override;
+    int nominalFrameRate() const override;
 
     // Overridden because a screen-mirror frame's real size (the host's
     // actual desktop resolution) is essentially never DS's fixed
@@ -228,7 +240,7 @@ public:
     // user report, 2026-08-03: both of the user's actual test machines
     // turned out to be Wayland sessions, where X11ScreenCapture
     // "succeeds" against XWayland's own empty compositing root (a
-    // uniform grey, not a crash -- see docs/known-limitations.md) --
+    // uniform grey, not a crash -- see docs/history.md) --
     // tried first anyway since it's cheaper/simpler when it does apply
     // (a real X11 desktop session), with WaylandScreenCapture's
     // portal+PipeWire path as the fallback that actually matters on
@@ -240,6 +252,8 @@ public:
 
 private:
     void emitState(const HostControlGamepadState& state);
+    void mirrorCaptureLoop();
+    void captureMirrorFrame();
     void emitMouseState(const HostControlMouseState& state);
     void emitTouchpadState();
 
@@ -289,7 +303,7 @@ private:
     // otherwise); mirrorLastFrame_/mirrorLastFrameIndex_ cache the most
     // recent successful capture so getLatestFrame() can keep returning
     // it between actual captures (rate-limited by
-    // mirrorCaptureInterval_) without re-capturing every single poll.
+    // mirrorCaptureIntervalUs_) without re-capturing every single poll.
     // mirrorX11Capture_ is tried first (see isMirrorReady()'s comment);
     // mirrorWaylandCapture_ is only ever constructed as a fallback when
     // the X11 attempt didn't work, since constructing it unconditionally
@@ -300,31 +314,42 @@ private:
     bool mirrorEnabled_ = false;
     std::unique_ptr<X11ScreenCapture> mirrorX11Capture_;
     std::unique_ptr<WaylandScreenCapture> mirrorWaylandCapture_;
+    // Everything from here to mirrorLastFrameIndex_ is written by the
+    // capture thread and read by NetServer's video thread, under
+    // mirrorFrameMutex_.
+    mutable std::mutex mirrorFrameMutex_;
     std::vector<uint8_t> mirrorLastFrame_;
     uint16_t mirrorLastWidth_ = 0;
     uint16_t mirrorLastHeight_ = 0;
-    // mirrorLastFrameIndex_ is what getLatestFrame() actually reports
-    // (stable across repeated cache-hit calls returning the same
-    // captured frame); mirrorNextFrameIndex_ is the counter that
-    // actually advances, one real capture at a time -- kept separate so
-    // a cache hit (no new capture this tick) never skips an index the
-    // way incrementing a single shared counter unconditionally would.
-    // Starts at 0 for the first frame ever produced, matching every
-    // other IFrameSource in this project (see frame_source.h's own
-    // getLatestFrame() comment).
+    // Starts at 0 for the first frame ever produced, matching every other
+    // IFrameSource in this project (see frame_source.h's own
+    // getLatestFrame() comment). Only advances on a successful capture.
     uint64_t mirrorLastFrameIndex_ = 0;
     uint64_t mirrorNextFrameIndex_ = 0;
-    std::chrono::steady_clock::time_point mirrorLastCaptureTime_;
-    std::chrono::milliseconds mirrorCaptureInterval_{200};
+
+    static constexpr int kDefaultMirrorFps = 60;
+    // Capture interval from DUALDECK_HOSTCONTROL_MIRROR_FPS (or
+    // kDefaultMirrorFps), and the one in effect right now, which a
+    // client's setTargetFrameRate() can change per session.
+    int64_t mirrorDefaultIntervalUs_ = 1'000'000 / kDefaultMirrorFps;
+    std::atomic<int64_t> mirrorCaptureIntervalUs_{1'000'000 / kDefaultMirrorFps};
+    // steady_clock microseconds of the last getLatestFrame()/
+    // latestFrameIndex() call -- the capture thread idles once nobody has
+    // asked for a frame in a while.
+    std::atomic<int64_t> mirrorLastPollUs_{0};
+    std::thread mirrorThread_;
+    std::mutex mirrorThreadMutex_;
+    std::condition_variable mirrorThreadCv_;
+    bool mirrorStop_ = false;
 
     // Set by setTargetDisplaySize() once a client's real Hello handshake
     // reports its display resolution; 0 means "not known yet" (e.g. no
-    // client has connected this session), in which case getLatestFrame()
-    // falls back to kFallbackTargetDisplayWidth/Height (this project's
-    // primary target device's native resolution) rather than skipping
-    // downscaling entirely.
-    uint16_t targetDisplayWidth_ = 0;
-    uint16_t targetDisplayHeight_ = 0;
+    // client has connected this session), in which case captures fall
+    // back to kFallbackTargetDisplayWidth/Height (this project's primary
+    // target device's native resolution) rather than skipping
+    // downscaling entirely. Atomic: read by the capture thread.
+    std::atomic<uint16_t> targetDisplayWidth_{0};
+    std::atomic<uint16_t> targetDisplayHeight_{0};
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

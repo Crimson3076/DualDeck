@@ -14,9 +14,9 @@
 #include <unordered_map>
 
 #include "client_log.h"
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 namespace {
 // How often the scan loop below checks `cancel` (when given) between
@@ -141,4 +141,4 @@ std::vector<DiscoveredHost> discoverHosts(uint16_t discoveryPort, int timeoutMs,
     return result;
 }
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

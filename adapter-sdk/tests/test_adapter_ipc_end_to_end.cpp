@@ -16,17 +16,17 @@
 #include <thread>
 #include <unistd.h>
 
-#include "melonds_remote/adapter/fake/fake_3ds_adapter.h"
-#include "melonds_remote/adapter/fake/fake_ds_adapter.h"
-#include "melonds_remote/adapter/ipc/adapter_ipc_client.h"
-#include "melonds_remote/adapter/ipc/adapter_ipc_server.h"
-#include "melonds_remote/adapter/ipc/ipc_protocol.h"
+#include "dualdeck/adapter/fake/fake_3ds_adapter.h"
+#include "dualdeck/adapter/fake/fake_ds_adapter.h"
+#include "dualdeck/adapter/ipc/adapter_ipc_client.h"
+#include "dualdeck/adapter/ipc/adapter_ipc_server.h"
+#include "dualdeck/adapter/ipc/ipc_protocol.h"
 #include "test_framework.h"
 
-using namespace melonds_remote;
-using namespace melonds_remote::adapter;
-using namespace melonds_remote::adapter::fake;
-using namespace melonds_remote::adapter::ipc;
+using namespace dualdeck;
+using namespace dualdeck::adapter;
+using namespace dualdeck::adapter::fake;
+using namespace dualdeck::adapter::ipc;
 
 namespace {
 
@@ -242,6 +242,17 @@ MDR_TEST(ipc_frame_relayed_from_adapter_to_server) {
     // real IPC socket, not just in the in-process serialize/parse tests.
     MDR_CHECK_EQ(outFrame.width, 256);
     MDR_CHECK_EQ(outFrame.height, 192);
+    MDR_CHECK(server.latestFrameIndex("bottom") == std::optional<uint64_t>(outFrame.frameIndex));
+    MDR_CHECK(!server.latestFrameIndex("top").has_value());
+
+    // A second frame advances the index the server reports without the
+    // caller having to copy the frame out to find out.
+    ds.pushFrame("bottom", {6, 5, 4}, 256, 192);
+    const uint64_t firstIndex = outFrame.frameIndex;
+    MDR_CHECK(waitUntil([&] {
+        const auto index = server.latestFrameIndex("bottom");
+        return index && *index != firstIndex;
+    }));
 
     client.disconnect();
     server.stop();

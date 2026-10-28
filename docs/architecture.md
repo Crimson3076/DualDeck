@@ -24,7 +24,7 @@ adapter-sdk/         The versioned Emulator Adapter Contract (GitHub issue
                       process synthetic adapter. See "Emulator identity
                       model" below for the (already-live) identity slice of
                       this same issue, and the ADR for everything else.
-                      - include/melonds_remote/adapter/
+                      - include/dualdeck/adapter/
                           session_state.h    lifecycle enum + isValidTransition()
                           video_surface.h    VideoSurfaceDescriptor, SurfaceRole, PixelFormat
                           generic_input.h    GenericInputState, TouchContact, GenericButton/Action
@@ -70,7 +70,7 @@ host/melonds-patches/ 0001-remote-server-integration.patch: implements the
                       MelonDSMicAudioSink (unchanged low-level sinks) and
                       MelonDSAdapter (GitHub issue #28 Phase 2 -- wraps
                       those sinks and implements
-                      melonds_remote::adapter::IEmulatorAdapter, the
+                      dualdeck::adapter::IEmulatorAdapter, the
                       generic contract's "reference implementation").
                       RemoteServerBridge wires MelonDSAdapter through the
                       same host::AdapterBridge host/remote-server's
@@ -83,7 +83,7 @@ host/melonds-patches/ 0001-remote-server-integration.patch: implements the
                       path, and real button-driven input have all been
                       verified end-to-end against the running patched
                       binary -- see host/melonds-patches/README.md and
-                      docs/known-limitations.md.
+                      docs/history.md.
 
 client/               Steam Deck client (SDL3). Depends on protocol/ only.
                       - net_client.h/.cpp      control/input/video sockets
@@ -250,8 +250,8 @@ Host Service extraction, generic input/video-surface model, or 3DS/Wii U
 adapters the rest of the issue describes -- those remain future work (see
 "What issue #28 still needs" below).
 
-**The types** (`melonds_remote::SystemIdentity`/`AdapterIdentity` in
-`protocol/include/melonds_remote/protocol.h`):
+**The types** (`dualdeck::SystemIdentity`/`AdapterIdentity` in
+`protocol/include/dualdeck/protocol.h`):
 
 ```cpp
 struct SystemIdentity {
@@ -394,7 +394,7 @@ selecting adapters independently (coordinated with issue #26) -- issue
 - Video transport is raw B,G,R,A bytes-in-memory over TCP (Stage 1 per
   spec section 8.4); no compression yet. On the client this must be
   `SDL_PIXELFORMAT_BGRA32`, not `SDL_PIXELFORMAT_BGRA8888` -- see
-  `docs/known-limitations.md`'s "Real-usage bug fixes" section for why
+  `docs/history.md`'s "Real-usage bug fixes" section for why
   those aren't the same thing on a little-endian machine.
 - The host defaults melonDS's own window to showing only the top screen
   while a client is actively streaming the bottom one (matching SPEC.md's
@@ -412,7 +412,7 @@ selecting adapters independently (coordinated with issue #26) -- issue
   standalone host prototype and the actual patched melonDS host,
   including the auto-reconnect thread and the device-approval flow.
   Not yet tested: real Steam Deck hardware/gamepad (see
-  `docs/known-limitations.md`).
+  `docs/history.md`).
 - Latency instrumentation assumes client and host clocks are reasonably
   synced (e.g. NTP) -- there's no protocol-level clock-offset negotiation,
   so on an unsynced pair the latency numbers are meaningless (the host

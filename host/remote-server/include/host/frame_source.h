@@ -8,9 +8,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
-namespace melonds_remote::host {
+namespace dualdeck::host {
 
 inline constexpr int kFrameWidth = 256;
 inline constexpr int kFrameHeight = 192;
@@ -45,6 +46,15 @@ public:
     virtual bool getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& outFrameIndex,
                                 uint16_t& outWidth, uint16_t& outHeight) = 0;
 
+    // The frame index getLatestFrame() would report right now, without
+    // copying the frame. NetServer's video loop polls at up to
+    // videoSendFps (240 by default) and checks this first so an
+    // unchanged frame is never copied just to be thrown away. nullopt
+    // means "unknown, call getLatestFrame()" -- the default, and also
+    // what a source returns when calling getLatestFrame() is what would
+    // produce a new frame (HostControlAdapter's capture-on-poll).
+    virtual std::optional<uint64_t> latestFrameIndex() { return std::nullopt; }
+
     // The pixel dimensions of frames this source produces, reported to a
     // connecting client in HelloAck (see net_server.cpp) so it can size its
     // receive buffer/texture correctly instead of assuming DS's fixed
@@ -75,6 +85,17 @@ public:
     // GamePad top out around 410k pixels), never large enough to need
     // downscaling.
     virtual void setTargetDisplaySize(uint16_t /*width*/, uint16_t /*height*/) {}
+
+    // The client's requested capture rate (HelloPayload::maxFrameRate,
+    // protocol v15), 0 meaning "use your default". No-op for sources that
+    // don't pace their own capture (the emulator adapters run at their
+    // game's or patch's own rate).
+    virtual void setTargetFrameRate(int /*fps*/) {}
+
+    // The rate this source actually produces frames at, for tuning the
+    // H.264 encoder's rate control, or 0 if it doesn't know (NetServer
+    // then assumes 30, the emulator adapters' usual rate).
+    virtual int nominalFrameRate() const { return 0; }
 };
 
-} // namespace melonds_remote::host
+} // namespace dualdeck::host

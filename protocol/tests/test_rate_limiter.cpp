@@ -1,7 +1,7 @@
-#include "melonds_remote/rate_limiter.h"
+#include "dualdeck/rate_limiter.h"
 #include "test_framework.h"
 
-using namespace melonds_remote;
+using namespace dualdeck;
 
 MDR_TEST(rate_limiter_allows_up_to_max_within_window) {
     ConnectionRateLimiter limiter(3, 1'000'000); // 3 per second

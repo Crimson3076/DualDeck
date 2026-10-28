@@ -11,7 +11,7 @@
 # name fragment + newest-mtime, the same convention, rather than assuming
 # one exact filename. Verified against a real EmuDeck install (2026-07-31,
 # Fedora) for Azahar (azahar.AppImage) and Cemu (Cemu.AppImage) -- see
-# docs/known-limitations.md's Phase A entry. melonDS wasn't installed via
+# docs/history.md's Phase A entry. melonDS wasn't installed via
 # EmuDeck on that machine, so find_emudeck_melonds_appimage() remains
 # unverified against a real install.
 #
@@ -148,7 +148,8 @@ emudeck_launchers_dir() {
 # tool, or a non-Flatpak stock install the normal AppImage path already
 # handles).
 find_emudeck_melonds_flatpak_launcher() {
-    local launcher="$(emudeck_launchers_dir)/melonds.sh"
+    local launcher
+    launcher="$(emudeck_launchers_dir)/melonds.sh"
     [[ -f "${launcher}" ]] || return 1
     grep -qi "flatpak run.*melonds" "${launcher}" && echo "${launcher}" || return 1
 }

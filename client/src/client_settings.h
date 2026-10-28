@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 struct ClientSettings {
     // Preserve the release launcher's existing behavior for users who do
@@ -34,6 +34,12 @@ struct ClientSettings {
     // per client rather than being stuck with one host-wide value.
     int videoQuality = 0;
 
+    // Capture rate requested from the host (protocol v15,
+    // HelloPayload::maxFrameRate), or 0 for the host's default. Only Host
+    // Control's desktop mirror honors it today; emulators stream at their
+    // game's own rate.
+    int streamFps = 0;
+
     // Real user request, 2026-08-03: "add an option to the client's
     // host control to mirror the screen." Purely a local rendering
     // choice -- the host already sends real video during Host Control
@@ -54,7 +60,7 @@ struct ClientSettings {
     // Protocol v13: whether this client advertises VideoCodecBit_H264
     // (in addition to the always-advertised VideoCodecBit_Jpeg) in
     // HelloPayload.supportedVideoCodecs -- see
-    // docs/known-limitations.md's 2026-08-25 video-codec-negotiation
+    // docs/history.md's 2026-08-25 video-codec-negotiation
     // entries for the full design. Defaults off, same "opt-in
     // experimental feature" convention as mirrorHostScreen above: the
     // decoder is real and tested (client/src/h264_decoder.h), but has
@@ -65,6 +71,27 @@ struct ClientSettings {
     // say (NetServer::selectVideoCodec()), e.g. if it wasn't built with
     // OpenH264 either.
     bool videoCodecH264Experimental = false;
+
+    // Whether this client also advertises VideoCodecBit_PyroWave -- see
+    // client/src/pyrowave_decoder.h for what PyroWave is. Same opt-in
+    // convention and same "host has the final say" caveat as
+    // videoCodecH264Experimental above, plus one more: it's only
+    // advertised if this machine's GPU can actually run PyroWave's
+    // Vulkan decoder (PyroWaveDecoder::isAvailable()). Kept as its own
+    // persisted flag rather than folding both into one enum so a
+    // settings file written before PyroWave existed loads unchanged.
+    // main.cpp's VIDEO CODEC menu entry treats the pair as one three-way
+    // choice (JPEG -> H264 -> PYROWAVE) and never sets both, but if a
+    // hand-edited file does, PyroWave wins (that's what the host would
+    // pick given both bits anyway -- see NetServer::selectVideoCodec()).
+    bool videoCodecPyroWaveExperimental = false;
+
+    // VIDEO CODEC: AUTO -- the host picks the codec after a short
+    // link-speed test (see NetClientConfig::autoVideoCodec). The default,
+    // and it takes precedence over the two flags above. A settings file
+    // from before AUTO existed that turned on H.264 or PyroWave keeps
+    // that choice (see loadClientSettings()).
+    bool videoCodecAuto = true;
 
     // Real user request, 2026-08-26: "some sort of way to show the user
     // what resolution is being streamed, what fps, codec, etc as a debug
@@ -89,4 +116,4 @@ ClientSettings loadClientSettings(const std::string& settingsPath);
 // Returns false when the directory or file could not be written.
 bool saveClientSettings(const std::string& settingsPath, const ClientSettings& settings);
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

@@ -5,7 +5,7 @@
 #include <fstream>
 #include <random>
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 namespace {
 
@@ -77,4 +77,4 @@ std::string loadOrCreateDeviceIdentity(const std::string& storePath) {
     return identity;
 }
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

@@ -1,7 +1,7 @@
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 #include "test_framework.h"
 
-using namespace melonds_remote;
+using namespace dualdeck;
 
 MDR_TEST(mode_changed_payload_round_trip_emulation) {
     ModeChangedPayload payload;

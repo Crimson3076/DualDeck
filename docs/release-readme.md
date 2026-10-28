@@ -7,10 +7,12 @@ and bottom screen.
 ## Quick start
 
 **Host** (the Linux PC/HTPC connected to your TV, running melonDS):
-double-click `host/dualdeck-host.sh`. Pick "Launch melonDS now"
-the first time -- it sets up anything it needs automatically, including
-on Bazzite/immutable systems. Pick "Add to Steam" if you want to launch
-it from Steam Big Picture/Gaming Mode with just a controller.
+double-click `host/dualdeck-host.sh`. It opens the DualDeck Host
+window, which works with a controller, a mouse or a keyboard. Pick
+"Play" and a system the first time -- it sets up anything it needs
+automatically, including on Bazzite/immutable systems. Pick "Add to
+Steam" if you want to launch it from Steam Big Picture/Gaming Mode with
+just a controller.
 
 **Client** (your Steam Deck, or any Linux x86_64 machine with a
 gamepad): double-click `client/dualdeck-client.sh`. Same menu,
@@ -48,8 +50,8 @@ After that, it's remembered automatically.
   directly.
 - `client/` -- the Steam Deck client, laid out the same way.
 - `docs/` -- setup guides, the wire protocol reference, and
-  `known-limitations.md` (an honest list of what is and isn't verified
-  in this specific build).
+  `known-limitations.md` (what doesn't work yet), and `history.md` (the
+  full development log those notes link into).
 - `RELEASE_NOTES.md` -- exactly which commit this build was made from.
 - `VERSION` / `check-for-updates.sh` -- what the "Check for updates"
   menu choice uses; read-only if run directly, never downloads or

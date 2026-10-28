@@ -4,13 +4,28 @@
 integration against upstream Azahar (github.com/azahar-emu/azahar)
 commit `75134fca82eab4e1a86dca0aaa4a188cefff5469` (master, 2026-07-18),
 adding a second real `IEmulatorAdapter` implementation
-(`melonds_remote::adapter::IEmulatorAdapter`, the same contract
+(`dualdeck::adapter::IEmulatorAdapter`, the same contract
 melonDS's own `MelonDSAdapter` implements) for the Nintendo 3DS, proving
 the contract generalizes across emulator codebases without any changes
 to it. See `docs/azahar-integration-analysis.md` for the Phase 0
 investigation this patch is based on, and
 `docs/adr/0001-host-service-and-adapter-architecture.md` section 11 for
 the architectural writeup.
+
+## Shared DualDeck sources
+
+The patch does not carry its own copy of the shared DualDeck code it
+compiles (`adapter-sdk/`, `protocol/`). `shared-files.txt` lists those
+files and where they go in the emulator's tree, and
+`scripts/lib/emulator_patch.sh` copies them in from this repository right
+after `git apply` (used by `scripts/lib/build_emulator.sh` and
+`scripts/patch-existing-emulator.sh`). There is one copy of each file,
+the live one, so the patch can no longer drift behind it (see
+`docs/history.md`'s 2026-08-01 "frozen protocol copy" entry).
+
+When regenerating the patch, leave the files `shared-files.txt` lists out
+of the diff. `scripts/check-patch-protocol-sync.sh` (run in CI) fails if
+the patch adds any of them again.
 
 ## What the patch does
 
@@ -24,7 +39,7 @@ the architectural writeup.
      the software, OpenGL, and Vulkan renderers, unlike melonDS's
      OpenGL-specific `GLBottomScreenCapture` path. Exposes exactly one
      surface, `"bottom"`, 320x240, touch-capable.
-   - **Input**: registers a `"melonds_remote"` `Input::Factory` engine
+   - **Input**: registers a `"dualdeck"` `Input::Factory` engine
      (`RemoteButtonDevice`/`RemoteAnalogDevice`/`RemoteTouchDevice`,
      mirroring the pattern Azahar's own `input_common/sdl` and
      `input_common/udp` engines use) and overwrites
@@ -35,7 +50,7 @@ the architectural writeup.
      uses (confirmed by reading `Settings::NativeButton::Values`, not
      assumed) so `protocol.h` and `host/adapter_bridge.cpp` needed zero
      changes. New3DS-exclusive ZL/ZR have no wire representation --
-     documented limitation, see `docs/known-limitations.md`.
+     documented limitation, see `docs/history.md`.
 2. `src/citra_qt/remote_server/RemoteServerBridge.{h,cpp}` (new) --
    owns the `AzaharAdapter` plus an `AdapterIpcClient` that connects
    *out* to an already-running `dualdeck-host-service --adapter-ipc`
@@ -47,12 +62,13 @@ the architectural writeup.
    set in the environment); `ShutdownGame()` tears it down first, before
    any other emulation-shutdown work, mirroring melonDS's
    `EmuInstance` constructor/destructor lifecycle hook points.
-4. `src/citra_qt/CMakeLists.txt` -- adds the new sources and a vendored
+4. `src/citra_qt/CMakeLists.txt` -- adds the new sources and an
    `adapter_sdk/` subset (`protocol.h/.cpp`, `adapter_contract.h`,
    `generic_input.h`, `session_state.h/.cpp`, `video_surface.h`,
    `ipc/adapter_ipc_client.h/.cpp`, `ipc/ipc_protocol.h/.cpp`,
-   `ipc/socket_path.h/.cpp`) copied byte-for-byte from this repository's
-   `adapter-sdk/` and `protocol/`, plus the matching include path.
+   `ipc/socket_path.h/.cpp`) copied from this repository's `adapter-sdk/`
+   and `protocol/` at apply time (see "Shared DualDeck sources" above),
+   plus the matching include path.
 
 ## A deliberate departure from melonDS's integration: no in-process mode
 
@@ -65,7 +81,7 @@ running Host Service, authenticated with a static shared secret
 cross-process device-approval bridge (proxying an Approve/Deny prompt
 from the Host Service back into Azahar's Qt UI, or vice versa) was
 explicitly scoped out of this pass as separate, unfinished work -- see
-`docs/known-limitations.md`'s AzaharAdapter entry for the full
+`docs/history.md`'s AzaharAdapter entry for the full
 reasoning. This mirrors the same trade-off already shipped for
 host-control mode (issue #4).
 
@@ -80,7 +96,7 @@ host-control mode (issue #4).
   submodules, Qt6, Vulkan/OpenGL/software renderers) completes and
   produces `build/bin/Release/azahar`, a real ~57MB linked executable
   containing the new `AzaharAdapter`/`RemoteServerBridge` code and the
-  vendored `melonds_remote::` symbols (confirmed via `nm`), not just a
+  vendored `dualdeck::` symbols (confirmed via `nm`), not just a
   clean compile of the new files in isolation.
 - **Idempotency and mismatch handling**: re-running
   `patch-existing-emulator.sh` against an already-patched checkout

@@ -13,9 +13,9 @@
 #include <thread>
 #include <vector>
 
-#include "melonds_remote/protocol.h"
+#include "dualdeck/protocol.h"
 
-namespace melonds_remote::client {
+namespace dualdeck::client {
 
 struct NetClientConfig {
     std::string hostAddress = "127.0.0.1";
@@ -39,7 +39,7 @@ struct NetClientConfig {
     std::string authToken;
 
     // This client's own release version string (e.g. "v0.1.24"), sent to
-    // the host in Hello. See melonds_remote::HelloPayload::appVersion for
+    // the host in Hello. See dualdeck::HelloPayload::appVersion for
     // the full explanation; empty (the default) means "unknown/dev
     // build", which disables the app-version check on the host side for
     // this connection regardless of what the host itself is running.
@@ -47,9 +47,13 @@ struct NetClientConfig {
 
     // JPEG quality (1-100) to request for this session's video, or 0 to
     // defer to the host's own configured default. See
-    // melonds_remote::HelloPayload::videoQuality's comment; set from
+    // dualdeck::HelloPayload::videoQuality's comment; set from
     // ClientSettings::videoQuality in main.cpp.
     uint8_t videoQuality = 0;
+
+    // Capture rate to request (HelloPayload::maxFrameRate), or 0 for the
+    // host's default; set from ClientSettings::streamFps in main.cpp.
+    uint8_t maxFrameRate = 0;
 
     // Protocol v13: whether to also advertise VideoCodecBit_H264 (in
     // addition to the always-advertised VideoCodecBit_Jpeg) in
@@ -59,6 +63,22 @@ struct NetClientConfig {
     // say (NetServer::selectVideoCodec()); this only ever raises the
     // possibility, never forces H.264.
     bool preferH264 = false;
+
+    // Same idea as preferH264 above, for VideoCodecBit_PyroWave (see
+    // pyrowave_decoder.h). Set from ClientSettings::
+    // videoCodecPyroWaveExperimental in main.cpp. Only actually
+    // advertised if PyroWaveDecoder::isAvailable() also confirms this
+    // machine has a Vulkan device that can run it -- unlike OpenH264's
+    // pure-CPU decoder, a PyroWave build can still be missing the
+    // hardware it needs at runtime.
+    bool preferPyroWave = false;
+
+    // VIDEO CODEC: AUTO. Advertises every codec this build can decode
+    // plus kVideoCodecFlag_Auto, which makes the host pick one itself
+    // after a short link-speed test during the handshake (see
+    // PacketType::BandwidthProbe). preferH264/preferPyroWave are ignored
+    // when this is set.
+    bool autoVideoCodec = false;
 
     // How often to send a Heartbeat packet on the control channel while
     // otherwise idle, so the host's control-channel timeout doesn't fire
@@ -188,6 +208,9 @@ public:
     // since codec choice is fixed for a session's whole lifetime (same
     // as HelloPayload::videoQuality).
     VideoCodec negotiatedVideoCodec() const { return negotiatedVideoCodec_.load(); }
+    // The link speed measured during the last AUTO-codec handshake, in
+    // kbit/s; 0 if none ran or it couldn't be measured.
+    uint32_t measuredBandwidthKbps() const { return measuredBandwidthKbps_.load(); }
 
     // Debug-overlay stats (GitHub/real user request, 2026-08-26: "show
     // the user what resolution is being streamed, what fps, codec, etc
@@ -276,6 +299,7 @@ private:
     std::atomic<bool> hostMicSupported_{false};
     std::atomic<HostMode> hostMode_{HostMode::Emulation};
     std::atomic<VideoCodec> negotiatedVideoCodec_{VideoCodec::Jpeg};
+    std::atomic<uint32_t> measuredBandwidthKbps_{0};
     // Read on every received video packet by videoReceiveLoop() (see
     // hostNativeWidth()/hostNativeHeight() below), so atomic like
     // sessionId_/hostMode_ above rather than mutex-guarded like
@@ -345,4 +369,4 @@ private:
     AdapterIdentity hostAdapterIdentity_;
 };
 
-} // namespace melonds_remote::client
+} // namespace dualdeck::client

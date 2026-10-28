@@ -48,7 +48,7 @@ Details logged to:
 ${error_log}" 2>/dev/null || true
     fi
 }
-trap 'ec=$?; on_error "${ec}" "${LINENO}" "${BASH_COMMAND}"' ERR
+trap 'on_error "$?" "${LINENO}" "${BASH_COMMAND}"' ERR
 
 if [[ ! -x "${binary}" ]]; then
     echo "Client binary not found, building..." >&2
@@ -86,8 +86,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Keep in sync with the same constant in scripts/uninstall-steam-shortcut.sh
-# and the packaged client/install-steam-shortcut.sh / uninstall-steam-shortcut.sh
-# heredocs in scripts/build-release.sh.
+# and the packaged packaging/client/internal/install-steam-shortcut.sh /
+# uninstall-steam-shortcut.sh.
 central_install_dir="${HOME}/.config/dualdeck-client/install"
 staging_dir="${central_install_dir}.new"
 previous_dir="${central_install_dir}.previous"
@@ -98,7 +98,7 @@ exe="${central_install_dir}/client/dualdeck-client"
 # the Steam AppName changed ("melonDS Remote" -> "DualDeck")
 # simultaneously, so steam_shortcut.py's Exe-OR-AppName matching can't
 # reliably find-and-update the old entry on its own (see
-# docs/known-limitations.md's rebrand section). Explicitly remove the
+# docs/history.md's rebrand section). Explicitly remove the
 # old entry by its old identity first, best-effort -- if it doesn't
 # exist, or Steam is running and --force wasn't passed, this just fails
 # silently and the upsert below still succeeds with the new identity.
