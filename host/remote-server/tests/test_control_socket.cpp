@@ -162,3 +162,22 @@ MDR_TEST(default_control_socket_path_sits_next_to_the_adapter_socket) {
         ::unsetenv("XDG_RUNTIME_DIR");
     }
 }
+
+// One connection that never sends anything must not lock every other
+// client out of the control socket.
+MDR_TEST(control_socket_idle_connection_does_not_block_other_clients) {
+    const TempSocket temp;
+    const std::string& path = temp.path;
+    ControlSocketServer server(path, [](const std::string& line) { return "echo:" + line; });
+    server.setIdleTimeoutMs(300);
+    MDR_CHECK(server.start());
+
+    int idleFd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    sockaddr_un addr = unixAddress(path);
+    MDR_CHECK(::connect(idleFd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+
+    MDR_CHECK_EQ(roundTrip(path, "status\n", 1), std::string("echo:status\n"));
+
+    ::close(idleFd);
+    server.stop();
+}

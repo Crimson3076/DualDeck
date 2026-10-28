@@ -18,9 +18,25 @@ KdialogPromptResult interpretKdialogExitStatus(bool exitedNormally, int exitCode
     return KdialogPromptResult::Unavailable;
 }
 
+std::string escapeKdialogRichText(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    for (char c : text) {
+        switch (c) {
+            case '&': out += "&amp;"; break;
+            case '<': out += "&lt;"; break;
+            case '>': out += "&gt;"; break;
+            case '"': out += "&quot;"; break;
+            default: out += c; break;
+        }
+    }
+    return out;
+}
+
 KdialogPromptResult promptDeviceApprovalViaKdialog(const std::string& clientName,
                                                     const std::string& address) {
-    const std::string message = "\"" + clientName + "\" (" + address +
+    const std::string message = "\"" + escapeKdialogRichText(clientName) + "\" (" +
+                                escapeKdialogRichText(address) +
                                 ") wants to connect to this PC.\n\n"
                                 "Allowing it lets it stream video from this PC and send it "
                                 "controller input. Only allow devices you recognize. Once "

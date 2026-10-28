@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -179,11 +180,20 @@ void ControlSocketServer::acceptLoop() {
 void ControlSocketServer::serveClient(int clientFd) {
     std::string buffer;
     char chunk[256];
+    auto lastActivity = std::chrono::steady_clock::now();
     while (running_.load()) {
         pollfd pfd{clientFd, POLLIN, 0};
         int ready = ::poll(&pfd, 1, kPollTimeoutMs);
-        if (ready == 0) continue;
+        if (ready == 0) {
+            // Clients are served inline on the accept thread, so one that
+            // connects and then says nothing would otherwise block every
+            // other approve/deny command indefinitely.
+            auto idle = std::chrono::steady_clock::now() - lastActivity;
+            if (idle >= std::chrono::milliseconds(idleTimeoutMs_.load())) return;
+            continue;
+        }
         if (ready < 0) return;
+        lastActivity = std::chrono::steady_clock::now();
 
         ssize_t n = ::recv(clientFd, chunk, sizeof(chunk), 0);
         if (n <= 0) return;

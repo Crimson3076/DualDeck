@@ -29,3 +29,9 @@ MDR_TEST(kdialog_abnormal_exit_is_unavailable) {
     // Killed by signal, crashed, etc. -- didn't cleanly exit at all.
     MDR_CHECK(interpretKdialogExitStatus(false, 0) == KdialogPromptResult::Unavailable);
 }
+
+MDR_TEST(kdialog_rich_text_escape_neutralizes_markup) {
+    MDR_CHECK_EQ(escapeKdialogRichText("<b>Steam</b> & \"co\""),
+                 std::string("&lt;b&gt;Steam&lt;/b&gt; &amp; &quot;co&quot;"));
+    MDR_CHECK_EQ(escapeKdialogRichText("plain name"), std::string("plain name"));
+}

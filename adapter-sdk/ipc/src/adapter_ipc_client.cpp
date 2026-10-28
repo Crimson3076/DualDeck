@@ -110,6 +110,11 @@ bool AdapterIpcClient::connect() {
     if (readThread_.joinable()) readThread_.join();
     if (writeThread_.joinable()) writeThread_.join();
 
+    // The dropped connection's socket is still open (only disconnect()
+    // closes it); close it before fd_ is overwritten below, or every
+    // reconnect leaks one fd.
+    if (int stale = fd_.exchange(-1); stale >= 0) ::close(stale);
+
     int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
         std::perror("AdapterIpcClient: socket");
@@ -167,6 +172,9 @@ void AdapterIpcClient::disconnect() {
     if (wasConnected) {
         int fd = fd_.load();
         if (fd >= 0) {
+            // Same lock writeLoop() sends under, so this Disconnect can't
+            // interleave with a half-written Frame/Heartbeat message.
+            std::lock_guard<std::mutex> lock(writeMutex_);
             sendMessage(fd, IpcMessageType::Disconnect, {});
             ::shutdown(fd, SHUT_RDWR);
         }
@@ -190,6 +198,11 @@ void AdapterIpcClient::disconnect() {
 
     int fd = fd_.exchange(-1);
     if (fd >= 0) ::close(fd);
+}
+
+bool AdapterIpcClient::sendLocked(int fd, IpcMessageType type, const dualdeck::ByteBuffer& payload) {
+    std::lock_guard<std::mutex> lock(writeMutex_);
+    return sendMessage(fd, type, payload);
 }
 
 void AdapterIpcClient::readLoop() {
@@ -256,7 +269,7 @@ void AdapterIpcClient::writeLoop() {
         if (state != lastSentState_) {
             dualdeck::ByteBuffer payload;
             serializeSessionState(payload, state);
-            if (!sendMessage(fd, IpcMessageType::StateChanged, payload)) {
+            if (!sendLocked(fd, IpcMessageType::StateChanged, payload)) {
                 connected_ = false;
                 break;
             }
@@ -282,7 +295,7 @@ void AdapterIpcClient::writeLoop() {
 
             dualdeck::ByteBuffer payload;
             serializeSurfaceFrame(payload, frame);
-            if (!sendMessage(fd, IpcMessageType::Frame, payload)) {
+            if (!sendLocked(fd, IpcMessageType::Frame, payload)) {
                 connected_ = false;
                 break;
             }
@@ -293,7 +306,7 @@ void AdapterIpcClient::writeLoop() {
 
         auto now = std::chrono::steady_clock::now();
         if (!sentSomething && now - lastHeartbeat >= kHeartbeatInterval) {
-            if (!sendMessage(fd, IpcMessageType::Heartbeat, {})) {
+            if (!sendLocked(fd, IpcMessageType::Heartbeat, {})) {
                 connected_ = false;
                 break;
             }
