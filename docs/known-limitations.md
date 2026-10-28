@@ -27,6 +27,14 @@ an item is fixed or a new gap is found.
 - `emudeck-replace-in-place.sh --refresh-installed`, which re-patches
   emulators after a host update, has only run against a fake
   `~/Applications`, not a real EmuDeck or RetroDECK install.
+- **RetroDECK compatibility** (`scripts/retrodeck-setup.sh`, a host menu
+  option): Cemu is confirmed on real hardware end to end, including
+  Tender (history: "root cause found -- RetroDECK has two separate
+  emulator-resolvers..."). melonDS and Azahar use the identical fix but
+  have not had the same real-hardware pass (history: "extended the
+  RetroDECK fix to melonDS and Azahar..."). melonDS also needs one
+  manual RetroDECK-side step (switching its DS system to "melonDS
+  (Standalone)"), since RetroDECK defaults DS to a RetroArch core.
 
 ## Video
 
