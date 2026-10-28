@@ -48,13 +48,13 @@ void consoleLoop(dualdeck::host::NetServer& server, dualdeck::host::ModeCoordina
 
         if (cmd == "approve" && !arg.empty()) {
             if (server.approveDevice(arg)) {
-                std::printf("[approval] approved device %s\n", arg.c_str());
+                std::printf("[approval] approved device %.8s\n", arg.c_str());
             } else {
                 std::printf("[approval] no pending request matches '%s'\n", arg.c_str());
             }
         } else if (cmd == "deny" && !arg.empty()) {
             if (server.denyDevice(arg)) {
-                std::printf("[approval] denied device %s\n", arg.c_str());
+                std::printf("[approval] denied device %.8s\n", arg.c_str());
             } else {
                 std::printf("[approval] no pending request matches '%s'\n", arg.c_str());
             }
@@ -64,7 +64,10 @@ void consoleLoop(dualdeck::host::NetServer& server, dualdeck::host::ModeCoordina
                 std::printf("[approval] no pending requests\n");
             } else {
                 for (const auto& r : pending) {
-                    std::printf("  %s  '%s' at %s\n", r.deviceId.c_str(), r.clientName.c_str(),
+                    // Short prefix only (device IDs are bearer credentials);
+                    // `approve`/`deny` accept an unambiguous prefix.
+                    std::printf("  %s  '%s' at %s\n", r.deviceId.substr(0, 8).c_str(),
+                                r.clientName.c_str(),
                                 r.address.c_str());
                 }
             }

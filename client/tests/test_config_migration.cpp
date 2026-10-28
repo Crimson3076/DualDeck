@@ -16,6 +16,8 @@
 #include <fstream>
 #include <string>
 
+#include <sys/stat.h>
+
 using namespace dualdeck::client;
 
 namespace {
@@ -144,4 +146,36 @@ MDR_TEST(wizard_state_migrates_forward_from_legacy_path) {
     std::string newPath = defaultWizardStatePath();
     MDR_CHECK(isSetupComplete(newPath));
     MDR_CHECK(std::filesystem::exists(legacyPath));
+}
+
+MDR_TEST(device_identity_is_128_bit_hex_stored_owner_only) {
+    ScopedFakeHome home("device-identity-perms");
+    auto path = (home.path() / "id/device_id.txt").string();
+
+    std::string id = loadOrCreateDeviceIdentity(path);
+    MDR_CHECK_EQ(id.size(), 32u);
+    MDR_CHECK(id.find_first_not_of("0123456789abcdef") == std::string::npos);
+
+    struct stat st{};
+    MDR_CHECK_EQ(::stat(path.c_str(), &st), 0);
+    MDR_CHECK_EQ(st.st_mode & 0777, 0600u);
+
+    // Reload returns the same identity.
+    MDR_CHECK(loadOrCreateDeviceIdentity(path) == id);
+
+    // Two fresh identities differ.
+    MDR_CHECK(loadOrCreateDeviceIdentity("") != loadOrCreateDeviceIdentity(""));
+}
+
+MDR_TEST(device_identity_tightens_permissions_of_an_existing_file) {
+    ScopedFakeHome home("device-identity-tighten");
+    auto path = home.path() / "device_id.txt";
+    writeFile(path, "0123456789abcdef0123456789abcdef\n");
+    ::chmod(path.c_str(), 0644);
+
+    MDR_CHECK(loadOrCreateDeviceIdentity(path.string()) == "0123456789abcdef0123456789abcdef");
+
+    struct stat st{};
+    MDR_CHECK_EQ(::stat(path.c_str(), &st), 0);
+    MDR_CHECK_EQ(st.st_mode & 0777, 0600u);
 }

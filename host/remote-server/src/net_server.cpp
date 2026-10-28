@@ -77,8 +77,9 @@ NetServer::NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFra
                     std::fprintf(stderr,
                                   "NetServer: pending connection request from '%s' at %s "
                                   "(device %s) -- type 'approve %s' or 'deny %s' to respond\n",
-                                  r.clientName.c_str(), r.address.c_str(), r.deviceId.c_str(),
-                                  r.deviceId.substr(0, 8).c_str(), r.deviceId.substr(0, 8).c_str());
+                                  r.clientName.c_str(), r.address.c_str(),
+                                  r.deviceId.substr(0, 8).c_str(), r.deviceId.substr(0, 8).c_str(),
+                                  r.deviceId.substr(0, 8).c_str());
                 }
             }
             notifiedPendingIds_ = std::move(currentIds);

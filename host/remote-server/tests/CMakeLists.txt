@@ -1,6 +1,7 @@
 add_executable(dualdeck_host_tests
     main.cpp
     test_adapter_bridge.cpp
+    test_device_approval_manager.cpp
     test_net_server_mode_switch.cpp
     test_self_update_trigger.cpp
     test_control_socket.cpp

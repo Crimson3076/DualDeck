@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <fstream>
 
+#include <sys/stat.h>
+
 namespace dualdeck::host {
 
 DeviceApprovalManager::DeviceApprovalManager(std::string stateFilePath,
@@ -38,6 +40,13 @@ void DeviceApprovalManager::persistApprovedLocked(const std::string& deviceId) {
 
     // Append-only: every previously-approved device keeps working even if
     // the process restarts mid-write of a later line.
+    // Approved IDs are bearer credentials: keep the file owner-only. Created
+    // empty at 0600 first so the IDs are never written to a looser file.
+    if (!std::filesystem::exists(path, ec)) {
+        std::ofstream create(stateFilePath_, std::ios::app);
+    }
+    ::chmod(stateFilePath_.c_str(), 0600);
+
     std::ofstream out(stateFilePath_, std::ios::app);
     if (out.is_open()) {
         out << deviceId << '\n';

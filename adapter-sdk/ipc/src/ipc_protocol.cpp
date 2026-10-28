@@ -310,6 +310,11 @@ std::optional<SurfaceFrame> parseSurfaceFrame(const uint8_t* data, size_t size) 
     if (pixelCount > kMaxIpcFramePixelBytes) return std::nullopt;
     if (offset + pixelCount != size) return std::nullopt; // declared size must match what actually follows
 
+    // width/height 0 means "adapter didn't set them" (the consumer falls
+    // back to the negotiated size, and re-checks against that); otherwise
+    // the buffer must actually hold that many pixels.
+    if (!surfaceFramePixelsCoverDimensions(frame.width, frame.height, pixelCount)) return std::nullopt;
+
     frame.pixels.assign(data + offset, data + offset + pixelCount);
     return frame;
 }

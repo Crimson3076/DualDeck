@@ -14,6 +14,7 @@
 // 2) will migrate towards, proven out today only by the fake DS/3DS/
 // Wii U fixtures under adapter-sdk/fake_adapters/.
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -90,6 +91,16 @@ struct SurfaceFrame {
     uint16_t height = 0;
     std::vector<uint8_t> pixels;
 };
+
+// True if `pixelBytes` covers a width x height Bgra8888 frame (4 bytes
+// per pixel, the only PixelFormat there is). Every consumer that hands
+// SurfaceFrame::pixels to an encoder with a width/height must check this
+// first: a short buffer with large dimensions otherwise makes the encoder
+// read past the end of the heap allocation. Computed in 64 bits so
+// 65535x65535 can't wrap.
+inline bool surfaceFramePixelsCoverDimensions(uint16_t width, uint16_t height, size_t pixelBytes) {
+    return static_cast<uint64_t>(width) * height * 4u <= pixelBytes;
+}
 
 // The contract every emulator adapter implements (issue #28's
 // "Emulator Adapter Contract" section). Implemented in-process today by

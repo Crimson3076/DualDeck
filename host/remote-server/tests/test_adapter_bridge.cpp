@@ -240,6 +240,22 @@ MDR_TEST(adapter_bridge_release_all_reaches_the_adapter) {
     MDR_CHECK(ds.isReleased());
 }
 
+// Heap over-read guard: a buffer too small for the dimensions (declared
+// by the frame, or the negotiated fallback) must never reach the encoder.
+MDR_TEST(adapter_bridge_rejects_frame_smaller_than_its_dimensions) {
+    FakeDsAdapter ds;
+    AdapterBridge bridge(ds);
+    std::vector<uint8_t> outFrame;
+    uint64_t outIndex = 0;
+    uint16_t outWidth = 0, outHeight = 0;
+
+    ds.pushFrame("bottom", {1, 2, 3, 4}, 65535, 65535);
+    MDR_CHECK(!bridge.getLatestFrame(outFrame, outIndex, outWidth, outHeight));
+
+    ds.pushFrame("bottom", {1, 2, 3, 4}); // 0x0 -> falls back to 256x192
+    MDR_CHECK(!bridge.getLatestFrame(outFrame, outIndex, outWidth, outHeight));
+}
+
 MDR_TEST(adapter_bridge_get_latest_frame_false_when_none_pushed) {
     FakeDsAdapter ds;
     AdapterBridge bridge(ds);
@@ -254,18 +270,20 @@ MDR_TEST(adapter_bridge_get_latest_frame_proxies_pushed_frame) {
     FakeDsAdapter ds;
     AdapterBridge bridge(ds);
 
-    ds.pushFrame("bottom", {1, 2, 3, 4});
+    const std::vector<uint8_t> first(256 * 192 * 4, 1);
+    const std::vector<uint8_t> second(256 * 192 * 4, 2);
+    ds.pushFrame("bottom", first);
 
     std::vector<uint8_t> outFrame;
     uint64_t outIndex = 999;
     uint16_t outWidth = 0, outHeight = 0;
     MDR_CHECK(bridge.getLatestFrame(outFrame, outIndex, outWidth, outHeight));
-    MDR_CHECK(outFrame == std::vector<uint8_t>({1, 2, 3, 4}));
+    MDR_CHECK(outFrame == first);
     MDR_CHECK_EQ(outIndex, 0u);
 
-    ds.pushFrame("bottom", {5, 6, 7, 8});
+    ds.pushFrame("bottom", second);
     MDR_CHECK(bridge.getLatestFrame(outFrame, outIndex, outWidth, outHeight));
-    MDR_CHECK(outFrame == std::vector<uint8_t>({5, 6, 7, 8}));
+    MDR_CHECK(outFrame == second);
     MDR_CHECK_EQ(outIndex, 1u);
 }
 
@@ -280,7 +298,7 @@ MDR_TEST(adapter_bridge_get_latest_frame_reports_this_frames_real_size) {
     FakeDsAdapter ds; // declares 256x192 via capabilities()
     AdapterBridge bridge(ds);
 
-    ds.pushFrame("bottom", {1, 2, 3, 4}, 320, 240); // real captured size differs from the declared default
+    ds.pushFrame("bottom", std::vector<uint8_t>(320 * 240 * 4, 1), 320, 240); // real captured size differs from the declared default
     std::vector<uint8_t> outFrame;
     uint64_t outIndex = 0;
     uint16_t outWidth = 0, outHeight = 0;
@@ -291,7 +309,7 @@ MDR_TEST(adapter_bridge_get_latest_frame_reports_this_frames_real_size) {
     // An adapter that never sets SurfaceFrame::width/height (0x0, e.g. one
     // not yet updated for contract v2) falls back to the declared value
     // instead of handing net_server.cpp a 0x0 frame it can't encode.
-    ds.pushFrame("bottom", {5, 6, 7, 8});
+    ds.pushFrame("bottom", std::vector<uint8_t>(256 * 192 * 4, 5));
     MDR_CHECK(bridge.getLatestFrame(outFrame, outIndex, outWidth, outHeight));
     MDR_CHECK_EQ(outWidth, 256);
     MDR_CHECK_EQ(outHeight, 192);
@@ -340,10 +358,11 @@ MDR_TEST(adapter_bridge_resolves_surface_after_late_adapter_connection) {
     MDR_CHECK(!bridge.getLatestFrame(outFrame, outIndex, outWidth, outHeight)); // nothing yet, correctly
 
     adapter.connectNow();
-    adapter.pushFrame("bottom", {10, 20, 30, 40});
+    const std::vector<uint8_t> pixels(320 * 240 * 4, 10);
+    adapter.pushFrame("bottom", pixels);
 
     MDR_CHECK(bridge.getLatestFrame(outFrame, outIndex, outWidth, outHeight));
-    MDR_CHECK(outFrame == std::vector<uint8_t>({10, 20, 30, 40}));
+    MDR_CHECK(outFrame == pixels);
     MDR_CHECK(bridge.targetSurfaceId() == "bottom");
 }
 
