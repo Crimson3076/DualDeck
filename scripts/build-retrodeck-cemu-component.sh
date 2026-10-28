@@ -61,6 +61,10 @@ if command -v sccache >/dev/null 2>&1; then
 fi
 
 echo "== [1/4] Patched Cemu (Nintendo Wii U, commit ${CEMU_COMMIT}) =="
+# Pre-declared (matching build-release.sh's own convention) since
+# build_cemu() sets it by nameref -- shellcheck can't see across that
+# indirection otherwise.
+cemu_bin=''
 build_cemu cemu_bin "${work_dir}" "${repo_root}" "${CEMU_COMMIT}" "${CEMU_VERSION_MAJOR}" "${CEMU_VERSION_MINOR}"
 cemu_bin_dir="$(dirname "${cemu_bin}")"
 
