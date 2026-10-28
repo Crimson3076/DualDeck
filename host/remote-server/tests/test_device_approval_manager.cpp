@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 #include "host/device_approval_manager.h"
@@ -28,6 +29,29 @@ MDR_TEST(approved_devices_file_is_owner_only) {
 
     DeviceApprovalManager reloaded(path, std::chrono::seconds(60));
     MDR_CHECK(reloaded.isApproved("0123456789abcdef0123456789abcdef"));
+
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+MDR_TEST(existing_loose_approved_devices_file_is_tightened_on_load) {
+    auto dir = std::filesystem::temp_directory_path() /
+               ("dualdeck-approval-loose-" +
+                std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(dir);
+    auto path = (dir / "approved_devices.txt").string();
+    {
+        std::ofstream out(path);
+        out << "0123456789abcdef0123456789abcdef\n";
+    }
+    ::chmod(path.c_str(), 0644);
+
+    DeviceApprovalManager manager(path, std::chrono::seconds(60));
+    MDR_CHECK(manager.isApproved("0123456789abcdef0123456789abcdef"));
+
+    struct stat st{};
+    MDR_CHECK_EQ(::stat(path.c_str(), &st), 0);
+    MDR_CHECK_EQ(st.st_mode & 0777, 0600u);
 
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);

@@ -4,7 +4,9 @@
 #include <filesystem>
 #include <fstream>
 
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 namespace dualdeck::host {
 
@@ -20,6 +22,10 @@ void DeviceApprovalManager::loadApprovedLocked() {
 
     std::ifstream in(stateFilePath_);
     if (!in.is_open()) return; // fine -- no prior approvals, or first run
+
+    // Approved IDs are bearer credentials: tighten a file left loose by an
+    // older version.
+    ::chmod(stateFilePath_.c_str(), 0600);
 
     std::string line;
     while (std::getline(in, line)) {
@@ -40,11 +46,10 @@ void DeviceApprovalManager::persistApprovedLocked(const std::string& deviceId) {
 
     // Append-only: every previously-approved device keeps working even if
     // the process restarts mid-write of a later line.
-    // Approved IDs are bearer credentials: keep the file owner-only. Created
-    // empty at 0600 first so the IDs are never written to a looser file.
-    if (!std::filesystem::exists(path, ec)) {
-        std::ofstream create(stateFilePath_, std::ios::app);
-    }
+    // Approved IDs are bearer credentials: create the file at 0600 (before any
+    // ID is written) and tighten one that already exists with looser bits.
+    int fd = ::open(stateFilePath_.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0600);
+    if (fd >= 0) ::close(fd);
     ::chmod(stateFilePath_.c_str(), 0600);
 
     std::ofstream out(stateFilePath_, std::ios::app);
