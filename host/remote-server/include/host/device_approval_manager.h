@@ -103,6 +103,13 @@ public:
     // haven't been refreshed within pendingRequestTtl.
     std::vector<PendingRequest> pendingRequests();
 
+    // Shortest prefix of `deviceId` (at least 8 chars) that no other entry
+    // in `requests` shares. Console output uses this instead of the full
+    // id (a bearer credential) while still letting the operator tell apart
+    // two pending devices whose ids start the same.
+    static std::string displayId(const std::vector<PendingRequest>& requests,
+                                 const std::string& deviceId);
+
     // Fired (on whatever thread calls check()/approve()/deny(), or the
     // watchdog thread that evicts stale entries) whenever the *set* of
     // pending device ids actually changes -- a new arrival, an eviction,

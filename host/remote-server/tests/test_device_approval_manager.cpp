@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #include "host/device_approval_manager.h"
 #include "test_framework.h"
@@ -14,9 +15,10 @@
 using namespace dualdeck::host;
 
 // mkdtemp creates the directory atomically with mode 0700, so no other
-// user can pre-create or write into it.
+// user can pre-create or write into it. It is made under the working
+// directory (the build tree) rather than a shared, world-writable /tmp.
 static std::filesystem::path makeTestDir(const char* prefix) {
-    std::string tmpl = (std::filesystem::temp_directory_path() / (std::string(prefix) + "XXXXXX")).string();
+    std::string tmpl = (std::filesystem::current_path() / (std::string(prefix) + "XXXXXX")).string();
     char* made = ::mkdtemp(tmpl.data());
     return made ? std::filesystem::path(made) : std::filesystem::path();
 }
@@ -62,4 +64,13 @@ MDR_TEST(existing_loose_approved_devices_file_is_tightened_on_load) {
 
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
+}
+
+MDR_TEST(display_id_extends_prefix_only_when_pending_ids_collide) {
+    using Req = DeviceApprovalManager::PendingRequest;
+    std::vector<Req> reqs{{"aaaaaaaa11111111", "a", "x"}, {"aaaaaaaa22222222", "b", "x"},
+                          {"bbbbbbbb33333333", "c", "x"}};
+    MDR_CHECK_EQ(DeviceApprovalManager::displayId(reqs, reqs[0].deviceId), std::string("aaaaaaaa1"));
+    MDR_CHECK_EQ(DeviceApprovalManager::displayId(reqs, reqs[1].deviceId), std::string("aaaaaaaa2"));
+    MDR_CHECK_EQ(DeviceApprovalManager::displayId(reqs, reqs[2].deviceId), std::string("bbbbbbbb"));
 }

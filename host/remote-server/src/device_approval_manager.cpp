@@ -88,6 +88,18 @@ void DeviceApprovalManager::notifyChangedLocked() {
     onPendingRequestsChanged_(std::move(requests));
 }
 
+std::string DeviceApprovalManager::displayId(const std::vector<PendingRequest>& requests,
+                                             const std::string& deviceId) {
+    size_t len = std::min<size_t>(8, deviceId.size());
+    for (const auto& r : requests) {
+        if (r.deviceId == deviceId) continue;
+        while (len < deviceId.size() && r.deviceId.compare(0, len, deviceId, 0, len) == 0) {
+            ++len;
+        }
+    }
+    return deviceId.substr(0, len);
+}
+
 std::string DeviceApprovalManager::resolvePendingLocked(const std::string& idOrPrefix) const {
     if (idOrPrefix.empty()) return {};
     if (pending_.count(idOrPrefix) > 0) return idOrPrefix;

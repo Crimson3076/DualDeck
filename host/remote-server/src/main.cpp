@@ -64,9 +64,11 @@ void consoleLoop(dualdeck::host::NetServer& server, dualdeck::host::ModeCoordina
                 std::printf("[approval] no pending requests\n");
             } else {
                 for (const auto& r : pending) {
-                    // Short prefix only (device IDs are bearer credentials);
+                    // Short prefix only (device IDs are bearer credentials),
+                    // extended only as far as needed to stay unambiguous;
                     // `approve`/`deny` accept an unambiguous prefix.
-                    std::printf("  %s  '%s' at %s\n", r.deviceId.substr(0, 8).c_str(),
+                    std::printf("  %s  '%s' at %s\n",
+                                dualdeck::host::DeviceApprovalManager::displayId(pending, r.deviceId).c_str(),
                                 r.clientName.c_str(),
                                 r.address.c_str());
                 }
