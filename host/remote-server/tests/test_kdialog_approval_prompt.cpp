@@ -40,3 +40,8 @@ MDR_TEST(kdialog_rich_text_escape_flattens_control_characters_and_caps_length) {
     MDR_CHECK_EQ(escapeKdialogRichText("a\nb\r\tc"), std::string("a b  c"));
     MDR_CHECK_EQ(escapeKdialogRichText(std::string(500, 'x')).size(), size_t(64));
 }
+
+MDR_TEST(kdialog_rich_text_escape_does_not_split_utf8_sequences) {
+    // 63 ASCII bytes then a 2-byte character straddling the 64-byte cap.
+    MDR_CHECK_EQ(escapeKdialogRichText(std::string(63, 'x') + "\xC3\xA9"), std::string(63, 'x'));
+}

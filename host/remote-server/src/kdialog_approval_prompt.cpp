@@ -3,6 +3,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
+
 namespace dualdeck::host {
 
 KdialogPromptResult interpretKdialogExitStatus(bool exitedNormally, int exitCode) {
@@ -24,7 +26,10 @@ std::string escapeKdialogRichText(const std::string& text) {
     constexpr size_t kMaxChars = 64;
     std::string out;
     out.reserve(text.size());
-    for (char c : text.substr(0, kMaxChars)) {
+    // Don't cut a multi-byte UTF-8 sequence in half: back up to a boundary.
+    size_t keep = std::min(text.size(), kMaxChars);
+    while (keep > 0 && keep < text.size() && (static_cast<unsigned char>(text[keep]) & 0xC0) == 0x80) --keep;
+    for (char c : text.substr(0, keep)) {
         if (static_cast<unsigned char>(c) < 0x20 || c == 0x7f) c = ' ';
         switch (c) {
             case '&': out += "&amp;"; break;
