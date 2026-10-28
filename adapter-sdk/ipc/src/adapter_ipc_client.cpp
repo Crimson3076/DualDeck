@@ -174,8 +174,11 @@ void AdapterIpcClient::disconnect() {
         if (fd >= 0) {
             // Same lock writeLoop() sends under, so this Disconnect can't
             // interleave with a half-written Frame/Heartbeat message.
-            std::lock_guard<std::mutex> lock(writeMutex_);
-            sendMessage(fd, IpcMessageType::Disconnect, {});
+            // try_lock: if writeLoop() is blocked in send() to a stalled
+            // peer, skip the courtesy Disconnect so shutdown() below can
+            // unblock it instead of deadlocking here.
+            std::unique_lock<std::mutex> lock(writeMutex_, std::try_to_lock);
+            if (lock.owns_lock()) sendMessage(fd, IpcMessageType::Disconnect, {});
             ::shutdown(fd, SHUT_RDWR);
         }
     }

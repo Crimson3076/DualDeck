@@ -19,9 +19,13 @@ KdialogPromptResult interpretKdialogExitStatus(bool exitedNormally, int exitCode
 }
 
 std::string escapeKdialogRichText(const std::string& text) {
+    // Names come from the connecting device, so cap the length and flatten
+    // control characters (newlines would let a name fake extra prompt lines).
+    constexpr size_t kMaxChars = 64;
     std::string out;
     out.reserve(text.size());
-    for (char c : text) {
+    for (char c : text.substr(0, kMaxChars)) {
+        if (static_cast<unsigned char>(c) < 0x20 || c == 0x7f) c = ' ';
         switch (c) {
             case '&': out += "&amp;"; break;
             case '<': out += "&lt;"; break;

@@ -35,3 +35,8 @@ MDR_TEST(kdialog_rich_text_escape_neutralizes_markup) {
                  std::string("&lt;b&gt;Steam&lt;/b&gt; &amp; &quot;co&quot;"));
     MDR_CHECK_EQ(escapeKdialogRichText("plain name"), std::string("plain name"));
 }
+
+MDR_TEST(kdialog_rich_text_escape_flattens_control_characters_and_caps_length) {
+    MDR_CHECK_EQ(escapeKdialogRichText("a\nb\r\tc"), std::string("a b  c"));
+    MDR_CHECK_EQ(escapeKdialogRichText(std::string(500, 'x')).size(), size_t(64));
+}

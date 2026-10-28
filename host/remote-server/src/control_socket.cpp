@@ -193,16 +193,18 @@ void ControlSocketServer::serveClient(int clientFd) {
             continue;
         }
         if (ready < 0) return;
-        lastActivity = std::chrono::steady_clock::now();
 
         ssize_t n = ::recv(clientFd, chunk, sizeof(chunk), 0);
         if (n <= 0) return;
         buffer.append(chunk, static_cast<size_t>(n));
 
+        // Only a completed command counts as activity, so a client
+        // trickling bytes without a newline still times out.
         size_t newline;
         while ((newline = buffer.find('\n')) != std::string::npos) {
             std::string line = buffer.substr(0, newline);
             buffer.erase(0, newline + 1);
+            lastActivity = std::chrono::steady_clock::now();
             if (!line.empty() && line.back() == '\r') line.pop_back();
 
             std::string reply = handler_(line) + "\n";
