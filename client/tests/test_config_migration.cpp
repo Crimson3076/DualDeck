@@ -171,7 +171,7 @@ MDR_TEST(device_identity_tightens_permissions_of_an_existing_file) {
     ScopedFakeHome home("device-identity-tighten");
     auto path = home.path() / "device_id.txt";
     writeFile(path, "0123456789abcdef0123456789abcdef\n");
-    ::chmod(path.c_str(), 0644);
+    ::chmod(path.c_str(), 0640);
 
     MDR_CHECK(loadOrCreateDeviceIdentity(path.string()) == "0123456789abcdef0123456789abcdef");
 

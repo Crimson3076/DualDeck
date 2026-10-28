@@ -1,6 +1,8 @@
 // The approved-devices file holds bearer credentials: it must be owner-only.
 #include <sys/stat.h>
 
+#include <unistd.h>
+
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -11,10 +13,17 @@
 
 using namespace dualdeck::host;
 
+// mkdtemp creates the directory atomically with mode 0700, so no other
+// user can pre-create or write into it.
+static std::filesystem::path makeTestDir(const char* prefix) {
+    std::string tmpl = (std::filesystem::temp_directory_path() / (std::string(prefix) + "XXXXXX")).string();
+    char* made = ::mkdtemp(tmpl.data());
+    return made ? std::filesystem::path(made) : std::filesystem::path();
+}
+
 MDR_TEST(approved_devices_file_is_owner_only) {
-    auto dir = std::filesystem::temp_directory_path() /
-               ("dualdeck-approval-test-" +
-                std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    auto dir = makeTestDir("dualdeck-approval-test-");
+    MDR_CHECK(!dir.empty());
     auto path = (dir / "approved_devices.txt").string();
 
     {
@@ -35,16 +44,14 @@ MDR_TEST(approved_devices_file_is_owner_only) {
 }
 
 MDR_TEST(existing_loose_approved_devices_file_is_tightened_on_load) {
-    auto dir = std::filesystem::temp_directory_path() /
-               ("dualdeck-approval-loose-" +
-                std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    std::filesystem::create_directories(dir);
+    auto dir = makeTestDir("dualdeck-approval-loose-");
+    MDR_CHECK(!dir.empty());
     auto path = (dir / "approved_devices.txt").string();
     {
         std::ofstream out(path);
         out << "0123456789abcdef0123456789abcdef\n";
     }
-    ::chmod(path.c_str(), 0644);
+    ::chmod(path.c_str(), 0640);
 
     DeviceApprovalManager manager(path, std::chrono::seconds(60));
     MDR_CHECK(manager.isApproved("0123456789abcdef0123456789abcdef"));
