@@ -137,7 +137,9 @@ def wait_for_pending_request(proc: subprocess.Popen, device_id: str, deadline_s:
             time.sleep(0.05)
             continue
         buf += line
-        if "pending connection request" in line and device_id in line:
+        # The host logs only an 8-char prefix (device IDs are bearer credentials).
+        if "pending connection request" in line and device_id[:8] in line:
+            assert device_id not in line, "host must not log the full device ID"
             return
     raise AssertionError(f"no pending-request log line for {device_id} appeared:\n{buf}")
 
