@@ -63,6 +63,7 @@ public:
         std::string deviceId;
         std::string clientName;
         std::string address;
+        std::string requestHandle;
     };
 
     // Checks `deviceId` (the Hello payload's authToken field, repurposed
@@ -86,14 +87,13 @@ public:
     // anyway.
     bool isApproved(const std::string& deviceId) const;
 
-    // Approves a pending request by exact deviceId or unambiguous prefix
-    // (operator convenience -- typing the first several characters of the
-    // id shown in the log is enough). Persists the full deviceId to disk
-    // and removes it from the pending set. Returns false if no pending
-    // request matches (exactly, or as a unique prefix).
+    // Approves a pending request by its non-secret request handle, exact
+    // deviceId or unambiguous prefix (for existing local UI callers).
+    // Persists the full deviceId to disk and removes it from the pending set.
+    // Returns false if no pending request matches.
     bool approve(const std::string& deviceIdOrPrefix);
 
-    // Denies (simply discards) a pending request by exact deviceId or
+    // Denies (simply discards) a pending request by request handle, exact deviceId or
     // unambiguous prefix. Returns false if no pending request matches. A
     // denied client's automatic retries will just reappear as pending
     // again -- this isn't a permanent block, only "not right now".
@@ -103,10 +103,8 @@ public:
     // haven't been refreshed within pendingRequestTtl.
     std::vector<PendingRequest> pendingRequests();
 
-    // Shortest prefix of `deviceId` (at least 8 chars) that no other entry
-    // in `requests` shares. Console output uses this instead of the full
-    // id (a bearer credential) while still letting the operator tell apart
-    // two pending devices whose ids start the same.
+    // Non-secret, process-local approval handle. It is independent of the
+    // bearer credential and stays stable until this pending request is removed.
     static std::string displayId(const std::vector<PendingRequest>& requests,
                                  const std::string& deviceId);
 
@@ -131,13 +129,14 @@ private:
         std::string clientName;
         std::string address;
         std::chrono::steady_clock::time_point lastSeen;
+        std::string requestHandle;
     };
 
     void loadApprovedLocked();
     void persistApprovedLocked(const std::string& deviceId);
     void evictStaleLocked();
     void notifyChangedLocked();
-    // Returns the exact deviceId matching `idOrPrefix` in pending_, either
+    // Resolves a request handle or the exact deviceId matching `idOrPrefix`, either
     // an exact key match or the single pending entry whose key starts
     // with it. Returns empty string if there's no match or the prefix is
     // ambiguous (matches more than one).
@@ -149,6 +148,7 @@ private:
 
     std::unordered_set<std::string> approvedDevices_;
     std::unordered_map<std::string, PendingEntry> pending_; // keyed by deviceId
+    size_t nextRequestHandle_ = 1;
     std::vector<std::string> pendingOrder_; // insertion order, for stable listing
 
     std::function<void(std::vector<PendingRequest>)> onPendingRequestsChanged_;

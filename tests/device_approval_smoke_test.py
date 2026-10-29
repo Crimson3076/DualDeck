@@ -11,13 +11,13 @@ machine a real client + host operator would hit:
 
   1. An unrecognized device identity is rejected with `ApprovalRequired`,
      and the server's log gets a pending-request line naming it.
-  2. Sending 'approve <id>' on the server's stdin approves it; retrying
+  2. Sending 'approve <handle>' on the server's stdin approves it; retrying
      the same identity is then accepted.
   3. Reconnecting with that identity again is accepted silently (no new
      prompt, no new state).
   4. A different, never-seen identity is still rejected (not accidentally
      approved by the first approval).
-  5. Sending 'deny <id>' for that second identity is accepted by the
+  5. Sending 'deny <handle>' for that second identity is accepted by the
      console loop but leaves it rejected on the next attempt.
   6. Restarting the server with `--state-dir` pointed at the same
      directory remembers the first identity's approval across the
@@ -38,6 +38,7 @@ import json
 import os
 import re
 import secrets
+import select
 import shutil
 import socket
 import struct
@@ -127,21 +128,34 @@ def do_handshake(control_port: int, device_id: str, client_name: str = "device-a
     return accepted, reject_reason
 
 
-def wait_for_pending_request(proc: subprocess.Popen, device_id: str, deadline_s: float = 3.0):
-    """Polls the server's stdout for a pending-request line naming `device_id`."""
-    deadline = time.time() + deadline_s
-    buf = ""
-    while time.time() < deadline:
-        line = proc.stdout.readline()
-        if not line:
-            time.sleep(0.05)
+def wait_for_pending_request(proc: subprocess.Popen, device_id: str, deadline_s: float = 3.0,
+                             other_device_ids: tuple = ()):
+    """Wait for a non-secret approval handle without blocking past the deadline."""
+    deadline = time.monotonic() + deadline_s
+    line = ""
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        ready, _, _ = select.select([proc.stdout], [], [], remaining)
+        if not ready:
+            break
+        # Read directly from the pipe: TextIOWrapper buffering can hide bytes
+        # from select, and readline can block forever on a silent host.
+        chunk = os.read(proc.stdout.fileno(), 1)
+        if not chunk:
+            break
+        line += chunk.decode("utf-8", errors="replace")
+        if chunk != b"\n":
             continue
-        buf += line
-        # The host logs only an 8-char prefix (device IDs are bearer credentials).
-        if "pending connection request" in line and device_id[:8] in line:
-            assert device_id not in line, "host must not log the full device ID"
-            return
-    raise AssertionError(f"no pending-request log line for {device_id} appeared:\n{buf}")
+        for credential in (device_id, *other_device_ids):
+            assert credential[:8] not in line, "host must not log credential prefixes"
+        if "pending connection request" in line:
+            match = re.search(r"\(device (request-\d+)\)", line)
+            assert match, "pending request must show a non-secret approval handle"
+            return match.group(1)
+        line = ""
+    raise AssertionError("no pending-request log line appeared before the deadline")
 
 
 def send_console_command(proc: subprocess.Popen, command: str):
@@ -212,11 +226,12 @@ def run(server_path: str) -> int:
             assert reason == REJECT_APPROVAL_REQUIRED, f"expected ApprovalRequired, got {reason}"
             print("[ok] unapproved connection rejected with ApprovalRequired")
 
-            wait_for_pending_request(proc, device_a)
-            print(f"[ok] host logged a pending request for {device_a}")
+            send_console_command(proc, "list")
+            handle_a = wait_for_pending_request(proc, device_a)
+            print("[ok] host logged a non-secret pending request handle")
 
             # --- Approving via the console lets the same device connect ---
-            send_console_command(proc, f"approve {device_a}")
+            send_console_command(proc, f"approve {handle_a}")
             time.sleep(0.2)
             accepted, reason = do_handshake(control_port, device_a)
             assert accepted == 1, f"expected approved device to be accepted, reason={reason}"
@@ -227,6 +242,10 @@ def run(server_path: str) -> int:
             assert accepted == 1, "expected reconnect with an already-approved device to be accepted"
             print("[ok] reconnecting with an already-approved device succeeds silently")
 
+            # Failed legacy commands must not echo the supplied credential.
+            send_console_command(proc, f"approve {device_a}")
+            send_console_command(proc, f"deny {device_a}")
+
             # --- A different, never-seen device is still rejected ---
             accepted, reason = do_handshake(control_port, device_b)
             assert accepted == 0, "expected a different unapproved device to be rejected"
@@ -234,8 +253,8 @@ def run(server_path: str) -> int:
             print("[ok] a different device is not accidentally approved")
 
             # --- Denying via the console leaves it rejected ---
-            wait_for_pending_request(proc, device_b)
-            send_console_command(proc, f"deny {device_b}")
+            handle_b = wait_for_pending_request(proc, device_b, other_device_ids=(device_a,))
+            send_console_command(proc, f"deny {handle_b}")
             time.sleep(0.2)
             accepted, reason = do_handshake(control_port, device_b)
             assert accepted == 0, "expected a denied device to remain rejected"

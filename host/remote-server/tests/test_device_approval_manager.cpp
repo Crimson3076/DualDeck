@@ -66,11 +66,26 @@ MDR_TEST(existing_loose_approved_devices_file_is_tightened_on_load) {
     std::filesystem::remove_all(dir, ec);
 }
 
-MDR_TEST(display_id_extends_prefix_only_when_pending_ids_collide) {
-    using Req = DeviceApprovalManager::PendingRequest;
-    std::vector<Req> reqs{{"aaaaaaaa11111111", "a", "x"}, {"aaaaaaaa22222222", "b", "x"},
-                          {"bbbbbbbb33333333", "c", "x"}};
-    MDR_CHECK_EQ(DeviceApprovalManager::displayId(reqs, reqs[0].deviceId), std::string("aaaaaaaa1"));
-    MDR_CHECK_EQ(DeviceApprovalManager::displayId(reqs, reqs[1].deviceId), std::string("aaaaaaaa2"));
-    MDR_CHECK_EQ(DeviceApprovalManager::displayId(reqs, reqs[2].deviceId), std::string("bbbbbbbb"));
+MDR_TEST(approval_handles_are_unique_stable_and_do_not_disclose_credentials) {
+    DeviceApprovalManager manager("");
+    const std::string first = "aaaaaaaa11111111";
+    const std::string second = "aaaaaaaa22222222";
+    manager.check(first, "first", "x");
+    auto requests = manager.pendingRequests();
+    const auto firstHandle = DeviceApprovalManager::displayId(requests, first);
+    MDR_CHECK(firstHandle.starts_with("request-"));
+    MDR_CHECK(firstHandle.find(first.substr(0, 8)) == std::string::npos);
+    manager.check(second, "second", "x");
+    manager.check(first, "first", "x");
+    requests = manager.pendingRequests();
+    const auto secondHandle = DeviceApprovalManager::displayId(requests, second);
+    MDR_CHECK_EQ(DeviceApprovalManager::displayId(requests, first), firstHandle);
+    MDR_CHECK(firstHandle != secondHandle);
+    MDR_CHECK(manager.approve(firstHandle));
+    MDR_CHECK(manager.isApproved(first));
+    MDR_CHECK(!manager.isApproved(second));
+    MDR_CHECK(manager.deny(secondHandle));
+    MDR_CHECK(manager.pendingRequests().empty());
+    manager.check(second, "second", "x");
+    MDR_CHECK(!manager.approve(secondHandle)); // stale handles must not target a new request
 }

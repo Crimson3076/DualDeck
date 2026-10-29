@@ -270,7 +270,13 @@ MDR_TEST(ipc_frame_for_unnegotiated_surface_is_dropped) {
     MDR_CHECK(fd >= 0);
     sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
-    std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+    MDR_CHECK(path.size() < sizeof(addr.sun_path));
+    if (path.size() >= sizeof(addr.sun_path)) {
+        ::close(fd);
+        server.stop();
+        return;
+    }
+    std::memcpy(addr.sun_path, path.c_str(), path.size() + 1);
     MDR_CHECK(::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
 
     ByteBuffer hello;

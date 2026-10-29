@@ -83,25 +83,25 @@ void DeviceApprovalManager::notifyChangedLocked() {
     requests.reserve(pendingOrder_.size());
     for (const auto& id : pendingOrder_) {
         const auto& entry = pending_.at(id);
-        requests.push_back(PendingRequest{id, entry.clientName, entry.address});
+        requests.push_back(PendingRequest{id, entry.clientName, entry.address, entry.requestHandle});
     }
     onPendingRequestsChanged_(std::move(requests));
 }
 
 std::string DeviceApprovalManager::displayId(const std::vector<PendingRequest>& requests,
                                              const std::string& deviceId) {
-    size_t len = std::min<size_t>(8, deviceId.size());
-    for (const auto& r : requests) {
-        if (r.deviceId == deviceId) continue;
-        while (len < deviceId.size() && r.deviceId.compare(0, len, deviceId, 0, len) == 0) {
-            ++len;
-        }
+    for (const auto& request : requests) {
+        if (request.deviceId == deviceId) return request.requestHandle;
     }
-    return deviceId.substr(0, len);
+    return {};
 }
 
 std::string DeviceApprovalManager::resolvePendingLocked(const std::string& idOrPrefix) const {
     if (idOrPrefix.empty()) return {};
+    for (const auto& id : pendingOrder_) {
+        if (pending_.at(id).requestHandle == idOrPrefix) return id;
+    }
+    if (idOrPrefix.starts_with("request-")) return {}; // expired or unknown handle
     if (pending_.count(idOrPrefix) > 0) return idOrPrefix;
 
     std::string match;
@@ -126,7 +126,9 @@ DeviceApprovalManager::CheckResult DeviceApprovalManager::check(const std::strin
 
     if (!deviceId.empty()) {
         bool isNew = pending_.count(deviceId) == 0;
-        pending_[deviceId] = PendingEntry{clientName, address, std::chrono::steady_clock::now()};
+        const auto handle = isNew ? "request-" + std::to_string(nextRequestHandle_++)
+                                  : pending_.at(deviceId).requestHandle;
+        pending_[deviceId] = PendingEntry{clientName, address, std::chrono::steady_clock::now(), handle};
         if (isNew) {
             pendingOrder_.push_back(deviceId);
             notifyChangedLocked();
@@ -175,7 +177,7 @@ std::vector<DeviceApprovalManager::PendingRequest> DeviceApprovalManager::pendin
     requests.reserve(pendingOrder_.size());
     for (const auto& id : pendingOrder_) {
         const auto& entry = pending_.at(id);
-        requests.push_back(PendingRequest{id, entry.clientName, entry.address});
+        requests.push_back(PendingRequest{id, entry.clientName, entry.address, entry.requestHandle});
     }
     return requests;
 }
