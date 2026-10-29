@@ -184,15 +184,15 @@ void ControlSocketServer::serveClient(int clientFd) {
     while (running_.load()) {
         pollfd pfd{clientFd, POLLIN, 0};
         int ready = ::poll(&pfd, 1, kPollTimeoutMs);
-        if (ready == 0) {
-            // Clients are served inline on the accept thread, so one that
-            // connects and then says nothing would otherwise block every
-            // other approve/deny command indefinitely.
-            auto idle = std::chrono::steady_clock::now() - lastActivity;
-            if (idle >= std::chrono::milliseconds(idleTimeoutMs_.load())) return;
-            continue;
-        }
         if (ready < 0) return;
+        // Clients are served inline on the accept thread, so one that
+        // connects and then says nothing (or trickles bytes without ever
+        // completing a command) would otherwise block every other
+        // approve/deny command. Checked on every iteration, not only when
+        // poll() times out, so steady trickling can't dodge it.
+        auto idle = std::chrono::steady_clock::now() - lastActivity;
+        if (idle >= std::chrono::milliseconds(idleTimeoutMs_.load())) return;
+        if (ready == 0) continue;
 
         ssize_t n = ::recv(clientFd, chunk, sizeof(chunk), 0);
         if (n <= 0) return;

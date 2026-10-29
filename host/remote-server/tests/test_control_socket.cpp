@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <thread>
 #include <sys/time.h>
@@ -204,12 +205,16 @@ MDR_TEST(control_socket_drops_a_client_that_trickles_without_a_newline) {
     MDR_CHECK(::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
     timeval rcvTimeout{3, 0};
     ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvTimeout, sizeof(rcvTimeout));
-    for (int i = 0; i < 4; ++i) {
+    // Keep trickling well past the 300 ms timeout; the server must hang up
+    // while bytes are still arriving, not only once they stop.
+    for (int i = 0; i < 12; ++i) {
         ::send(fd, "x", 1, MSG_NOSIGNAL);
-        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     char b;
-    MDR_CHECK_EQ(::recv(fd, &b, 1, 0), ssize_t(0));
+    ssize_t r = ::recv(fd, &b, 1, 0);
+    // EOF (or reset), not a receive timeout from a server still holding us.
+    MDR_CHECK(r == 0 || (r < 0 && errno == ECONNRESET));
 
     ::close(fd);
     server.stop();
