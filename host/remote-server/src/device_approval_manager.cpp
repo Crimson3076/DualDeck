@@ -96,12 +96,14 @@ std::string DeviceApprovalManager::displayId(const std::vector<PendingRequest>& 
     return {};
 }
 
-std::string DeviceApprovalManager::resolvePendingLocked(const std::string& idOrPrefix) const {
+std::string DeviceApprovalManager::resolvePendingLocked(const std::string& idOrPrefix, Lookup lookup) const {
     if (idOrPrefix.empty()) return {};
-    for (const auto& id : pendingOrder_) {
-        if (pending_.at(id).requestHandle == idOrPrefix) return id;
+    if (lookup == Lookup::RequestHandle) {
+        for (const auto& id : pendingOrder_) {
+            if (pending_.at(id).requestHandle == idOrPrefix) return id;
+        }
+        return {};
     }
-    if (idOrPrefix.starts_with("request-")) return {}; // expired or unknown handle
     if (pending_.count(idOrPrefix) > 0) return idOrPrefix;
 
     std::string match;
@@ -143,9 +145,9 @@ bool DeviceApprovalManager::isApproved(const std::string& deviceId) const {
     return !deviceId.empty() && approvedDevices_.count(deviceId) > 0;
 }
 
-bool DeviceApprovalManager::approve(const std::string& deviceIdOrPrefix) {
+bool DeviceApprovalManager::approve(const std::string& deviceIdOrPrefix, Lookup lookup) {
     std::lock_guard<std::mutex> lock(mutex_);
-    std::string deviceId = resolvePendingLocked(deviceIdOrPrefix);
+    std::string deviceId = resolvePendingLocked(deviceIdOrPrefix, lookup);
     if (deviceId.empty()) return false;
 
     approvedDevices_.insert(deviceId);
@@ -157,9 +159,9 @@ bool DeviceApprovalManager::approve(const std::string& deviceIdOrPrefix) {
     return true;
 }
 
-bool DeviceApprovalManager::deny(const std::string& deviceIdOrPrefix) {
+bool DeviceApprovalManager::deny(const std::string& deviceIdOrPrefix, Lookup lookup) {
     std::lock_guard<std::mutex> lock(mutex_);
-    std::string deviceId = resolvePendingLocked(deviceIdOrPrefix);
+    std::string deviceId = resolvePendingLocked(deviceIdOrPrefix, lookup);
     if (deviceId.empty()) return false;
 
     pending_.erase(deviceId);

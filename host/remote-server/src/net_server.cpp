@@ -155,12 +155,12 @@ AdapterIdentity NetServer::currentAdapterIdentity() const {
     return currentAdapterIdentity_;
 }
 
-bool NetServer::approveDevice(const std::string& deviceIdOrPrefix) {
-    return deviceApproval_.approve(deviceIdOrPrefix);
+bool NetServer::approveDevice(const std::string& deviceIdOrPrefix, DeviceApprovalManager::Lookup lookup) {
+    return deviceApproval_.approve(deviceIdOrPrefix, lookup);
 }
 
-bool NetServer::denyDevice(const std::string& deviceIdOrPrefix) {
-    return deviceApproval_.deny(deviceIdOrPrefix);
+bool NetServer::denyDevice(const std::string& deviceIdOrPrefix, DeviceApprovalManager::Lookup lookup) {
+    return deviceApproval_.deny(deviceIdOrPrefix, lookup);
 }
 
 std::vector<DeviceApprovalManager::PendingRequest> NetServer::pendingRequests() {

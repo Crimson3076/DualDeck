@@ -87,17 +87,17 @@ public:
     // anyway.
     bool isApproved(const std::string& deviceId) const;
 
-    // Approves a pending request by its non-secret request handle, exact
-    // deviceId or unambiguous prefix (for existing local UI callers).
-    // Persists the full deviceId to disk and removes it from the pending set.
-    // Returns false if no pending request matches.
-    bool approve(const std::string& deviceIdOrPrefix);
+    // Keep credential and handle namespaces separate: clients can supply IDs
+    // identical to another request's handle. Local UIs use DeviceId; the
+    // console uses RequestHandle. Credential lookup retains prefix support.
+    enum class Lookup { DeviceId, RequestHandle };
 
-    // Denies (simply discards) a pending request by request handle, exact deviceId or
-    // unambiguous prefix. Returns false if no pending request matches. A
-    // denied client's automatic retries will just reappear as pending
-    // again -- this isn't a permanent block, only "not right now".
-    bool deny(const std::string& deviceIdOrPrefix);
+    // Persists the matching credential and removes the pending request.
+    // Returns false for an unknown or ambiguous target.
+    bool approve(const std::string& target, Lookup lookup = Lookup::DeviceId);
+
+    // Discards the matching pending request; retries may queue it again.
+    bool deny(const std::string& target, Lookup lookup = Lookup::DeviceId);
 
     // Current pending requests, oldest first, after evicting any that
     // haven't been refreshed within pendingRequestTtl.
@@ -136,11 +136,9 @@ private:
     void persistApprovedLocked(const std::string& deviceId);
     void evictStaleLocked();
     void notifyChangedLocked();
-    // Resolves a request handle or the exact deviceId matching `idOrPrefix`, either
-    // an exact key match or the single pending entry whose key starts
-    // with it. Returns empty string if there's no match or the prefix is
-    // ambiguous (matches more than one).
-    std::string resolvePendingLocked(const std::string& idOrPrefix) const;
+    // Resolves only the specified namespace. DeviceId lookup accepts an
+    // exact credential or a unique prefix; handle lookup requires an exact match.
+    std::string resolvePendingLocked(const std::string& target, Lookup lookup) const;
 
     mutable std::mutex mutex_;
     std::string stateFilePath_;

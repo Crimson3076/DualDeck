@@ -28,7 +28,7 @@ void handleSignal(int) {
     g_stopRequested = 1;
 }
 
-// Reads "approve <id>" / "deny <id>" / "list" lines from stdin for as
+// Reads "approve <handle>" / "deny <handle>" / "list" from stdin for as
 // long as it stays open, so an operator running this console binary
 // interactively can respond to device-approval requests without a GUI.
 // `coordinator` is non-null only in --adapter-ipc mode (GitHub issue #4
@@ -47,13 +47,13 @@ void consoleLoop(dualdeck::host::NetServer& server, dualdeck::host::ModeCoordina
         iss >> cmd >> arg;
 
         if (cmd == "approve" && !arg.empty()) {
-            if (server.approveDevice(arg)) {
+            if (server.approveDevice(arg, dualdeck::host::DeviceApprovalManager::Lookup::RequestHandle)) {
                 std::printf("[approval] device approved\n");
             } else {
                 std::printf("[approval] no pending request matches\n");
             }
         } else if (cmd == "deny" && !arg.empty()) {
-            if (server.denyDevice(arg)) {
+            if (server.denyDevice(arg, dualdeck::host::DeviceApprovalManager::Lookup::RequestHandle)) {
                 std::printf("[approval] device denied\n");
             } else {
                 std::printf("[approval] no pending request matches\n");
