@@ -170,9 +170,9 @@ MDR_TEST(surface_frame_round_trip) {
     SurfaceFrame frame;
     frame.surfaceId = "bottom";
     frame.frameIndex = 42;
-    frame.width = 320;
-    frame.height = 240;
-    frame.pixels = {1, 2, 3, 4, 5};
+    frame.width = 2;
+    frame.height = 2;
+    frame.pixels = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
 
     ByteBuffer buf;
     serializeSurfaceFrame(buf, frame);
@@ -180,9 +180,30 @@ MDR_TEST(surface_frame_round_trip) {
     MDR_CHECK(parsed.has_value());
     MDR_CHECK(parsed->surfaceId == "bottom");
     MDR_CHECK_EQ(parsed->frameIndex, 42u);
-    MDR_CHECK_EQ(parsed->width, 320);
-    MDR_CHECK_EQ(parsed->height, 240);
-    MDR_CHECK(parsed->pixels == std::vector<uint8_t>({1, 2, 3, 4, 5}));
+    MDR_CHECK_EQ(parsed->width, 2);
+    MDR_CHECK_EQ(parsed->height, 2);
+    MDR_CHECK_EQ(parsed->pixels.size(), 16u);
+}
+
+MDR_TEST(surface_frame_rejects_pixels_smaller_than_dimensions) {
+    // Heap over-read guard: 65535x65535 declared with a 5-byte buffer would
+    // otherwise be handed to the encoders as-is.
+    SurfaceFrame frame;
+    frame.surfaceId = "bottom";
+    frame.width = 65535;
+    frame.height = 65535;
+    frame.pixels = {1, 2, 3, 4, 5};
+    ByteBuffer buf;
+    serializeSurfaceFrame(buf, frame);
+    MDR_CHECK(!parseSurfaceFrame(buf.data(), buf.size()).has_value());
+
+    // One byte short of 2x2 BGRA.
+    frame.width = 2;
+    frame.height = 2;
+    frame.pixels.assign(15, 0);
+    buf.clear();
+    serializeSurfaceFrame(buf, frame);
+    MDR_CHECK(!parseSurfaceFrame(buf.data(), buf.size()).has_value());
 }
 
 MDR_TEST(surface_frame_rejects_oversized_declared_pixel_count) {

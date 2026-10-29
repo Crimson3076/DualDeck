@@ -380,12 +380,15 @@ public:
     AdapterIdentity currentAdapterIdentity() const;
 
     // Approves/denies a pending connection request by exact device id or
-    // unambiguous prefix (see DeviceApprovalManager::approve/deny).
+    // unambiguous prefix by default; the console explicitly selects request
+    // handle lookup (see DeviceApprovalManager::approve/deny).
     // Returns false if nothing pending matches. Safe to call from any
     // thread (e.g. a console-input thread in main.cpp, or a Qt UI-thread
     // slot in the melonDS integration).
-    bool approveDevice(const std::string& deviceIdOrPrefix);
-    bool denyDevice(const std::string& deviceIdOrPrefix);
+    bool approveDevice(const std::string& deviceIdOrPrefix,
+                       DeviceApprovalManager::Lookup lookup = DeviceApprovalManager::Lookup::DeviceId);
+    bool denyDevice(const std::string& deviceIdOrPrefix,
+                    DeviceApprovalManager::Lookup lookup = DeviceApprovalManager::Lookup::DeviceId);
 
     // Current pending connection requests -- e.g. for a UI/console loop
     // to list on demand rather than only reacting to onPendingRequestsChanged.

@@ -1,9 +1,14 @@
 #include "device_identity.h"
 
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <random>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+#include <cstdint>
 
 namespace dualdeck::client {
 
@@ -29,14 +34,32 @@ void migrateFromLegacyPathIfNeeded(const std::string& newPath, const std::string
     std::filesystem::copy_file(legacyPath, newPath, std::filesystem::copy_options::none, ec);
 }
 
+// The device ID is a bearer credential: 16 bytes straight from the kernel
+// CSPRNG, never a seeded userspace PRNG.
 std::string generateIdentity() {
-    std::random_device rd;
-    std::mt19937 rng(rd());
-    std::uniform_int_distribution<int> nibble(0, 15);
+    uint8_t bytes[16];
+    size_t got = 0;
+    int fd = ::open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) {
+        while (got < sizeof(bytes)) {
+            ssize_t n = ::read(fd, bytes + got, sizeof(bytes) - got);
+            if (n <= 0) break;
+            got += static_cast<size_t>(n);
+        }
+        ::close(fd);
+    }
+    if (got != sizeof(bytes)) {
+        // No usable entropy source (practically impossible on Linux): an
+        // unguessable ID can't be made and a weak one must not be, so stop.
+        std::fprintf(stderr, "device identity: cannot read /dev/urandom\n");
+        std::abort();
+    }
     static const char kHexDigits[] = "0123456789abcdef";
-    std::string id(32, '0');
-    for (char& c : id) {
-        c = kHexDigits[nibble(rng)];
+    std::string id;
+    id.reserve(sizeof(bytes) * 2);
+    for (uint8_t b : bytes) {
+        id.push_back(kHexDigits[b >> 4]);
+        id.push_back(kHexDigits[b & 0x0f]);
     }
     return id;
 }
@@ -56,6 +79,8 @@ std::string loadOrCreateDeviceIdentity(const std::string& storePath) {
         std::ifstream in(storePath);
         std::string line;
         if (in.is_open() && std::getline(in, line) && !line.empty()) {
+            // Tighten files written by older versions (default umask).
+            ::chmod(storePath.c_str(), 0600);
             return line;
         }
     }
@@ -68,9 +93,14 @@ std::string loadOrCreateDeviceIdentity(const std::string& storePath) {
         if (path.has_parent_path()) {
             std::filesystem::create_directories(path.parent_path(), ec);
         }
-        std::ofstream out(storePath, std::ios::trunc);
-        if (out.is_open()) {
-            out << identity << '\n';
+        // 0600 from creation (no window where it's world-readable).
+        int fd = ::open(storePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+        if (fd >= 0) {
+            ::fchmod(fd, 0600);
+            std::string line = identity + '\n';
+            ssize_t ignored = ::write(fd, line.data(), line.size());
+            (void)ignored;
+            ::close(fd);
         }
     }
 

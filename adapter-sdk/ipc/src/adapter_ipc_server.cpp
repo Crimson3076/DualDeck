@@ -1,5 +1,7 @@
 #include "dualdeck/adapter/ipc/adapter_ipc_server.h"
 
+#include <algorithm>
+
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -297,7 +299,15 @@ void AdapterIpcServer::serveConnection(int clientFd) {
                 auto frame = parseSurfaceFrame(msg->second.data(), msg->second.size());
                 if (frame) {
                     std::lock_guard<std::mutex> lock(sessionMutex_);
-                    latestFrames_[frame->surfaceId] = std::move(*frame);
+                    // Only surfaces negotiated in this session's Hello; an
+                    // arbitrary surfaceId per frame would otherwise grow
+                    // latestFrames_ without bound.
+                    const auto& surfaces = capabilities_.surfaces;
+                    bool negotiated = std::any_of(surfaces.begin(), surfaces.end(),
+                        [&](const auto& s) { return s.surfaceId == frame->surfaceId; });
+                    if (negotiated) {
+                        latestFrames_[frame->surfaceId] = std::move(*frame);
+                    }
                 }
                 break;
             }

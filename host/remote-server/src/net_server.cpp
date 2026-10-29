@@ -74,11 +74,12 @@ NetServer::NetServer(NetServerConfig config, IEmulatorInputSink& inputSink, IFra
             for (const auto& r : requests) {
                 currentIds.insert(r.deviceId);
                 if (notifiedPendingIds_.count(r.deviceId) == 0) {
+                    const std::string handle = DeviceApprovalManager::displayId(requests, r.deviceId);
                     std::fprintf(stderr,
                                   "NetServer: pending connection request from '%s' at %s "
                                   "(device %s) -- type 'approve %s' or 'deny %s' to respond\n",
-                                  r.clientName.c_str(), r.address.c_str(), r.deviceId.c_str(),
-                                  r.deviceId.substr(0, 8).c_str(), r.deviceId.substr(0, 8).c_str());
+                                  r.clientName.c_str(), r.address.c_str(),
+                                  handle.c_str(), handle.c_str(), handle.c_str());
                 }
             }
             notifiedPendingIds_ = std::move(currentIds);
@@ -154,12 +155,12 @@ AdapterIdentity NetServer::currentAdapterIdentity() const {
     return currentAdapterIdentity_;
 }
 
-bool NetServer::approveDevice(const std::string& deviceIdOrPrefix) {
-    return deviceApproval_.approve(deviceIdOrPrefix);
+bool NetServer::approveDevice(const std::string& deviceIdOrPrefix, DeviceApprovalManager::Lookup lookup) {
+    return deviceApproval_.approve(deviceIdOrPrefix, lookup);
 }
 
-bool NetServer::denyDevice(const std::string& deviceIdOrPrefix) {
-    return deviceApproval_.deny(deviceIdOrPrefix);
+bool NetServer::denyDevice(const std::string& deviceIdOrPrefix, DeviceApprovalManager::Lookup lookup) {
+    return deviceApproval_.deny(deviceIdOrPrefix, lookup);
 }
 
 std::vector<DeviceApprovalManager::PendingRequest> NetServer::pendingRequests() {

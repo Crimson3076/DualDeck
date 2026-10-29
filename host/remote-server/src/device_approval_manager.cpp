@@ -4,6 +4,10 @@
 #include <filesystem>
 #include <fstream>
 
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 namespace dualdeck::host {
 
 DeviceApprovalManager::DeviceApprovalManager(std::string stateFilePath,
@@ -18,6 +22,10 @@ void DeviceApprovalManager::loadApprovedLocked() {
 
     std::ifstream in(stateFilePath_);
     if (!in.is_open()) return; // fine -- no prior approvals, or first run
+
+    // Approved IDs are bearer credentials: tighten a file left loose by an
+    // older version.
+    ::chmod(stateFilePath_.c_str(), 0600);
 
     std::string line;
     while (std::getline(in, line)) {
@@ -38,6 +46,12 @@ void DeviceApprovalManager::persistApprovedLocked(const std::string& deviceId) {
 
     // Append-only: every previously-approved device keeps working even if
     // the process restarts mid-write of a later line.
+    // Approved IDs are bearer credentials: create the file at 0600 (before any
+    // ID is written) and tighten one that already exists with looser bits.
+    int fd = ::open(stateFilePath_.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0600);
+    if (fd >= 0) ::close(fd);
+    ::chmod(stateFilePath_.c_str(), 0600);
+
     std::ofstream out(stateFilePath_, std::ios::app);
     if (out.is_open()) {
         out << deviceId << '\n';
@@ -69,13 +83,27 @@ void DeviceApprovalManager::notifyChangedLocked() {
     requests.reserve(pendingOrder_.size());
     for (const auto& id : pendingOrder_) {
         const auto& entry = pending_.at(id);
-        requests.push_back(PendingRequest{id, entry.clientName, entry.address});
+        requests.push_back(PendingRequest{id, entry.clientName, entry.address, entry.requestHandle});
     }
     onPendingRequestsChanged_(std::move(requests));
 }
 
-std::string DeviceApprovalManager::resolvePendingLocked(const std::string& idOrPrefix) const {
+std::string DeviceApprovalManager::displayId(const std::vector<PendingRequest>& requests,
+                                             const std::string& deviceId) {
+    for (const auto& request : requests) {
+        if (request.deviceId == deviceId) return request.requestHandle;
+    }
+    return {};
+}
+
+std::string DeviceApprovalManager::resolvePendingLocked(const std::string& idOrPrefix, Lookup lookup) const {
     if (idOrPrefix.empty()) return {};
+    if (lookup == Lookup::RequestHandle) {
+        for (const auto& id : pendingOrder_) {
+            if (pending_.at(id).requestHandle == idOrPrefix) return id;
+        }
+        return {};
+    }
     if (pending_.count(idOrPrefix) > 0) return idOrPrefix;
 
     std::string match;
@@ -100,7 +128,9 @@ DeviceApprovalManager::CheckResult DeviceApprovalManager::check(const std::strin
 
     if (!deviceId.empty()) {
         bool isNew = pending_.count(deviceId) == 0;
-        pending_[deviceId] = PendingEntry{clientName, address, std::chrono::steady_clock::now()};
+        const auto handle = isNew ? "request-" + std::to_string(nextRequestHandle_++)
+                                  : pending_.at(deviceId).requestHandle;
+        pending_[deviceId] = PendingEntry{clientName, address, std::chrono::steady_clock::now(), handle};
         if (isNew) {
             pendingOrder_.push_back(deviceId);
             notifyChangedLocked();
@@ -115,9 +145,9 @@ bool DeviceApprovalManager::isApproved(const std::string& deviceId) const {
     return !deviceId.empty() && approvedDevices_.count(deviceId) > 0;
 }
 
-bool DeviceApprovalManager::approve(const std::string& deviceIdOrPrefix) {
+bool DeviceApprovalManager::approve(const std::string& deviceIdOrPrefix, Lookup lookup) {
     std::lock_guard<std::mutex> lock(mutex_);
-    std::string deviceId = resolvePendingLocked(deviceIdOrPrefix);
+    std::string deviceId = resolvePendingLocked(deviceIdOrPrefix, lookup);
     if (deviceId.empty()) return false;
 
     approvedDevices_.insert(deviceId);
@@ -129,9 +159,9 @@ bool DeviceApprovalManager::approve(const std::string& deviceIdOrPrefix) {
     return true;
 }
 
-bool DeviceApprovalManager::deny(const std::string& deviceIdOrPrefix) {
+bool DeviceApprovalManager::deny(const std::string& deviceIdOrPrefix, Lookup lookup) {
     std::lock_guard<std::mutex> lock(mutex_);
-    std::string deviceId = resolvePendingLocked(deviceIdOrPrefix);
+    std::string deviceId = resolvePendingLocked(deviceIdOrPrefix, lookup);
     if (deviceId.empty()) return false;
 
     pending_.erase(deviceId);
@@ -149,7 +179,7 @@ std::vector<DeviceApprovalManager::PendingRequest> DeviceApprovalManager::pendin
     requests.reserve(pendingOrder_.size());
     for (const auto& id : pendingOrder_) {
         const auto& entry = pending_.at(id);
-        requests.push_back(PendingRequest{id, entry.clientName, entry.address});
+        requests.push_back(PendingRequest{id, entry.clientName, entry.address, entry.requestHandle});
     }
     return requests;
 }

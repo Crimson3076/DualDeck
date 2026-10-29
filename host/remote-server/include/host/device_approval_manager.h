@@ -63,6 +63,7 @@ public:
         std::string deviceId;
         std::string clientName;
         std::string address;
+        std::string requestHandle;
     };
 
     // Checks `deviceId` (the Hello payload's authToken field, repurposed
@@ -86,22 +87,26 @@ public:
     // anyway.
     bool isApproved(const std::string& deviceId) const;
 
-    // Approves a pending request by exact deviceId or unambiguous prefix
-    // (operator convenience -- typing the first several characters of the
-    // id shown in the log is enough). Persists the full deviceId to disk
-    // and removes it from the pending set. Returns false if no pending
-    // request matches (exactly, or as a unique prefix).
-    bool approve(const std::string& deviceIdOrPrefix);
+    // Keep credential and handle namespaces separate: clients can supply IDs
+    // identical to another request's handle. Local UIs use DeviceId; the
+    // console uses RequestHandle. Credential lookup retains prefix support.
+    enum class Lookup { DeviceId, RequestHandle };
 
-    // Denies (simply discards) a pending request by exact deviceId or
-    // unambiguous prefix. Returns false if no pending request matches. A
-    // denied client's automatic retries will just reappear as pending
-    // again -- this isn't a permanent block, only "not right now".
-    bool deny(const std::string& deviceIdOrPrefix);
+    // Persists the matching credential and removes the pending request.
+    // Returns false for an unknown or ambiguous target.
+    bool approve(const std::string& target, Lookup lookup = Lookup::DeviceId);
+
+    // Discards the matching pending request; retries may queue it again.
+    bool deny(const std::string& target, Lookup lookup = Lookup::DeviceId);
 
     // Current pending requests, oldest first, after evicting any that
     // haven't been refreshed within pendingRequestTtl.
     std::vector<PendingRequest> pendingRequests();
+
+    // Non-secret, process-local approval handle. It is independent of the
+    // bearer credential and stays stable until this pending request is removed.
+    static std::string displayId(const std::vector<PendingRequest>& requests,
+                                 const std::string& deviceId);
 
     // Fired (on whatever thread calls check()/approve()/deny(), or the
     // watchdog thread that evicts stale entries) whenever the *set* of
@@ -124,17 +129,16 @@ private:
         std::string clientName;
         std::string address;
         std::chrono::steady_clock::time_point lastSeen;
+        std::string requestHandle;
     };
 
     void loadApprovedLocked();
     void persistApprovedLocked(const std::string& deviceId);
     void evictStaleLocked();
     void notifyChangedLocked();
-    // Returns the exact deviceId matching `idOrPrefix` in pending_, either
-    // an exact key match or the single pending entry whose key starts
-    // with it. Returns empty string if there's no match or the prefix is
-    // ambiguous (matches more than one).
-    std::string resolvePendingLocked(const std::string& idOrPrefix) const;
+    // Resolves only the specified namespace. DeviceId lookup accepts an
+    // exact credential or a unique prefix; handle lookup requires an exact match.
+    std::string resolvePendingLocked(const std::string& target, Lookup lookup) const;
 
     mutable std::mutex mutex_;
     std::string stateFilePath_;
@@ -142,6 +146,7 @@ private:
 
     std::unordered_set<std::string> approvedDevices_;
     std::unordered_map<std::string, PendingEntry> pending_; // keyed by deviceId
+    size_t nextRequestHandle_ = 1;
     std::vector<std::string> pendingOrder_; // insertion order, for stable listing
 
     std::function<void(std::vector<PendingRequest>)> onPendingRequestsChanged_;

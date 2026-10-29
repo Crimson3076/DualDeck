@@ -38,6 +38,9 @@ uint64_t wallClockNowUs() {
     return static_cast<uint64_t>(duration_cast<microseconds>(system_clock::now().time_since_epoch()).count());
 }
 
+// Largest width/height accepted from a JPEG header (see decompressJpegToBgra()).
+constexpr int kMaxVideoDimension = 8192;
+
 // JPEG-decodes one video frame (protocol v8, see protocol.h's
 // kProtocolVersion comment) back into raw BGRA8888 -- TJPF_BGRA as the
 // output format means no manual channel reordering, matching this
@@ -67,6 +70,14 @@ bool decompressJpegToBgra(tjhandle decompressor, const uint8_t* jpeg, size_t jpe
     }
     if (outWidth <= 0 || outHeight <= 0) {
         logLine("video: decoded JPEG has invalid dimensions %dx%d\n", outWidth, outHeight);
+        return false;
+    }
+
+    // Dimensions come straight from the (untrusted) JPEG header; without a
+    // cap 65535x65535 would ask resize() for ~17 GB.
+    if (outWidth > kMaxVideoDimension || outHeight > kMaxVideoDimension) {
+        logLine("video: JPEG dimensions %dx%d exceed the %d limit\n", outWidth, outHeight,
+                kMaxVideoDimension);
         return false;
     }
 

@@ -28,7 +28,7 @@ void handleSignal(int) {
     g_stopRequested = 1;
 }
 
-// Reads "approve <id>" / "deny <id>" / "list" lines from stdin for as
+// Reads "approve <handle>" / "deny <handle>" / "list" from stdin for as
 // long as it stays open, so an operator running this console binary
 // interactively can respond to device-approval requests without a GUI.
 // `coordinator` is non-null only in --adapter-ipc mode (GitHub issue #4
@@ -47,16 +47,16 @@ void consoleLoop(dualdeck::host::NetServer& server, dualdeck::host::ModeCoordina
         iss >> cmd >> arg;
 
         if (cmd == "approve" && !arg.empty()) {
-            if (server.approveDevice(arg)) {
-                std::printf("[approval] approved device %s\n", arg.c_str());
+            if (server.approveDevice(arg, dualdeck::host::DeviceApprovalManager::Lookup::RequestHandle)) {
+                std::printf("[approval] device approved\n");
             } else {
-                std::printf("[approval] no pending request matches '%s'\n", arg.c_str());
+                std::printf("[approval] no pending request matches\n");
             }
         } else if (cmd == "deny" && !arg.empty()) {
-            if (server.denyDevice(arg)) {
-                std::printf("[approval] denied device %s\n", arg.c_str());
+            if (server.denyDevice(arg, dualdeck::host::DeviceApprovalManager::Lookup::RequestHandle)) {
+                std::printf("[approval] device denied\n");
             } else {
-                std::printf("[approval] no pending request matches '%s'\n", arg.c_str());
+                std::printf("[approval] no pending request matches\n");
             }
         } else if (cmd == "list") {
             auto pending = server.pendingRequests();
@@ -64,7 +64,10 @@ void consoleLoop(dualdeck::host::NetServer& server, dualdeck::host::ModeCoordina
                 std::printf("[approval] no pending requests\n");
             } else {
                 for (const auto& r : pending) {
-                    std::printf("  %s  '%s' at %s\n", r.deviceId.c_str(), r.clientName.c_str(),
+                    // Only non-secret request handles belong in console output.
+                    std::printf("  %s  '%s' at %s\n",
+                                dualdeck::host::DeviceApprovalManager::displayId(pending, r.deviceId).c_str(),
+                                r.clientName.c_str(),
                                 r.address.c_str());
                 }
             }

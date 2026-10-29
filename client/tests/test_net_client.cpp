@@ -283,6 +283,25 @@ MDR_TEST(net_client_receives_a_non_ds_sized_video_frame) {
     client.disconnect();
 }
 
+// OOM guard: the decoded size comes from the JPEG header, which a hostile
+// host controls, so a frame wider/taller than the client's cap must be
+// dropped rather than allocated.
+MDR_TEST(net_client_drops_a_video_frame_wider_than_the_dimension_cap) {
+    ServerFixture fixture;
+    SizedFrameSource hugeFrame(8200, 8);
+    hugeFrame.setFrame(std::vector<uint8_t>(static_cast<size_t>(8200) * 8 * 4, 0x7A));
+    fixture.server.setTarget(fixture.sinkA, hugeFrame, HostMode::Emulation,
+                              SystemIdentity{"n3ds", "Nintendo 3DS"}, AdapterIdentity{"azahar", "Azahar", "1.0"});
+
+    NetClient client(fixture.clientConfig());
+    MDR_CHECK(client.connect());
+
+    std::vector<uint8_t> received;
+    MDR_CHECK(!waitUntil([&] { return client.getLatestFrame(received); }, 1000));
+
+    client.disconnect();
+}
+
 // Protocol v14: real user report, LATENCY read exactly 0US for a whole
 // session (see protocol.h's kProtocolVersion v14 comment and
 // NetClient::connect()'s own comment for the full clock-skew story).

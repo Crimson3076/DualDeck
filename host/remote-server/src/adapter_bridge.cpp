@@ -112,6 +112,15 @@ bool AdapterBridge::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& out
     if (!adapter_.latestFrame(targetSurfaceId(), frame)) {
         return false;
     }
+    uint16_t width = frame.width;
+    uint16_t height = frame.height;
+    if (width == 0 || height == 0) {
+        frameDimensions(width, height);
+    }
+    // Never hand the encoder dimensions the buffer can't back (heap over-read).
+    if (!dualdeck::adapter::surfaceFramePixelsCoverDimensions(width, height, frame.pixels.size())) {
+        return false;
+    }
     outFrame = std::move(frame.pixels);
     outFrameIndex = frame.frameIndex;
     // Real, shipped bug this fixes: frameDimensions() below is a coarse
@@ -128,12 +137,8 @@ bool AdapterBridge::getLatestFrame(std::vector<uint8_t>& outFrame, uint64_t& out
     // back to frameDimensions()'s declared value only for an adapter that
     // hasn't been updated to set it (it would otherwise be 0x0, which
     // would corrupt or crash the JPEG encoder in net_server.cpp).
-    if (frame.width != 0 && frame.height != 0) {
-        outWidth = frame.width;
-        outHeight = frame.height;
-    } else {
-        frameDimensions(outWidth, outHeight);
-    }
+    outWidth = width;
+    outHeight = height;
     return true;
 }
 

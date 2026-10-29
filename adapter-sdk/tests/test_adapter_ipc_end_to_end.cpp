@@ -233,21 +233,22 @@ MDR_TEST(ipc_frame_relayed_from_adapter_to_server) {
     MDR_CHECK(client.connect());
     MDR_CHECK(waitUntil([&] { return server.hasConnectedAdapter(); }));
 
-    ds.pushFrame("bottom", {9, 8, 7}, 256, 192);
+    const std::vector<uint8_t> pixels(4 * 2 * 4, 9);
+    ds.pushFrame("bottom", pixels, 4, 2);
 
     SurfaceFrame outFrame;
     MDR_CHECK(waitUntil([&] { return server.latestFrame("bottom", outFrame) && !outFrame.pixels.empty(); }));
-    MDR_CHECK(outFrame.pixels == std::vector<uint8_t>({9, 8, 7}));
+    MDR_CHECK(outFrame.pixels == pixels);
     // Contract v2: width/height ride along with the frame itself over the
     // real IPC socket, not just in the in-process serialize/parse tests.
-    MDR_CHECK_EQ(outFrame.width, 256);
-    MDR_CHECK_EQ(outFrame.height, 192);
+    MDR_CHECK_EQ(outFrame.width, 4);
+    MDR_CHECK_EQ(outFrame.height, 2);
     MDR_CHECK(server.latestFrameIndex("bottom") == std::optional<uint64_t>(outFrame.frameIndex));
     MDR_CHECK(!server.latestFrameIndex("top").has_value());
 
     // A second frame advances the index the server reports without the
     // caller having to copy the frame out to find out.
-    ds.pushFrame("bottom", {6, 5, 4}, 256, 192);
+    ds.pushFrame("bottom", pixels, 4, 2);
     const uint64_t firstIndex = outFrame.frameIndex;
     MDR_CHECK(waitUntil([&] {
         const auto index = server.latestFrameIndex("bottom");
@@ -255,6 +256,56 @@ MDR_TEST(ipc_frame_relayed_from_adapter_to_server) {
     }));
 
     client.disconnect();
+    server.stop();
+}
+
+MDR_TEST(ipc_frame_for_unnegotiated_surface_is_dropped) {
+    // latestFrames_ must not grow for surfaceIds the Hello never declared.
+    // Raw socket, since the real client only ever sends declared surfaces.
+    std::string path = uniqueSocketPath();
+    AdapterIpcServer server(path);
+    MDR_CHECK(server.start());
+
+    int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    MDR_CHECK(fd >= 0);
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    MDR_CHECK(path.size() < sizeof(addr.sun_path));
+    if (path.size() >= sizeof(addr.sun_path)) {
+        ::close(fd);
+        server.stop();
+        return;
+    }
+    std::memcpy(addr.sun_path, path.c_str(), path.size() + 1);
+    MDR_CHECK(::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+
+    ByteBuffer hello;
+    serializeAdapterCapabilities(hello, FakeDsAdapter{}.capabilities());
+    auto helloPacket = buildIpcMessage(IpcMessageType::Hello, hello);
+    MDR_CHECK(::send(fd, helloPacket.data(), helloPacket.size(), 0) ==
+              static_cast<ssize_t>(helloPacket.size()));
+    MDR_CHECK(waitUntil([&] { return server.hasConnectedAdapter(); }));
+
+    auto sendFrame = [&](const char* surfaceId) {
+        SurfaceFrame frame;
+        frame.surfaceId = surfaceId;
+        frame.width = 4;
+        frame.height = 2;
+        frame.pixels.assign(4 * 2 * 4, 1);
+        ByteBuffer payload;
+        serializeSurfaceFrame(payload, frame);
+        auto packet = buildIpcMessage(IpcMessageType::Frame, payload);
+        MDR_CHECK(::send(fd, packet.data(), packet.size(), 0) == static_cast<ssize_t>(packet.size()));
+    };
+    sendFrame("bogus");
+    sendFrame("bottom"); // processed in order, so once it lands "bogus" was already seen
+
+    SurfaceFrame outFrame;
+    MDR_CHECK(waitUntil([&] { return server.latestFrame("bottom", outFrame); }));
+    MDR_CHECK(!server.latestFrame("bogus", outFrame));
+    MDR_CHECK(!server.latestFrameIndex("bogus").has_value());
+
+    ::close(fd);
     server.stop();
 }
 
