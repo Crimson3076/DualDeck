@@ -55,6 +55,9 @@ public:
     bool start();
     void stop();
 
+    // How long a connected client may stay silent before it is dropped.
+    void setIdleTimeoutMs(int ms) { idleTimeoutMs_ = ms; }
+
     const std::string& socketPath() const { return socketPath_; }
 
 private:
@@ -64,6 +67,7 @@ private:
     std::string socketPath_;
     Handler handler_;
     int listenFd_ = -1;
+    std::atomic<int> idleTimeoutMs_{5000};
     std::atomic<bool> running_{false};
     std::thread acceptThread_;
 };
