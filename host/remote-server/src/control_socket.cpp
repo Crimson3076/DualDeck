@@ -209,6 +209,9 @@ void ControlSocketServer::serveClient(int clientFd) {
 
             std::string reply = handler_(line) + "\n";
             if (::send(clientFd, reply.data(), reply.size(), MSG_NOSIGNAL) < 0) return;
+            // Restart the idle clock once the reply is out, so a slow
+            // handler doesn't eat the client's idle budget.
+            lastActivity = std::chrono::steady_clock::now();
         }
         if (buffer.size() > kMaxLineBytes) {
             std::string reply = "{\"ok\":false,\"error\":\"line too long\"}\n";
