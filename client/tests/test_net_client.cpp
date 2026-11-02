@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <functional>
 #include <mutex>
 #include <thread>
@@ -101,7 +102,19 @@ uint16_t freePort() {
     return port;
 }
 
+// DUALDECK_TEST_TIMEOUT_SCALE (integer, default 1) stretches every deadline
+// for slow CI runners.
+int timeoutScale() {
+    static const int scale = [] {
+        const char* env = std::getenv("DUALDECK_TEST_TIMEOUT_SCALE");
+        int value = env ? std::atoi(env) : 1;
+        return value > 0 ? value : 1;
+    }();
+    return scale;
+}
+
 bool waitUntil(const std::function<bool()>& predicate, int timeoutMs = 2000) {
+    timeoutMs *= timeoutScale();
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
     while (std::chrono::steady_clock::now() < deadline) {
         if (predicate()) return true;
@@ -406,8 +419,12 @@ MDR_TEST(net_server_applies_only_well_formed_controller_state_packets) {
     ControllerState first;
     first.sequence = 1;
     first.dsButtons = 0x1;
-    client.sendControllerState(first);
-    MDR_CHECK(waitUntil([&] { return fixture.sinkA.lastState().dsButtons == 0x1; }));
+    // Controller state is UDP: resend (as the real client does every frame)
+    // instead of relying on one datagram arriving inside a fixed deadline.
+    MDR_CHECK(waitUntil([&] {
+        client.sendControllerState(first);
+        return fixture.sinkA.lastState().dsButtons == 0x1;
+    }));
 
     // Same address as the client (loopback), so only the packet checks
     // can reject these.
@@ -436,8 +453,10 @@ MDR_TEST(net_server_applies_only_well_formed_controller_state_packets) {
     ControllerState next;
     next.sequence = 3;
     next.dsButtons = 0x4;
-    client.sendControllerState(next);
-    MDR_CHECK(waitUntil([&] { return fixture.sinkA.lastState().dsButtons == 0x4; }));
+    MDR_CHECK(waitUntil([&] {
+        client.sendControllerState(next);
+        return fixture.sinkA.lastState().dsButtons == 0x4;
+    }));
     client.disconnect();
 }
 
