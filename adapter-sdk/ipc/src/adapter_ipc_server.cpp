@@ -239,7 +239,10 @@ void AdapterIpcServer::serveConnection(int clientFd) {
         connected_ = true;
         clientAlreadyConnected = lastKnownClientConnected_;
     }
-    clientFd_ = clientFd;
+    {
+        std::lock_guard<std::mutex> lock(writeMutex_);
+        clientFd_ = clientFd;
+    }
 
     // Catch this newly-connected adapter up to the real, current remote-
     // client-connection state -- see lastKnownClientConnected_'s own
@@ -322,14 +325,21 @@ void AdapterIpcServer::serveConnection(int clientFd) {
 
     heartbeatStop = true;
     if (heartbeatThread.joinable()) heartbeatThread.join();
-    ::close(clientFd);
+    {
+        // Unpublish the fd under writeMutex_ before closing it, so a
+        // concurrent applyGenericInput()/releaseAllInputs()/
+        // notifyClientConnectionChanged() can never send on an fd number
+        // the kernel has already reused for some other socket.
+        std::lock_guard<std::mutex> lock(writeMutex_);
+        clientFd_ = -1;
+        ::close(clientFd);
+    }
     resetSessionLocked();
 }
 
 void AdapterIpcServer::resetSessionLocked() {
     std::lock_guard<std::mutex> lock(sessionMutex_);
     connected_ = false;
-    clientFd_ = -1;
     latestFrames_.clear();
     // capabilities_/state_ deliberately left as last-known rather than
     // cleared -- mirrors how the client keeps showing "last known
@@ -354,18 +364,18 @@ SessionState AdapterIpcServer::currentState() const {
 }
 
 void AdapterIpcServer::applyGenericInput(const GenericInputState& state) {
-    int fd = clientFd_.load();
-    if (fd < 0) return; // no adapter connected -- safe no-op, matches NetClient::sendControllerState()
     dualdeck::ByteBuffer payload;
     serializeGenericInputState(payload, state);
     std::lock_guard<std::mutex> lock(writeMutex_);
+    int fd = clientFd_.load(); // read under writeMutex_: serveConnection() clears it under the same lock before close()
+    if (fd < 0) return; // no adapter connected -- safe no-op, matches NetClient::sendControllerState()
     sendMessage(fd, IpcMessageType::InputState, payload);
 }
 
 void AdapterIpcServer::releaseAllInputs() {
+    std::lock_guard<std::mutex> lock(writeMutex_);
     int fd = clientFd_.load();
     if (fd < 0) return; // safe no-op if nothing is connected to release
-    std::lock_guard<std::mutex> lock(writeMutex_);
     sendMessage(fd, IpcMessageType::ReleaseInputs, {});
 }
 
@@ -378,11 +388,11 @@ void AdapterIpcServer::notifyClientConnectionChanged(bool connected) {
         std::lock_guard<std::mutex> lock(sessionMutex_);
         lastKnownClientConnected_ = connected;
     }
-    int fd = clientFd_.load();
-    if (fd < 0) return; // no adapter connected -- safe no-op, matches releaseAllInputs()'s same pattern
     dualdeck::ByteBuffer payload;
     serializeClientConnectionChanged(payload, connected);
     std::lock_guard<std::mutex> lock(writeMutex_);
+    int fd = clientFd_.load();
+    if (fd < 0) return; // no adapter connected -- safe no-op, matches releaseAllInputs()'s same pattern
     sendMessage(fd, IpcMessageType::ClientConnectionChanged, payload);
 }
 

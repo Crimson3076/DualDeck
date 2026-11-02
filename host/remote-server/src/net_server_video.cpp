@@ -69,10 +69,9 @@ void NetServer::videoLoop() {
             continue;
         }
 
-        int previous = videoClientFd_.exchange(clientFd);
-        if (previous >= 0) {
+        int expectedFd = -1;
+        if (!videoClientFd_.compare_exchange_strong(expectedFd, clientFd)) {
             ::close(clientFd);
-            videoClientFd_ = previous;
             continue;
         }
 
