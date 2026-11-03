@@ -288,6 +288,7 @@ choose_action() {
         ui_send item update "Check for updates" "Download the newest DualDeck release" refresh "" "" ""
         ui_send item reconfigure-controls "Fix Cemu controls" "When Deck input does nothing in Cemu" gamepad "" "" ""
         ui_send item emudeck "Use my EmuDeck / RetroDECK emulators" "Stream the emulators you already have installed" list "Experimental" warn ""
+        ui_send item retrodeck-setup "RetroDECK: emulator compatibility setup" "Lets RetroDECK's own game list and Tender launch DualDeck's patched Cemu/melonDS/Azahar" list "Experimental" warn ""
         ui_send item advanced "Advanced" "Installation branch and other options" gear "" "" ""
         ui_send item steam-remove "Remove from Steam and uninstall" "Your ROMs, saves and firmware are never touched" trash "" danger ""
         ui_send end
@@ -304,6 +305,7 @@ What would you like to do?" \
             reconfigure-controls "Fix Cemu controls (Deck input does nothing in Cemu)" \
             update "Check for updates" \
             emudeck "Use my EmuDeck/RetroDECK emulators (experimental)" \
+            retrodeck-setup "RetroDECK: emulator compatibility setup (experimental)" \
             advanced "Advanced..." \
             2>/dev/null || echo "cancel"
     else
@@ -323,10 +325,11 @@ What would you like to do?" \
             echo "  5) Fix Cemu controls (Deck input does nothing in Cemu)"
             echo "  6) Check for updates"
             echo "  7) Use my EmuDeck/RetroDECK emulators (experimental)"
-            echo "  8) Advanced..."
-            echo "  9) Exit"
+            echo "  8) RetroDECK: emulator compatibility setup (experimental)"
+            echo "  9) Advanced..."
+            echo "  10) Exit"
         } >&2
-        read -rp "Choice [1-9]: " choice
+        read -rp "Choice [1-10]: " choice
         case "${choice}" in
             1) echo "launch" ;;
             2) echo "hostcontrol-daemon" ;;
@@ -335,7 +338,8 @@ What would you like to do?" \
             5) echo "reconfigure-controls" ;;
             6) echo "update" ;;
             7) echo "emudeck" ;;
-            8) echo "advanced" ;;
+            8) echo "retrodeck-setup" ;;
+            9) echo "advanced" ;;
             *) echo "cancel" ;;
         esac
     fi
@@ -394,6 +398,50 @@ choose_host_control_daemon_action() {
         case "${choice}" in
             1) [[ "${active}" -eq 1 ]] && echo "stop" || echo "start" ;;
             2) echo "status" ;;
+            *) echo "cancel" ;;
+        esac
+    fi
+}
+
+# RetroDECK's own emulator resolution (both its ES-DE GUI and the
+# separate run_game.sh path apps like Tender call into) needs three
+# local Flatpak permission grants plus a ~/.local/bin symlink per
+# emulator to actually use DualDeck's patched Cemu/melonDS/Azahar
+# instead of RetroDECK's own bundled copies -- confirmed on real
+# hardware, see docs/retrodeck-compatibility.md's "Real, confirmed
+# blockers" section and scripts/retrodeck-setup.sh's own header comment
+# for the full story. This submenu is the zero-typing, controller-
+# friendly front end for that script, mirroring
+# choose_host_control_daemon_action()'s own shape (a small menu, each
+# choice calling the underlying script and showing its output in a
+# plain info() dialog).
+choose_retrodeck_action() {
+    if [[ "${ui_active}" -eq 1 ]]; then
+        ui_send menu list "RetroDECK: emulator compatibility setup" "Lets RetroDECK's own game list and Tender launch DualDeck's patched Cemu/melonDS/Azahar"
+        ui_send item apply "Apply" "Recommended" check "" "" ""
+        ui_send item status "Status" "Show current overrides and symlinks" info "" "" ""
+        ui_send item restore "Restore / undo" "Reset RetroDECK back to its own bundled emulators" undo "" "" ""
+        ui_send end
+        ui_read
+    elif have_kdialog; then
+        kdialog --title "DualDeck Host -- RetroDECK" --menu "RetroDECK: emulator compatibility setup" \
+            apply "Apply (recommended)" \
+            status "Status" \
+            restore "Restore / undo" \
+            2>/dev/null || echo "cancel"
+    else
+        {
+            echo "RetroDECK: emulator compatibility setup"
+            echo "  1) Apply (recommended)"
+            echo "  2) Status"
+            echo "  3) Restore / undo"
+            echo "  4) Back"
+        } >&2
+        read -rp "Choice [1-4]: " choice
+        case "${choice}" in
+            1) echo "apply" ;;
+            2) echo "status" ;;
+            3) echo "restore" ;;
             *) echo "cancel" ;;
         esac
     fi
@@ -661,6 +709,50 @@ Install ${latest_version} now? This downloads it from GitHub and also adds/updat
     emudeck)
         ui_stop
         exec ./internal/launch-emudeck-integration.sh
+        ;;
+    retrodeck-setup)
+        rd_tool="./emudeck-integration/scripts/retrodeck-setup.sh"
+        if [[ ! -x "${rd_tool}" ]]; then
+            info "The RetroDECK setup tool is missing from this install (host/emudeck-integration/scripts/retrodeck-setup.sh) -- re-download the release archive."
+        else
+            while true; do
+                rd_action="$(choose_retrodeck_action)"
+                case "${rd_action}" in
+                    apply)
+                        if confirm "This grants RetroDECK's own Flatpak sandbox three local permissions (its own IPC socket directory, an AppImage FUSE workaround, and a widened PATH) plus a ~/.local/bin symlink for each patched emulator you already have installed (Cemu/melonDS/Azahar), so RetroDECK's game list -- and anything that launches through it, like Tender -- use DualDeck's patched builds instead of RetroDECK's own bundled copies. Only covers emulators you've already installed via 'Use my EmuDeck/RetroDECK emulators' above; any not yet installed are skipped, not an error. Nintendo DS also needs one extra manual step in RetroDECK itself afterward (switching its active emulator to \"melonDS (Standalone)\") -- this tool will remind you if melonDS is covered. Only affects RetroDECK, only for this user account, and is fully reversible from this same menu. Continue?"; then
+                            if rd_output="$("${rd_tool}" 2>&1)"; then
+                                info "${rd_output}"
+                            else
+                                info "Could not apply the RetroDECK setup:
+
+${rd_output}"
+                            fi
+                        fi
+                        ;;
+                    status)
+                        rd_output="$("${rd_tool}" --status 2>&1)"
+                        info "${rd_output}"
+                        ;;
+                    restore)
+                        if confirm "This removes ALL Flatpak permission overrides for RetroDECK (a full reset -- real-hardware testing found removing just DualDeck's own three could leave RetroDECK unable to launch at all, so this is the one approach confirmed safe) and removes every emulator's ~/.local/bin symlink. RetroDECK goes back to launching its own bundled Cemu/melonDS/Azahar. Continue?"; then
+                            if rd_output="$("${rd_tool}" --restore 2>&1)"; then
+                                info "${rd_output}"
+                            else
+                                info "Could not restore:
+
+${rd_output}"
+                            fi
+                        fi
+                        ;;
+                    *)
+                        # Cancelled/backed out -- return to the main menu,
+                        # don't exit the host (see the outer loop's own
+                        # header comment).
+                        break
+                        ;;
+                esac
+            done
+        fi
         ;;
     advanced)
         while true; do
