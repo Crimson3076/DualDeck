@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -516,4 +517,38 @@ MDR_TEST(ipc_contract_version_mismatch_rejected) {
 
     ::close(fd);
     server.stop();
+}
+
+namespace {
+
+size_t openFdCount() {
+    size_t count = 0;
+    for ([[maybe_unused]] const auto& entry : std::filesystem::directory_iterator("/proc/self/fd")) ++count;
+    return count;
+}
+
+} // namespace
+
+// connect() on an instance whose previous connection ended on its own
+// (never disconnect()ed) used to overwrite fd_ without closing the old
+// socket, leaking one fd per reconnect.
+MDR_TEST(ipc_client_reconnect_after_drop_does_not_leak_fds) {
+    std::string path = uniqueSocketPath();
+    FakeDsAdapter ds;
+    AdapterIpcClient client(ds, path);
+
+    auto cycle = [&] {
+        AdapterIpcServer server(path);
+        MDR_CHECK(server.start());
+        MDR_CHECK(client.connect());
+        MDR_CHECK(waitUntil([&] { return server.hasConnectedAdapter(); }));
+        server.stop();
+        MDR_CHECK(waitUntil([&] { return !client.isConnected(); }));
+    };
+
+    cycle(); // warm-up
+    const size_t before = openFdCount();
+    for (int i = 0; i < 5; ++i) cycle();
+    MDR_CHECK_EQ(openFdCount(), before);
+    client.disconnect();
 }

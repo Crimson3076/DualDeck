@@ -7,6 +7,10 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <thread>
+#include <sys/time.h>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -161,4 +165,57 @@ MDR_TEST(default_control_socket_path_sits_next_to_the_adapter_socket) {
     } else {
         ::unsetenv("XDG_RUNTIME_DIR");
     }
+}
+
+// One connection that never sends anything must not lock every other
+// client out of the control socket.
+MDR_TEST(control_socket_idle_connection_does_not_block_other_clients) {
+    const TempSocket temp;
+    const std::string& path = temp.path;
+    ControlSocketServer server(path, [](const std::string& line) { return "echo:" + line; });
+    server.setIdleTimeoutMs(300);
+    MDR_CHECK(server.start());
+
+    int idleFd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    sockaddr_un addr = unixAddress(path);
+    MDR_CHECK(::connect(idleFd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+
+    MDR_CHECK_EQ(roundTrip(path, "status\n", 1), std::string("echo:status\n"));
+
+    // The idle connection was dropped by the server (EOF, not a hang).
+    timeval rcvTimeout{2, 0};
+    ::setsockopt(idleFd, SOL_SOCKET, SO_RCVTIMEO, &rcvTimeout, sizeof(rcvTimeout));
+    char b;
+    MDR_CHECK_EQ(::recv(idleFd, &b, 1, 0), ssize_t(0));
+
+    ::close(idleFd);
+    server.stop();
+}
+
+// Bytes without a newline must not keep a connection alive forever.
+MDR_TEST(control_socket_drops_a_client_that_trickles_without_a_newline) {
+    const TempSocket temp;
+    const std::string& path = temp.path;
+    ControlSocketServer server(path, [](const std::string& line) { return "echo:" + line; });
+    server.setIdleTimeoutMs(300);
+    MDR_CHECK(server.start());
+
+    int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    sockaddr_un addr = unixAddress(path);
+    MDR_CHECK(::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+    timeval rcvTimeout{3, 0};
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvTimeout, sizeof(rcvTimeout));
+    // Keep trickling well past the 300 ms timeout; the server must hang up
+    // while bytes are still arriving, not only once they stop.
+    for (int i = 0; i < 12; ++i) {
+        ::send(fd, "x", 1, MSG_NOSIGNAL);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    char b;
+    ssize_t r = ::recv(fd, &b, 1, 0);
+    // EOF (or reset), not a receive timeout from a server still holding us.
+    MDR_CHECK(r == 0 || (r < 0 && errno == ECONNRESET));
+
+    ::close(fd);
+    server.stop();
 }
