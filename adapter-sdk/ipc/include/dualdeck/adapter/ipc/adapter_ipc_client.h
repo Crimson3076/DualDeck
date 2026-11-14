@@ -17,11 +17,13 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
 
 #include "dualdeck/adapter/adapter_contract.h"
+#include "dualdeck/adapter/ipc/ipc_protocol.h"
 
 namespace dualdeck::adapter::ipc {
 
@@ -56,11 +58,13 @@ public:
 private:
     void readLoop();  // blocking recv: InputState/ReleaseInputs/ClientConnectionChanged/Heartbeat/Disconnect -> localAdapter
     void writeLoop(); // periodic: localAdapter's frames/state -> Frame/StateChanged/Heartbeat messages
+    bool sendLocked(int fd, IpcMessageType type, const dualdeck::ByteBuffer& payload); // send under writeMutex_
 
     IEmulatorAdapter& localAdapter_;
     std::string socketPath_;
 
     std::atomic<int> fd_{-1};
+    std::mutex writeMutex_; // serializes every send() on fd_ (writeLoop() vs. disconnect())
     std::atomic<bool> connected_{false};
     std::thread readThread_;
     std::thread writeThread_;

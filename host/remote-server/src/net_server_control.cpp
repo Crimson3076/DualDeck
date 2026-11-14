@@ -149,11 +149,13 @@ void NetServer::controlLoop() {
         }
 
         // Only one client at a time (spec section 7.1 initial scope).
-        int previous = controlClientFd_.exchange(clientFd);
-        if (previous >= 0) {
+        // compare_exchange rather than exchange-and-restore: a rejected
+        // extra connection must never be published in controlClientFd_,
+        // where setTarget() could send ModeChanged to it.
+        int expectedFd = -1;
+        if (!controlClientFd_.compare_exchange_strong(expectedFd, clientFd)) {
             std::fprintf(stderr, "NetServer: rejecting extra control connection\n");
             ::close(clientFd);
-            controlClientFd_ = previous;
             continue;
         }
 

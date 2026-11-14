@@ -36,6 +36,11 @@ enum class KdialogPromptResult {
 KdialogPromptResult promptDeviceApprovalViaKdialog(const std::string& clientName,
                                                     const std::string& address);
 
+// kdialog renders its message as Qt rich text, so attacker-controlled text
+// (the connecting device's self-reported name) must have markup characters
+// escaped or it could restyle/spoof the prompt.
+std::string escapeKdialogRichText(const std::string& text);
+
 // Exposed separately so the exit-status interpretation -- the only part of
 // this that doesn't require a real subprocess/display to exercise -- has
 // unit test coverage. promptDeviceApprovalViaKdialog() is a thin wrapper
