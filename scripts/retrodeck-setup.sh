@@ -109,6 +109,10 @@ while [[ $# -gt 0 ]]; do
         --status) mode="status"; shift ;;
         --restore) mode="restore"; shift ;;
         --emulator)
+            if [[ $# -lt 2 ]]; then
+                echo "error: --emulator needs a value (see --help)" >&2
+                exit 1
+            fi
             selected_emulators+=("$2")
             shift 2
             ;;
@@ -202,7 +206,16 @@ apply() {
                 "(run ./scripts/emudeck-replace-in-place.sh first)"
             continue
         fi
-        run ln -sf "${appimage_path[$e]}" "${local_bin_dir}/${systempath_name[$e]}"
+        local symlink="${local_bin_dir}/${systempath_name[$e]}"
+        if [[ -e "${symlink}" || -L "${symlink}" ]] && \
+           [[ "$(readlink -f "${symlink}" 2>/dev/null)" != "$(readlink -f "${appimage_path[$e]}")" ]]; then
+            echo "warning: ${symlink} already exists and is not a symlink to" \
+                "${appimage_path[$e]} -- not overwriting it. Remove it manually" \
+                "first if you want this script to manage it." >&2
+            applied_any=1
+            continue
+        fi
+        run ln -sf "${appimage_path[$e]}" "${symlink}"
         applied_any=1
     done
 
@@ -253,7 +266,8 @@ restore() {
     run flatpak override --user --reset "${app_id}"
     for e in "${emulators[@]}"; do
         local symlink="${local_bin_dir}/${systempath_name[$e]}"
-        if [[ -L "${symlink}" ]]; then
+        if [[ -L "${symlink}" ]] && \
+           [[ "$(readlink -f "${symlink}")" == "$(readlink -f "${appimage_path[$e]}" 2>/dev/null)" ]]; then
             run rm -f "${symlink}"
         fi
     done

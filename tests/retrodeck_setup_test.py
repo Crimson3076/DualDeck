@@ -277,6 +277,57 @@ def test_restore_removes_every_symlink_via_full_reset():
         check(not any("--unset-env" in c for c in calls), "--restore no longer uses --unset-env, which was found to leave RetroDECK unable to launch")
 
 
+def test_apply_does_not_clobber_a_pre_existing_unrelated_file_at_the_symlink_target():
+    # Real bug found in review: apply() used a bare `ln -sf`, which force-
+    # overwrites whatever already sits at ~/.local/bin/<name> -- a user's
+    # own file or symlink with that exact name would be silently replaced.
+    with tempfile.TemporaryDirectory() as tmp:
+        fx = Fixture(Path(tmp))
+        fx.install_appimage("cemu")
+        symlink = fx.symlink("cemu")
+        symlink.parent.mkdir(parents=True)
+        symlink.write_text("#!/usr/bin/env bash\necho not dualdeck's\n")
+        symlink.chmod(symlink.stat().st_mode | stat.S_IEXEC)
+
+        result = fx.run("--emulator", "cemu")
+        check(result.returncode == 0, f"apply still succeeds when the symlink target is a pre-existing unrelated file (stderr: {result.stderr})")
+        check(not symlink.is_symlink(), "apply does not turn the user's own file into a symlink")
+        check(symlink.read_text() == "#!/usr/bin/env bash\necho not dualdeck's\n",
+              "apply leaves the user's own file content untouched")
+        check("not overwriting" in result.stderr, "apply warns that it's not overwriting the existing file")
+
+
+def test_restore_does_not_remove_a_symlink_pointing_elsewhere():
+    # Real bug found in review: restore() removed any symlink named
+    # cemu/melonds/azahar under ~/.local/bin, even one that never pointed
+    # at a DualDeck AppImage (e.g. the user's own symlink to something else).
+    with tempfile.TemporaryDirectory() as tmp:
+        fx = Fixture(Path(tmp))
+        fx.install_appimage("cemu")
+        symlink = fx.symlink("cemu")
+        symlink.parent.mkdir(parents=True)
+        elsewhere = fx.tmp / "not-dualdecks-cemu"
+        elsewhere.write_text("something else entirely")
+        symlink.symlink_to(elsewhere)
+
+        result = fx.run("--restore")
+        check(result.returncode == 0, f"--restore still succeeds (stderr: {result.stderr})")
+        check(symlink.is_symlink(), "--restore leaves a symlink pointing elsewhere untouched")
+        check(os.path.realpath(symlink) == os.path.realpath(elsewhere),
+              "the untouched symlink still points at its original target")
+
+
+def test_emulator_flag_with_no_value_fails_clearly():
+    # Real bug found in review: under `set -u`, `--emulator` as the last
+    # argument hit an unbound $2 instead of a clear error message.
+    with tempfile.TemporaryDirectory() as tmp:
+        fx = Fixture(Path(tmp))
+        result = fx.run("--emulator")
+        check(result.returncode != 0, "--emulator with no value exits non-zero")
+        check("unbound variable" not in result.stderr, "--emulator with no value does not crash with an unbound-variable error")
+        check("needs a value" in result.stderr, "--emulator with no value reports a clear error instead")
+
+
 if __name__ == "__main__":
     test_apply_requires_flatpak_installed()
     test_apply_requires_at_least_one_appimage()
@@ -288,6 +339,9 @@ if __name__ == "__main__":
     test_dry_run_makes_no_changes()
     test_status_reports_every_emulator_without_changing_anything()
     test_restore_removes_every_symlink_via_full_reset()
+    test_apply_does_not_clobber_a_pre_existing_unrelated_file_at_the_symlink_target()
+    test_restore_does_not_remove_a_symlink_pointing_elsewhere()
+    test_emulator_flag_with_no_value_fails_clearly()
 
     if failures:
         print(f"\n{len(failures)} failure(s)")

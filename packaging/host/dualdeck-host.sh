@@ -730,8 +730,13 @@ ${rd_output}"
                         fi
                         ;;
                     status)
-                        rd_output="$("${rd_tool}" --status 2>&1)"
-                        info "${rd_output}"
+                        if rd_output="$("${rd_tool}" --status 2>&1)"; then
+                            info "${rd_output}"
+                        else
+                            info "Could not get RetroDECK status:
+
+${rd_output}"
+                        fi
                         ;;
                     restore)
                         if confirm "This removes ALL Flatpak permission overrides for RetroDECK (a full reset -- real-hardware testing found removing just DualDeck's own three could leave RetroDECK unable to launch at all, so this is the one approach confirmed safe) and removes every emulator's ~/.local/bin symlink. RetroDECK goes back to launching its own bundled Cemu/melonDS/Azahar. Continue?"; then

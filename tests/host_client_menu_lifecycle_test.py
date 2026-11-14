@@ -208,6 +208,24 @@ def run() -> int:
         check("retrodeck-setup.sh called with: --status" in proc.stdout,
               "host: the RetroDECK submenu's Status choice calls retrodeck-setup.sh --status")
 
+    # --- Host: RetroDECK Status failing (e.g. RetroDECK not installed) returns to the menu, not a crash ---
+    with tempfile.TemporaryDirectory() as tmp:
+        host_dir = build_host_harness(Path(tmp))
+        retrodeck_tool_dir = host_dir / "emudeck-integration" / "scripts"
+        retrodeck_tool_dir.mkdir(parents=True)
+        write_exec(retrodeck_tool_dir / "retrodeck-setup.sh",
+                   "#!/usr/bin/env bash\n"
+                   "echo \"error: RetroDECK is not installed.\" >&2\n"
+                   "exit 1\n")
+        # 8=RetroDECK submenu, 2=Status (fails), 4=Back, 10=Exit -- under
+        # `set -e` a bare `rd_output=$(...)` assignment from a failing
+        # command substitution used to kill the whole host script instead
+        # of showing an error dialog and returning to the menu.
+        proc = run_menu(host_dir, "dualdeck-host.sh", ["8", "2", "4", "10"])
+        check(proc.returncode == 0, "host: clean exit after a failing RetroDECK Status action then Exit")
+        check(count_menu_appearances(proc, "DualDeck Host") == 2,
+              "host: main menu redisplayed after a failing RetroDECK Status action (not crashed)")
+
     # --- Host: only the explicit Exit choice terminates it ---
     with tempfile.TemporaryDirectory() as tmp:
         host_dir = build_host_harness(Path(tmp))
