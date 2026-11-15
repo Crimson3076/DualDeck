@@ -295,6 +295,15 @@ def test_apply_does_not_clobber_a_pre_existing_unrelated_file_at_the_symlink_tar
         check(symlink.read_text() == "#!/usr/bin/env bash\necho not dualdeck's\n",
               "apply leaves the user's own file content untouched")
         check("not overwriting" in result.stderr, "apply warns that it's not overwriting the existing file")
+        # Real bug found in a later review round: applied_any was set in
+        # the conflict-skip branch too, so when every requested emulator
+        # hit a conflict, apply() still took the generic "Done ... should
+        # now use the DualDeck-patched build" success path -- misleading,
+        # since nothing was actually wired up for RetroDECK to use.
+        check("no symlink was actually created or confirmed" in result.stderr,
+              "apply warns clearly when every emulator's symlink was skipped due to a conflict")
+        check("should now use the" not in result.stdout,
+              "apply does not print the generic success message when nothing was actually symlinked")
 
 
 def test_restore_does_not_remove_a_symlink_pointing_elsewhere():

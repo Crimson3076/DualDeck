@@ -197,6 +197,14 @@ status() {
 apply() {
     require_flatpak_and_retrodeck
     local applied_any=0
+    # Separate from applied_any: that one only tracks "an AppImage was
+    # found for at least one emulator" (gates the hard error below).
+    # This one tracks "a symlink was actually created or already
+    # correct" -- real review finding: if every found AppImage's
+    # symlink target is a pre-existing conflict, applied_any alone would
+    # still take the success path below and print "Done", even though
+    # nothing was actually wired up for RetroDECK to use.
+    local symlink_ok_any=0
 
     echo "Applying RetroDECK compatibility overrides for ${app_id}..."
     run mkdir -p "${local_bin_dir}"
@@ -217,6 +225,7 @@ apply() {
         fi
         run ln -sf "${appimage_path[$e]}" "${symlink}"
         applied_any=1
+        symlink_ok_any=1
     done
 
     if [[ "${applied_any}" -eq 0 ]]; then
@@ -229,7 +238,16 @@ apply() {
     run flatpak override --user --env=APPIMAGE_EXTRACT_AND_RUN=1 "${app_id}"
     run flatpak override --user --env="PATH=${widened_path}" "${app_id}"
 
-    if [[ "${dry_run}" -eq 0 ]]; then
+    if [[ "${dry_run}" -eq 0 ]] && [[ "${symlink_ok_any}" -eq 0 ]]; then
+        echo >&2
+        echo "Warning: no symlink was actually created or confirmed -- every" >&2
+        echo "emulator's ~/.local/bin/<name> target above already exists and" >&2
+        echo "doesn't point at its patched AppImage, so this script left it" >&2
+        echo "alone. The three Flatpak permission overrides were still applied" >&2
+        echo "(harmless on their own), but RetroDECK will NOT use the patched" >&2
+        echo "build until you remove or fix those conflicting paths yourself," >&2
+        echo "then run this again." >&2
+    elif [[ "${dry_run}" -eq 0 ]]; then
         echo
         echo "Done. If RetroDECK is currently running, restart it for the new"
         echo "environment to take effect. Launching a game -- through RetroDECK's"
