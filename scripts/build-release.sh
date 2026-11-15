@@ -685,6 +685,20 @@ mkdir -p "${emudeck_bundle_dir}/scripts/lib"
 
 cp "${repo_root}/scripts/emudeck-replace-in-place.sh" "${emudeck_bundle_dir}/scripts/"
 cp "${repo_root}/scripts/emudeck-check-drift.sh" "${emudeck_bundle_dir}/scripts/"
+# RetroDECK (a Flatpak, not EmuDeck) needs three local --user Flatpak
+# permission grants plus a ~/.local/bin symlink per emulator before its
+# own game list, the -e CLI override, and anything that launches
+# through it (e.g. Tender) will actually use the patched AppImage this
+# tool just installed, instead of RetroDECK's own bundled, unpatched
+# copy -- see docs/retrodeck-compatibility.md's "Real, confirmed
+# blockers" section for the full root-cause writeup and
+# retrodeck-setup.sh's own header comment. Standalone (no scripts/lib/
+# helpers of its own), and surfaced as its own "RetroDECK: emulator
+# compatibility setup" host menu button (dualdeck-host.sh's
+# retrodeck-setup case) rather than folded into emudeck-replace-in-place.sh
+# itself, since it's RetroDECK-specific and most users (EmuDeck, no
+# RetroDECK installed) never need it.
+cp "${repo_root}/scripts/retrodeck-setup.sh" "${emudeck_bundle_dir}/scripts/"
 cp "${repo_root}/scripts/lib/emudeck_paths.sh" "${emudeck_bundle_dir}/scripts/lib/"
 cp "${repo_root}/scripts/lib/appimage_manifest.py" "${emudeck_bundle_dir}/scripts/lib/"
 # GitHub/real-hardware report, 2026-08-01: emudeck-replace-in-place.sh
@@ -693,7 +707,8 @@ cp "${repo_root}/scripts/lib/appimage_manifest.py" "${emudeck_bundle_dir}/script
 # reason emudeck_paths.sh/appimage_manifest.py are.
 cp "${repo_root}/scripts/lib/host_firewall.sh" "${emudeck_bundle_dir}/scripts/lib/"
 chmod +x "${emudeck_bundle_dir}/scripts/emudeck-replace-in-place.sh" \
-         "${emudeck_bundle_dir}/scripts/emudeck-check-drift.sh"
+         "${emudeck_bundle_dir}/scripts/emudeck-check-drift.sh" \
+         "${emudeck_bundle_dir}/scripts/retrodeck-setup.sh"
 
 # Read by emudeck-replace-in-place.sh's own version-detection fallback
 # (no .git directory exists inside a packaged release) -- same
@@ -713,16 +728,27 @@ Also works with no EmuDeck installed at all, for **RetroDECK**: when no
 existing EmuDeck AppImage is found, this installs one fresh at the same
 \`~/Applications/*.AppImage\` path anyway. RetroDECK bundles its own
 unpatched copy of each emulator inside its own Flatpak sandbox, but its
-ES-DE-based game launcher already checks that exact host path first and
-only falls back to its own bundled copy if nothing is there (confirmed
+ES-DE-based game launcher checks that exact host path first and only
+falls back to its own bundled copy if nothing is there (confirmed
 directly against RetroDECK's own source, not assumed -- see
-\`docs/history.md\`'s 2026-08-28 "RetroDECK" entry) -- so
-installing here is picked up automatically, no RetroDECK-specific setup
-needed. One real caveat: RetroDECK's Nintendo DS system defaults to a
-RetroArch core, not standalone melonDS, so you'll need to switch it to
-"melonDS (Standalone)" in RetroDECK's own per-system emulator settings
-for this to actually get used there (Cemu and Azahar are already
-standalone-only/default, so those need no such change).
+\`docs/history.md\`'s 2026-08-28 "RetroDECK" entry). **Installing the
+AppImage here is not enough by itself, though**: RetroDECK's sandbox
+needs three local Flatpak permission grants plus a symlink before its
+own game list, the \`-e\` CLI override, and anything that launches
+through RetroDECK (e.g. Tender) actually pick up the patched AppImage
+instead of RetroDECK's own bundled copy -- real, confirmed root causes
+found by testing against a real RetroDECK install (see
+\`docs/retrodeck-compatibility.md\` and \`docs/history.md\`'s 2026-08-29
+entries). \`retrodeck-setup.sh\` (bundled alongside this tool, and also
+reachable from DualDeck Host's own "RetroDECK: emulator compatibility
+setup" menu button) applies that fix -- see "RetroDECK setup" below. One
+more real caveat, which no permission or symlink can work around:
+RetroDECK's Nintendo DS system defaults to a RetroArch core, not
+standalone melonDS, so you'll also need to switch it to "melonDS
+(Standalone)" in RetroDECK's own per-system emulator settings (Cemu and
+Azahar are already standalone-only/default, so those need no such
+change) -- \`retrodeck-setup.sh\` reminds you of this whenever melonDS is
+covered.
 
 This downloads already-built, already-patched AppImages from this same
 GitHub release (built once in CI, not compiled on your machine) and
@@ -769,6 +795,27 @@ installed AppImage (losing DualDeck's patch), and re-patch it if so:
 Re-patching after drift like this just re-downloads and re-verifies the
 same prebuilt AppImage from this release -- no rebuild, ever. Applies to
 all three emulators.
+
+## RetroDECK setup (only needed if you use RetroDECK, not plain EmuDeck)
+
+    ./retrodeck-setup.sh --dry-run
+    ./retrodeck-setup.sh
+    ./retrodeck-setup.sh --status
+    ./retrodeck-setup.sh --restore
+
+Applies (or shows, or fully reverts) the three \`flatpak override --user\`
+permission grants plus the \`~/.local/bin\` symlink per emulator that
+make RetroDECK's own game list, the \`-e\` CLI override, and Tender all
+launch DualDeck's patched Cemu/melonDS/Azahar instead of RetroDECK's own
+bundled copies -- confirmed end to end on real hardware for Cemu,
+including through Tender; melonDS and Azahar use the identical mechanism
+but have not had the same real-hardware pass yet. \`--emulator melonds\`
+/ \`--emulator azahar\` / \`--emulator cemu\` (repeatable) narrows it to
+specific emulators, same as \`emudeck-replace-in-place.sh\` above. Only
+touches emulators already installed by that tool; does nothing to
+EmuDeck itself. Same tool is reachable without a terminal from DualDeck
+Host's own "RetroDECK: emulator compatibility setup" menu button. See
+\`docs/retrodeck-compatibility.md\` for the full investigation.
 EMUDECK_README
 
 echo "Bundled EmuDeck integration tool at host/emudeck-integration/"

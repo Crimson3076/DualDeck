@@ -106,6 +106,7 @@ See [`docs/building.md`](docs/building.md) for dependencies and
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) -- fixes for problems you're likely to hit
 - [`docs/known-limitations.md`](docs/known-limitations.md) -- what doesn't work yet
 - [`docs/history.md`](docs/history.md) -- dated development log, the background behind most code comments
+- [`docs/retrodeck-compatibility.md`](docs/retrodeck-compatibility.md) -- RetroDECK Flatpak compatibility (Cemu, melonDS, Azahar): architecture, permissions, install/rollback, and verification plan
 
 ## License
 

@@ -92,7 +92,7 @@ def run() -> int:
         check(any(line.startswith("message\t\tDualDeck 0.1.0") for line in log), "shows the update report")
         check(sum(1 for line in log if line.startswith("menu\thome")) == 2, "returns to the home menu after the action")
         check(log[-2:] == ["quit", "<exit>"], "closes the window when the script ends")
-        check("9) Exit" not in proc.stderr, "never shows the terminal menu")
+        check("10) Exit" not in proc.stderr, "never shows the terminal menu")
 
     with tempfile.TemporaryDirectory() as tmp:
         host_dir = harness(Path(tmp) / "b")
@@ -123,18 +123,18 @@ def run() -> int:
         # Window closed while the Advanced menu is up.
         proc, log = run_with_ui(host_dir, ["advanced"])
         check(proc.returncode == 0, f"closing the window ends the script (rc={proc.returncode})")
-        check("9) Exit" not in proc.stderr, "and doesn't fall back to the terminal menu")
+        check("10) Exit" not in proc.stderr, "and doesn't fall back to the terminal menu")
 
     with tempfile.TemporaryDirectory() as tmp:
         host_dir = harness(Path(tmp) / "f")
         proc, log = run_with_ui(host_dir, [], {"FAKE_UI_BROKEN": "1"})
-        check("9) Exit" in proc.stderr, "falls back to the terminal menu when the window can't start")
+        check("10) Exit" in proc.stderr, "falls back to the terminal menu when the window can't start")
         check(proc.returncode == 0, "and that menu still exits cleanly")
 
     with tempfile.TemporaryDirectory() as tmp:
         host_dir = harness(Path(tmp) / "g")
         proc, log = run_with_ui(host_dir, [], {"DUALDECK_HOST_UI": "0"})
-        check(log == [] and "9) Exit" in proc.stderr, "DUALDECK_HOST_UI=0 skips the window")
+        check(log == [] and "10) Exit" in proc.stderr, "DUALDECK_HOST_UI=0 skips the window")
 
     print()
     if failures:
